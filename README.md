@@ -1,26 +1,26 @@
-# Waveform Analysis MCP
+# Waveform Analysis MCP (精简版)
 
-芯片验证仿真 Log 与波形联合分析助手。
+用于芯片验证的仿真 Log 与波形联合分析助手。
 
-## 项目结构 (精简版)
+## 必须保留的文件清单
 
-```text
-waveform_mcp/
-├── src/                # 核心解析器代码 (Log, VCD, FSDB)
-├── docs/               # 所有的文档、配置模板和集成指南
-├── scripts/            # 编译、环境验证和核心功能测试脚本
-├── tests/              # 自动化测试套件 (Unit & Integration)
-├── config.py           # 核心配置文件 (换项目只需改这里)
-├── server.py           # MCP 服务入口
-├── fsdb_wrapper.cpp    # FSDB 高性能查询 C++ 源码
-└── requirements.txt    # Python 依赖
-```
+1.  **运行核心**：
+    *   `server.py`: MCP 服务入口。
+    *   `src/`: 核心解析逻辑（Log, VCD, FSDB, 分析器）。
+    *   `config.py`: 唯一需要根据项目修改的配置文件。
+    *   `custom_patterns.yaml`: 自定义报错正则匹配。
 
-## 快速查阅
+2.  **安装与移植必须**：
+    *   `fsdb_wrapper.cpp`: FSDB 查询的 C++ 源码。
+    *   `build_wrapper.sh`: 换环境后重新编译所需的脚本。
+    *   `verify_setup.py`: 验证新环境依赖和库加载是否成功的脚本。
+    *   `requirements.txt`: Python 依赖清单。
 
-- **配置指南**: 请查看 [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md)
-- **虚拟机环境适配说明**: 请查看 [`docs/README_CURRENT_ENV.md`](docs/README_CURRENT_ENV.md)
-- **如何开始**:
-  1. 编译库: `bash scripts/build_wrapper.sh`
-  2. 验证环境: `python3.11 scripts/verify_setup.py`
-  3. 集成: 将 `docs/claude_config_example.json` 复制到 `~/.claude.json`
+## 快速使用
+
+- **换项目**：修改 `config.py` 中的路径约定。
+- **换环境/移植**：
+  1. 安装依赖：`pip install -r requirements.txt`
+  2. 编译核心库：`bash build_wrapper.sh`
+  3. 验证环境：`python3 verify_setup.py`
+  4. 配置集成：将此目录下的 `server.py` 路径及环境变量加入你的 AI 助手（Claude/Gemini/Cursor）配置中。
