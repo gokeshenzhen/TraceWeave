@@ -11,7 +11,7 @@ import os
 
 VERDI_HOME = os.environ.get(
     "VERDI_HOME",
-    "/tools/synopsys/verdi/O-2018.09-SP2-11"   # fallback 硬编码
+    "/home/eda/app/synopsys/verdi/W-2024.09-SP1"   # fallback 硬编码
 )
 
 # Verdi FSDB 解析库目录（优先用 linux64）
@@ -24,30 +24,30 @@ FSDB_LIB_NFFR  = os.path.join(FSDB_LIB_DIR, "libnffr.so")
 # ═══════════════════════════════════════════════════════════════════
 
 # verif/ 下的固定子目录名
-VERIF_WORK_DIR      = "work"          # verif/work/
-VERIF_TESTCASE_DIR  = "testcase"      # verif/testcase/
-VERIF_SCRIPT_DIR    = "script"        # verif/script/
-VERIF_TB_DIR        = "tb"            # verif/tb/
-VERIF_DUV_DIR       = "duv"           # verif/duv/
+VERIF_WORK_DIR      = "."             # 直接在项目根目录下
+VERIF_TESTCASE_DIR  = "testcase"      
+VERIF_SCRIPT_DIR    = "script"        
+VERIF_TB_DIR        = "tb"            
+VERIF_DUV_DIR       = "src"           # 适配当前 src 目录
 
 # case_list 文件路径（相对 verif/）
-CASE_LIST_FILE      = "testcase/case_list"
+CASE_LIST_FILE      = "flist.f"       # 借用 flist.f 作为 placeholder
 
 # ═══════════════════════════════════════════════════════════════════
 # 仿真输出文件名约定
 # ═══════════════════════════════════════════════════════════════════
 
-# 编译 + elab log（放在 verif/work/ 下）
-ELAB_LOG_NAME       = "elab.log"
+# 编译 + elab log
+ELAB_LOG_NAME       = "logs/compile.log"
 
-# 仿真 work 目录前缀：make SV_CASE=case0 → work/work_case0/
-WORK_CASE_PREFIX    = "work_"
+# 仿真 work 目录前缀（如果不想用 case 独立子目录，可设为空）
+WORK_CASE_PREFIX    = ""
 
-# 仿真 log 文件名（在 work_<CASE>/ 下）
-SIM_LOG_NAME        = "irun.log"
+# 仿真 log 文件名
+SIM_LOG_NAME        = "logs/simulate.log"
 
-# 波形文件名（在 work_<CASE>/ 下）
-WAVE_FILE_NAME      = "top_tb.fsdb"
+# 波形文件名
+WAVE_FILE_NAME      = "waves.fsdb"
 
 # ═══════════════════════════════════════════════════════════════════
 # 自定义报错格式配置文件路径
