@@ -5,7 +5,7 @@
 
 set -e
 
-VERDI_HOME=${VERDI_HOME:-/tools/synopsys/verdi/O-2018.09-SP2-11}
+VERDI_HOME=${VERDI_HOME:-/home/eda/app/synopsys/verdi/W-2024.09-SP1}
 INC_DIR="$VERDI_HOME/share/FsdbReader"
 LIB_DIR="$VERDI_HOME/share/FsdbReader/linux64"
 OUT="libfsdb_wrapper.so"
