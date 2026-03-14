@@ -5,13 +5,14 @@ Waveform Analysis MCP Server
 
 支持工具：
   1. get_sim_paths          - 根据项目路径+case名，返回所有标准文件路径
-  2. parse_sim_log          - 解析仿真 log（assertion fail + UVM_ERROR/FATAL）
-  3. search_signals         - 在波形文件中按关键字搜索信号完整路径
-  4. get_signal_at_time     - 查询信号在某时刻的值
-  5. get_signal_transitions - 获取信号跳变列表
-  6. get_signals_around_time- 获取多个信号在某时刻前后的快照
-  7. get_waveform_summary   - 波形文件基本信息
-  8. analyze_failures       - 核心工具：log + 波形联合分析，生成根因分析报告
+  2. parse_sim_log          - 解析仿真 log 摘要分组
+  3. get_error_context      - 按行号提取报错上下文
+  4. search_signals         - 在波形文件中按关键字搜索信号完整路径
+  5. get_signal_at_time     - 查询信号在某时刻的值
+  6. get_signal_transitions - 获取信号跳变列表
+  7. get_signals_around_time- 获取多个信号在某时刻前后的快照
+  8. get_waveform_summary   - 波形文件基本信息
+  9. analyze_failures       - 聚焦单个报错分组做 log + 波形联合分析
 """
 
 import asyncio
@@ -28,9 +29,9 @@ from mcp.types import Tool, TextContent
 
 from config import (
     get_elab_log, get_sim_log, get_wave_file, get_case_list, get_work_case_dir,
-    DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE, DEFAULT_WAVE_WINDOW_PS,
 )
-from src.log_parser import SimLogParser
+from src.log_parser import SimLogParser, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
@@ -89,17 +90,42 @@ async def list_tools():
         Tool(
             name="parse_sim_log",
             description=(
-                "解析 VCS 或 Xcelium 仿真 log，提取所有 assertion fail、UVM_ERROR、UVM_FATAL。"
-                "返回结构化报错列表，包含文件名、行号、时间、消息。"
+                "解析 VCS 或 Xcelium 仿真 log，返回按 signature 分组的报错摘要。"
+                "simulator 必传，不再自动识别。"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "log_path":  {"type": "string", "description": "仿真 log 文件绝对路径（irun.log）"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto（默认 auto）",
-                                  "default": "auto"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
                 },
-                "required": ["log_path"],
+                "required": ["log_path", "simulator"],
+            },
+        ),
+
+        Tool(
+            name="get_error_context",
+            description=(
+                "根据报错行号，从仿真 log 中提取前后 N 行原始文本。"
+                "通常配合 parse_sim_log 返回的 first_line 使用。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "log_path": {"type": "string", "description": "仿真 log 文件绝对路径（irun.log）"},
+                    "line": {"type": "integer", "description": "中心报错行号"},
+                    "before": {
+                        "type": "integer",
+                        "description": f"向前取多少行，默认 {DEFAULT_LOG_CONTEXT_BEFORE}",
+                        "default": DEFAULT_LOG_CONTEXT_BEFORE,
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": f"向后取多少行，默认 {DEFAULT_LOG_CONTEXT_AFTER}",
+                        "default": DEFAULT_LOG_CONTEXT_AFTER,
+                    },
+                },
+                "required": ["log_path", "line"],
             },
         ),
 
@@ -206,9 +232,8 @@ async def list_tools():
         Tool(
             name="analyze_failures",
             description=(
-                "核心分析工具：读取仿真 log 中所有报错，自动提取每个报错时刻前后的波形上下文，"
-                "生成结构化报告供 Claude 做 root cause 分析。"
-                "返回数据包含：报错摘要、每个报错的信号快照、分析指引。"
+                "核心分析工具：聚焦单个报错 group 的第一次出现，"
+                "返回 log 摘要、报错原始上下文和波形快照。"
             ),
             inputSchema={
                 "type": "object",
@@ -220,9 +245,10 @@ async def list_tools():
                     "window_ps":    {"type": "integer",
                                      "description": f"每个报错时刻前后的波形窗口 ps，默认 {DEFAULT_WAVE_WINDOW_PS}",
                                      "default": DEFAULT_WAVE_WINDOW_PS},
-                    "simulator":    {"type": "string", "default": "auto"},
+                    "simulator":    {"type": "string", "description": "vcs / xcelium"},
+                    "group_index":  {"type": "integer", "description": "分析哪个报错分组，默认 0", "default": 0},
                 },
-                "required": ["log_path", "wave_path", "signal_paths"],
+                "required": ["log_path", "wave_path", "signal_paths", "simulator"],
             },
         ),
     ]
@@ -261,8 +287,16 @@ async def _dispatch(name: str, args: dict):
     elif name == "parse_sim_log":
         return SimLogParser(
             args["log_path"],
-            args.get("simulator", "auto")
+            args["simulator"]
         ).parse()
+
+    elif name == "get_error_context":
+        return get_error_context(
+            args["log_path"],
+            line=args["line"],
+            before=args.get("before", DEFAULT_LOG_CONTEXT_BEFORE),
+            after=args.get("after", DEFAULT_LOG_CONTEXT_AFTER),
+        )
 
     elif name == "search_signals":
         wave_path  = args["wave_path"]
@@ -312,9 +346,10 @@ async def _dispatch(name: str, args: dict):
         return WaveformAnalyzer(
             log_path   = args["log_path"],
             parser     = _get_parser(args["wave_path"]),
-            simulator  = args.get("simulator", "auto"),
+            simulator  = args["simulator"],
         ).analyze(
             signal_paths = args["signal_paths"],
+            group_index  = args.get("group_index", 0),
             window_ps    = args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
         )
 

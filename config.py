@@ -68,6 +68,10 @@ UVM_PARSE_LEVELS    = {"UVM_ERROR", "UVM_FATAL"}
 # analyze_assertion_failures 默认波形窗口（ps）
 DEFAULT_WAVE_WINDOW_PS = 2000
 
+# get_error_context 默认上下文行数
+DEFAULT_LOG_CONTEXT_BEFORE = 100
+DEFAULT_LOG_CONTEXT_AFTER = 100
+
 # search_signals 返回的最大结果数
 SIGNAL_SEARCH_MAX_RESULTS = 100
 
