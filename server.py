@@ -35,20 +35,29 @@ from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
+from src.compile_log_parser import parse_compile_log
+from src.tb_hierarchy_builder import build_hierarchy
 
 app = Server("waveform-mcp")
 
-# ── 全局 FSDB 索引缓存（避免每次都重建）────────────────────────────
+# ── 全局缓存 ──────────────────────────────────────────────────────
 _fsdb_index_cache: dict[str, FSDBSignalIndex] = {}
+_parser_cache: dict[str, object] = {}          # wave_path → VCDParser / FSDBParser
 
 
 def _get_parser(wave_path: str):
+    """返回缓存的 parser 实例，避免 VCD 重复解析 / FSDB 重复打开"""
+    if wave_path in _parser_cache:
+        return _parser_cache[wave_path]
     ext = wave_path.lower().rsplit(".", 1)[-1]
     if ext == "vcd":
-        return VCDParser(wave_path)
+        parser = VCDParser(wave_path)
     elif ext == "fsdb":
-        return FSDBParser(wave_path)
-    raise ValueError(f"不支持的波形格式: .{ext}")
+        parser = FSDBParser(wave_path)
+    else:
+        raise ValueError(f"不支持的波形格式: .{ext}")
+    _parser_cache[wave_path] = parser
+    return parser
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -178,6 +187,23 @@ async def list_tools():
         ),
 
         Tool(
+            name="build_tb_hierarchy",
+            description=(
+                "从编译阶段 log 自动提取用户文件并扫描源代码，构建完整 testbench hierarchy。"
+                "返回 top module、文件分类、component tree、class hierarchy、interfaces。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "compile_log": {"type": "string", "description": "编译或 elaborate 阶段 log 的绝对路径"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / auto（默认 auto）",
+                                  "default": "auto"},
+                },
+                "required": ["compile_log"],
+            },
+        ),
+
+        Tool(
             name="analyze_failures",
             description=(
                 "核心分析工具：读取仿真 log 中所有报错，自动提取每个报错时刻前后的波形上下文，"
@@ -248,7 +274,7 @@ async def _dispatch(name: str, args: dict):
                 _fsdb_index_cache[wave_path] = FSDBSignalIndex(wave_path)
             return _fsdb_index_cache[wave_path].search(keyword, max_r)
         elif ext == "vcd":
-            return VCDParser(wave_path).search_signals(keyword, max_r)
+            return _get_parser(wave_path).search_signals(keyword, max_r)
         else:
             raise ValueError(f"不支持的格式: .{ext}")
 
@@ -274,10 +300,18 @@ async def _dispatch(name: str, args: dict):
     elif name == "get_waveform_summary":
         return _get_parser(args["wave_path"]).get_summary()
 
+    elif name == "build_tb_hierarchy":
+        return build_hierarchy(
+            parse_compile_log(
+                args["compile_log"],
+                args.get("simulator", "auto"),
+            )
+        )
+
     elif name == "analyze_failures":
         return WaveformAnalyzer(
             log_path   = args["log_path"],
-            wave_path  = args["wave_path"],
+            parser     = _get_parser(args["wave_path"]),
             simulator  = args.get("simulator", "auto"),
         ).analyze(
             signal_paths = args["signal_paths"],
