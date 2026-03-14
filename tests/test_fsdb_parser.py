@@ -75,19 +75,21 @@ class TestGetValueAtTime:
     def test_value_at_310000ps(self, parser):
         """310000ps 时 s_bits 应为 000（assertion fail 时刻）"""
         result = parser.get_value_at_time(SIGNAL, 310000)
-        assert result["value"] == "000"
+        assert result["value"]["bin"] == "000"
+        assert result["value"]["hex"] == "0x0"
+        assert result["value"]["dec"] == 0
         assert result["time_ps"] == 310000
         assert result["time_ns"] == 310.0
 
     def test_value_at_250000ps(self, parser):
         """250000ps 时 s_bits 应为 100（跳变后）"""
         result = parser.get_value_at_time(SIGNAL, 250000)
-        assert result["value"] == "100"
+        assert result["value"]["bin"] == "100"
 
     def test_value_at_0ps(self, parser):
         """仿真开始时应为 000"""
         result = parser.get_value_at_time(SIGNAL, 0)
-        assert result["value"] == "000"
+        assert result["value"]["bin"] == "000"
 
     def test_result_has_required_fields(self, parser):
         result = parser.get_value_at_time(SIGNAL, 310000)
@@ -125,7 +127,7 @@ class TestGetTransitions:
         """s_bits 是 3bit reg，值应为 0/1/x/z 组成的字符串"""
         result = parser.get_transitions(SIGNAL, 0, 500000)
         for t in result["transitions"]:
-            assert all(c in "01xzXZ" for c in t["value"])
+            assert all(c in "01xzXZu?" for c in t["value"]["bin"])
 
     def test_narrow_range_returns_subset(self, parser):
         """窄范围应返回更少的跳变"""
@@ -149,7 +151,7 @@ class TestGetSignalsAroundTime:
     def test_center_value_correct(self, parser):
         """310000ps 时 s_bits=000，center 值应一致"""
         result = parser.get_signals_around_time([SIGNAL], 310000, 5000)
-        assert result["signals"][SIGNAL]["value_at_center"] == "000"
+        assert result["signals"][SIGNAL]["value_at_center"]["bin"] == "000"
 
     def test_window_contains_transitions(self, parser):
         """以 310000ps 为中心，窗口 ±50000ps 内应有跳变"""
@@ -157,11 +159,19 @@ class TestGetSignalsAroundTime:
         trans = result["signals"][SIGNAL]["transitions_in_window"]
         assert len(trans) > 0
 
+    def test_pre_window_transitions_present(self, parser):
+        result = parser.get_signals_around_time([SIGNAL], 310000, 5000)
+        assert "pre_window_transitions" in result["signals"][SIGNAL]
+        pre = result["signals"][SIGNAL]["pre_window_transitions"]
+        times = [item["time_ps"] for item in pre]
+        assert times == sorted(times, reverse=True)
+
     def test_result_structure(self, parser):
         result = parser.get_signals_around_time([SIGNAL], 310000, 5000)
         assert "center_time_ps" in result
         assert "center_time_ns" in result
         assert "window_ps" in result
+        assert "truncated" in result
         assert "signals" in result
 
     def test_nonexistent_signal_returns_error_key(self, parser):

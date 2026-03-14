@@ -6,8 +6,11 @@ fsdb_parser.py
 
 import ctypes
 import os
-from pathlib import Path
-from config import FSDB_LIB_DIR, SIGNAL_SEARCH_MAX_RESULTS
+from config import (
+    DEFAULT_EXTRA_TRANSITIONS,
+    FSDB_LIB_DIR,
+    SIGNAL_SEARCH_MAX_RESULTS,
+)
 
 # wrapper .so 与本文件同目录
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
@@ -63,6 +66,16 @@ def _setup(lib):
                                           ctypes.c_uint64, ctypes.c_uint64,
                                           ctypes.c_char_p, ctypes.c_int]
 
+    # int fsdb_get_multi_signals_around_time(
+    #     void*, const char**, int, uint64, uint64, int, char*, int)
+    lib.fsdb_get_multi_signals_around_time.restype = ctypes.c_int
+    lib.fsdb_get_multi_signals_around_time.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_char_p), ctypes.c_int,
+        ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int,
+        ctypes.c_char_p, ctypes.c_int,
+    ]
+
     # unsigned long long fsdb_get_end_time(void*)
     lib.fsdb_get_end_time.restype  = ctypes.c_uint64
     lib.fsdb_get_end_time.argtypes = [ctypes.c_void_p]
@@ -80,6 +93,7 @@ class FSDBParser:
         self.file_path = file_path
         self._lib    = None
         self._handle = None
+        self._buf    = None   # 延迟初始化的 64MB 复用缓冲区
 
     # ── 生命周期 ─────────────────────────────────────────────────────
 
@@ -101,6 +115,12 @@ class FSDBParser:
     def __del__(self):
         self.close()
 
+    def _get_buf(self):
+        """返回复用的 64MB 缓冲区，懒初始化"""
+        if self._buf is None:
+            self._buf = ctypes.create_string_buffer(_BUF_SIZE)
+        return self._buf
+
     # ── Public API ────────────────────────────────────────────────────
 
     def get_value_at_time(self, signal_path: str, time_ps: int) -> dict:
@@ -118,13 +138,13 @@ class FSDBParser:
             "signal":  signal_path,
             "time_ps": time_ps,
             "time_ns": time_ps / 1000,
-            "value":   buf.value.decode(),
+            "value":   _enrich_value(buf.value.decode()),
         }
 
     def get_transitions(self, signal_path: str,
                         start_ps: int = 0, end_ps: int = -1) -> dict:
         self._open()
-        buf = ctypes.create_string_buffer(_BUF_SIZE)
+        buf = self._get_buf()
         end = ctypes.c_uint64(0xFFFFFFFFFFFFFFFF if end_ps == -1 else end_ps)
         rc  = self._lib.fsdb_get_transitions(
             self._handle, signal_path.encode(),
@@ -145,29 +165,41 @@ class FSDBParser:
         }
 
     def get_signals_around_time(self, signal_paths: list,
-                                center_ps: int, window_ps: int = 500) -> dict:
+                                center_ps: int, window_ps: int = 500,
+                                extra_transitions: int = DEFAULT_EXTRA_TRANSITIONS) -> dict:
         self._open()
-        start_ps = max(0, center_ps - window_ps)
-        end_ps   = center_ps + window_ps
-        result   = {}
-        for path in signal_paths:
-            try:
-                # 先拿 center 时刻的值
-                v_res = self.get_value_at_time(path, center_ps)
-                # 再拿窗口内的跳变
-                t_res = self.get_transitions(path, start_ps, end_ps)
-                result[path] = {
-                    "value_at_center":       v_res["value"],
-                    "transitions_in_window": t_res["transitions"],
-                }
-            except Exception as e:
-                result[path] = {"error": str(e)}
-        return {
-            "center_time_ps": center_ps,
-            "center_time_ns": center_ps / 1000,
-            "window_ps":      window_ps,
-            "signals":        result,
-        }
+        if not signal_paths:
+            return {
+                "center_time_ps": center_ps,
+                "center_time_ns": center_ps / 1000,
+                "window_ps": window_ps,
+                "extra_transitions": extra_transitions,
+                "signals": {},
+                "truncated": False,
+            }
+
+        buf = self._get_buf()
+        encoded_paths = [path.encode() for path in signal_paths]
+        c_paths = (ctypes.c_char_p * len(encoded_paths))(*encoded_paths)
+
+        rc = self._lib.fsdb_get_multi_signals_around_time(
+            self._handle,
+            c_paths,
+            len(signal_paths),
+            ctypes.c_uint64(center_ps),
+            ctypes.c_uint64(window_ps),
+            ctypes.c_int(extra_transitions),
+            buf,
+            _BUF_SIZE,
+        )
+        if rc < 0:
+            raise RuntimeError(f"fsdb_get_multi_signals_around_time 失败，rc={rc}")
+        return _parse_multi_signal_buf(
+            buf.value.decode(),
+            center_ps=center_ps,
+            window_ps=window_ps,
+            extra_transitions=extra_transitions,
+        )
 
     def get_summary(self) -> dict:
         self._open()
@@ -184,7 +216,7 @@ class FSDBParser:
     def search_signals(self, keyword: str,
                        max_results: int = SIGNAL_SEARCH_MAX_RESULTS) -> dict:
         self._open()
-        buf = ctypes.create_string_buffer(_BUF_SIZE)
+        buf = self._get_buf()
         count = self._lib.fsdb_search_signals(
             self._handle, keyword.encode(), buf, _BUF_SIZE
         )
@@ -222,8 +254,98 @@ def _parse_trans_buf(text: str) -> list:
             result.append({
                 "time_ps": t_ps,
                 "time_ns": t_ps / 1000,
-                "value":   val,
+                "value":   _enrich_value(val),
             })
         except ValueError:
             pass
+    return result
+
+
+def _parse_multi_signal_buf(
+    text: str,
+    center_ps: int,
+    window_ps: int,
+    extra_transitions: int,
+) -> dict:
+    result = {
+        "center_time_ps": center_ps,
+        "center_time_ns": center_ps / 1000,
+        "window_ps": window_ps,
+        "extra_transitions": extra_transitions,
+        "signals": {},
+        "truncated": False,
+    }
+    current_path = None
+    current_section = None
+
+    for line in text.splitlines():
+        if not line:
+            continue
+        if line == "@TRUNCATED":
+            result["truncated"] = True
+            continue
+        if line.startswith("@ERROR\t"):
+            _, path, reason = (line.split("\t", 2) + [""])[:3]
+            result["signals"][path] = {"error": reason or "unknown_error"}
+            current_path = None
+            current_section = None
+            continue
+        if line.startswith("@SIGNAL\t"):
+            parts = line.split("\t")
+            path = parts[1]
+            width = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            result["signals"][path] = {
+                "bit_size": width,
+                "value_at_center": None,
+                "transitions_in_window": [],
+                "pre_window_transitions": [],
+            }
+            current_path = path
+            current_section = None
+            continue
+        if current_path is None:
+            continue
+        if line.startswith("#VALUE_AT_CENTER\t"):
+            value = line.split("\t", 1)[1] if "\t" in line else "?"
+            result["signals"][current_path]["value_at_center"] = _enrich_value(value)
+            current_section = None
+            continue
+        if line == "#WINDOW_TRANSITIONS":
+            current_section = "transitions_in_window"
+            continue
+        if line == "#PRE_WINDOW_TRANSITIONS":
+            current_section = "pre_window_transitions"
+            continue
+        if current_section and "\t" in line:
+            time_str, value = line.split("\t", 1)
+            try:
+                time_ps = int(time_str)
+            except ValueError:
+                continue
+            result["signals"][current_path][current_section].append({
+                "time_ps": time_ps,
+                "time_ns": time_ps / 1000,
+                "value": _enrich_value(value),
+            })
+
+    return result
+
+
+def _enrich_value(binary_str: str) -> dict:
+    result = {"bin": binary_str}
+    normalized = binary_str.strip()
+    if not normalized or any(c in normalized for c in "xXzZu?"):
+        result["hex"] = None
+        result["dec"] = None
+        return result
+    try:
+        val = int(normalized, 2)
+    except ValueError:
+        result["hex"] = None
+        result["dec"] = None
+        return result
+    width = len(normalized)
+    hex_width = max(1, (width + 3) // 4)
+    result["hex"] = f"0x{val:0{hex_width}x}"
+    result["dec"] = val
     return result

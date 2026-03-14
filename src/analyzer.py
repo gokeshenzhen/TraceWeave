@@ -6,6 +6,7 @@ analyzer.py
 from __future__ import annotations
 
 from config import (
+    DEFAULT_EXTRA_TRANSITIONS,
     DEFAULT_LOG_CONTEXT_AFTER,
     DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_WAVE_WINDOW_PS,
@@ -24,6 +25,7 @@ class WaveformAnalyzer:
         signal_paths: list[str],
         group_index: int = 0,
         window_ps: int = DEFAULT_WAVE_WINDOW_PS,
+        extra_transitions: int = DEFAULT_EXTRA_TRANSITIONS,
         log_before: int = DEFAULT_LOG_CONTEXT_BEFORE,
         log_after: int = DEFAULT_LOG_CONTEXT_AFTER,
     ) -> dict:
@@ -58,6 +60,7 @@ class WaveformAnalyzer:
             signal_paths,
             first_time_ps,
             window_ps,
+            extra_transitions,
         )
 
         return {
@@ -67,10 +70,11 @@ class WaveformAnalyzer:
             "wave_context": wave_context,
             "remaining_groups": len(groups) - group_index - 1,
             "signals_queried": signal_paths,
+            "extra_transitions": extra_transitions,
             "analysis_guide": {
                 "step1": "先看 focused_group 是否是最早出现且次数最多的报错类型",
                 "step2": "结合 log_context 判断该次报错前后的 transaction 和 checker 输出",
-                "step3": "在 wave_context 中核对关键信号在首次报错时刻附近的取值和跳变",
-                "step4": "若需要更长历史，再单独调用 get_signal_transitions 追踪根因",
+                "step3": "在 wave_context 中核对关键信号在首次报错时刻附近的取值、窗口内跳变和窗口前历史",
+                "step4": "若 pre_window_transitions 仍不足，再单独调用 get_signal_transitions 追踪更长历史",
             },
         }

@@ -29,7 +29,8 @@ from mcp.types import Tool, TextContent
 
 from config import (
     get_elab_log, get_sim_log, get_wave_file, get_case_list, get_work_case_dir,
-    DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE, DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
+    DEFAULT_WAVE_WINDOW_PS,
 )
 from src.log_parser import SimLogParser, get_error_context
 from src.vcd_parser import VCDParser
@@ -195,6 +196,11 @@ async def list_tools():
                     "window_ps":     {"type": "integer",
                                       "description": f"前后各取多少 ps，默认 {DEFAULT_WAVE_WINDOW_PS}",
                                       "default": DEFAULT_WAVE_WINDOW_PS},
+                    "extra_transitions": {
+                        "type": "integer",
+                        "description": f"窗口前额外回溯多少次跳变，默认 {DEFAULT_EXTRA_TRANSITIONS}",
+                        "default": DEFAULT_EXTRA_TRANSITIONS,
+                    },
                 },
                 "required": ["wave_path", "signal_paths", "center_time_ps"],
             },
@@ -247,6 +253,11 @@ async def list_tools():
                                      "default": DEFAULT_WAVE_WINDOW_PS},
                     "simulator":    {"type": "string", "description": "vcs / xcelium"},
                     "group_index":  {"type": "integer", "description": "分析哪个报错分组，默认 0", "default": 0},
+                    "extra_transitions": {
+                        "type": "integer",
+                        "description": f"每个信号在窗口前额外回溯多少次跳变，默认 {DEFAULT_EXTRA_TRANSITIONS}",
+                        "default": DEFAULT_EXTRA_TRANSITIONS,
+                    },
                 },
                 "required": ["log_path", "wave_path", "signal_paths", "simulator"],
             },
@@ -329,6 +340,7 @@ async def _dispatch(name: str, args: dict):
             args["signal_paths"],
             args["center_time_ps"],
             args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
+            args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
 
     elif name == "get_waveform_summary":
@@ -351,6 +363,7 @@ async def _dispatch(name: str, args: dict):
             signal_paths = args["signal_paths"],
             group_index  = args.get("group_index", 0),
             window_ps    = args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
+            extra_transitions = args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
 
     else:

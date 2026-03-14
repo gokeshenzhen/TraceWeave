@@ -15,6 +15,7 @@
 #endif
 
 #include "ffrAPI.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,7 +80,9 @@ _TreeCB(fsdbTreeCBType cb_type, void *client_data, void *tree_cb_data)
 
         SigInfo info;
         info.idcode        = v->u.idcode;
-        info.bit_size      = v->lbitnum - v->rbitnum + 1;
+        info.bit_size      = (v->lbitnum >= v->rbitnum)
+                             ? (v->lbitnum - v->rbitnum + 1)
+                             : (v->rbitnum - v->lbitnum + 1);
         info.bytes_per_bit = v->bytes_per_bit;
         info.full_path     = full_path;
 
@@ -98,6 +101,12 @@ static std::string
 _VCToStr(byte_T *vc_ptr, uint_T bit_size, uint_T bpb)
 {
     if (!vc_ptr) return "?";
+    if (bit_size > 65536) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "ERROR:bit_size=%u_exceeds_limit", bit_size);
+        return std::string(msg);
+    }
 
     if (bpb == FSDB_BYTES_PER_BIT_1B) {
         /* 0/1/x/z 编码 */
@@ -125,6 +134,63 @@ _VCToStr(byte_T *vc_ptr, uint_T bit_size, uint_T bpb)
         return std::string(buf);
     }
     return "?";
+}
+
+static fsdbTag64
+_ToTag(unsigned long long time_ps)
+{
+    fsdbTag64 tag;
+    tag.H = (uint_T)(time_ps >> 32);
+    tag.L = (uint_T)(time_ps & 0xFFFFFFFF);
+    return tag;
+}
+
+static unsigned long long
+_TagToPs(const fsdbTag64 &tag)
+{
+    return ((unsigned long long)tag.H << 32) | tag.L;
+}
+
+static bool
+_AppendText(char *out_buf, int buf_size, int &pos,
+            const std::string &text, bool &truncated)
+{
+    if (truncated) return false;
+    int len = (int)text.size();
+    if (pos + len + 1 >= buf_size) {
+        const char *marker = "@TRUNCATED\n";
+        int marker_len = (int)strlen(marker);
+        if (buf_size > marker_len) {
+            int marker_pos = buf_size - marker_len - 1;
+            if (marker_pos < 0) marker_pos = 0;
+            memcpy(out_buf + marker_pos, marker, marker_len);
+            out_buf[marker_pos + marker_len] = '\0';
+            pos = marker_pos + marker_len;
+        } else if (buf_size > 0) {
+            out_buf[buf_size - 1] = '\0';
+        }
+        truncated = true;
+        return false;
+    }
+    memcpy(out_buf + pos, text.c_str(), len);
+    pos += len;
+    out_buf[pos] = '\0';
+    return true;
+}
+
+static bool
+_AppendTransitionLine(
+    char *out_buf,
+    int buf_size,
+    int &pos,
+    unsigned long long time_ps,
+    const std::string &value,
+    bool &truncated
+)
+{
+    char line[1024];
+    snprintf(line, sizeof(line), "%llu\t%s\n", time_ps, value.c_str());
+    return _AppendText(out_buf, buf_size, pos, std::string(line), truncated);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -321,6 +387,139 @@ fsdb_get_transitions(void *handle, const char *signal_path,
     hdl->ffrFree();
     ctx->obj->ffrUnloadSignals();
     return count;
+}
+
+int
+fsdb_get_multi_signals_around_time(
+    void *handle,
+    const char **signal_paths,
+    int signal_count,
+    unsigned long long center_ps,
+    unsigned long long window_ps,
+    int extra_transitions,
+    char *out_buf,
+    int buf_size
+)
+{
+    if (!handle || !signal_paths || signal_count < 0 || !out_buf) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    out_buf[0] = '\0';
+
+    std::vector<SigInfo*> valid_sigs;
+    valid_sigs.reserve(signal_count);
+
+    int pos = 0;
+    bool truncated = false;
+    int success_count = 0;
+
+    for (int i = 0; i < signal_count; i++) {
+        const char *path = signal_paths[i];
+        if (!path) continue;
+        auto it = ctx->path_to_sig.find(std::string(path));
+        if (it == ctx->path_to_sig.end()) {
+            std::string err_line = std::string("@ERROR\t") + path + "\tsignal_not_found\n";
+            _AppendText(out_buf, buf_size, pos, err_line, truncated);
+            continue;
+        }
+        valid_sigs.push_back(&it->second);
+        ctx->obj->ffrAddToSignalList(it->second.idcode);
+    }
+
+    if (valid_sigs.empty() || truncated) {
+        return success_count;
+    }
+
+    ctx->obj->ffrLoadSignals();
+
+    unsigned long long start_ps = (center_ps > window_ps) ? (center_ps - window_ps) : 0;
+    unsigned long long end_ps = center_ps + window_ps;
+
+    for (size_t i = 0; i < valid_sigs.size(); i++) {
+        SigInfo *sig = valid_sigs[i];
+        std::string header = std::string("@SIGNAL\t") + sig->full_path + "\t" +
+                             std::to_string(sig->bit_size) + "\n";
+        if (!_AppendText(out_buf, buf_size, pos, header, truncated)) break;
+
+        ffrVCTrvsHdl hdl = ctx->obj->ffrCreateVCTraverseHandle(sig->idcode);
+        if (!hdl) {
+            std::string err_line = std::string("@ERROR\t") + sig->full_path +
+                                   "\tcreate_traverse_handle_failed\n";
+            _AppendText(out_buf, buf_size, pos, err_line, truncated);
+            continue;
+        }
+
+        std::string value_at_center = "?";
+        if (hdl->ffrHasIncoreVC()) {
+            fsdbTag64 center_tag = _ToTag(center_ps);
+            if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&center_tag)) {
+                byte_T *vc_ptr = NULL;
+                if (FSDB_RC_SUCCESS == hdl->ffrGetVC(&vc_ptr) && vc_ptr) {
+                    value_at_center = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
+                }
+            }
+        }
+
+        std::string value_line = std::string("#VALUE_AT_CENTER\t") + value_at_center + "\n";
+        if (!_AppendText(out_buf, buf_size, pos, value_line, truncated)) {
+            hdl->ffrFree();
+            break;
+        }
+        if (!_AppendText(out_buf, buf_size, pos, "#WINDOW_TRANSITIONS\n", truncated)) {
+            hdl->ffrFree();
+            break;
+        }
+
+        if (hdl->ffrHasIncoreVC()) {
+            fsdbTag64 start_tag = _ToTag(start_ps);
+            if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&start_tag)) {
+                do {
+                    fsdbTag64 time;
+                    byte_T *vc_ptr = NULL;
+                    hdl->ffrGetXTag(&time);
+                    hdl->ffrGetVC(&vc_ptr);
+                    unsigned long long t_ps = _TagToPs(time);
+                    if (t_ps > end_ps) break;
+                    std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
+                    if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
+                        break;
+                } while (!truncated && FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
+            }
+        }
+
+        if (truncated) {
+            hdl->ffrFree();
+            break;
+        }
+
+        if (!_AppendText(out_buf, buf_size, pos, "#PRE_WINDOW_TRANSITIONS\n", truncated)) {
+            hdl->ffrFree();
+            break;
+        }
+
+        if (hdl->ffrHasIncoreVC() && extra_transitions > 0) {
+            fsdbTag64 start_tag = _ToTag(start_ps);
+            if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&start_tag)) {
+                for (int n = 0; n < extra_transitions; n++) {
+                    if (FSDB_RC_SUCCESS != hdl->ffrGotoPrevVC()) break;
+                    fsdbTag64 time;
+                    byte_T *vc_ptr = NULL;
+                    hdl->ffrGetXTag(&time);
+                    hdl->ffrGetVC(&vc_ptr);
+                    unsigned long long t_ps = _TagToPs(time);
+                    std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
+                    if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
+                        break;
+                }
+            }
+        }
+
+        hdl->ffrFree();
+        success_count++;
+        if (truncated) break;
+    }
+
+    ctx->obj->ffrUnloadSignals();
+    return success_count;
 }
 
 /* ── 获取仿真结束时间（ps）─────────────────────────────────────── */

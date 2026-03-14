@@ -27,12 +27,13 @@ class FakeWaveParser:
     def __init__(self):
         self.calls = []
 
-    def get_signals_around_time(self, signal_paths, center_time_ps, window_ps):
+    def get_signals_around_time(self, signal_paths, center_time_ps, window_ps, extra_transitions):
         self.calls.append(
             {
                 "signal_paths": signal_paths,
                 "center_time_ps": center_time_ps,
                 "window_ps": window_ps,
+                "extra_transitions": extra_transitions,
             }
         )
         return {
@@ -40,8 +41,9 @@ class FakeWaveParser:
             "window_ps": window_ps,
             "signals": {
                 signal_path: {
-                    "value_at_center": "1'b0",
+                    "value_at_center": {"bin": "0", "hex": "0x0", "dec": 0},
                     "transitions_in_window": [],
+                    "pre_window_transitions": [],
                 }
                 for signal_path in signal_paths
             },
@@ -86,7 +88,8 @@ class TestAnalysisStructure:
     def test_wave_context(self, analysis):
         result, parser = analysis
         assert parser.calls[0]["center_time_ps"] == 290000
-        assert result["wave_context"]["signals"]["top_tb.dut.req"]["value_at_center"] == "1'b0"
+        assert parser.calls[0]["extra_transitions"] == 5
+        assert result["wave_context"]["signals"]["top_tb.dut.req"]["value_at_center"]["bin"] == "0"
 
     def test_remaining_groups(self, analysis):
         result, _ = analysis

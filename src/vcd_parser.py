@@ -5,6 +5,7 @@ vcd_parser.py
 """
 
 import re
+from bisect import bisect_right
 from pathlib import Path
 
 
@@ -51,7 +52,8 @@ class VCDParser:
         }
 
     def get_signals_around_time(self, signal_paths: list,
-                                center_ps: int, window_ps: int = 500) -> dict:
+                                center_ps: int, window_ps: int = 500,
+                                extra_transitions: int = 5) -> dict:
         self._ensure_parsed()
         start_ps = max(0, center_ps - window_ps)
         end_ps   = center_ps + window_ps
@@ -184,15 +186,15 @@ class VCDParser:
 # ── Utility ────────────────────────────────────────────────────────
 
 def _value_at(transitions: list, time_ps: int):
+    """二分查找 transitions 中 time_ps 时刻的值，O(log n)"""
     if not transitions:
         return None
-    val = transitions[0][1]
-    for t, v in transitions:
-        if t <= time_ps:
-            val = v
-        else:
-            break
-    return val
+    # transitions 是 (time_ps, value) 的有序列表
+    times = [t for t, _ in transitions]
+    idx = bisect_right(times, time_ps) - 1
+    if idx < 0:
+        return None
+    return transitions[idx][1]
 
 
 def _parse_timescale(ts_str: str) -> int:
