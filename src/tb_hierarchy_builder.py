@@ -70,6 +70,7 @@ def scan_sv_file(file_path: str) -> dict:
         "path": file_path,
         "name": os.path.basename(file_path),
         "type": file_type,
+        "source_text": raw,
         "classes": classes,
         "class_extends": class_extends,
         "modules": modules,
@@ -98,7 +99,7 @@ def build_class_hierarchy(scan_results: list[dict]) -> list[str]:
     return chains
 
 
-def _add_module_children(module_name: str, module_to_scan: dict, path_to_scan: dict, seen: set[str]) -> dict:
+def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str]) -> dict:
     if module_name in seen:
         return {}
     seen = seen | {module_name}
@@ -114,7 +115,7 @@ def _add_module_children(module_name: str, module_to_scan: dict, path_to_scan: d
             "class": item["module_name"],
             "src": child_src,
         }
-        descendants = _add_module_children(item["module_name"], module_to_scan, path_to_scan, seen)
+        descendants = _add_module_children(item["module_name"], module_to_scan, seen)
         if descendants:
             node["children"] = descendants
         tree[item["instance_name"]] = node
@@ -165,16 +166,10 @@ def _build_uvm_tree(class_name: str, class_to_scan: dict, seen: set[str]) -> dic
 
 
 def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
-    module_to_scan = {}
-    class_to_scan = {}
-    for result in scan_results:
-        for module_name in result["modules"]:
-            module_to_scan[module_name] = result
-        for class_name in result["classes"]:
-            class_to_scan[class_name] = result
+    module_to_scan, class_to_scan = _build_symbol_indexes(scan_results)
 
     component_tree = {}
-    top_node = _add_module_children(top_module, module_to_scan, {}, set())
+    top_node = _add_module_children(top_module, module_to_scan, set())
     if top_node:
         component_tree[top_module] = top_node
 
@@ -187,42 +182,10 @@ def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
 
 def build_hierarchy(compile_result: dict) -> dict:
     file_entries = compile_result.get("files", {}).get("user", [])
-    scan_results = []
-    scan_by_path = {}
-    for entry in file_entries:
-        path = entry["path"]
-        if not os.path.exists(path):
-            continue
-        result = scan_sv_file(path)
-        scan_results.append(result)
-        scan_by_path[path] = result
-
-    grouped_files = defaultdict(list)
-    for entry in file_entries:
-        path = entry["path"]
-        result = scan_by_path.get(path)
-        grouped_files[entry["category"]].append({
-            "name": os.path.basename(path),
-            "path": path,
-            "type": result["type"] if result else entry["type"],
-        })
-
-    source_root = ""
-    if file_entries:
-        source_root = os.path.commonpath([item["path"] for item in file_entries])
-
-    interface_defs = {}
-    interface_bindings = {}
-    for result in scan_results:
-        for interface_name in result["interfaces"]:
-            interface_defs[interface_name] = result
-        for binding in result["virtual_interfaces"]:
-            interface_bindings.setdefault(binding["interface_name"], result["name"])
-        for interface_name in interface_defs:
-            if interface_name in result["name"]:
-                continue
-            if re.search(rf"\b{re.escape(interface_name)}\b", open(result['path'], 'r', errors='replace').read()):
-                interface_bindings.setdefault(interface_name, result["name"])
+    scan_results, scan_by_path, source_text_cache = _scan_user_files(file_entries)
+    grouped_files = _group_files_by_category(file_entries, scan_by_path)
+    source_root = _compute_source_root(file_entries)
+    interface_defs, interface_bindings = _collect_interface_metadata(scan_results, source_text_cache)
 
     top_module = compile_result.get("top_modules", [""])[0] if compile_result.get("top_modules") else ""
     interfaces = []
@@ -246,3 +209,76 @@ def build_hierarchy(compile_result: dict) -> dict:
         "interfaces": interfaces,
         "compile_result": compile_result,
     }
+
+
+def _scan_user_files(file_entries: list[dict]) -> tuple[list[dict], dict[str, dict], dict[str, str]]:
+    scan_results = []
+    scan_by_path = {}
+    source_text_cache: dict[str, str] = {}
+    for entry in file_entries:
+        path = entry["path"]
+        if not os.path.exists(path):
+            continue
+        result = scan_sv_file(path)
+        scan_results.append(result)
+        scan_by_path[path] = result
+        source_text_cache[path] = result["source_text"]
+    return scan_results, scan_by_path, source_text_cache
+
+
+def _group_files_by_category(file_entries: list[dict], scan_by_path: dict[str, dict]) -> dict[str, list[dict]]:
+    grouped_files = defaultdict(list)
+    for entry in file_entries:
+        path = entry["path"]
+        result = scan_by_path.get(path)
+        grouped_files[entry["category"]].append({
+            "name": os.path.basename(path),
+            "path": path,
+            "type": result["type"] if result else entry["type"],
+        })
+    return dict(grouped_files)
+
+
+def _compute_source_root(file_entries: list[dict]) -> str:
+    if not file_entries:
+        return ""
+    return os.path.commonpath([item["path"] for item in file_entries])
+
+
+def _build_symbol_indexes(scan_results: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+    module_to_scan = {}
+    class_to_scan = {}
+    for result in scan_results:
+        for module_name in result["modules"]:
+            module_to_scan[module_name] = result
+        for class_name in result["classes"]:
+            class_to_scan[class_name] = result
+    return module_to_scan, class_to_scan
+
+
+def _collect_interface_metadata(
+    scan_results: list[dict], source_text_cache: dict[str, str]
+) -> tuple[dict[str, dict], dict[str, str]]:
+    interface_defs = {}
+    interface_bindings = {}
+    for result in scan_results:
+        for interface_name in result["interfaces"]:
+            interface_defs[interface_name] = result
+        for binding in result["virtual_interfaces"]:
+            interface_bindings.setdefault(binding["interface_name"], result["name"])
+        _bind_interfaces_by_reference(result, interface_defs, interface_bindings, source_text_cache)
+    return interface_defs, interface_bindings
+
+
+def _bind_interfaces_by_reference(
+    scan_result: dict,
+    interface_defs: dict[str, dict],
+    interface_bindings: dict[str, str],
+    source_text_cache: dict[str, str],
+):
+    source_text = source_text_cache.get(scan_result["path"], "")
+    for interface_name in interface_defs:
+        if interface_name in scan_result["name"]:
+            continue
+        if re.search(rf"\b{re.escape(interface_name)}\b", source_text):
+            interface_bindings.setdefault(interface_name, scan_result["name"])

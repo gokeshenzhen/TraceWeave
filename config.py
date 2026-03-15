@@ -1,53 +1,36 @@
 """
-config.py — 所有路径和文件名常量集中在此处
-换项目时只需改这个文件，其他代码不用动
+config.py — 集中放置环境相关路径和解析行为常量
 """
 
 import os
+from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════════
 # EDA 工具路径（与 ~/.bashrc 保持一致）
 # ═══════════════════════════════════════════════════════════════════
 
-VERDI_HOME = os.environ.get(
-    "VERDI_HOME",
-    "/tools/synopsys/verdi/O-2018.09-SP2-11"   # fallback 硬编码
-)
-
-# Verdi FSDB 解析库目录（优先用 linux64）
-FSDB_LIB_DIR = os.path.join(VERDI_HOME, "share/FsdbReader/linux64")
-FSDB_LIB_NSYS  = os.path.join(FSDB_LIB_DIR, "libnsys.so")
-FSDB_LIB_NFFR  = os.path.join(FSDB_LIB_DIR, "libnffr.so")
-
-# ═══════════════════════════════════════════════════════════════════
-# 项目目录结构约定
-# ═══════════════════════════════════════════════════════════════════
-
-# verif/ 下的固定子目录名
-VERIF_WORK_DIR      = "work"          # verif/work/
-VERIF_TESTCASE_DIR  = "testcase"      # verif/testcase/
-VERIF_SCRIPT_DIR    = "script"        # verif/script/
-VERIF_TB_DIR        = "tb"            # verif/tb/
-VERIF_DUV_DIR       = "duv"           # verif/duv/
+REPO_ROOT = Path(__file__).resolve().parent
+# FSDB runtime 优先级：
+# 1. 仓库本地 third_party/verdi_runtime/linux64
+# 2. VERDI_HOME/share/FsdbReader/linux64
+LOCAL_FSDB_RUNTIME_DIR = REPO_ROOT / "third_party" / "verdi_runtime" / "linux64"
+FSDB_REQUIRED_LIBS = ("libnsys.so", "libnffr.so")
 
 # case_list 文件路径（相对 verif/）
-CASE_LIST_FILE      = "testcase/case_list"
+CASE_LIST_FILE = "testcase/case_list"
 
 # ═══════════════════════════════════════════════════════════════════
-# 仿真输出文件名约定
+# 仿真路径自动发现配置
 # ═══════════════════════════════════════════════════════════════════
 
-# 编译 + elab log（放在 verif/work/ 下）
-ELAB_LOG_NAME       = "elab.log"
+COMPILE_LOG_PATTERNS = ["*comp*.log", "*elab*.log"]
+SIM_LOG_PATTERNS = ["*run*.log", "xm*.log", "sim*.log", "vcs.log"]
+WAVE_PATTERNS = ["*.fsdb", "*.vcd"]
 
-# 仿真 work 目录前缀：make SV_CASE=case0 → work/work_case0/
-WORK_CASE_PREFIX    = "work_"
-
-# 仿真 log 文件名（在 work_<CASE>/ 下）
-SIM_LOG_NAME        = "irun.log"
-
-# 波形文件名（在 work_<CASE>/ 下）
-WAVE_FILE_NAME      = "top_tb.fsdb"
+MCP_CONFIG_FILE = ".mcp.yaml"
+DISCOVER_MAX_DEPTH_CASE = 1
+DISCOVER_MAX_DEPTH_ROOT = 2
+CASE_DIR_MAX_DEPTH = 3
 
 # ═══════════════════════════════════════════════════════════════════
 # 自定义报错格式配置文件路径
@@ -78,29 +61,63 @@ DEFAULT_LOG_CONTEXT_AFTER = 100
 # search_signals 返回的最大结果数
 SIGNAL_SEARCH_MAX_RESULTS = 100
 
-# ═══════════════════════════════════════════════════════════════════
-# 便捷函数：根据项目根目录 + case 名构造标准路径
-# ═══════════════════════════════════════════════════════════════════
+# parse_sim_log 最多返回的 error group 数
+DEFAULT_MAX_GROUPS = 50
 
-def get_elab_log(verif_root: str) -> str:
-    """verif/work/elab.log"""
-    return os.path.join(verif_root, VERIF_WORK_DIR, ELAB_LOG_NAME)
 
-def get_sim_log(verif_root: str, case_name: str) -> str:
-    """verif/work/work_<case>/irun.log"""
-    return os.path.join(verif_root, VERIF_WORK_DIR,
-                        WORK_CASE_PREFIX + case_name, SIM_LOG_NAME)
+def get_fsdb_runtime_info() -> dict:
+    local_dir = LOCAL_FSDB_RUNTIME_DIR
+    local_missing = _missing_fsdb_libs(local_dir)
+    if not local_missing:
+        return {
+            "enabled": True,
+            "source": "local_runtime",
+            "lib_dir": str(local_dir),
+            "missing_libs": [],
+            "message": f"Using bundled FSDB runtime from {local_dir}",
+        }
 
-def get_wave_file(verif_root: str, case_name: str) -> str:
-    """verif/work/work_<case>/top_tb.fsdb"""
-    return os.path.join(verif_root, VERIF_WORK_DIR,
-                        WORK_CASE_PREFIX + case_name, WAVE_FILE_NAME)
+    verdi_home = os.environ.get("VERDI_HOME")
+    if verdi_home:
+        verdi_lib_dir = Path(verdi_home) / "share" / "FsdbReader" / "linux64"
+        verdi_missing = _missing_fsdb_libs(verdi_lib_dir)
+        if not verdi_missing:
+            return {
+                "enabled": True,
+                "source": "verdi_home",
+                "lib_dir": str(verdi_lib_dir),
+                "missing_libs": [],
+                "message": f"Using FSDB runtime from VERDI_HOME={verdi_home}",
+            }
+        return {
+            "enabled": False,
+            "source": "verdi_home",
+            "lib_dir": str(verdi_lib_dir),
+            "missing_libs": verdi_missing,
+            "message": (
+                f"VERDI_HOME is set to {verdi_home}, but required FSDB libs are missing: "
+                f"{', '.join(verdi_missing)}"
+            ),
+        }
+
+    return {
+        "enabled": False,
+        "source": None,
+        "lib_dir": None,
+        "missing_libs": list(FSDB_REQUIRED_LIBS),
+        "message": (
+            "FSDB runtime unavailable: provide VERDI_HOME or place libnsys.so/libnffr.so under "
+            f"{LOCAL_FSDB_RUNTIME_DIR}"
+        ),
+    }
+
 
 def get_case_list(verif_root: str) -> str:
     """verif/testcase/case_list"""
     return os.path.join(verif_root, CASE_LIST_FILE)
 
-def get_work_case_dir(verif_root: str, case_name: str) -> str:
-    """verif/work/work_<case>/"""
-    return os.path.join(verif_root, VERIF_WORK_DIR,
-                        WORK_CASE_PREFIX + case_name)
+
+def _missing_fsdb_libs(lib_dir: Path) -> list[str]:
+    if not lib_dir.is_dir():
+        return list(FSDB_REQUIRED_LIBS)
+    return [lib for lib in FSDB_REQUIRED_LIBS if not (lib_dir / lib).exists()]

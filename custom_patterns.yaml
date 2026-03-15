@@ -21,7 +21,11 @@
 #   description: "自定义总线协议 checker 输出"
 #   regex: 'CHECKER_ERROR\s+\[(?P<message>[^\]]+)\]\s+@\s+(?P<time>[\d.]+)\s+(?P<time_unit>ns|ps)'
 
-patterns: []
+patterns:
+  - name: tb_error
+    severity: ERROR
+    description: "Testbench 打印的 ERROR 行"
+    regex: 'ERROR:\s+(?P<message>.+)'
 
 # ──────────────────────────────────────────────────────────────────
 # 以下为内置格式参考（只读，修改不生效，内置格式在 log_parser.py 里硬编码）

@@ -1,7 +1,9 @@
 import os
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -101,5 +103,41 @@ Top Level Modules:
 
             interfaces = {item["name"]: item for item in hierarchy["interfaces"]}
             assert "my_if" in interfaces
+        finally:
+            tmp.cleanup()
+
+    def test_build_hierarchy_reads_each_source_once(self):
+        tmp, root = _make_project()
+        try:
+            log = root / "comp.log"
+            log.write_text(
+                f"""Command: vcs -f {root / 'dut' / 'filelist.f'} +incdir+{root / 'tb'}
+Parsing design file '{root / 'tb' / 'my_if.sv'}'
+Parsing design file '{root / 'tb' / 'my_agent.sv'}'
+Parsing design file '{root / 'tb' / 'my_env.sv'}'
+Parsing design file '{root / 'tb' / 'base_test.sv'}'
+Parsing design file '{root / 'tb' / 'my_case0.sv'}'
+Parsing design file '{root / 'tb' / 'top_tb.sv'}'
+Parsing design file '{root / 'dut' / 'dut.sv'}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            compile_result = parse_compile_log(str(log), "vcs")
+            open_counts = Counter()
+            real_open = open
+
+            def counting_open(path, *args, **kwargs):
+                if str(path).endswith((".sv", ".svh", ".v", ".vh")):
+                    open_counts[str(Path(path).resolve())] += 1
+                return real_open(path, *args, **kwargs)
+
+            with patch("builtins.open", side_effect=counting_open):
+                build_hierarchy(compile_result)
+
+            source_paths = [entry["path"] for entry in compile_result["files"]["user"]]
+            assert source_paths
+            for path in source_paths:
+                assert open_counts[path] == 1
         finally:
             tmp.cleanup()

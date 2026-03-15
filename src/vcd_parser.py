@@ -31,7 +31,7 @@ class VCDParser:
             "signal":  signal_path,
             "time_ps": time_ps,
             "time_ns": time_ps / 1000,
-            "value":   value,
+            "value":   _enrich_value(value),
         }
 
     def get_transitions(self, signal_path: str,
@@ -47,7 +47,7 @@ class VCDParser:
             "start_ps":         start_ps,
             "end_ps":           end_ps,
             "transition_count": len(filtered),
-            "transitions": [{"time_ps": t, "time_ns": t / 1000, "value": v}
+            "transitions": [{"time_ps": t, "time_ns": t / 1000, "value": _enrich_value(v)}
                             for t, v in filtered],
         }
 
@@ -63,10 +63,13 @@ class VCDParser:
                 sym   = self._resolve(path)
                 trans = self._transitions.get(sym, [])
                 filtered = [(t, v) for t, v in trans if start_ps <= t <= end_ps]
+                pre_window = [(t, v) for t, v in trans if t < start_ps][-extra_transitions:]
                 result[path] = {
-                    "value_at_center":       _value_at(trans, center_ps),
-                    "transitions_in_window": [{"time_ps": t, "time_ns": t / 1000, "value": v}
+                    "value_at_center":       _enrich_value(_value_at(trans, center_ps)),
+                    "transitions_in_window": [{"time_ps": t, "time_ns": t / 1000, "value": _enrich_value(v)}
                                               for t, v in filtered],
+                    "pre_window_transitions": [{"time_ps": t, "time_ns": t / 1000, "value": _enrich_value(v)}
+                                               for t, v in pre_window],
                 }
             except Exception as e:
                 result[path] = {"error": str(e)}
@@ -74,7 +77,9 @@ class VCDParser:
             "center_time_ps": center_ps,
             "center_time_ns": center_ps / 1000,
             "window_ps":      window_ps,
+            "extra_transitions": extra_transitions,
             "signals":        result,
+            "truncated":      False,
         }
 
     def get_summary(self) -> dict:
@@ -195,6 +200,31 @@ def _value_at(transitions: list, time_ps: int):
     if idx < 0:
         return None
     return transitions[idx][1]
+
+
+def _enrich_value(binary_str: str | None) -> dict | None:
+    if binary_str is None:
+        return None
+    result = {"bin": binary_str}
+    normalized = binary_str.strip()
+    if not normalized or any(c in normalized for c in "xXzZu?"):
+        result["hex"] = None
+        result["dec"] = None
+        return result
+    if normalized.startswith(("b", "B")):
+        normalized = normalized[1:]
+        result["bin"] = normalized
+    try:
+        val = int(normalized, 2)
+    except ValueError:
+        result["hex"] = None
+        result["dec"] = None
+        return result
+    width = len(normalized)
+    hex_width = max(1, (width + 3) // 4)
+    result["hex"] = f"0x{val:0{hex_width}x}"
+    result["dec"] = val
+    return result
 
 
 def _parse_timescale(ts_str: str) -> int:

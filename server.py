@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Waveform Analysis MCP Server
-用于 Claude Code（全局模式）
+用于支持 MCP 的调试客户端（例如 Codex、Claude Code）
 
 支持工具：
-  1. get_sim_paths          - 根据项目路径+case名，返回所有标准文件路径
+  1. get_sim_paths          - 自动发现 compile/sim/wave 路径，或列出可用 case
   2. parse_sim_log          - 解析仿真 log 摘要分组
   3. get_error_context      - 按行号提取报错上下文
   4. search_signals         - 在波形文件中按关键字搜索信号完整路径
@@ -28,9 +28,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from config import (
-    get_elab_log, get_sim_log, get_wave_file, get_case_list, get_work_case_dir,
     DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
-    DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
 )
 from src.log_parser import SimLogParser, get_error_context
 from src.vcd_parser import VCDParser
@@ -38,19 +37,73 @@ from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
+from src.path_discovery import discover_sim_paths
 from src.tb_hierarchy_builder import build_hierarchy
+from config import get_fsdb_runtime_info
 
-app = Server("waveform-mcp")
+
+SERVER_INSTRUCTIONS = """
+Waveform debug workflow:
+
+1. ALWAYS start with get_sim_paths to discover file paths and simulator type.
+   - Inspect discovery_mode first: root_dir, case_dir, or unknown.
+   - If discovery_mode is unknown, do not guess deeper paths; follow returned hints.
+   - If case_name is unknown in root_dir mode, omit it to get available_cases first.
+   - Inform the user early when hints show missing logs, empty logs, or missing waves.
+   - Prefer compile_logs entries with phase="elaborate" for build_tb_hierarchy.
+   - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
+
+2. Call build_tb_hierarchy before analyzing failures.
+   - Use the elaborate-phase compile_log and simulator from step 1.
+
+3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
+   - Use grouped errors to choose the first group_index to inspect.
+
+4. Call search_signals to confirm full hierarchical signal paths.
+   - Derive keywords from hierarchy output, error messages, or RTL source.
+
+5. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
+   - Follow analysis_guide in the result.
+
+6. Use deep-dive tools when needed:
+   - get_error_context for other groups
+   - get_signal_transitions for longer history
+   - get_signals_around_time for additional signals
+   - get_signal_at_time for exact values
+   - get_waveform_summary for waveform sanity checks
+""".strip()
+
+app = Server("waveform-mcp", instructions=SERVER_INSTRUCTIONS)
 
 # ── 全局缓存 ──────────────────────────────────────────────────────
-_fsdb_index_cache: dict[str, FSDBSignalIndex] = {}
-_parser_cache: dict[str, object] = {}          # wave_path → VCDParser / FSDBParser
+_fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
+_parser_cache: dict[str, tuple[tuple[int, int], object]] = {}          # wave_path → ((mtime_ns, size), parser)
+
+
+def _get_wave_signature(wave_path: str) -> tuple[int, int]:
+    stat = os.stat(wave_path)
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _dispose_cached_object(obj: object):
+    close = getattr(obj, "close", None)
+    if callable(close):
+        close()
+        return
+    parser = getattr(obj, "_parser", None)
+    parser_close = getattr(parser, "close", None)
+    if callable(parser_close):
+        parser_close()
 
 
 def _get_parser(wave_path: str):
     """返回缓存的 parser 实例，避免 VCD 重复解析 / FSDB 重复打开"""
-    if wave_path in _parser_cache:
-        return _parser_cache[wave_path]
+    signature = _get_wave_signature(wave_path)
+    cached = _parser_cache.get(wave_path)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+    if cached is not None:
+        _dispose_cached_object(cached[1])
     ext = wave_path.lower().rsplit(".", 1)[-1]
     if ext == "vcd":
         parser = VCDParser(wave_path)
@@ -58,7 +111,7 @@ def _get_parser(wave_path: str):
         parser = FSDBParser(wave_path)
     else:
         raise ValueError(f"不支持的波形格式: .{ext}")
-    _parser_cache[wave_path] = parser
+    _parser_cache[wave_path] = (signature, parser)
     return parser
 
 
@@ -73,8 +126,8 @@ async def list_tools():
         Tool(
             name="get_sim_paths",
             description=(
-                "根据 verif 目录根路径和 case 名称，返回所有标准仿真文件路径。"
-                "调用其他工具前先调用此工具，获取 log_path 和 wave_path。"
+                "自动发现 verif 目录下的编译日志、仿真日志和波形文件。"
+                "case_name 可选；省略时返回可用 case 列表。"
             ),
             inputSchema={
                 "type": "object",
@@ -82,9 +135,9 @@ async def list_tools():
                     "verif_root": {"type": "string",
                                    "description": "项目的 verif/ 目录绝对路径，如 /home/robin/Projects/i2c_lib/verif"},
                     "case_name":  {"type": "string",
-                                   "description": "case 名称，如 case0（对应 make SV_CASE=case0）"},
+                                   "description": "可选，case 名称，如 case0（对应 make SV_CASE=case0）"},
                 },
-                "required": ["verif_root", "case_name"],
+                "required": ["verif_root"],
             },
         ),
 
@@ -99,6 +152,11 @@ async def list_tools():
                 "properties": {
                     "log_path":  {"type": "string", "description": "仿真 log 文件绝对路径（irun.log）"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "max_groups": {
+                        "type": "integer",
+                        "description": f"最多返回多少个 error group，默认 {DEFAULT_MAX_GROUPS}",
+                        "default": DEFAULT_MAX_GROUPS,
+                    },
                 },
                 "required": ["log_path", "simulator"],
             },
@@ -134,8 +192,9 @@ async def list_tools():
             name="search_signals",
             description=(
                 "在波形文件（FSDB/VCD）中搜索包含关键字的信号，返回完整层级路径。"
-                "当 Claude 从 RTL 代码知道信号名但不知道完整路径时使用。"
+                "当客户端已知信号名但不知道完整层级路径时使用。"
                 "FSDB 通过遍历 scope 树建索引，不读 value change，适合 GB 级文件。"
+                "对 .fsdb 的支持受 get_sim_paths 返回的 fsdb_runtime.enabled 约束。"
             ),
             inputSchema={
                 "type": "object",
@@ -151,7 +210,7 @@ async def list_tools():
 
         Tool(
             name="get_signal_at_time",
-            description="查询波形文件中某个信号在指定时刻的值（ps 精度）",
+            description="查询波形文件中某个信号在指定时刻的值（ps 精度）。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -166,7 +225,7 @@ async def list_tools():
 
         Tool(
             name="get_signal_transitions",
-            description="获取信号在时间范围内的所有跳变记录",
+            description="获取信号在时间范围内的所有跳变记录。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -185,6 +244,7 @@ async def list_tools():
             description=(
                 "获取多个信号在指定时刻前后窗口内的值和跳变。"
                 "常用于：已知报错时刻，查看相关信号的上下文。"
+                "对 .fsdb 的支持受 fsdb_runtime.enabled 约束。"
             ),
             inputSchema={
                 "type": "object",
@@ -208,7 +268,7 @@ async def list_tools():
 
         Tool(
             name="get_waveform_summary",
-            description="获取波形文件基本信息：格式、仿真时长、顶层模块等",
+            description="获取波形文件基本信息：格式、仿真时长、顶层模块等。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -240,6 +300,7 @@ async def list_tools():
             description=(
                 "核心分析工具：聚焦单个报错 group 的第一次出现，"
                 "返回 log 摘要、报错原始上下文和波形快照。"
+                "对 .fsdb 的支持受 get_sim_paths 返回的 fsdb_runtime.enabled 约束。"
             ),
             inputSchema={
                 "type": "object",
@@ -247,7 +308,7 @@ async def list_tools():
                     "log_path":     {"type": "string", "description": "仿真 log 路径（irun.log）"},
                     "wave_path":    {"type": "string", "description": "波形文件路径（top_tb.fsdb）"},
                     "signal_paths": {"type": "array", "items": {"type": "string"},
-                                     "description": "需要提取的信号完整路径列表（Claude 从 RTL 推断后用 search_signals 确认）"},
+                                     "description": "需要提取的信号完整路径列表（客户端从 RTL 或 log 推断后用 search_signals 确认）"},
                     "window_ps":    {"type": "integer",
                                      "description": f"每个报错时刻前后的波形窗口 ps，默认 {DEFAULT_WAVE_WINDOW_PS}",
                                      "default": DEFAULT_WAVE_WINDOW_PS},
@@ -277,29 +338,22 @@ async def call_tool(name: str, arguments: dict):
                             text=json.dumps(result, ensure_ascii=False, indent=2))]
     except Exception as e:
         return [TextContent(type="text",
-                            text=json.dumps({"error": str(e)}, ensure_ascii=False))]
+                            text=json.dumps(_format_error(e), ensure_ascii=False))]
 
 
 async def _dispatch(name: str, args: dict):
 
     if name == "get_sim_paths":
-        vr   = args["verif_root"]
-        case = args["case_name"]
-        return {
-            "verif_root":    vr,
-            "case_name":     case,
-            "elab_log":      get_elab_log(vr),
-            "sim_log":       get_sim_log(vr, case),
-            "wave_file":     get_wave_file(vr, case),
-            "work_case_dir": get_work_case_dir(vr, case),
-            "case_list":     get_case_list(vr),
-        }
+        return discover_sim_paths(
+            args["verif_root"],
+            args.get("case_name"),
+        )
 
     elif name == "parse_sim_log":
         return SimLogParser(
             args["log_path"],
             args["simulator"]
-        ).parse()
+        ).parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
 
     elif name == "get_error_context":
         return get_error_context(
@@ -315,9 +369,13 @@ async def _dispatch(name: str, args: dict):
         max_r      = args.get("max_results", 50)
         ext = wave_path.lower().rsplit(".", 1)[-1]
         if ext == "fsdb":
-            if wave_path not in _fsdb_index_cache:
-                _fsdb_index_cache[wave_path] = FSDBSignalIndex(wave_path)
-            return _fsdb_index_cache[wave_path].search(keyword, max_r)
+            signature = _get_wave_signature(wave_path)
+            cached = _fsdb_index_cache.get(wave_path)
+            if cached is None or cached[0] != signature:
+                if cached is not None:
+                    _dispose_cached_object(cached[1])
+                _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
+            return _fsdb_index_cache[wave_path][1].search(keyword, max_r)
         elif ext == "vcd":
             return _get_parser(wave_path).search_signals(keyword, max_r)
         else:
@@ -368,6 +426,21 @@ async def _dispatch(name: str, args: dict):
 
     else:
         raise ValueError(f"未知工具: {name}")
+
+
+def _format_error(exc: Exception) -> dict:
+    message = str(exc)
+    if "FSDB 解析不可用" in message:
+        return {
+            "error": message,
+            "error_code": "fsdb_runtime_unavailable",
+            "fsdb_runtime": get_fsdb_runtime_info(),
+            "fallback": {
+                "supported_wave_formats": ["vcd"],
+                "action": "prefer_vcd_waveforms",
+            },
+        }
+    return {"error": message}
 
 
 # ═══════════════════════════════════════════════════════════════════

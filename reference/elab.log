@@ -1,0 +1,525 @@
+xrun(64): 18.03-s001: (c) Copyright 1995-2018 Cadence Design Systems, Inc.
+TOOL:	xrun(64)	18.03-s001: Started on Mar 13, 2026 at 20:43:24 PDT
+xrun
+	-elaborate
+	+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL
+	-64bit
+	-mess
+	-disable_sem2009
+	-verbose
+	-uvmpackagename /tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src
+	/tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv
+	-incdir /tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src
+	+define+UVM_NO_DEPRECATED
+	+define+XCELIUM
+	-incdir /home/robin/Projects/uvm_demo/tb/../tb
+	-f /home/robin/Projects/uvm_demo/tb/../dut/filelist.f
+		+incdir+/tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src
+		/tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv
+		/home/robin/Projects/uvm_demo/tb/../tb/assertion/5.2/sva_top.sv
+		/home/robin/Projects/uvm_demo/tb/../dut/dut.sv
+		-f /home/robin/Projects/uvm_demo/tb/../dut/des_rtl.f
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/crp.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox1.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox2.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox3.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox4.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox5.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox6.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox7.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox8.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/perf_opt/des.v
+			/home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/perf_opt/key_sel.v
+		/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv
+	-timescale 1ns/10ps
+	-access +rc
+	-64bit
+	-mess
+	+xmnontcglitch
+	-top top_tb
+	-loadpli /tools/synopsys/verdi/O-2018.09-SP2-11/share/PLI/IUS/linux64/boot/debpli.so
+	-notimingchecks
+	-nospecify
+	-log /home/robin/Projects/uvm_demo/tb/work/elab.log
+file: /tools/cadence/XCELIUM1803/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv
+	package worklib.uvm_pkg:sv
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../tb/assertion/5.2/sva_top.sv
+	module worklib.sva_top:sv
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../dut/dut.sv
+	module worklib.dut:sv
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/crp.v
+	module worklib.crp:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox1.v
+	module worklib.sbox1:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox2.v
+	module worklib.sbox2:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox3.v
+	module worklib.sbox3:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox4.v
+	module worklib.sbox4:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox5.v
+	module worklib.sbox5:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox6.v
+	module worklib.sbox6:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox7.v
+	module worklib.sbox7:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/common/sbox8.v
+	module worklib.sbox8:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/perf_opt/des.v
+	module worklib.des:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../des_latest/des/trunk/rtl/verilog/perf_opt/key_sel.v
+	module worklib.key_sel:v
+		errors: 0, warnings: 0
+file: /home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv
+	interface worklib.my_if:sv
+		errors: 0, warnings: 0
+	interface worklib.bus_if:sv
+		errors: 0, warnings: 0
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|5): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|6): non-printable character (0x8d) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|7): non-printable character (0x95) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|8): non-printable character (0xe4) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|9): non-printable character (0xbd) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|10): non-printable character (0x8d) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|11): non-printable character (0xe3) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|12): non-printable character (0x80) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|13): non-printable character (0x81) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|14): non-printable character (0xe7) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|15): non-printable character (0xb2) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|16): non-printable character (0xbe) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                 |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|17): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                  |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|18): non-printable character (0xba) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                   |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|19): non-printable character (0xa6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                    |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|20): non-printable character (0xe3) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|21): non-printable character (0x80) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|22): non-printable character (0x81) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|23): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|24): non-printable character (0xb0) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|25): non-printable character (0x8f) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|26): non-printable character (0xe6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|27): non-printable character (0x95) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|28): non-printable character (0xb0) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|29): non-printable character (0xe4) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|30): non-printable character (0xbd) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|31): non-printable character (0x8d) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|32): non-printable character (0xe6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                 |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|33): non-printable character (0x95) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                  |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|34): non-printable character (0xb0) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                   |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|35): non-printable character (0xe3) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                    |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|36): non-printable character (0x80) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|37): non-printable character (0x81) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|38): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|39): non-printable character (0x8d) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|40): non-printable character (0x95) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|41): non-printable character (0xe4) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|42): non-printable character (0xbd) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|43): non-printable character (0x8d) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|44): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|45): non-printable character (0xad) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|46): non-printable character (0x97) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|47): non-printable character (0xe7) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|48): non-printable character (0xac) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                 |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|49): non-printable character (0xa6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                  |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|50): non-printable character (0xe4) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                   |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|51): non-printable character (0xb8) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                    |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|52): non-printable character (0xb2) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|53): non-printable character (0xe3) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|54): non-printable character (0x80) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|55): non-printable character (0x81) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|56): non-printable character (0xe6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|57): non-printable character (0x9c) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|58): non-printable character (0x80) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|59): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|60): non-printable character (0xb0) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|61): non-printable character (0x8f) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|62): non-printable character (0xe6) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|63): non-printable character (0x98) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|64): non-printable character (0xbe) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                 |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|65): non-printable character (0xe7) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                  |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|66): non-printable character (0xa4) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                   |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|67): non-printable character (0xba) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                    |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|68): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|69): non-printable character (0xae) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|70): non-printable character (0xbd) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|71): non-printable character (0xe5) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|72): non-printable character (0xba) ignored.
+  // 单位、精度、小数位数、单位字符串、最小显示宽度
+                                                                         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,89|73): non-printable character (0xa6) ignored.
+  // 其他常见设置示例：
+     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|5): non-printable character (0xe5) ignored.
+  // 其他常见设置示例：
+      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|6): non-printable character (0x85) ignored.
+  // 其他常见设置示例：
+       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|7): non-printable character (0xb6) ignored.
+  // 其他常见设置示例：
+        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|8): non-printable character (0xe4) ignored.
+  // 其他常见设置示例：
+         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|9): non-printable character (0xbb) ignored.
+  // 其他常见设置示例：
+          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|10): non-printable character (0x96) ignored.
+  // 其他常见设置示例：
+           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|11): non-printable character (0xe5) ignored.
+  // 其他常见设置示例：
+            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|12): non-printable character (0xb8) ignored.
+  // 其他常见设置示例：
+             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|13): non-printable character (0xb8) ignored.
+  // 其他常见设置示例：
+              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|14): non-printable character (0xe8) ignored.
+  // 其他常见设置示例：
+               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|15): non-printable character (0xa7) ignored.
+  // 其他常见设置示例：
+                |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|16): non-printable character (0x81) ignored.
+  // 其他常见设置示例：
+                 |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|17): non-printable character (0xe8) ignored.
+  // 其他常见设置示例：
+                  |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|18): non-printable character (0xae) ignored.
+  // 其他常见设置示例：
+                   |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|19): non-printable character (0xbe) ignored.
+  // 其他常见设置示例：
+                    |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|20): non-printable character (0xe7) ignored.
+  // 其他常见设置示例：
+                     |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|21): non-printable character (0xbd) ignored.
+  // 其他常见设置示例：
+                      |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|22): non-printable character (0xae) ignored.
+  // 其他常见设置示例：
+                       |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|23): non-printable character (0xe7) ignored.
+  // 其他常见设置示例：
+                        |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|24): non-printable character (0xa4) ignored.
+  // 其他常见设置示例：
+                         |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|25): non-printable character (0xba) ignored.
+  // 其他常见设置示例：
+                          |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|26): non-printable character (0xe4) ignored.
+  // 其他常见设置示例：
+                           |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|27): non-printable character (0xbe) ignored.
+  // 其他常见设置示例：
+                            |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|28): non-printable character (0x8b) ignored.
+  // 其他常见设置示例：
+                             |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|29): non-printable character (0xef) ignored.
+  // 其他常见设置示例：
+                              |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|30): non-printable character (0xbc) ignored.
+  // 其他常见设置示例：
+                               |
+xmvlog: *W,NONPRT (/home/robin/Projects/uvm_demo/tb/../tb/top_tb.sv,91|31): non-printable character (0x9a) ignored.
+	module worklib.top_tb:sv
+		errors: 0, warnings: 96
+	Elaborating the design hierarchy:
+		Caching library 'worklib' ....... Done
+	Top level design units:
+		uvm_pkg
+		$unit_0x63fa6a30
+		top_tb
+	Building instance overlay tables: .................... Done
+	Generating native compiled code:
+		worklib.dut:sv <0x010e51af>
+			streams:   7, words:  2483
+		worklib.sva_top:sv <0x43bc51fc>
+			streams:  15, words: 11080
+		worklib.uvm_pkg:sv <0x04a56b34>
+			streams:   8, words:  8278
+		worklib.uvm_pkg:sv <0x09de9d2b>
+			streams:   8, words:  7903
+		worklib.uvm_pkg:sv <0x1dbe97d4>
+			streams:   7, words:  7262
+		worklib.uvm_pkg:sv <0x378f0839>
+			streams:   7, words:  1844
+		worklib.uvm_pkg:sv <0x596bc63a>
+			streams:   9, words:  3380
+		worklib.uvm_pkg:sv <0x20612de0>
+			streams:  22, words: 57463
+		worklib.uvm_pkg:sv <0x30192446>
+			streams:   7, words:  1844
+		worklib.uvm_pkg:sv <0x1db2d1b9>
+			streams:  17, words: 15680
+		worklib.uvm_pkg:sv <0x54a7e94a>
+			streams:  26, words: 37585
+		worklib.uvm_pkg:sv <0x23b4477d>
+			streams:  16, words: 20507
+		worklib.uvm_pkg:sv <0x6f8f9bad>
+			streams:  26, words: 33004
+		worklib.uvm_pkg:sv <0x2c6e73b6>
+			streams:  25, words: 57846
+		worklib.uvm_pkg:sv <0x6c96d7e3>
+			streams:  27, words: 36210
+		worklib.uvm_pkg:sv <0x031b655d>
+			streams:  26, words: 51680
+		worklib.uvm_pkg:sv <0x27a66456>
+			streams:  27, words: 39158
+		worklib.uvm_pkg:sv <0x5ec65407>
+			streams:  25, words: 55935
+		worklib.uvm_pkg:sv <0x15959938>
+			streams:  27, words: 41370
+		worklib.uvm_pkg:sv <0x57ea1a12>
+			streams:  25, words: 62408
+		worklib.uvm_pkg:sv <0x278f403e>
+			streams:  27, words: 46424
+		worklib.uvm_pkg:sv <0x04d91fa5>
+			streams:  25, words: 56377
+		worklib.uvm_pkg:sv <0x1f2c2788>
+			streams:  25, words: 59000
+		worklib.uvm_pkg:sv <0x0edbe99c>
+			streams:  27, words: 38404
+		worklib.uvm_pkg:sv <0x06b997ac>
+			streams:  25, words: 56361
+		worklib.uvm_pkg:sv <0x7bd18d6f>
+			streams:  29, words: 93775
+		worklib.uvm_pkg:sv <0x4b3a9c19>
+			streams:  71, words: 125593
+		worklib.uvm_pkg:sv <0x491e9944>
+			streams:  23, words: 22200
+		worklib.\$unit_0x63fa6a30 :compilation_unit <0x4132f156>
+			streams:  57, words: 88680
+		worklib.uvm_pkg:sv <0x39941a67>
+			streams:   7, words:  3126
+		worklib.uvm_pkg:sv <0x712ed3b1>
+			streams:  26, words: 30633
+		worklib.uvm_pkg:sv <0x259a4f57>
+			streams:   7, words:  2348
+		worklib.uvm_pkg:sv <0x5884984a>
+			streams:  39, words: 37000
+		worklib.uvm_pkg:sv <0x3eb45aea>
+			streams:  24, words: 23309
+		worklib.uvm_pkg:sv <0x4d9d306a>
+			streams:  52, words: 52593
+		worklib.uvm_pkg:sv <0x0c48e7e5>
+			streams:  25, words: 31060
+		worklib.uvm_pkg:sv <0x38a72b26>
+			streams:  24, words: 23309
+		worklib.uvm_pkg:sv <0x75bf120e>
+			streams:   9, words:  4840
+		worklib.uvm_pkg:sv <0x3bdda0b9>
+			streams:  58, words: 58770
+		worklib.uvm_pkg:sv <0x670e1179>
+			streams:  25, words: 30049
+		worklib.uvm_pkg:sv <0x60969085>
+			streams:   7, words:  3126
+		worklib.uvm_pkg:sv <0x21e95c8b>
+			streams:  26, words: 47631
+		worklib.uvm_pkg:sv <0x0927383d>
+			streams:   7, words:  3126
+		worklib.uvm_pkg:sv <0x0e77d682>
+			streams:  32, words: 31876
+		worklib.uvm_pkg:sv <0x5691c0cc>
+			streams:  26, words: 32757
+		worklib.uvm_pkg:sv <0x6f5e4c08>
+			streams:  26, words: 29421
+		worklib.uvm_pkg:sv <0x64563460>
+			streams:  22, words: 19507
+		worklib.uvm_pkg:sv <0x2bb09a1e>
+			streams: 310, words: 396584
+		worklib.uvm_pkg:sv <0x286470bc>
+			streams:  24, words: 43599
+		worklib.uvm_pkg:sv <0x5f239868>
+			streams:  25, words: 27477
+		worklib.uvm_pkg:sv <0x147f806c>
+			streams:  25, words: 26084
+		worklib.uvm_pkg:sv <0x4ac710b4>
+			streams:  35, words: 40568
+		worklib.uvm_pkg:sv <0x04913e5e>
+			streams: 310, words: 396584
+		worklib.uvm_pkg:sv <0x056365c4>
+			streams:  26, words: 73748
+		worklib.top_tb:sv <0x72f1a090>
+			streams: 162, words: 252378
+		worklib.\$unit_0x63fa6a30 :compilation_unit <0x3926dd2a>
+			streams:   0, words:     0
+		worklib.uvm_pkg:sv <0x58c90e53>
+			streams: 4678, words: 8616481
+	Building instance specific data structures.
+	Loading native compiled code:     .................... Done
+	Design hierarchy summary:
+		                       Instances  Unique
+		Modules:                       3       3
+		Interfaces:                    3       2
+		Verilog packages:              1       1
+		Registers:                 14742    9995
+		Scalar wires:                 14       -
+		Vectored wires:                8       -
+		Named events:                  2      10
+		Always blocks:                21      21
+		Initial blocks:              336     179
+		Clocking blocks:               1       1
+		Parallel blocks:              21      22
+		Pseudo assignments:           11      11
+		Assertions:                    6       6
+		Compilation units:             1       1
+		SV Class declarations:       201     312
+		SV Class specializations:    419     419
+		Simulation timescale:        1ps
+	Writing initial simulation snapshot: worklib.top_tb:sv
+TOOL:	xrun(64)	18.03-s001: Exiting on Mar 13, 2026 at 20:43:40 PDT  (total: 00:00:16)

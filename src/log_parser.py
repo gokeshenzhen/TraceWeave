@@ -19,6 +19,7 @@ from config import (
     CUSTOM_PATTERNS_FILE,
     DEFAULT_LOG_CONTEXT_AFTER,
     DEFAULT_LOG_CONTEXT_BEFORE,
+    DEFAULT_MAX_GROUPS,
     UVM_PARSE_LEVELS,
 )
 
@@ -100,7 +101,7 @@ class SimLogParser:
             raise ValueError("simulator 必须为 'vcs' 或 'xcelium'")
         self._custom_patterns = self._load_custom_patterns()
 
-    def parse(self) -> dict[str, Any]:
+    def parse(self, max_groups: int = DEFAULT_MAX_GROUPS) -> dict[str, Any]:
         path = Path(self.log_path)
         if not path.exists():
             raise FileNotFoundError(f"Log 文件不存在: {self.log_path}")
@@ -161,6 +162,10 @@ class SimLogParser:
                 item["signature"],
             ),
         )
+        total_groups = len(group_list)
+        truncated = total_groups > max_groups
+        if truncated:
+            group_list = group_list[:max_groups]
 
         return {
             "log_file": self.log_path,
@@ -168,7 +173,10 @@ class SimLogParser:
             "total_errors": total_errors,
             "fatal_count": fatal_count,
             "error_count": error_count,
-            "unique_types": len(group_list),
+            "unique_types": total_groups,
+            "total_groups": total_groups,
+            "truncated": truncated,
+            "max_groups": max_groups,
             "first_error_line": first_error_line,
             "groups": group_list,
         }
@@ -195,6 +203,10 @@ class SimLogParser:
         if error is not None:
             return error
 
+        error = self._match_custom(line, line_num)
+        if error is not None:
+            return error
+
         if _GENERIC_ERROR_RE.search(line_lower):
             return ParsedError(
                 signature=f"ERROR: {line.strip()[:80]}",
@@ -204,7 +216,7 @@ class SimLogParser:
                 message=line.strip(),
             )
 
-        return self._match_custom(line, line_num)
+        return None
 
     def _match_vcs_assertion(self, line: str, line_num: int) -> ParsedError | None:
         match = _VCS_ASSERT_RE.search(line)

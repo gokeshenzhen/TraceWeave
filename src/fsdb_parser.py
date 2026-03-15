@@ -8,7 +8,9 @@ import ctypes
 import os
 from config import (
     DEFAULT_EXTRA_TRANSITIONS,
-    FSDB_LIB_DIR,
+    FSDB_REQUIRED_LIBS,
+    LOCAL_FSDB_RUNTIME_DIR,
+    get_fsdb_runtime_info,
     SIGNAL_SEARCH_MAX_RESULTS,
 )
 
@@ -23,6 +25,14 @@ def _load_wrapper():
             f"未找到 libfsdb_wrapper.so：{so_path}\n"
             f"请在 waveform_mcp/ 目录下执行：bash build_wrapper.sh"
         )
+    runtime_info = get_fsdb_runtime_info()
+    if not runtime_info["enabled"]:
+        raise RuntimeError(
+            "FSDB 解析不可用："
+            f"{runtime_info['message']}。\n"
+            "如果当前工程同时提供 VCD，请在后续工作流中优先使用 .vcd 波形。"
+        )
+    _ensure_wrapper_runtime_dir(runtime_info)
     # 先加载 Verdi 依赖库
     for libz in ("libz.so.1", "libz.so"):
         try:
@@ -31,13 +41,24 @@ def _load_wrapper():
         except OSError:
             pass
     for lib in ("libnsys.so", "libnffr.so"):
-        try:
-            ctypes.CDLL(os.path.join(FSDB_LIB_DIR, lib), ctypes.RTLD_GLOBAL)
-        except OSError:
-            pass
+        lib_path = os.path.join(runtime_info["lib_dir"], lib)
+        ctypes.CDLL(lib_path, ctypes.RTLD_GLOBAL)
     lib = ctypes.CDLL(so_path)
     _setup(lib)
     return lib
+
+
+def _ensure_wrapper_runtime_dir(runtime_info: dict):
+    if runtime_info["source"] != "verdi_home":
+        return
+    runtime_dir = LOCAL_FSDB_RUNTIME_DIR
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_dir = runtime_info["lib_dir"]
+    for lib in FSDB_REQUIRED_LIBS:
+        target = runtime_dir / lib
+        if target.exists():
+            continue
+        os.symlink(os.path.join(source_dir, lib), target)
 
 
 def _setup(lib):

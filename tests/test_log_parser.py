@@ -6,11 +6,13 @@ test_log_parser.py
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import src.log_parser as log_parser_module
 from src.log_parser import SimLogParser, get_error_context
 
 
@@ -41,6 +43,11 @@ Booting simulation
 INFO test has started
 timeout ERROR waiting for resp @ 45 ns
 still running
+"""
+
+CUSTOM_ERROR_LOG_SAMPLE = """\
+Booting simulation
+timeout ERROR waiting for resp @ 45 ns
 """
 
 
@@ -115,6 +122,57 @@ class TestGenericErrorFallback:
         assert group["first_time_ps"] == 45000
 
 
+class TestCustomPatterns:
+    def test_custom_pattern_overrides_generic_error(self, monkeypatch):
+        custom_patterns = Path(tempfile.mkdtemp()) / "custom_patterns.yaml"
+        custom_patterns.write_text(
+            "\n".join(
+                [
+                    "patterns:",
+                    "  - name: timeout_wait",
+                    "    severity: ERROR",
+                    "    regex: 'timeout ERROR waiting for resp @ (?P<time>[\\d.]+) (?P<time_unit>ns|ps)'",
+                    "    description: custom timeout matcher",
+                ]
+            )
+            + "\n"
+        )
+
+        log_path = _write_log(CUSTOM_ERROR_LOG_SAMPLE)
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", str(custom_patterns))
+
+        try:
+            result = SimLogParser(log_path, "vcs").parse()
+            group = result["groups"][0]
+            assert group["signature"] == "CUSTOM: timeout_wait"
+            assert group["first_time_ps"] == 45000
+        finally:
+            os.unlink(log_path)
+            custom_patterns.unlink()
+            custom_patterns.parent.rmdir()
+
+
+class TestGroupTruncation:
+    def setup_method(self):
+        lines = ["Booting simulation"]
+        for i in range(60):
+            lines.append(f"module_{i} ERROR unique issue {i} @ {i + 1} ns")
+        self.log_path = _write_log("\n".join(lines) + "\n")
+
+    def teardown_method(self):
+        os.unlink(self.log_path)
+
+    def test_parse_truncates_groups(self):
+        result = SimLogParser(self.log_path, "vcs").parse(max_groups=5)
+
+        assert result["total_errors"] == 60
+        assert result["unique_types"] == 60
+        assert result["total_groups"] == 60
+        assert result["truncated"] is True
+        assert result["max_groups"] == 5
+        assert len(result["groups"]) == 5
+
+
 class TestGetErrorContext:
     def setup_method(self):
         self.log_path = _write_log(VCS_LOG_SAMPLE)
@@ -158,6 +216,9 @@ class TestRealLog:
             "fatal_count",
             "error_count",
             "unique_types",
+            "total_groups",
+            "truncated",
+            "max_groups",
             "first_error_line",
             "groups",
         ]:
