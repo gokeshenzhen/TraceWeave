@@ -19,7 +19,17 @@ _VIRTUAL_IF_RE = re.compile(r"\bvirtual\s+(\w+)\s+(\w+)", re.IGNORECASE)
 _MODULE_INSTANCE_EXCLUDES = {
     "if", "for", "while", "case", "function", "task", "module", "class",
     "interface", "package", "return", "assign", "always", "initial",
+    "else", "repeat", "generate", "begin", "end",
 }
+
+
+def _classify_node(module_name: str, instance_name: str) -> str:
+    lower = f"{module_name}.{instance_name}".lower()
+    if any(token in lower for token in ("assert", "checker", "scoreboard", "uvm", "monitor", "agent")):
+        return "helper"
+    if any(token in lower for token in ("dut", "rtl", "core", "design")):
+        return "dut"
+    return "tb"
 
 
 def _strip_comments(text: str) -> str:
@@ -114,6 +124,7 @@ def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str])
             "type": "module",
             "class": item["module_name"],
             "src": child_src,
+            "role": _classify_node(item["module_name"], item["instance_name"]),
         }
         descendants = _add_module_children(item["module_name"], module_to_scan, seen)
         if descendants:
@@ -157,6 +168,7 @@ def _build_uvm_tree(class_name: str, class_to_scan: dict, seen: set[str]) -> dic
         child_node = {
             "class": item["class_name"],
             "src": child_scan["name"] if child_scan else "",
+            "role": _classify_node(item["class_name"], item["instance_name"]),
         }
         descendants = _build_uvm_tree(item["class_name"], class_to_scan, seen)
         if descendants:

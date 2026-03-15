@@ -251,8 +251,8 @@ class FSDBParser:
                 "name":  parts[0].split(".")[-1],
                 "width": int(parts[1]) if len(parts) > 1 else 0,
             })
-            if len(results) >= max_results:
-                break
+        results.sort(key=lambda item: (-_signal_rank(item["path"], keyword.lower()), item["path"]))
+        results = results[:max_results]
         return {
             "keyword":       keyword,
             "total_matched": count,
@@ -370,3 +370,19 @@ def _enrich_value(binary_str: str) -> dict:
     result["hex"] = f"0x{val:0{hex_width}x}"
     result["dec"] = val
     return result
+
+
+def _signal_rank(path: str, keyword: str) -> int:
+    lower = path.lower()
+    score = 0
+    if path.split(".")[-1].lower() == keyword:
+        score += 8
+    elif lower.endswith(f".{keyword}"):
+        score += 6
+    elif keyword in lower:
+        score += 3
+    if any(token in lower for token in ("dut", "core", "rtl", "design")):
+        score += 4
+    if any(token in lower for token in ("assert", "checker", "scoreboard", "uvm", "monitor")):
+        score -= 3
+    return score

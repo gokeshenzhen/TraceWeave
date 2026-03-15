@@ -84,6 +84,10 @@ class VCDParser:
 
     def get_summary(self) -> dict:
         self._ensure_parsed()
+        if self._end_time_ps == 0:
+            for transitions in self._transitions.values():
+                if transitions:
+                    self._end_time_ps = max(self._end_time_ps, transitions[-1][0])
         return {
             "file":                   self.file_path,
             "format":                 "VCD",
@@ -104,7 +108,9 @@ class VCDParser:
              "width": self._signals[s]["width"]}
             for p, s in self._path_to_sym.items()
             if kw in p.lower()
-        ][:max_results]
+        ]
+        matched.sort(key=lambda item: (-_signal_rank(item["path"], kw), item["path"]))
+        matched = matched[:max_results]
         return {
             "keyword":        keyword,
             "total_matched":  len(matched),
@@ -238,3 +244,19 @@ def _parse_timescale(ts_str: str) -> int:
             except ValueError:
                 pass
     return 1
+
+
+def _signal_rank(path: str, keyword: str) -> int:
+    lower = path.lower()
+    score = 0
+    if path.split(".")[-1].lower() == keyword:
+        score += 8
+    elif lower.endswith(f".{keyword}"):
+        score += 6
+    elif keyword in lower:
+        score += 3
+    if any(token in lower for token in ("dut", "core", "rtl", "design")):
+        score += 4
+    if any(token in lower for token in ("assert", "checker", "scoreboard", "uvm", "monitor")):
+        score -= 3
+    return score

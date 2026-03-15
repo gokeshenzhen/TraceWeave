@@ -88,6 +88,18 @@ class TestGroupedSummary:
     def test_first_error_line(self):
         assert self.result["first_error_line"] == 4
 
+    def test_failure_events_are_normalized(self):
+        events = SimLogParser(self.log_path, "vcs").parse_failure_events()
+        assert len(events) == 6
+        first = events[0]
+        assert first["event_id"].startswith("failure-")
+        assert first["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
+        assert first["time_ps"] == 290000
+        assert first["source_file"].endswith("sva_top.sv")
+        assert first["source_line"] == 66
+        assert first["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
+        assert first["structured_fields"]["assertion_name"] == "apUNEXPECTED_ASSERTION"
+
 
 class TestXceliumSummary:
     def setup_method(self):
@@ -151,6 +163,32 @@ class TestCustomPatterns:
             custom_patterns.unlink()
             custom_patterns.parent.rmdir()
 
+    def test_custom_pattern_builds_failure_event(self, monkeypatch):
+        custom_patterns = Path(tempfile.mkdtemp()) / "custom_patterns.yaml"
+        custom_patterns.write_text(
+            "\n".join(
+                [
+                    "patterns:",
+                    "  - name: sb_compare",
+                    "    severity: ERROR",
+                    "    regex: 'SB_FAIL src=(?P<source_file>[^ ]+) line=(?P<source_line>\\d+) inst=(?P<instance_path>[^ ]+) sig=(?P<signal>\\w+) @ (?P<time>[\\d.]+) (?P<time_unit>ns)'",
+                ]
+            )
+            + "\n"
+        )
+        log_path = _write_log("SB_FAIL src=/tmp/tb.sv line=42 inst=top_tb.dut sig=data @ 15 ns\n")
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", str(custom_patterns))
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["source_file"] == "/tmp/tb.sv"
+            assert event["source_line"] == 42
+            assert event["instance_path"] == "top_tb.dut"
+            assert event["structured_fields"]["signal"] == "data"
+        finally:
+            os.unlink(log_path)
+            custom_patterns.unlink()
+            custom_patterns.parent.rmdir()
+
 
 class TestGroupTruncation:
     def setup_method(self):
@@ -192,6 +230,39 @@ class TestGetErrorContext:
     def test_context_out_of_range(self):
         with pytest.raises(ValueError):
             get_error_context(self.log_path, line=999, before=1, after=1)
+
+
+class TestFailureEventDiff:
+    def test_diff_detects_resolved_persistent_and_new(self):
+        base_log = _write_log(
+            "\n".join(
+                [
+                    '"/path/a.sv", 10: top_tb.dut.apA: started at 10ns failed at 12ns',
+                    "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] mismatch a=1, b=0",
+                ]
+            )
+            + "\n"
+        )
+        new_log = _write_log(
+            "\n".join(
+                [
+                    '"/path/a.sv", 10: top_tb.dut.apA: started at 10ns failed at 14ns',
+                    "module_c ERROR unique issue c @ 3 ns",
+                ]
+            )
+            + "\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            assert diff["base_summary"]["total_events"] == 2
+            assert diff["new_summary"]["total_events"] == 2
+            assert len(diff["persistent_events"]) == 1
+            assert len(diff["resolved_events"]) == 1
+            assert len(diff["new_events"]) == 1
+            assert diff["persistent_events"][0]["time_shift_ps"] == 2000
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
 
 
 REAL_LOG = "/home/robin/Projects/mcp_demo/tb/work/work_my_case0/run.log"

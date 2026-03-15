@@ -1,12 +1,14 @@
 """
 log_parser.py
 支持两阶段仿真 log 分析：
-  1. parse(): 单遍流式扫描，返回分组摘要
-  2. get_error_context(): 按需提取指定报错附近的原始文本
+  1. parse(): 返回分组摘要
+  2. parse_failure_events(): 返回标准化 failure_event 列表
+  3. get_error_context(): 按需提取指定报错附近的原始文本
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import deque
 from dataclasses import dataclass
@@ -84,13 +86,24 @@ def _has_error_keyword(line_lower: str) -> bool:
     return any(keyword in line_lower for keyword in keywords)
 
 
+def _extract_structured_fields(line: str) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for match in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*([^\s,]+)", line):
+        fields[match.group(1)] = match.group(2)
+    return fields
+
+
 @dataclass
 class ParsedError:
-    signature: str
+    group_signature: str
     severity: str
     time_ps: int
     line_num: int
     message: str
+    source_file: str | None = None
+    source_line: int | None = None
+    instance_path: str | None = None
+    structured_fields: dict[str, Any] | None = None
 
 
 class SimLogParser:
@@ -102,84 +115,43 @@ class SimLogParser:
         self._custom_patterns = self._load_custom_patterns()
 
     def parse(self, max_groups: int = DEFAULT_MAX_GROUPS) -> dict[str, Any]:
+        return _build_summary(self.parse_failure_events(), self.log_path, self.simulator, max_groups)
+
+    def parse_failure_events(self) -> list[dict[str, Any]]:
         path = Path(self.log_path)
         if not path.exists():
             raise FileNotFoundError(f"Log 文件不存在: {self.log_path}")
 
-        groups: dict[str, dict[str, Any]] = {}
-        total_errors = 0
-        fatal_count = 0
-        error_count = 0
-        first_error_line = 0
-
+        events: list[dict[str, Any]] = []
         with path.open("r", errors="replace") as handle:
             for line_num, raw_line in enumerate(handle, 1):
                 line = raw_line.rstrip("\n")
                 line_lower = line.lower()
-                if not _has_error_keyword(line_lower):
-                    continue
-
                 error = self._try_match(line, line_lower, line_num)
                 if error is None:
                     continue
 
-                total_errors += 1
-                if error.severity == "FATAL":
-                    fatal_count += 1
-                else:
-                    error_count += 1
+                event_index = len(events) + 1
+                event = {
+                    "event_id": self._make_event_id(event_index, error),
+                    "group_signature": error.group_signature,
+                    "severity": error.severity,
+                    "log_path": self.log_path,
+                    "line": error.line_num,
+                    "time_ps": error.time_ps,
+                    "source_file": error.source_file,
+                    "source_line": error.source_line,
+                    "instance_path": error.instance_path,
+                    "message_text": error.message,
+                    "structured_fields": dict(error.structured_fields or {}),
+                }
+                events.append(event)
+        return events
 
-                if first_error_line == 0:
-                    first_error_line = line_num
-
-                group = groups.get(error.signature)
-                if group is None:
-                    groups[error.signature] = {
-                        "signature": error.signature,
-                        "severity": error.severity,
-                        "count": 1,
-                        "first_line": error.line_num,
-                        "first_time_ps": error.time_ps,
-                        "last_time_ps": error.time_ps,
-                    }
-                    continue
-
-                group["count"] += 1
-                if error.line_num < group["first_line"]:
-                    group["first_line"] = error.line_num
-                if group["first_time_ps"] == 0 or (
-                    error.time_ps and error.time_ps < group["first_time_ps"]
-                ):
-                    group["first_time_ps"] = error.time_ps
-                if error.time_ps > group["last_time_ps"]:
-                    group["last_time_ps"] = error.time_ps
-
-        group_list = sorted(
-            groups.values(),
-            key=lambda item: (
-                item["first_time_ps"] if item["first_time_ps"] > 0 else float("inf"),
-                item["first_line"],
-                item["signature"],
-            ),
-        )
-        total_groups = len(group_list)
-        truncated = total_groups > max_groups
-        if truncated:
-            group_list = group_list[:max_groups]
-
-        return {
-            "log_file": self.log_path,
-            "simulator": self.simulator,
-            "total_errors": total_errors,
-            "fatal_count": fatal_count,
-            "error_count": error_count,
-            "unique_types": total_groups,
-            "total_groups": total_groups,
-            "truncated": truncated,
-            "max_groups": max_groups,
-            "first_error_line": first_error_line,
-            "groups": group_list,
-        }
+    def diff_against(self, new_log_path: str) -> dict[str, Any]:
+        base_events = self.parse_failure_events()
+        new_events = SimLogParser(new_log_path, self.simulator).parse_failure_events()
+        return diff_failure_events(base_events, new_events)
 
     def get_error_context(
         self,
@@ -209,11 +181,12 @@ class SimLogParser:
 
         if _GENERIC_ERROR_RE.search(line_lower):
             return ParsedError(
-                signature=f"ERROR: {line.strip()[:80]}",
+                group_signature=f"ERROR: {line.strip()[:80]}",
                 severity="ERROR",
                 time_ps=_extract_time_ps(line),
                 line_num=line_num,
                 message=line.strip(),
+                structured_fields=_extract_structured_fields(line),
             )
 
         return None
@@ -225,11 +198,19 @@ class SimLogParser:
         assertion_name = match.group(3).split(".")[-1]
         fail_time_ps = _to_ps(float(match.group(6)), match.group(7))
         return ParsedError(
-            signature=f"ASSERTION_FAIL: {assertion_name}",
+            group_signature=f"ASSERTION_FAIL: {assertion_name}",
             severity="ERROR",
             time_ps=fail_time_ps,
             line_num=line_num,
             message=line.strip(),
+            source_file=match.group(1),
+            source_line=int(match.group(2)),
+            instance_path=match.group(3),
+            structured_fields={
+                "assertion_name": assertion_name,
+                "start_time_ps": _to_ps(float(match.group(4)), match.group(5)),
+                "fail_time_ps": fail_time_ps,
+            },
         )
 
     def _match_xcelium_assertion(self, line: str, line_num: int) -> ParsedError | None:
@@ -239,11 +220,21 @@ class SimLogParser:
         assertion_name = match.group(5).split(".")[-1]
         fail_time_ps = _to_ps(float(match.group(3)), match.group(4))
         return ParsedError(
-            signature=f"ASSERTION_FAIL: {assertion_name}",
+            group_signature=f"ASSERTION_FAIL: {assertion_name}",
             severity="ERROR",
             time_ps=fail_time_ps,
             line_num=line_num,
             message=line.strip(),
+            source_file=match.group(1),
+            source_line=int(match.group(2)),
+            instance_path=match.group(5),
+            structured_fields={
+                "assertion_name": assertion_name,
+                "start_time_ps": (
+                    _to_ps(float(match.group(6)), match.group(7)) if match.group(6) else None
+                ),
+                "fail_time_ps": fail_time_ps,
+            },
         )
 
     def _match_uvm(self, line: str, line_num: int) -> ParsedError | None:
@@ -258,11 +249,18 @@ class SimLogParser:
         signature = f"{level} [{tag}]" if tag else level
         time_ps = _to_ps(float(match.group(4)), match.group(5) or "ns")
         return ParsedError(
-            signature=signature,
+            group_signature=signature,
             severity=severity,
             time_ps=time_ps,
             line_num=line_num,
             message=(match.group(8) or "").strip(),
+            source_file=match.group(2),
+            source_line=int(match.group(3)),
+            instance_path=match.group(6),
+            structured_fields={
+                "reporter": match.group(6),
+                "tag": tag or None,
+            },
         )
 
     def _match_custom(self, line: str, line_num: int) -> ParsedError | None:
@@ -278,14 +276,35 @@ class SimLogParser:
             time_ps = 0
             if groups.get("time"):
                 time_ps = _to_ps(float(groups["time"]), groups.get("time_unit", "ns"))
+            structured_fields = {
+                key: value for key, value in groups.items()
+                if key not in {"message", "time", "time_unit", "source_file", "source_line", "instance_path"}
+            }
             return ParsedError(
-                signature=f"CUSTOM: {pattern.get('name', 'custom')}",
+                group_signature=f"CUSTOM: {pattern.get('name', 'custom')}",
                 severity=severity,
                 time_ps=time_ps,
                 line_num=line_num,
                 message=groups.get("message", line.strip()),
+                source_file=groups.get("source_file"),
+                source_line=int(groups["source_line"]) if groups.get("source_line") else None,
+                instance_path=groups.get("instance_path"),
+                structured_fields=structured_fields,
             )
         return None
+
+    def _make_event_id(self, event_index: int, error: ParsedError) -> str:
+        raw = "|".join(
+            [
+                self.log_path,
+                str(error.line_num),
+                str(error.time_ps),
+                error.group_signature,
+                error.message,
+            ]
+        )
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+        return f"failure-{event_index:06d}-{digest}"
 
     def _load_custom_patterns(self) -> list[dict[str, Any]]:
         try:
@@ -305,6 +324,73 @@ class SimLogParser:
                 print(f"[WARN] custom_patterns.yaml 正则编译失败 ({pattern.get('name')}): {ex}")
                 pattern["compiled"] = None
         return patterns
+
+
+def _build_summary(
+    events: list[dict[str, Any]],
+    log_path: str,
+    simulator: str,
+    max_groups: int,
+) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    for event in events:
+        signature = event["group_signature"]
+        group = groups.get(signature)
+        if group is None:
+            groups[signature] = {
+                "signature": signature,
+                "severity": event["severity"],
+                "count": 1,
+                "first_line": event["line"],
+                "first_time_ps": event["time_ps"],
+                "last_time_ps": event["time_ps"],
+                "sample_event_id": event["event_id"],
+                "sample_message": event["message_text"][:160],
+                "source_file": event["source_file"],
+                "source_line": event["source_line"],
+                "instance_path": event["instance_path"],
+            }
+            continue
+
+        group["count"] += 1
+        if event["line"] < group["first_line"]:
+            group["first_line"] = event["line"]
+        if group["first_time_ps"] == 0 or (
+            event["time_ps"] and event["time_ps"] < group["first_time_ps"]
+        ):
+            group["first_time_ps"] = event["time_ps"]
+        if event["time_ps"] > group["last_time_ps"]:
+            group["last_time_ps"] = event["time_ps"]
+
+    group_list = sorted(
+        groups.values(),
+        key=lambda item: (
+            item["first_time_ps"] if item["first_time_ps"] > 0 else float("inf"),
+            item["first_line"],
+            item["signature"],
+        ),
+    )
+    total_groups = len(group_list)
+    truncated = total_groups > max_groups
+    if truncated:
+        group_list = group_list[:max_groups]
+
+    fatal_count = sum(1 for event in events if event["severity"] == "FATAL")
+    total_errors = len(events)
+    first_error_line = events[0]["line"] if events else 0
+    return {
+        "log_file": log_path,
+        "simulator": simulator,
+        "total_errors": total_errors,
+        "fatal_count": fatal_count,
+        "error_count": total_errors - fatal_count,
+        "unique_types": total_groups,
+        "total_groups": total_groups,
+        "truncated": truncated,
+        "max_groups": max_groups,
+        "first_error_line": first_error_line,
+        "groups": group_list,
+    }
 
 
 def get_error_context(
@@ -351,3 +437,123 @@ def get_error_context(
         "end_line": selected[-1][0],
         "context": "\n".join(text for _, text in selected),
     }
+
+
+def diff_failure_events(base_events: list[dict[str, Any]], new_events: list[dict[str, Any]]) -> dict[str, Any]:
+    matched_base: set[int] = set()
+    matched_new: set[int] = set()
+    persistent_events: list[dict[str, Any]] = []
+
+    for new_idx, new_event in enumerate(new_events):
+        best_idx = _find_best_event_match(new_event, base_events, matched_base)
+        if best_idx is None:
+            continue
+        matched_base.add(best_idx)
+        matched_new.add(new_idx)
+        base_event = base_events[best_idx]
+        persistent_events.append(
+            {
+                "base_event": base_event,
+                "new_event": new_event,
+                "time_shift_ps": _time_shift_value(base_event, new_event),
+                "group_changed": base_event["group_signature"] != new_event["group_signature"],
+            }
+        )
+
+    resolved_events = [event for idx, event in enumerate(base_events) if idx not in matched_base]
+    introduced_events = [event for idx, event in enumerate(new_events) if idx not in matched_new]
+    changed_events = [
+        item for item in persistent_events
+        if item["group_changed"] or ((item["time_shift_ps"] or 0) > 0)
+    ]
+
+    comparison_notes = []
+    if len(base_events) != len(new_events):
+        comparison_notes.append(
+            f"Total failure events changed from {len(base_events)} to {len(new_events)}."
+        )
+    if changed_events:
+        comparison_notes.append(
+            f"{len(changed_events)} persistent events changed timing or grouping."
+        )
+
+    return {
+        "base_summary": _event_summary(base_events),
+        "new_summary": _event_summary(new_events),
+        "resolved_events": resolved_events,
+        "persistent_events": persistent_events,
+        "new_events": introduced_events,
+        "comparison_notes": comparison_notes,
+    }
+
+
+def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[str, int] = {}
+    for event in events:
+        groups[event["group_signature"]] = groups.get(event["group_signature"], 0) + 1
+    return {
+        "total_events": len(events),
+        "unique_groups": len(groups),
+        "groups": groups,
+    }
+
+
+def _find_best_event_match(
+    target_event: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    used_indexes: set[int],
+) -> int | None:
+    best_idx = None
+    best_score = 0
+    for idx, candidate in enumerate(candidates):
+        if idx in used_indexes:
+            continue
+        score = _match_score(candidate, target_event)
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+    return best_idx if best_score >= 4 else None
+
+
+def _match_score(base_event: dict[str, Any], new_event: dict[str, Any]) -> int:
+    score = 0
+    if base_event["group_signature"] == new_event["group_signature"]:
+        score += 4
+    if base_event.get("source_file") and base_event.get("source_file") == new_event.get("source_file"):
+        score += 2
+    if base_event.get("source_line") and base_event.get("source_line") == new_event.get("source_line"):
+        score += 2
+    if base_event.get("instance_path") and base_event.get("instance_path") == new_event.get("instance_path"):
+        score += 2
+    if _message_fingerprint(base_event["message_text"]) == _message_fingerprint(new_event["message_text"]):
+        score += 2
+    if _message_tokens(base_event["message_text"]) & _message_tokens(new_event["message_text"]):
+        score += 1
+    if not _time_shifted(base_event, new_event):
+        score += 1
+    return score
+
+
+def _message_fingerprint(message: str) -> str:
+    normalized = re.sub(r"\d+", "#", message.lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _message_tokens(message: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", message.lower())
+        if token not in {"error", "fatal", "expected", "got", "reporter"}
+    }
+
+
+def _time_shifted(base_event: dict[str, Any], new_event: dict[str, Any]) -> bool:
+    shift = _time_shift_value(base_event, new_event)
+    return shift is not None and shift > 0
+
+
+def _time_shift_value(base_event: dict[str, Any], new_event: dict[str, Any]) -> int | None:
+    base_time = base_event.get("time_ps") or 0
+    new_time = new_event.get("time_ps") or 0
+    if base_time <= 0 or new_time <= 0:
+        return None
+    return abs(new_time - base_time)

@@ -24,8 +24,8 @@ waveform_mcp/
     ├── vcd_parser.py       ← VCD 纯 Python 解析
     ├── fsdb_parser.py      ← FSDB 信号值查询（libnffr.so）
     ├── fsdb_signal_index.py← FSDB 信号路径搜索（scope 树索引，GB 级友好）
-    ├── log_parser.py       ← VCS+Xcelium assertion fail + UVM_ERROR/FATAL
-    └── analyzer.py         ← log + 波形联合分析
+    ├── log_parser.py       ← failure_event 归一化、group 摘要和 run diff
+    └── analyzer.py         ← failure_event + 波形 + hierarchy 联合分析与推荐
 ```
 
 ---
@@ -115,11 +115,24 @@ claude mcp list
    返回里还包含 `discovery_mode` 和可能的 `case_dir`
 2. 选 `phase == "elaborate"` 的 compile log，调用 `build_tb_hierarchy`
 3. 如果 `sim_logs` 非空，用 `sim_logs[0].path` 和 `simulator` 调用 `parse_sim_log`
+   当前返回不仅有 `groups`，还包含标准化后的 `failure_events`
 4. 选择波形文件：
    如果 `fsdb_runtime.enabled == false`，优先选 `.vcd`；否则可用 `.fsdb` 或 `.vcd`
-5. 用选中的 `wave_path` 调用 `search_signals`
-6. 调用 `analyze_failures(log_path, wave_path, signal_paths, simulator)`
-7. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
+5. 优先走 failure-event 中心流：
+   - 用 `failure_events[0]` 或选中的 event 调用 `analyze_failure_event`
+   - 或直接调用 `recommend_failure_debug_next_steps`
+6. 需要指定信号和单 group 快照时，再用 `search_signals` + `analyze_failures`
+7. 比较两次仿真收敛情况时，调用 `diff_sim_failure_results`
+8. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
+
+推荐的默认顺序：
+
+1. `get_sim_paths`
+2. `build_tb_hierarchy`
+3. `parse_sim_log`
+4. `recommend_failure_debug_next_steps` 或 `analyze_failure_event`
+5. 必要时 `search_signals` + `analyze_failures`
+6. 迭代调试时 `diff_sim_failure_results`
 
 ### Client Integration Example
 
@@ -138,9 +151,12 @@ claude mcp list
 | 工具 | 典型使用场景 |
 |------|-------------|
 | `get_sim_paths` | 第一步，自动发现 compile/sim/wave 路径，或列出可用 case |
-| `parse_sim_log` | 快速看有没有报错 |
+| `parse_sim_log` | 快速拿到 group 摘要和标准化 `failure_events` |
+| `diff_sim_failure_results` | 比较两次仿真的已解决 / 持续 / 新增失败 |
 | `search_signals` | 从 RTL 信号名找波形完整路径；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `analyze_failures` | 核心：报错 + 波形联合分析；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
+| `analyze_failure_event` | 从单个 `failure_event` 出发，联动实例、信号和源码候选 |
+| `recommend_failure_debug_next_steps` | 用户只说“调这个失败”时，给出默认优先看哪个失败/信号/实例 |
 | `get_signal_at_time` | 查特定时刻单个信号值；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_transitions` | 查信号完整跳变历史；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signals_around_time` | 查多个信号在某时刻的快照；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
@@ -157,10 +173,17 @@ patterns:
   - name: my_bus_checker
     severity: ERROR
     description: "自定义总线协议 checker"
-    regex: 'BUS_ERROR\s+\[(?P<message>[^\]]+)\]\s+@\s+(?P<time>[\d.]+)\s*(?P<time_unit>ns|ps)'
+    regex: 'BUS_ERROR\s+\[(?P<message>[^\]]+)\]\s+src=(?P<source_file>\S+)\s+line=(?P<source_line>\d+)\s+inst=(?P<instance_path>\S+)\s+@\s+(?P<time>[\d.]+)\s*(?P<time_unit>ns|ps)'
 ```
 
-必须包含命名捕获组 `(?P<message>...)` 和可选的 `(?P<time>...)` `(?P<time_unit>...)`。
+建议至少包含命名捕获组 `(?P<message>...)`，并尽量补充：
+
+- `(?P<time>...)` / `(?P<time_unit>...)`
+- `(?P<source_file>...)` / `(?P<source_line>...)`
+- `(?P<instance_path>...)`
+
+这些字段会直接进入标准化 `failure_event`，提升 `analyze_failure_event` 和 `recommend_failure_debug_next_steps` 的效果。
+
 修改后**无需重启**，下次调用 `parse_sim_log` 时自动生效。
 
 ---

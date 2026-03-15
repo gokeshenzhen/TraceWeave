@@ -6,13 +6,16 @@ Waveform Analysis MCP Server
 支持工具：
   1. get_sim_paths          - 自动发现 compile/sim/wave 路径，或列出可用 case
   2. parse_sim_log          - 解析仿真 log 摘要分组
-  3. get_error_context      - 按行号提取报错上下文
-  4. search_signals         - 在波形文件中按关键字搜索信号完整路径
-  5. get_signal_at_time     - 查询信号在某时刻的值
-  6. get_signal_transitions - 获取信号跳变列表
-  7. get_signals_around_time- 获取多个信号在某时刻前后的快照
-  8. get_waveform_summary   - 波形文件基本信息
-  9. analyze_failures       - 聚焦单个报错分组做 log + 波形联合分析
+  3. diff_sim_failure_results - 比较两次仿真的 failure_event 变化
+  4. get_error_context      - 按行号提取报错上下文
+  5. search_signals         - 在波形文件中按关键字搜索信号完整路径
+  6. get_signal_at_time     - 查询信号在某时刻的值
+  7. get_signal_transitions - 获取信号跳变列表
+  8. get_signals_around_time- 获取多个信号在某时刻前后的快照
+  9. get_waveform_summary   - 波形文件基本信息
+  10. analyze_failures      - 聚焦单个报错分组做 log + 波形联合分析
+  11. analyze_failure_event - 以 failure_event 为中心做联动分析
+  12. recommend_failure_debug_next_steps - 给出默认调试下一步
 """
 
 import asyncio
@@ -159,6 +162,23 @@ async def list_tools():
                     },
                 },
                 "required": ["log_path", "simulator"],
+            },
+        ),
+
+        Tool(
+            name="diff_sim_failure_results",
+            description=(
+                "比较两次仿真 log 的标准化 failure_event，"
+                "输出已解决、持续存在和新增的失败。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "base_log_path": {"type": "string", "description": "基线仿真 log"},
+                    "new_log_path": {"type": "string", "description": "新仿真 log"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                },
+                "required": ["base_log_path", "new_log_path", "simulator"],
             },
         ),
 
@@ -323,6 +343,45 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "signal_paths", "simulator"],
             },
         ),
+
+        Tool(
+            name="analyze_failure_event",
+            description=(
+                "从单个标准化 failure_event 出发，"
+                "联动波形、hierarchy 和源码信息返回推荐实例、信号和源码文件。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "log_path": {"type": "string"},
+                    "wave_path": {"type": "string"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "failure_event": {"type": "object", "description": "parse_sim_log 对应 log 的标准化 failure_event"},
+                    "compile_log": {"type": "string"},
+                    "top_hint": {"type": "string"},
+                },
+                "required": ["log_path", "wave_path", "simulator", "failure_event"],
+            },
+        ),
+
+        Tool(
+            name="recommend_failure_debug_next_steps",
+            description=(
+                "根据当前 log、wave 和可选 hierarchy，"
+                "自动选择优先分析的失败并推荐下一步看的信号、实例和故障类型。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "log_path": {"type": "string"},
+                    "wave_path": {"type": "string"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "compile_log": {"type": "string"},
+                    "top_hint": {"type": "string"},
+                },
+                "required": ["log_path", "wave_path", "simulator"],
+            },
+        ),
     ]
 
 
@@ -350,10 +409,19 @@ async def _dispatch(name: str, args: dict):
         )
 
     elif name == "parse_sim_log":
-        return SimLogParser(
+        parser = SimLogParser(
             args["log_path"],
             args["simulator"]
-        ).parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
+        )
+        summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
+        summary["failure_events"] = parser.parse_failure_events()
+        return summary
+
+    elif name == "diff_sim_failure_results":
+        return SimLogParser(
+            args["base_log_path"],
+            args["simulator"],
+        ).diff_against(args["new_log_path"])
 
     elif name == "get_error_context":
         return get_error_context(
@@ -422,6 +490,29 @@ async def _dispatch(name: str, args: dict):
             group_index  = args.get("group_index", 0),
             window_ps    = args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
             extra_transitions = args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
+        )
+
+    elif name == "analyze_failure_event":
+        return WaveformAnalyzer(
+            log_path=args["log_path"],
+            parser=_get_parser(args["wave_path"]),
+            simulator=args["simulator"],
+        ).analyze_failure_event(
+            failure_event=args["failure_event"],
+            wave_path=args["wave_path"],
+            compile_log=args.get("compile_log"),
+            top_hint=args.get("top_hint"),
+        )
+
+    elif name == "recommend_failure_debug_next_steps":
+        return WaveformAnalyzer(
+            log_path=args["log_path"],
+            parser=_get_parser(args["wave_path"]),
+            simulator=args["simulator"],
+        ).recommend_debug_next_steps(
+            wave_path=args["wave_path"],
+            compile_log=args.get("compile_log"),
+            top_hint=args.get("top_hint"),
         )
 
     else:

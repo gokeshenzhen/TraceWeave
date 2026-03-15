@@ -82,8 +82,67 @@ class TestDispatchParseSimLog:
             assert result["truncated"] is True
             assert result["max_groups"] == 2
             assert len(result["groups"]) == 2
+            assert len(result["failure_events"]) == 3
         finally:
             Path(log_path).unlink()
+
+    async def test_diff_sim_failure_results(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as base:
+            base.write("module_a ERROR unique issue a @ 1 ns\n")
+            base_path = base.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as new:
+            new.write("module_b ERROR unique issue b @ 2 ns\n")
+            new_path = new.name
+        try:
+            result = await server._dispatch(
+                "diff_sim_failure_results",
+                {
+                    "base_log_path": base_path,
+                    "new_log_path": new_path,
+                    "simulator": "vcs",
+                },
+            )
+            assert len(result["resolved_events"]) == 1
+            assert len(result["new_events"]) == 1
+        finally:
+            Path(base_path).unlink()
+            Path(new_path).unlink()
+
+
+@pytest.mark.anyio
+class TestNewAnalyzerTools:
+    async def test_recommend_failure_debug_next_steps(self, tmp_path):
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+        assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
+        assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
 
 @pytest.mark.anyio

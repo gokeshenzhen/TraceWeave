@@ -141,3 +141,35 @@ Top Level Modules:
                 assert open_counts[path] == 1
         finally:
             tmp.cleanup()
+
+    def test_component_tree_marks_roles_and_filters_pseudo_nodes(self):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            _write(root / "dut" / "checker.sv", "module checker; endmodule\n")
+            _write(
+                root / "tb" / "top_tb.sv",
+                """
+module dut; endmodule
+module top_tb;
+  dut dut_i();
+  checker checker_i();
+  if (1) begin end
+endmodu1e
+""".replace("endmodu1e", "endmodule"),
+            )
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{root / 'tb' / 'top_tb.sv'}'
+Parsing design file '{root / 'dut' / 'checker.sv'}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            hierarchy = build_hierarchy(parse_compile_log(str(log), "vcs"))
+            top = hierarchy["component_tree"]["top_tb"]
+            assert top["dut_i"]["role"] == "dut"
+            assert top["checker_i"]["role"] == "helper"
+            assert "if" not in top
+        finally:
+            tmp.cleanup()

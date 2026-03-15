@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.analyzer import WaveformAnalyzer
+from src.log_parser import SimLogParser
 
 
 LOG_SAMPLE = """\
@@ -26,6 +27,7 @@ tail
 class FakeWaveParser:
     def __init__(self):
         self.calls = []
+        self.search_calls = []
 
     def get_signals_around_time(self, signal_paths, center_time_ps, window_ps, extra_transitions):
         self.calls.append(
@@ -48,6 +50,21 @@ class FakeWaveParser:
                 for signal_path in signal_paths
             },
         }
+
+    def search_signals(self, keyword, max_results):
+        self.search_calls.append({"keyword": keyword, "max_results": max_results})
+        samples = {
+            "dut": [
+                {"path": "top_tb.dut.req", "name": "req", "width": 1},
+                {"path": "top_tb.scoreboard.req", "name": "req", "width": 1},
+            ],
+            "req": [
+                {"path": "top_tb.dut.req", "name": "req", "width": 1},
+                {"path": "top_tb.monitor.req", "name": "req", "width": 1},
+            ],
+            "apUNEXPECTED_ASSERTION": [],
+        }
+        return {"results": samples.get(keyword, [])}
 
 
 @pytest.fixture
@@ -95,9 +112,34 @@ class TestAnalysisStructure:
         result, _ = analysis
         assert result["remaining_groups"] == 1
 
+    def test_focused_event(self, analysis):
+        result, _ = analysis
+        assert result["focused_event"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
+        assert result["focused_event"]["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
+
 
 class TestAnalysisEdgeCases:
     def test_group_index_out_of_range(self, log_path):
         analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
         with pytest.raises(IndexError):
             analyzer.analyze(["top_tb.dut.req"], group_index=5)
+
+
+class TestFailureEventAnalysis:
+    def test_analyze_failure_event_ranks_dut_signals(self, log_path):
+        analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
+        event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+        result = analyzer.analyze_failure_event(event, wave_path="/tmp/wave.vcd", top_hint="top_tb")
+
+        assert result["time_anchor"]["kind"] == "exact"
+        assert result["likely_instances"][0]["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
+        assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
+    def test_recommend_debug_next_steps_picks_primary_target(self, log_path):
+        parser = FakeWaveParser()
+        analyzer = WaveformAnalyzer(log_path, parser, "vcs")
+        result = analyzer.recommend_debug_next_steps(wave_path="/tmp/wave.vcd", top_hint="top_tb")
+
+        assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
+        assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+        assert result["suspected_failure_class"] == "assertion/protocol issue"

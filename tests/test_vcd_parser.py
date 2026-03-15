@@ -55,3 +55,39 @@ def test_get_value_and_transitions_are_enriched(tmp_path: Path):
     assert value["value"]["bin"] == "0"
     assert value["value"]["hex"] == "0x0"
     assert transitions["transitions"][1]["value"]["bin"] == "1"
+
+
+def test_search_signals_prefers_dut_paths(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(
+        """\
+$timescale 1ns $end
+$scope module top_tb $end
+$scope module scoreboard $end
+$var wire 1 ! req $end
+$upscope $end
+$scope module dut $end
+$var wire 1 \" req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+0"
+"""
+    )
+
+    parser = VCDParser(str(wave))
+    result = parser.search_signals("req")
+
+    assert result["results"][0]["path"] == "top_tb.dut.req"
+
+
+def test_summary_uses_transition_end_time_fallback(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+
+    parser = VCDParser(str(wave))
+    summary = parser.get_summary()
+
+    assert summary["simulation_duration_ps"] == 15000

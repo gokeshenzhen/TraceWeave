@@ -1,9 +1,13 @@
 """
 analyzer.py
-聚焦单个报错分组的联合分析器：log 摘要 + 原始上下文 + 波形窗口
+聚焦单个报错分组与 failure_event 的联合分析器。
 """
 
 from __future__ import annotations
+
+import os
+import re
+from typing import Any
 
 from config import (
     DEFAULT_EXTRA_TRANSITIONS,
@@ -11,7 +15,17 @@ from config import (
     DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_WAVE_WINDOW_PS,
 )
+from .compile_log_parser import parse_compile_log
 from .log_parser import SimLogParser
+from .tb_hierarchy_builder import build_hierarchy
+
+
+_STOPWORDS = {
+    "error", "fatal", "uvm", "assertion", "failed", "failure", "reporter", "timeout",
+    "expected", "got", "compare", "mismatch", "top", "tb", "module",
+}
+_HELPER_TOKENS = ("assert", "checker", "scoreboard", "monitor", "agent", "uvm", "reporter", "sva")
+_DUT_TOKENS = ("dut", "core", "u_", "d_", "rtl", "design")
 
 
 class WaveformAnalyzer:
@@ -32,11 +46,13 @@ class WaveformAnalyzer:
         log_parser = SimLogParser(self.log_path, self.simulator)
         log_result = log_parser.parse()
         groups = log_result.get("groups", [])
+        events = log_parser.parse_failure_events()
 
         if not groups:
             return {
                 "summary": log_result,
                 "focused_group": None,
+                "focused_event": None,
                 "log_context": None,
                 "wave_context": None,
                 "remaining_groups": 0,
@@ -49,6 +65,7 @@ class WaveformAnalyzer:
             raise IndexError(f"group_index {group_index} 超出范围，当前 groups={len(groups)}")
 
         focused_group = dict(groups[group_index])
+        focused_event = _find_group_event(events, focused_group["sample_event_id"])
         first_time_ps = focused_group["first_time_ps"]
 
         log_context = log_parser.get_error_context(
@@ -56,25 +73,329 @@ class WaveformAnalyzer:
             before=log_before,
             after=log_after,
         )
-        wave_context = self.parser.get_signals_around_time(
-            signal_paths,
-            first_time_ps,
-            window_ps,
-            extra_transitions,
-        )
+        wave_context = None
+        if signal_paths and first_time_ps > 0:
+            wave_context = self.parser.get_signals_around_time(
+                signal_paths,
+                first_time_ps,
+                window_ps,
+                extra_transitions,
+            )
 
         return {
             "summary": log_result,
             "focused_group": focused_group,
+            "focused_event": focused_event,
             "log_context": log_context,
             "wave_context": wave_context,
             "remaining_groups": len(groups) - group_index - 1,
             "signals_queried": signal_paths,
             "extra_transitions": extra_transitions,
             "analysis_guide": {
-                "step1": "先看 focused_group 是否是最早出现且次数最多的报错类型",
-                "step2": "结合 log_context 判断该次报错前后的 transaction 和 checker 输出",
-                "step3": "在 wave_context 中核对关键信号在首次报错时刻附近的取值、窗口内跳变和窗口前历史",
-                "step4": "若 pre_window_transitions 仍不足，再单独调用 get_signal_transitions 追踪更长历史",
+                "step1": "先看 focused_group 是否是最早出现且更接近 DUT 的报错类型",
+                "step2": "结合 focused_event 的 source_file / instance_path 确定失败锚点",
+                "step3": "在 wave_context 中核对信号中心值、窗口内跳变和窗口前历史",
+                "step4": "若信号不够，再调用 recommend_failure_debug_next_steps 或 analyze_failure_event",
             },
         }
+
+    def analyze_failure_event(
+        self,
+        failure_event: dict[str, Any],
+        wave_path: str,
+        compile_log: str | None = None,
+        top_hint: str | None = None,
+    ) -> dict[str, Any]:
+        hierarchy = _load_hierarchy(compile_log) if compile_log else None
+        likely_instances = _rank_likely_instances(failure_event, hierarchy, top_hint)
+        related_source_files = _rank_related_source_files(failure_event, hierarchy, likely_instances)
+        recommended_signals = _recommend_signals(
+            self.parser,
+            failure_event,
+            likely_instances,
+            top_hint,
+        )
+
+        time_anchor = {
+            "time_ps": failure_event.get("time_ps") or None,
+            "kind": "exact" if (failure_event.get("time_ps") or 0) > 0 else "log_only",
+            "log_line": failure_event.get("line"),
+            "wave_path": wave_path,
+        }
+
+        reasoning = []
+        if failure_event.get("instance_path"):
+            reasoning.append(f"Failure instance hint came from log path {failure_event['instance_path']}.")
+        if failure_event.get("source_file"):
+            reasoning.append(f"Source correlation used {os.path.basename(failure_event['source_file'])}.")
+        if recommended_signals:
+            reasoning.append("Signal suggestions were ranked to prefer DUT-visible paths over checker internals.")
+
+        return {
+            "failure_event": failure_event,
+            "time_anchor": time_anchor,
+            "likely_instances": likely_instances,
+            "recommended_signals": recommended_signals,
+            "related_source_files": related_source_files,
+            "reasoning_summary": reasoning,
+        }
+
+    def recommend_debug_next_steps(
+        self,
+        wave_path: str,
+        compile_log: str | None = None,
+        top_hint: str | None = None,
+    ) -> dict[str, Any]:
+        log_parser = SimLogParser(self.log_path, self.simulator)
+        events = log_parser.parse_failure_events()
+        if not events:
+            return {
+                "primary_failure_target": None,
+                "recommended_signals": [],
+                "recommended_instances": [],
+                "suspected_failure_class": "no_failure_detected",
+                "why": ["仿真 log 中未发现可归一化的失败事件"],
+            }
+
+        ranked_events = sorted(events, key=_failure_priority_key)
+        primary = ranked_events[0]
+        event_analysis = self.analyze_failure_event(primary, wave_path, compile_log=compile_log, top_hint=top_hint)
+        failure_class = _classify_failure(primary)
+        why = [
+            "Selected the earliest failure with the strongest available timing/source anchor.",
+            f"Failure classified heuristically as {failure_class}.",
+        ]
+        if event_analysis["likely_instances"]:
+            why.append("Hierarchy ranking preferred DUT-facing instances over helper/checker nodes.")
+
+        return {
+            "primary_failure_target": primary,
+            "recommended_signals": event_analysis["recommended_signals"],
+            "recommended_instances": event_analysis["likely_instances"],
+            "suspected_failure_class": failure_class,
+            "why": why,
+        }
+
+
+def _find_group_event(events: list[dict[str, Any]], event_id: str | None) -> dict[str, Any] | None:
+    for event in events:
+        if event["event_id"] == event_id:
+            return event
+    return None
+
+
+def _load_hierarchy(compile_log: str) -> dict[str, Any]:
+    return build_hierarchy(parse_compile_log(compile_log, "auto"))
+
+
+def _failure_priority_key(event: dict[str, Any]) -> tuple[int, int, int]:
+    severity_score = 0 if event.get("severity") == "FATAL" else 1
+    time_score = event.get("time_ps") if (event.get("time_ps") or 0) > 0 else 10**18
+    return severity_score, time_score, event.get("line") or 10**18
+
+
+def _classify_failure(event: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            event.get("group_signature") or "",
+            event.get("message_text") or "",
+            event.get("instance_path") or "",
+        ]
+    ).lower()
+    if any(token in text for token in ("assert", "protocol", "handshake", "ready", "valid")):
+        return "assertion/protocol issue"
+    if any(token in text for token in ("latency", "timeout", "cycle", "delay")):
+        return "timing/latency"
+    if any(token in text for token in ("expected", "got", "compare", "mismatch", "data")):
+        return "data-path corruption"
+    if any(token in text for token in ("scoreboard", "checker", "uvm_test_top", "monitor")):
+        return "checker/testbench issue"
+    return "control/handshake"
+
+
+def _flatten_component_tree(tree: dict[str, Any], prefix: str = "") -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for name, payload in tree.items():
+        instance_path = f"{prefix}.{name}" if prefix else name
+        node = dict(payload)
+        node["instance_path"] = instance_path
+        nodes.append(node)
+        children = payload.get("children", {})
+        if children:
+            nodes.extend(_flatten_component_tree(children, instance_path))
+    return nodes
+
+
+def _rank_likely_instances(
+    failure_event: dict[str, Any],
+    hierarchy: dict[str, Any] | None,
+    top_hint: str | None,
+) -> list[dict[str, Any]]:
+    if hierarchy is None:
+        if failure_event.get("instance_path"):
+            return [{"instance_path": failure_event["instance_path"], "score": 10, "reason": "exact log instance"}]
+        return []
+
+    nodes = _flatten_component_tree(hierarchy.get("component_tree", {}))
+    event_path = failure_event.get("instance_path") or ""
+    top_module = top_hint or hierarchy.get("project", {}).get("top_module") or ""
+    ranked = []
+    for node in nodes:
+        path = node["instance_path"]
+        score = 0
+        reasons = []
+        if event_path and (path.endswith(event_path) or event_path.endswith(path)):
+            score += 8
+            reasons.append("path overlap with failure event")
+        if top_module and path.startswith(top_module):
+            score += 2
+            reasons.append("under top module")
+        role = _classify_path(path)
+        if role == "dut":
+            score += 3
+            reasons.append("DUT-facing instance")
+        elif role == "helper":
+            score -= 2
+        src = node.get("src") or ""
+        if failure_event.get("source_file") and os.path.basename(src) == os.path.basename(failure_event["source_file"]):
+            score += 3
+            reasons.append("same source file basename")
+        if score > 0:
+            ranked.append(
+                {
+                    "instance_path": path,
+                    "class": node.get("class"),
+                    "src": src,
+                    "score": score,
+                    "reason": ", ".join(reasons),
+                }
+            )
+    ranked.sort(key=lambda item: (-item["score"], item["instance_path"]))
+    return ranked[:6]
+
+
+def _rank_related_source_files(
+    failure_event: dict[str, Any],
+    hierarchy: dict[str, Any] | None,
+    likely_instances: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_files: dict[str, dict[str, Any]] = {}
+    if hierarchy:
+        for items in hierarchy.get("files", {}).values():
+            for item in items:
+                source_files[item["path"]] = {"path": item["path"], "score": 0, "reason": []}
+    if failure_event.get("source_file"):
+        source_files.setdefault(
+            failure_event["source_file"],
+            {"path": failure_event["source_file"], "score": 0, "reason": []},
+        )
+        source_files[failure_event["source_file"]]["score"] += 8
+        source_files[failure_event["source_file"]]["reason"].append("exact failure source")
+    for instance in likely_instances:
+        src = instance.get("src")
+        if not src:
+            continue
+        source_files.setdefault(src, {"path": src, "score": 0, "reason": []})
+        source_files[src]["score"] += max(1, instance["score"] // 2)
+        source_files[src]["reason"].append(f"linked from {instance['instance_path']}")
+    ranked = [
+        {"path": path, "score": info["score"], "reason": ", ".join(info["reason"])}
+        for path, info in source_files.items()
+        if info["score"] > 0
+    ]
+    ranked.sort(key=lambda item: (-item["score"], item["path"]))
+    return ranked[:6]
+
+
+def _recommend_signals(
+    parser,
+    failure_event: dict[str, Any],
+    likely_instances: list[dict[str, Any]],
+    top_hint: str | None,
+) -> list[dict[str, Any]]:
+    keywords = _extract_keywords(failure_event)
+    for instance in likely_instances[:3]:
+        keywords.extend(part for part in instance["instance_path"].split(".") if part not in keywords)
+    dedup_keywords = []
+    seen = set()
+    ordered_keywords = [top_hint, "dut", "req", "data", "valid", "ready"] + keywords
+    dedup_keywords = []
+    seen = set()
+    for keyword in ordered_keywords:
+        if keyword in seen or len(keyword) < 2:
+            continue
+        seen.add(keyword)
+        dedup_keywords.append(keyword)
+
+    suggestions: dict[str, dict[str, Any]] = {}
+    for keyword in dedup_keywords[:8]:
+        try:
+            result = parser.search_signals(keyword, 10)
+        except Exception:
+            continue
+        for item in result.get("results", []):
+            score = _score_signal_path(item["path"], keyword, failure_event, top_hint)
+            existing = suggestions.get(item["path"])
+            if existing is None or score > existing["score"]:
+                suggestions[item["path"]] = {
+                    "path": item["path"],
+                    "name": item["name"],
+                    "width": item.get("width", 0),
+                    "matched_keyword": keyword,
+                    "score": score,
+                }
+    ranked = sorted(suggestions.values(), key=lambda item: (-item["score"], item["path"]))
+    return ranked[:8]
+
+
+def _extract_keywords(failure_event: dict[str, Any]) -> list[str]:
+    keywords: list[str] = []
+    instance_path = failure_event.get("instance_path") or ""
+    keywords.extend(part for part in instance_path.split(".") if part)
+    if failure_event.get("source_file"):
+        keywords.append(os.path.splitext(os.path.basename(failure_event["source_file"]))[0])
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", failure_event.get("message_text") or ""):
+        lower = token.lower()
+        if lower not in _STOPWORDS:
+            keywords.append(token)
+    for value in (failure_event.get("structured_fields") or {}).values():
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", value):
+            keywords.extend(part for part in value.split(".") if part)
+    return keywords
+
+
+def _score_signal_path(
+    path: str,
+    keyword: str,
+    failure_event: dict[str, Any],
+    top_hint: str | None,
+) -> int:
+    lower = path.lower()
+    keyword_lower = keyword.lower()
+    score = 0
+    if path.split(".")[-1].lower() == keyword_lower:
+        score += 8
+    elif lower.endswith(f".{keyword_lower}"):
+        score += 6
+    elif keyword_lower in lower:
+        score += 3
+    if top_hint and lower.startswith(top_hint.lower()):
+        score += 2
+    role = _classify_path(path)
+    if role == "dut":
+        score += 4
+    elif role == "helper":
+        score -= 3
+    instance_path = (failure_event.get("instance_path") or "").lower()
+    if instance_path and instance_path in lower:
+        score += 3
+    return score
+
+
+def _classify_path(path: str) -> str:
+    lower = path.lower()
+    if any(token in lower for token in _HELPER_TOKENS):
+        return "helper"
+    if any(token in lower for token in _DUT_TOKENS):
+        return "dut"
+    return "neutral"
