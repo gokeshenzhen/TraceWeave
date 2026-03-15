@@ -13,7 +13,8 @@ graph TD
   A --> H[src/fsdb_signal_index.py]
   A --> I[src/compile_log_parser.py]
   A --> J[src/tb_hierarchy_builder.py]
-  A --> K[mcp.server / mcp.types]
+  A --> K[src/signal_driver.py]
+  A --> L[mcp.server / mcp.types]
 
   C --> B
   C --> I
@@ -24,34 +25,37 @@ graph TD
   E --> G
 
   D --> B
-  D --> L[custom_patterns.yaml]
-  D --> M[PyYAML]
+  D --> M[custom_patterns.yaml]
+  D --> N[PyYAML]
+
+  K --> I
+  K --> J
 
   H --> G
   H --> B
 
   G --> B
-  G --> N[libfsdb_wrapper.so]
-  G --> O[ctypes]
-  G --> P[Verdi FSDB libs<br/>libnsys.so / libnffr.so]
+  G --> O[libfsdb_wrapper.so]
+  G --> P[ctypes]
+  G --> Q[Verdi FSDB libs<br/>libnsys.so / libnffr.so]
 
-  N --> Q[fsdb_wrapper.cpp]
-  Q --> R[Verdi ffrAPI]
+  O --> R[fsdb_wrapper.cpp]
+  R --> S[Verdi ffrAPI]
 
-  S[build_wrapper.sh] --> Q
-  S --> P
+  T[build_wrapper.sh] --> R
+  T --> Q
 
-  T[tests/conftest.py] --> A
-  U[tests/test_log_parser.py] --> D
-  U --> B
-  V[tests/test_fsdb_parser.py] --> G
+  U[tests/conftest.py] --> A
+  V[tests/test_log_parser.py] --> D
   V --> B
-  W[tests/test_analyzer.py] --> E
-  W --> G
-  W --> D
-  X[tests/test_compile_log_parser.py] --> I
-  Y[tests/test_server.py] --> A
-  Z[tests/test_path_discovery.py] --> C
+  W[tests/test_fsdb_parser.py] --> G
+  W --> B
+  X[tests/test_analyzer.py] --> E
+  X --> G
+  X --> D
+  Y[tests/test_compile_log_parser.py] --> I
+  Z[tests/test_server.py] --> A
+  AA[tests/test_path_discovery.py] --> C
 ```
 
 ## Layering
@@ -66,6 +70,7 @@ Core logic
   src/tb_hierarchy_builder.py
   src/analyzer.py
   src/log_parser.py
+  src/signal_driver.py
 
 Waveform backends
   src/vcd_parser.py
@@ -91,5 +96,6 @@ Verification
 - `src/path_discovery.py` is the path discovery layer for compile logs, sim logs, and waveforms.
 - `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` provide compile-log-based structure extraction.
 - `src/analyzer.py` depends on the shared parser interface implemented by `VCDParser` and `FSDBParser`.
+- `src/signal_driver.py` is a lightweight source-link layer built on compile-log discovery and source scanning.
 - `src/fsdb_parser.py` is the Python/native boundary and resolves FSDB runtime from repo-local links first, then `VERDI_HOME`.
 - `fsdb_wrapper.cpp` is the native/tool-vendor boundary.

@@ -45,6 +45,11 @@ timeout ERROR waiting for resp @ 45 ns
 still running
 """
 
+MISSING_TIME_LOG_SAMPLE = """\
+Booting simulation
+plain ERROR missing time token
+"""
+
 CUSTOM_ERROR_LOG_SAMPLE = """\
 Booting simulation
 timeout ERROR waiting for resp @ 45 ns
@@ -99,6 +104,9 @@ class TestGroupedSummary:
         assert first["source_line"] == 66
         assert first["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
         assert first["structured_fields"]["assertion_name"] == "apUNEXPECTED_ASSERTION"
+        assert first["raw_time"] == "290000"
+        assert first["raw_time_unit"] == "ps"
+        assert first["time_parse_status"] == "exact"
 
 
 class TestXceliumSummary:
@@ -132,6 +140,43 @@ class TestGenericErrorFallback:
         group = self.result["groups"][0]
         assert group["signature"].startswith("ERROR: timeout ERROR waiting for resp")
         assert group["first_time_ps"] == 45000
+
+    def test_supported_time_patterns(self, monkeypatch):
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", "/tmp/does_not_exist.yaml")
+        log_path = _write_log(
+            "\n".join(
+                [
+                    "ERROR: @23100000 bare_at_form",
+                    "checker ERROR [23100ns] bracket_form",
+                    "module ERROR time=23100000 inferred_ticks",
+                ]
+            )
+            + "\n"
+        )
+        try:
+            events = SimLogParser(log_path, "vcs").parse_failure_events()
+            assert events[0]["time_ps"] == 23100000
+            assert events[0]["raw_time_unit"] == "ps"
+            assert events[0]["time_parse_status"] == "exact"
+            assert events[1]["time_ps"] == 23100000
+            assert events[1]["raw_time_unit"] == "ns"
+            assert events[2]["time_ps"] == 23100000
+            assert events[2]["raw_time_unit"] == "ticks"
+            assert events[2]["time_parse_status"] == "inferred"
+        finally:
+            os.unlink(log_path)
+
+    def test_missing_time_stays_null(self):
+        log_path = _write_log(MISSING_TIME_LOG_SAMPLE)
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["time_ps"] is None
+            assert event["raw_time"] is None
+            assert event["raw_time_unit"] is None
+            assert event["time_parse_status"] == "missing"
+            assert SimLogParser(log_path, "vcs").parse()["groups"][0]["first_time_ps"] is None
+        finally:
+            os.unlink(log_path)
 
 
 class TestCustomPatterns:
@@ -209,6 +254,21 @@ class TestGroupTruncation:
         assert result["truncated"] is True
         assert result["max_groups"] == 5
         assert len(result["groups"]) == 5
+
+
+class TestRerunHints:
+    def test_parse_summary_reports_previous_logs(self, tmp_path):
+        older = tmp_path / "run_prev.log"
+        current = tmp_path / "run.log"
+        older.write_text("module_a ERROR previous @ 1 ns\n")
+        current.write_text("module_b ERROR current @ 2 ns\n")
+        os.utime(older, (older.stat().st_atime, older.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["previous_log_detected"] is True
+        assert str(older.resolve()) in result["candidate_previous_logs"]
+        assert result["suggested_followup_tool"] == "diff_sim_failure_results"
 
 
 class TestGetErrorContext:

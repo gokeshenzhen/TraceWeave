@@ -26,6 +26,16 @@ _STOPWORDS = {
 }
 _HELPER_TOKENS = ("assert", "checker", "scoreboard", "monitor", "agent", "uvm", "reporter", "sva")
 _DUT_TOKENS = ("dut", "core", "u_", "d_", "rtl", "design")
+_ROLE_KEYWORDS = {
+    "control": ("start", "stop", "enable", "sel", "mode", "ctrl", "control"),
+    "state": ("state", "fsm", "phase"),
+    "counter": ("cnt", "count", "round", "step", "idx", "index"),
+    "input_reg": ("in_reg", "input_reg", "din_reg", "src_reg"),
+    "output": ("out", "data_o", "resp", "result"),
+    "output_reg": ("out_reg", "output_reg", "data_reg", "result_reg", "desin_reg"),
+    "status": ("status", "busy", "done", "err", "error", "fail"),
+    "handshake": ("valid", "ready", "req", "ack"),
+}
 
 
 class WaveformAnalyzer:
@@ -118,7 +128,7 @@ class WaveformAnalyzer:
 
         time_anchor = {
             "time_ps": failure_event.get("time_ps") or None,
-            "kind": "exact" if (failure_event.get("time_ps") or 0) > 0 else "log_only",
+            "kind": "exact" if failure_event.get("time_ps") is not None else "log_only",
             "log_line": failure_event.get("line"),
             "wave_path": wave_path,
         }
@@ -173,6 +183,8 @@ class WaveformAnalyzer:
             "recommended_signals": event_analysis["recommended_signals"],
             "recommended_instances": event_analysis["likely_instances"],
             "suspected_failure_class": failure_class,
+            "recommendation_strategy": "role_rank_v1",
+            "failure_window_center_ps": primary.get("time_ps"),
             "why": why,
         }
 
@@ -190,7 +202,7 @@ def _load_hierarchy(compile_log: str) -> dict[str, Any]:
 
 def _failure_priority_key(event: dict[str, Any]) -> tuple[int, int, int]:
     severity_score = 0 if event.get("severity") == "FATAL" else 1
-    time_score = event.get("time_ps") if (event.get("time_ps") or 0) > 0 else 10**18
+    time_score = event.get("time_ps") if event.get("time_ps") is not None else 10**18
     return severity_score, time_score, event.get("line") or 10**18
 
 
@@ -334,15 +346,24 @@ def _recommend_signals(
         except Exception:
             continue
         for item in result.get("results", []):
-            score = _score_signal_path(item["path"], keyword, failure_event, top_hint)
+            score_info = _score_signal_candidate(
+                parser=parser,
+                candidate=item,
+                keyword=keyword,
+                failure_event=failure_event,
+                likely_instances=likely_instances,
+                top_hint=top_hint,
+            )
             existing = suggestions.get(item["path"])
-            if existing is None or score > existing["score"]:
+            if existing is None or score_info["score"] > existing["score"]:
                 suggestions[item["path"]] = {
                     "path": item["path"],
                     "name": item["name"],
                     "width": item.get("width", 0),
-                    "matched_keyword": keyword,
-                    "score": score,
+                    "score": score_info["score"],
+                    "role": score_info["role"],
+                    "reason_codes": score_info["reason_codes"],
+                    "confidence": score_info["confidence"],
                 }
     ranked = sorted(suggestions.values(), key=lambda item: (-item["score"], item["path"]))
     return ranked[:8]
@@ -364,32 +385,128 @@ def _extract_keywords(failure_event: dict[str, Any]) -> list[str]:
     return keywords
 
 
-def _score_signal_path(
-    path: str,
+def _score_signal_candidate(
+    parser,
+    candidate: dict[str, Any],
     keyword: str,
     failure_event: dict[str, Any],
+    likely_instances: list[dict[str, Any]],
     top_hint: str | None,
-) -> int:
+) -> dict[str, Any]:
+    path = candidate["path"]
+    name = candidate["name"]
+    width = candidate.get("width", 0) or 0
     lower = path.lower()
     keyword_lower = keyword.lower()
     score = 0
-    if path.split(".")[-1].lower() == keyword_lower:
-        score += 8
-    elif lower.endswith(f".{keyword_lower}"):
+    reason_codes: list[str] = []
+
+    role = _infer_signal_role(name, path)
+    if role != "status":
+        score += 1
+    if role != "control":
+        pass
+    if role != "unknown":
+        score += 5
+        reason_codes.append(f"role_{role}")
+
+    if name.lower() == keyword_lower:
         score += 6
-    elif keyword_lower in lower:
-        score += 3
-    if top_hint and lower.startswith(top_hint.lower()):
-        score += 2
-    role = _classify_path(path)
-    if role == "dut":
+        reason_codes.append("exact_name_match")
+    elif lower.endswith(f".{keyword_lower}"):
         score += 4
-    elif role == "helper":
-        score -= 3
-    instance_path = (failure_event.get("instance_path") or "").lower()
-    if instance_path and instance_path in lower:
+        reason_codes.append("suffix_name_match")
+    elif keyword_lower in lower:
+        score += 2
+        reason_codes.append("keyword_match")
+
+    instance_score, instance_reason = _score_instance_proximity(path, failure_event, likely_instances, top_hint)
+    score += instance_score
+    if instance_reason:
+        reason_codes.append(instance_reason)
+
+    activity_score, activity_reason = _score_activity_near_failure(parser, path, failure_event.get("time_ps"))
+    score += activity_score
+    if activity_reason:
+        reason_codes.append(activity_reason)
+
+    width_score, width_reason = _score_width_and_shape(name, width, role)
+    score += width_score
+    if width_reason:
+        reason_codes.append(width_reason)
+
+    path_role = _classify_path(path)
+    if path_role == "dut":
         score += 3
-    return score
+        reason_codes.append("dut_facing_path")
+    elif path_role == "helper":
+        score -= 6
+        reason_codes.append("helper_path_penalty")
+
+    confidence = "heuristic" if score >= 10 else "low"
+    return {
+        "score": score,
+        "role": role if role != "unknown" else "status",
+        "reason_codes": reason_codes,
+        "confidence": confidence,
+    }
+
+
+def _infer_signal_role(name: str, path: str) -> str:
+    haystack = f"{path}.{name}".lower()
+    for role, keywords in _ROLE_KEYWORDS.items():
+        if any(keyword in haystack for keyword in keywords):
+            return role
+    return "unknown"
+
+
+def _score_instance_proximity(
+    path: str,
+    failure_event: dict[str, Any],
+    likely_instances: list[dict[str, Any]],
+    top_hint: str | None,
+) -> tuple[int, str | None]:
+    lower = path.lower()
+    event_instance = (failure_event.get("instance_path") or "").lower()
+    if event_instance and (lower.startswith(event_instance + ".") or event_instance.startswith(lower.rsplit(".", 1)[0])):
+        return 6, "same_instance"
+    for instance in likely_instances[:3]:
+        instance_path = instance["instance_path"].lower()
+        if lower.startswith(instance_path + "."):
+            return 5, "same_instance"
+    if top_hint and lower.startswith(top_hint.lower()):
+        return 2, "under_top_hint"
+    return 0, None
+
+
+def _score_activity_near_failure(parser, signal_path: str, failure_time_ps: int | None) -> tuple[int, str | None]:
+    if failure_time_ps is None or not hasattr(parser, "get_signals_around_time"):
+        return 0, None
+    try:
+        context = parser.get_signals_around_time([signal_path], failure_time_ps, DEFAULT_WAVE_WINDOW_PS, 2)
+    except Exception:
+        return 0, None
+    signal_info = (context.get("signals") or {}).get(signal_path) or {}
+    transitions = signal_info.get("transitions_in_window") or []
+    if transitions:
+        return 4, "active_near_failure"
+    pre_transitions = signal_info.get("pre_window_transitions") or []
+    if pre_transitions:
+        return 1, "history_before_failure"
+    return 0, None
+
+
+def _score_width_and_shape(name: str, width: int, role: str) -> tuple[int, str | None]:
+    lower = name.lower()
+    if lower.endswith("_reg"):
+        if role in {"input_reg", "output_reg"}:
+            return 3, "registered_datapath"
+        return 1, "registered_signal"
+    if role in {"counter", "state"} and width > 1:
+        return 2, "multi_bit_debug_signal"
+    if role == "handshake" and width == 1:
+        return 2, "single_bit_handshake"
+    return 0, None
 
 
 def _classify_path(path: str) -> str:

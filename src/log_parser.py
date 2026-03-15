@@ -53,9 +53,38 @@ _UVM_RE = re.compile(
 )
 
 _GENERIC_ERROR_RE = re.compile(r"\berror\b", re.IGNORECASE)
+_TIME_PATTERNS = (
+    (re.compile(r"@\s*(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\b", re.IGNORECASE), "exact", None),
+    (re.compile(r"\(time\s+(?P<value>[\d.]+)\s+(?P<unit>PS|NS|US|MS|S|FS)\)", re.IGNORECASE), "exact", None),
+    (re.compile(r"\[(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\]", re.IGNORECASE), "exact", None),
+    (re.compile(r"\btime\s*=\s*(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\b", re.IGNORECASE), "exact", None),
+    (re.compile(r"@\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "exact", "ps"),
+    (re.compile(r"\btime\s*=\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "inferred", "ticks"),
+)
 
 
-def _to_ps(value: float, unit: str | None) -> int:
+@dataclass(frozen=True)
+class TimeParseResult:
+    raw_time: str | None
+    raw_time_unit: str | None
+    time_ps: int | None
+    time_parse_status: str
+
+
+def _normalize_time_unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    normalized = unit.lower()
+    if normalized == "fs":
+        return "fs"
+    if normalized in {"ps", "ns", "us", "ms", "s"}:
+        return normalized
+    if normalized in {"tick", "ticks"}:
+        return "ticks"
+    return "unknown"
+
+
+def _to_ps(value: float, unit: str | None) -> int | None:
     unit_upper = (unit or "PS").upper()
     mult = {
         "FS": 0.001,
@@ -65,20 +94,40 @@ def _to_ps(value: float, unit: str | None) -> int:
         "MS": 1_000_000_000,
         "S": 1_000_000_000_000,
     }
-    return int(value * mult.get(unit_upper, 1))
+    if unit_upper not in mult:
+        return None
+    return int(value * mult[unit_upper])
 
 
-def _extract_time_ps(line: str) -> int:
-    patterns = (
-        re.compile(r"@\s*([\d.]+)\s*(ps|ns|us|fs)\b", re.IGNORECASE),
-        re.compile(r"\(time\s+([\d.]+)\s+(PS|NS|US|FS)\)", re.IGNORECASE),
-        re.compile(r"\b(\d+)\s*(ps|ns|us|fs)\b", re.IGNORECASE),
-    )
-    for pattern in patterns:
+def _extract_time_info(line: str) -> TimeParseResult:
+    for pattern, status, default_unit in _TIME_PATTERNS:
         match = pattern.search(line)
-        if match:
-            return _to_ps(float(match.group(1)), match.group(2))
-    return 0
+        if not match:
+            continue
+        raw_time = match.group("value")
+        unit = match.groupdict().get("unit") or default_unit
+        normalized_unit = _normalize_time_unit(unit)
+        if normalized_unit == "ticks":
+            return TimeParseResult(
+                raw_time=raw_time,
+                raw_time_unit="ticks",
+                time_ps=int(float(raw_time)),
+                time_parse_status="inferred",
+            )
+        time_ps = _to_ps(float(raw_time), normalized_unit)
+        if time_ps is not None:
+            return TimeParseResult(
+                raw_time=raw_time,
+                raw_time_unit=normalized_unit,
+                time_ps=time_ps,
+                time_parse_status=status,
+            )
+    return TimeParseResult(
+        raw_time=None,
+        raw_time_unit=None,
+        time_ps=None,
+        time_parse_status="missing",
+    )
 
 
 def _has_error_keyword(line_lower: str) -> bool:
@@ -97,9 +146,12 @@ def _extract_structured_fields(line: str) -> dict[str, Any]:
 class ParsedError:
     group_signature: str
     severity: str
-    time_ps: int
+    time_ps: int | None
     line_num: int
     message: str
+    raw_time: str | None = None
+    raw_time_unit: str | None = None
+    time_parse_status: str = "missing"
     source_file: str | None = None
     source_line: int | None = None
     instance_path: str | None = None
@@ -139,6 +191,9 @@ class SimLogParser:
                     "log_path": self.log_path,
                     "line": error.line_num,
                     "time_ps": error.time_ps,
+                    "raw_time": error.raw_time,
+                    "raw_time_unit": error.raw_time_unit,
+                    "time_parse_status": error.time_parse_status,
                     "source_file": error.source_file,
                     "source_line": error.source_line,
                     "instance_path": error.instance_path,
@@ -180,12 +235,16 @@ class SimLogParser:
             return error
 
         if _GENERIC_ERROR_RE.search(line_lower):
+            time_info = _extract_time_info(line)
             return ParsedError(
                 group_signature=f"ERROR: {line.strip()[:80]}",
                 severity="ERROR",
-                time_ps=_extract_time_ps(line),
+                time_ps=time_info.time_ps,
                 line_num=line_num,
                 message=line.strip(),
+                raw_time=time_info.raw_time,
+                raw_time_unit=time_info.raw_time_unit,
+                time_parse_status=time_info.time_parse_status,
                 structured_fields=_extract_structured_fields(line),
             )
 
@@ -196,19 +255,23 @@ class SimLogParser:
         if not match:
             return None
         assertion_name = match.group(3).split(".")[-1]
-        fail_time_ps = _to_ps(float(match.group(6)), match.group(7))
+        fail_unit = _normalize_time_unit(match.group(7))
+        fail_time_ps = _to_ps(float(match.group(6)), fail_unit)
         return ParsedError(
             group_signature=f"ASSERTION_FAIL: {assertion_name}",
             severity="ERROR",
             time_ps=fail_time_ps,
             line_num=line_num,
             message=line.strip(),
+            raw_time=match.group(6),
+            raw_time_unit=fail_unit,
+            time_parse_status="exact",
             source_file=match.group(1),
             source_line=int(match.group(2)),
             instance_path=match.group(3),
             structured_fields={
                 "assertion_name": assertion_name,
-                "start_time_ps": _to_ps(float(match.group(4)), match.group(5)),
+                "start_time_ps": _to_ps(float(match.group(4)), _normalize_time_unit(match.group(5))),
                 "fail_time_ps": fail_time_ps,
             },
         )
@@ -218,20 +281,24 @@ class SimLogParser:
         if not match:
             return None
         assertion_name = match.group(5).split(".")[-1]
-        fail_time_ps = _to_ps(float(match.group(3)), match.group(4))
+        fail_unit = _normalize_time_unit(match.group(4))
+        fail_time_ps = _to_ps(float(match.group(3)), fail_unit)
         return ParsedError(
             group_signature=f"ASSERTION_FAIL: {assertion_name}",
             severity="ERROR",
             time_ps=fail_time_ps,
             line_num=line_num,
             message=line.strip(),
+            raw_time=match.group(3),
+            raw_time_unit=fail_unit,
+            time_parse_status="exact",
             source_file=match.group(1),
             source_line=int(match.group(2)),
             instance_path=match.group(5),
             structured_fields={
                 "assertion_name": assertion_name,
                 "start_time_ps": (
-                    _to_ps(float(match.group(6)), match.group(7)) if match.group(6) else None
+                    _to_ps(float(match.group(6)), _normalize_time_unit(match.group(7))) if match.group(6) else None
                 ),
                 "fail_time_ps": fail_time_ps,
             },
@@ -247,13 +314,17 @@ class SimLogParser:
         severity = "FATAL" if level == "UVM_FATAL" else "ERROR"
         tag = match.group(7) or ""
         signature = f"{level} [{tag}]" if tag else level
-        time_ps = _to_ps(float(match.group(4)), match.group(5) or "ns")
+        raw_unit = _normalize_time_unit(match.group(5) or "ns")
+        time_ps = _to_ps(float(match.group(4)), raw_unit)
         return ParsedError(
             group_signature=signature,
             severity=severity,
             time_ps=time_ps,
             line_num=line_num,
             message=(match.group(8) or "").strip(),
+            raw_time=match.group(4),
+            raw_time_unit=raw_unit,
+            time_parse_status="exact",
             source_file=match.group(2),
             source_line=int(match.group(3)),
             instance_path=match.group(6),
@@ -273,9 +344,9 @@ class SimLogParser:
                 continue
             groups = match.groupdict()
             severity = pattern.get("severity", "ERROR").upper()
-            time_ps = 0
-            if groups.get("time"):
-                time_ps = _to_ps(float(groups["time"]), groups.get("time_unit", "ns"))
+            raw_time = groups.get("time")
+            raw_time_unit = _normalize_time_unit(groups.get("time_unit", "ns")) if raw_time else None
+            time_ps = _to_ps(float(raw_time), raw_time_unit) if raw_time else None
             structured_fields = {
                 key: value for key, value in groups.items()
                 if key not in {"message", "time", "time_unit", "source_file", "source_line", "instance_path"}
@@ -286,6 +357,9 @@ class SimLogParser:
                 time_ps=time_ps,
                 line_num=line_num,
                 message=groups.get("message", line.strip()),
+                raw_time=raw_time,
+                raw_time_unit=raw_time_unit,
+                time_parse_status="exact" if raw_time else "missing",
                 source_file=groups.get("source_file"),
                 source_line=int(groups["source_line"]) if groups.get("source_line") else None,
                 instance_path=groups.get("instance_path"),
@@ -355,17 +429,19 @@ def _build_summary(
         group["count"] += 1
         if event["line"] < group["first_line"]:
             group["first_line"] = event["line"]
-        if group["first_time_ps"] == 0 or (
-            event["time_ps"] and event["time_ps"] < group["first_time_ps"]
+        if group["first_time_ps"] is None or (
+            event["time_ps"] is not None and event["time_ps"] < group["first_time_ps"]
         ):
             group["first_time_ps"] = event["time_ps"]
-        if event["time_ps"] > group["last_time_ps"]:
+        if group["last_time_ps"] is None or (
+            event["time_ps"] is not None and event["time_ps"] > group["last_time_ps"]
+        ):
             group["last_time_ps"] = event["time_ps"]
 
     group_list = sorted(
         groups.values(),
         key=lambda item: (
-            item["first_time_ps"] if item["first_time_ps"] > 0 else float("inf"),
+            item["first_time_ps"] if item["first_time_ps"] is not None else float("inf"),
             item["first_line"],
             item["signature"],
         ),
@@ -390,6 +466,40 @@ def _build_summary(
         "max_groups": max_groups,
         "first_error_line": first_error_line,
         "groups": group_list,
+        **_find_previous_log_hints(log_path),
+    }
+
+
+def _find_previous_log_hints(log_path: str) -> dict[str, Any]:
+    current = Path(log_path)
+    try:
+        current_stat = current.stat()
+        siblings = sorted(
+            (
+                path for path in current.parent.glob("*.log")
+                if path.resolve() != current.resolve()
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        current_stat = None
+        siblings = []
+
+    candidates: list[str] = []
+    for path in siblings:
+        try:
+            if current_stat is not None and path.stat().st_mtime >= current_stat.st_mtime:
+                continue
+        except OSError:
+            continue
+        candidates.append(str(path.resolve()))
+        if len(candidates) >= 3:
+            break
+    return {
+        "previous_log_detected": bool(candidates),
+        "candidate_previous_logs": candidates,
+        "suggested_followup_tool": "diff_sim_failure_results" if candidates else None,
     }
 
 

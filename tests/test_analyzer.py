@@ -44,7 +44,7 @@ class FakeWaveParser:
             "signals": {
                 signal_path: {
                     "value_at_center": {"bin": "0", "hex": "0x0", "dec": 0},
-                    "transitions_in_window": [],
+                    "transitions_in_window": [{"time_ps": center_time_ps, "value": "1"}] if signal_path.endswith(".req") else [],
                     "pre_window_transitions": [],
                 }
                 for signal_path in signal_paths
@@ -134,6 +134,8 @@ class TestFailureEventAnalysis:
         assert result["time_anchor"]["kind"] == "exact"
         assert result["likely_instances"][0]["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+        assert result["recommended_signals"][0]["role"] == "handshake"
+        assert "active_near_failure" in result["recommended_signals"][0]["reason_codes"]
 
     def test_recommend_debug_next_steps_picks_primary_target(self, log_path):
         parser = FakeWaveParser()
@@ -143,3 +145,5 @@ class TestFailureEventAnalysis:
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
         assert result["suspected_failure_class"] == "assertion/protocol issue"
+        assert result["recommendation_strategy"] == "role_rank_v1"
+        assert result["failure_window_center_ps"] == 290000

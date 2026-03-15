@@ -25,12 +25,15 @@ waveform_mcp/
     ├── fsdb_parser.py      ← FSDB 信号值查询（libnffr.so）
     ├── fsdb_signal_index.py← FSDB 信号路径搜索（scope 树索引，GB 级友好）
     ├── log_parser.py       ← failure_event 归一化、group 摘要和 run diff
-    └── analyzer.py         ← failure_event + 波形 + hierarchy 联合分析与推荐
+    ├── analyzer.py         ← failure_event + 波形 + hierarchy 联合分析与推荐
+    └── signal_driver.py    ← 从波形信号路径回溯最可能的 RTL 驱动位置
 ```
 
 ---
 
 ## 安装
+
+需要 Python `3.11+`。
 
 ```bash
 pip install mcp pyyaml --user
@@ -71,6 +74,7 @@ print('FSDB runtime 加载 OK')
 任何支持 stdio transport 的 MCP client 都可以接这个 server。最小接入要素是：
 
 - command: `python3`
+- 建议实际使用 `python3.11`
 - args: `["/home/robin/Projects/mcp/waveform_mcp/server.py"]`
 - env: 如果不提供本地 `third_party/verdi_runtime/linux64`，则至少显式提供 `VERDI_HOME`。没有这两者时仅支持 VCD，不支持 FSDB。
 
@@ -84,7 +88,7 @@ print('FSDB runtime 加载 OK')
 {
   "mcpServers": {
     "waveform": {
-      "command": "python3",
+      "command": "python3.11",
       "args": ["/home/robin/Projects/mcp/waveform_mcp/server.py"],
       "env": {
         "VERDI_HOME": "/tools/synopsys/verdi/O-2018.09-SP2-11",
@@ -115,15 +119,17 @@ claude mcp list
    返回里还包含 `discovery_mode` 和可能的 `case_dir`
 2. 选 `phase == "elaborate"` 的 compile log，调用 `build_tb_hierarchy`
 3. 如果 `sim_logs` 非空，用 `sim_logs[0].path` 和 `simulator` 调用 `parse_sim_log`
-   当前返回不仅有 `groups`，还包含标准化后的 `failure_events`
+   当前返回不仅有 `groups`，还包含标准化后的 `failure_events`、时间归一化字段，以及 rerun diff hints
 4. 选择波形文件：
    如果 `fsdb_runtime.enabled == false`，优先选 `.vcd`；否则可用 `.fsdb` 或 `.vcd`
 5. 优先走 failure-event 中心流：
+   - 优先使用 `failure_events[0].time_ps` 作为波形时间锚点
    - 用 `failure_events[0]` 或选中的 event 调用 `analyze_failure_event`
    - 或直接调用 `recommend_failure_debug_next_steps`
 6. 需要指定信号和单 group 快照时，再用 `search_signals` + `analyze_failures`
-7. 比较两次仿真收敛情况时，调用 `diff_sim_failure_results`
-8. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
+7. 如 `parse_sim_log` 返回 `previous_log_detected == true`，优先考虑调用 `diff_sim_failure_results`
+8. 波形上看到可疑信号后，可调用 `explain_signal_driver`
+9. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
 
 推荐的默认顺序：
 
@@ -132,7 +138,8 @@ claude mcp list
 3. `parse_sim_log`
 4. `recommend_failure_debug_next_steps` 或 `analyze_failure_event`
 5. 必要时 `search_signals` + `analyze_failures`
-6. 迭代调试时 `diff_sim_failure_results`
+6. 波形异常时 `explain_signal_driver`
+7. 迭代调试时 `diff_sim_failure_results`
 
 ### Client Integration Example
 
@@ -151,16 +158,31 @@ claude mcp list
 | 工具 | 典型使用场景 |
 |------|-------------|
 | `get_sim_paths` | 第一步，自动发现 compile/sim/wave 路径，或列出可用 case |
-| `parse_sim_log` | 快速拿到 group 摘要和标准化 `failure_events` |
+| `parse_sim_log` | 快速拿到 group 摘要、标准化 `failure_events`、时间归一化字段和 rerun hints |
 | `diff_sim_failure_results` | 比较两次仿真的已解决 / 持续 / 新增失败 |
 | `search_signals` | 从 RTL 信号名找波形完整路径；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `analyze_failures` | 核心：报错 + 波形联合分析；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `analyze_failure_event` | 从单个 `failure_event` 出发，联动实例、信号和源码候选 |
-| `recommend_failure_debug_next_steps` | 用户只说“调这个失败”时，给出默认优先看哪个失败/信号/实例 |
+| `recommend_failure_debug_next_steps` | 用户只说“调这个失败”时，给出默认优先看哪个失败/信号/实例，并附 role-based 排名理由 |
+| `explain_signal_driver` | 从可疑波形信号回溯最可能的 RTL driver 位置和驱动类型 |
 | `get_signal_at_time` | 查特定时刻单个信号值；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_transitions` | 查信号完整跳变历史；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signals_around_time` | 查多个信号在某时刻的快照；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_waveform_summary` | 查波形文件基本信息；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
+
+### `parse_sim_log` 关键新增字段
+
+- `failure_events[].raw_time`：log 中原始时间 token
+- `failure_events[].raw_time_unit`：归一化后的单位，可能是 `ps/ns/us/ms/s/ticks/unknown`
+- `failure_events[].time_ps`：归一化后的 ps 时间；缺失时为 `null`
+- `failure_events[].time_parse_status`：`exact` / `inferred` / `missing`
+- `previous_log_detected` / `candidate_previous_logs` / `suggested_followup_tool`：rerun-aware diff hint
+
+### `recommend_failure_debug_next_steps` 关键新增字段
+
+- `recommendation_strategy`：当前为 `role_rank_v1`
+- `failure_window_center_ps`：本次推荐所围绕的失败时间
+- `recommended_signals[]` 额外包含 `role`、`reason_codes`、`confidence`
 
 ---
 

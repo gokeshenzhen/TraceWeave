@@ -16,6 +16,7 @@ Waveform Analysis MCP Server
   10. analyze_failures      - 聚焦单个报错分组做 log + 波形联合分析
   11. analyze_failure_event - 以 failure_event 为中心做联动分析
   12. recommend_failure_debug_next_steps - 给出默认调试下一步
+  13. explain_signal_driver - 从波形信号路径回溯最可能的 RTL 驱动位置
 """
 
 import asyncio
@@ -42,6 +43,7 @@ from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
 from src.path_discovery import discover_sim_paths
 from src.tb_hierarchy_builder import build_hierarchy
+from src.signal_driver import explain_signal_driver
 from config import get_fsdb_runtime_info
 
 
@@ -60,15 +62,21 @@ Waveform debug workflow:
    - Use the elaborate-phase compile_log and simulator from step 1.
 
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
+   - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
    - Use grouped errors to choose the first group_index to inspect.
+   - If previous_log_detected is true, consider diff_sim_failure_results early.
 
-4. Call search_signals to confirm full hierarchical signal paths.
-   - Derive keywords from hierarchy output, error messages, or RTL source.
+4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
-5. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
+5. Call search_signals to confirm full hierarchical signal paths when needed.
+   - Derive keywords from hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
+
+6. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
    - Follow analysis_guide in the result.
 
-6. Use deep-dive tools when needed:
+7. Use deep-dive tools when needed:
+   - analyze_failure_event for failure-centric instance/source correlation
+   - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
    - get_error_context for other groups
    - get_signal_transitions for longer history
    - get_signals_around_time for additional signals
@@ -382,6 +390,24 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "simulator"],
             },
         ),
+
+        Tool(
+            name="explain_signal_driver",
+            description=(
+                "从波形信号路径回溯最可能的 RTL 驱动位置。"
+                "支持 direct assign、简单 always 块和 module output port。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "signal_path": {"type": "string"},
+                    "wave_path": {"type": "string"},
+                    "compile_log": {"type": "string"},
+                    "top_hint": {"type": "string"},
+                },
+                "required": ["signal_path", "wave_path", "compile_log"],
+            },
+        ),
     ]
 
 
@@ -512,6 +538,14 @@ async def _dispatch(name: str, args: dict):
         ).recommend_debug_next_steps(
             wave_path=args["wave_path"],
             compile_log=args.get("compile_log"),
+            top_hint=args.get("top_hint"),
+        )
+
+    elif name == "explain_signal_driver":
+        return explain_signal_driver(
+            signal_path=args["signal_path"],
+            wave_path=args["wave_path"],
+            compile_log=args["compile_log"],
             top_hint=args.get("top_hint"),
         )
 

@@ -83,6 +83,7 @@ class TestDispatchParseSimLog:
             assert result["max_groups"] == 2
             assert len(result["groups"]) == 2
             assert len(result["failure_events"]) == 3
+            assert result["failure_events"][0]["time_parse_status"] == "exact"
         finally:
             Path(log_path).unlink()
 
@@ -143,6 +144,48 @@ $enddefinitions $end
         )
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
+    async def test_explain_signal_driver(self, tmp_path):
+        rtl = tmp_path / "dut.sv"
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        rtl.write_text(
+            """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut;
+  logic a, b;
+  assign K_sub = a ^ b;
+  output logic K_sub;
+endmodule
+"""
+        )
+        compile_log.write_text(
+            f"""\
+Chronologic VCS simulator
+Parsing design file '{rtl}'
+Top Level Modules:
+    top_tb
+"""
+        )
+        wave_path.write_text("$date\n$end\n")
+
+        result = await server._dispatch(
+            "explain_signal_driver",
+            {
+                "signal_path": "top_tb.u0.K_sub",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["driver_status"] == "resolved"
+        assert result["driver_kind"] == "assign"
+        assert result["resolved_rtl_name"] == "K_sub"
+        assert str(rtl) == result["source_file"]
 
 
 @pytest.mark.anyio
