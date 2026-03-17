@@ -119,7 +119,7 @@ claude mcp list
    返回里还包含 `discovery_mode` 和可能的 `case_dir`
 2. 选 `phase == "elaborate"` 的 compile log，调用 `build_tb_hierarchy`
 3. 如果 `sim_logs` 非空，用 `sim_logs[0].path` 和 `simulator` 调用 `parse_sim_log`
-   当前返回不仅有 `groups`，还包含标准化后的 `failure_events`、时间归一化字段，以及 rerun diff hints
+   当前返回不仅有 `groups`，还包含版本字段、runtime-only 计数器、标准化后的 `failure_events`、时间归一化字段，以及 rerun diff hints
 4. 选择波形文件：
    如果 `fsdb_runtime.enabled == false`，优先选 `.vcd`；否则可用 `.fsdb` 或 `.vcd`
 5. 优先走 failure-event 中心流：
@@ -170,12 +170,20 @@ claude mcp list
 | `get_signals_around_time` | 查多个信号在某时刻的快照；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_waveform_summary` | 查波形文件基本信息；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 
-### `parse_sim_log` 关键新增字段
+### `parse_sim_log` 关键字段
 
+- `schema_version` / `contract_version` / `failure_events_schema_version`：响应和 `failure_events` 的版本信息
+- `parser_capabilities`：当前 parser build 支持的结构化提取能力
+- `runtime_total_errors` / `runtime_fatal_count` / `runtime_error_count`：runtime-only 顶层计数器
 - `failure_events[].raw_time`：log 中原始时间 token
 - `failure_events[].raw_time_unit`：归一化后的单位，可能是 `ps/ns/us/ms/s/ticks/unknown`
 - `failure_events[].time_ps`：归一化后的 ps 时间；缺失时为 `null`
 - `failure_events[].time_parse_status`：`exact` / `inferred` / `missing`
+- `failure_events[].log_phase`：当前固定为 `runtime`
+- `failure_events[].failure_source`：失败来源分类，如 `assertion` / `scoreboard` / `checker`
+- `failure_events[].failure_mechanism`：失败机理分类，如 `protocol` / `mismatch` / `timeout`
+- `failure_events[].transaction_hint`：从 log 文本或结构化字段提取的事务提示
+- `failure_events[].expected` / `failure_events[].actual`：优先从结构化字段，其次从 message 中提取
 - `previous_log_detected` / `candidate_previous_logs` / `suggested_followup_tool`：rerun-aware diff hint
 
 ### `recommend_failure_debug_next_steps` 关键新增字段

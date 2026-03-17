@@ -87,7 +87,7 @@ def analysis(log_path):
 class TestAnalysisStructure:
     def test_summary_kept(self, analysis):
         result, _ = analysis
-        assert result["summary"]["total_errors"] == 2
+        assert result["summary"]["runtime_total_errors"] == 2
         assert len(result["summary"]["groups"]) == 2
 
     def test_focused_group(self, analysis):

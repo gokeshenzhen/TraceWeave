@@ -72,9 +72,13 @@ class TestGroupedSummary:
         os.unlink(self.log_path)
 
     def test_total_counts(self):
-        assert self.result["total_errors"] == 6
-        assert self.result["error_count"] == 5
-        assert self.result["fatal_count"] == 1
+        assert self.result["schema_version"] == "2.0"
+        assert self.result["contract_version"] == "1.0"
+        assert self.result["failure_events_schema_version"] == "1.0"
+        assert "mixed_log_detection" not in self.result["parser_capabilities"]
+        assert self.result["runtime_total_errors"] == 6
+        assert self.result["runtime_error_count"] == 5
+        assert self.result["runtime_fatal_count"] == 1
         assert self.result["unique_types"] == 4
 
     def test_grouped_assertions(self):
@@ -107,6 +111,12 @@ class TestGroupedSummary:
         assert first["raw_time"] == "290000"
         assert first["raw_time_unit"] == "ps"
         assert first["time_parse_status"] == "exact"
+        assert first["log_phase"] == "runtime"
+        assert first["failure_source"] == "assertion"
+        assert first["failure_mechanism"] == "protocol"
+        assert first["transaction_hint"] is None
+        assert first["expected"] is None
+        assert first["actual"] is None
 
 
 class TestXceliumSummary:
@@ -136,7 +146,7 @@ class TestGenericErrorFallback:
         os.unlink(self.log_path)
 
     def test_generic_error_group(self):
-        assert self.result["total_errors"] == 1
+        assert self.result["runtime_total_errors"] == 1
         group = self.result["groups"][0]
         assert group["signature"].startswith("ERROR: timeout ERROR waiting for resp")
         assert group["first_time_ps"] == 45000
@@ -248,12 +258,46 @@ class TestGroupTruncation:
     def test_parse_truncates_groups(self):
         result = SimLogParser(self.log_path, "vcs").parse(max_groups=5)
 
-        assert result["total_errors"] == 60
+        assert result["runtime_total_errors"] == 60
         assert result["unique_types"] == 60
         assert result["total_groups"] == 60
         assert result["truncated"] is True
         assert result["max_groups"] == 5
         assert len(result["groups"]) == 5
+
+    def test_extracts_phase2_runtime_fields(self):
+        log_path = _write_log(
+            "UVM_ERROR /tmp/top_tb.sv(99) @ 12 ns: scoreboard [SB] expected=0x3, actual=0x7 txn_id=wr42\n"
+        )
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["log_phase"] == "runtime"
+            assert event["failure_source"] == "scoreboard"
+            assert event["failure_mechanism"] == "mismatch"
+            assert event["expected"] == "0x3"
+            assert event["actual"] == "0x7"
+            assert event["transaction_hint"] == "wr42"
+        finally:
+            os.unlink(log_path)
+
+    def test_expected_actual_falls_back_per_field(self):
+        log_path = _write_log(
+            "module ERROR compare failed expected=0x3 got=0x7 @ 12 ns\n"
+        )
+        try:
+            original = log_parser_module._extract_structured_fields
+
+            def partial_structured_fields(_line):
+                return {"expected": "0x3"}
+
+            log_parser_module._extract_structured_fields = partial_structured_fields
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["expected"] == "0x3"
+            assert event["actual"] == "0x7"
+            assert event["failure_mechanism"] == "mismatch"
+        finally:
+            log_parser_module._extract_structured_fields = original
+            os.unlink(log_path)
 
 
 class TestRerunHints:
@@ -334,7 +378,7 @@ class TestRealLog:
         self.result = SimLogParser(REAL_LOG, "vcs").parse()
 
     def test_has_errors(self):
-        assert self.result["total_errors"] > 0
+        assert self.result["runtime_total_errors"] > 0
 
     def test_has_groups(self):
         assert len(self.result["groups"]) > 0
@@ -343,9 +387,13 @@ class TestRealLog:
         for field in [
             "log_file",
             "simulator",
-            "total_errors",
-            "fatal_count",
-            "error_count",
+            "schema_version",
+            "contract_version",
+            "failure_events_schema_version",
+            "parser_capabilities",
+            "runtime_total_errors",
+            "runtime_fatal_count",
+            "runtime_error_count",
             "unique_types",
             "total_groups",
             "truncated",

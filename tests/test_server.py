@@ -77,13 +77,15 @@ class TestDispatchParseSimLog:
                 },
             )
 
-            assert result["total_errors"] == 3
+            assert result["schema_version"] == "2.0"
+            assert result["runtime_total_errors"] == 3
             assert result["total_groups"] == 3
             assert result["truncated"] is True
             assert result["max_groups"] == 2
             assert len(result["groups"]) == 2
             assert len(result["failure_events"]) == 3
             assert result["failure_events"][0]["time_parse_status"] == "exact"
+            assert result["failure_events"][0]["log_phase"] == "runtime"
         finally:
             Path(log_path).unlink()
 

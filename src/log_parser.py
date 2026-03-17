@@ -62,6 +62,10 @@ _TIME_PATTERNS = (
     (re.compile(r"\btime\s*=\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "inferred", "ticks"),
 )
 
+SCHEMA_VERSION = "2.0"
+CONTRACT_VERSION = "1.0"
+FAILURE_EVENTS_SCHEMA_VERSION = "1.0"
+
 
 @dataclass(frozen=True)
 class TimeParseResult:
@@ -200,6 +204,7 @@ class SimLogParser:
                     "message_text": error.message,
                     "structured_fields": dict(error.structured_fields or {}),
                 }
+                event = _enrich_runtime_event(event)
                 events.append(event)
         return events
 
@@ -400,6 +405,146 @@ class SimLogParser:
         return patterns
 
 
+def _get_parser_capabilities() -> list[str]:
+    return [
+        "assertion_parsing",
+        "uvm_parsing",
+        "custom_pattern_parsing",
+        "expected_actual_extraction",
+        "transaction_hint_extraction",
+    ]
+
+
+def _enrich_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(event)
+    structured_fields = enriched.get("structured_fields") or {}
+    message = enriched.get("message_text") or ""
+    expected, actual = _extract_expected_actual(message, structured_fields)
+    transaction_hint = _extract_transaction_hint(message, structured_fields)
+    enriched["log_phase"] = "runtime"
+    enriched["failure_source"] = _classify_failure_source(enriched)
+    enriched["failure_mechanism"] = _classify_failure_mechanism(enriched, expected, actual)
+    enriched["transaction_hint"] = transaction_hint
+    enriched["expected"] = expected
+    enriched["actual"] = actual
+    return enriched
+
+
+def _classify_failure_source(event: dict[str, Any]) -> str:
+    signature = (event.get("group_signature") or "").lower()
+    message = (event.get("message_text") or "").lower()
+    instance_path = (event.get("instance_path") or "").lower()
+    source_file = (event.get("source_file") or "").lower()
+    text = " ".join((signature, message, instance_path, source_file))
+
+    if signature.startswith("assertion_fail:"):
+        return "assertion"
+    if any(token in text for token in ("scoreboard", "compare", "mismatch")):
+        return "scoreboard"
+    if any(token in text for token in ("checker", "monitor", "reporter", "uvm")):
+        return "checker"
+    if any(token in text for token in ("xmsim", "simulator", "vcs")):
+        return "simulator"
+    if message or signature.startswith("custom:") or signature.startswith("error:"):
+        return "user_log"
+    return "unknown"
+
+
+def _classify_failure_mechanism(
+    event: dict[str, Any],
+    expected: str | None,
+    actual: str | None,
+) -> str:
+    text = " ".join(
+        [
+            event.get("group_signature") or "",
+            event.get("message_text") or "",
+            event.get("instance_path") or "",
+        ]
+    ).lower()
+    if expected is not None and actual is not None:
+        return "mismatch"
+    if any(token in text for token in ("timeout", "timed out", "watchdog")):
+        return "timeout"
+    if any(token in text for token in ("xprop", " x ", " z ", "unknown value", "x-state")):
+        return "xprop"
+    if any(token in text for token in ("deadlock", "hang", "stuck", "stall")):
+        return "deadlock"
+    if any(token in text for token in ("assert", "protocol", "ready", "valid", "handshake")):
+        return "protocol"
+    if any(token in text for token in ("uvm_fatal", "tb", "reporter", "checker")):
+        return "tb_error"
+    return "unknown"
+
+
+def _extract_expected_actual(
+    message: str,
+    structured_fields: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    expected_keys = ("expected", "exp", "golden", "ref", "reference")
+    actual_keys = ("actual", "act", "got", "observed")
+    expected = _clean_extracted_value(_first_present(structured_fields, expected_keys))
+    actual = _clean_extracted_value(_first_present(structured_fields, actual_keys))
+
+    patterns = (
+        re.compile(
+            r"\bexpected\s*[:=]?\s*(?P<expected>\S+)\s+(?:but\s+)?(?:got|actual)\s*[:=]?\s*(?P<actual>\S+)",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bexp(?:ected)?\s*[:=]\s*(?P<expected>[^,;]+?)\s*,\s*(?:act(?:ual)?|got)\s*[:=]\s*(?P<actual>[^,;]+)", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        match = pattern.search(message)
+        if match:
+            if expected is None:
+                expected = _clean_extracted_value(match.group("expected"))
+            if actual is None:
+                actual = _clean_extracted_value(match.group("actual"))
+            if expected is not None and actual is not None:
+                break
+    return expected, actual
+
+
+def _extract_transaction_hint(
+    message: str,
+    structured_fields: dict[str, Any],
+) -> str | None:
+    hint_keys = ("transaction", "transaction_id", "txn", "txn_id", "seq", "seq_id", "opcode", "op")
+    hint = _first_present(structured_fields, hint_keys)
+    if hint is not None:
+        return str(hint)
+
+    patterns = (
+        re.compile(r"\b(?:txn|transaction|seq|sequence|op|opcode)(?:_id)?\s*[:=]\s*([A-Za-z0-9_.-]+)", re.IGNORECASE),
+        re.compile(r"\btx(?:n)?#([A-Za-z0-9_.-]+)", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        match = pattern.search(message)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _first_present(mapping: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    lowered = {str(key).lower(): value for key, value in mapping.items()}
+    for key in keys:
+        value = lowered.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _stringify_optional(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _clean_extracted_value(value: Any) -> str | None:
+    text = _stringify_optional(value)
+    if text is None:
+        return None
+    return text.strip().rstrip(",;")
+
+
 def _build_summary(
     events: list[dict[str, Any]],
     log_path: str,
@@ -457,9 +602,13 @@ def _build_summary(
     return {
         "log_file": log_path,
         "simulator": simulator,
-        "total_errors": total_errors,
-        "fatal_count": fatal_count,
-        "error_count": total_errors - fatal_count,
+        "schema_version": SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "failure_events_schema_version": FAILURE_EVENTS_SCHEMA_VERSION,
+        "parser_capabilities": _get_parser_capabilities(),
+        "runtime_total_errors": total_errors,
+        "runtime_fatal_count": fatal_count,
+        "runtime_error_count": total_errors - fatal_count,
         "unique_types": total_groups,
         "total_groups": total_groups,
         "truncated": truncated,
