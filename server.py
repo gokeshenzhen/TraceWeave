@@ -58,8 +58,10 @@ Waveform debug workflow:
    - Prefer compile_logs entries with phase="elaborate" for build_tb_hierarchy.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
 
-2. Call build_tb_hierarchy before analyzing failures.
+2. MUST call build_tb_hierarchy before reading any RTL/TB source files or analyzing failures.
    - Use the elaborate-phase compile_log and simulator from step 1.
+   - The returned file list represents the ONLY files compiled in this session.
+   - Use this file list to scope all subsequent source reads — do NOT use find/grep to scan directories for source files.
 
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
@@ -69,7 +71,8 @@ Waveform debug workflow:
 4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
 5. Call search_signals to confirm full hierarchical signal paths when needed.
-   - Derive keywords from hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
+   - Derive keywords from build_tb_hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
+   - When reading RTL source, only read files listed in build_tb_hierarchy results.
 
 6. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
    - Follow analysis_guide in the result.
