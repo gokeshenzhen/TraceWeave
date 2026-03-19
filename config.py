@@ -64,6 +64,12 @@ SIGNAL_SEARCH_MAX_RESULTS = 100
 # parse_sim_log 最多返回的 error group 数
 DEFAULT_MAX_GROUPS = 50
 
+# UVM multi-line continuation collection
+MAX_UVM_CONTINUATION_LINES = 200
+
+# Log files larger than this skip multi-line aggregation (bytes)
+MAX_LOG_FILE_SIZE_FOR_MULTILINE = 500 * 1024 * 1024  # 500 MB
+
 
 def get_fsdb_runtime_info() -> dict:
     local_dir = LOCAL_FSDB_RUNTIME_DIR

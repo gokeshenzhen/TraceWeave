@@ -55,6 +55,60 @@ Booting simulation
 timeout ERROR waiting for resp @ 45 ns
 """
 
+MIXED_LOG_SAMPLE = """\
+xrun(64)
+xmvlog: *E,SYNTAX (/tmp/dut.sv,27): syntax error near 'endmodule'
+xmelab: elaborating design
+UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: scoreboard [SCOREBOARD] expected=0x5a, actual=0x58 txn_id=84
+"""
+
+UVM_DOTTED_REPORTER_LOG_SAMPLE = """\
+UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb [SCOREBOARD] compare failed
+"""
+
+UVM_MULTILINE_TABLE_LOG_SAMPLE = """\
+UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb [SCOREBOARD] packet compare failed
+  the expect pkt is
+  -------------------------------------------------------
+  Name               Type            Size  Value
+  -------------------------------------------------------
+  uvm_sequence_item  my_transaction  -     @1422
+    dmac             integral        48    'h55183781a6be
+    smac             integral        48    'hf334b7d71d03
+    ether_type       integral        16    'hc8b5
+    pload            da(integral)    1385  -
+    crc              integral        32    'hffffffff
+  -------------------------------------------------------
+  the actual pkt is
+  -------------------------------------------------------
+  Name               Type            Size  Value
+  -------------------------------------------------------
+  uvm_sequence_item  my_transaction  -     @1386
+    dmac             integral        48    'h55183781a6bf
+    smac             integral        48    'hf334b7d71d03
+    ether_type       integral        16    'hc8b5
+    pload            da(integral)    1385  -
+    crc              integral        32    'hffffffff
+
+UVM_FATAL /tmp/top_tb.sv(200) @ 1500.000 ns: reporter [TOP] stop
+"""
+
+UVM_CONTINUATION_BOUNDARY_LOG_SAMPLE = """\
+UVM_ERROR /tmp/top_tb.sv(129) @ 100.000 ns: uvm_test_top.env.scb [SCOREBOARD] packet compare failed
+  the expect pkt is
+  -------------------------------------------------------
+  Name               Type            Size  Value
+  -------------------------------------------------------
+    dmac             integral        48    'h55183781a6be
+ERROR: unrelated runtime error @ 300 ns
+"""
+
+COMPILE_ONLY_MIXED_LOG_SAMPLE = """\
+xrun(64)
+xmvlog: *E,SYNTAX (/tmp/dut.sv,27): syntax error near 'endmodule'
+xmelab: *E,CUVMUR: design unit not found
+"""
+
 
 def _write_log(content: str) -> str:
     handle = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
@@ -75,7 +129,7 @@ class TestGroupedSummary:
         assert self.result["schema_version"] == "2.0"
         assert self.result["contract_version"] == "1.0"
         assert self.result["failure_events_schema_version"] == "1.0"
-        assert "mixed_log_detection" not in self.result["parser_capabilities"]
+        assert "mixed_log_detection" in self.result["parser_capabilities"]
         assert self.result["runtime_total_errors"] == 6
         assert self.result["runtime_error_count"] == 5
         assert self.result["runtime_fatal_count"] == 1
@@ -117,6 +171,14 @@ class TestGroupedSummary:
         assert first["transaction_hint"] is None
         assert first["expected"] is None
         assert first["actual"] is None
+        assert first["missing_fields"] == []
+        assert first["field_provenance"]["log_phase"] == "derived"
+        assert first["field_provenance"]["time_ps"] == "observed"
+        assert first["field_provenance"]["source_file"] == "observed"
+        assert first["field_provenance"]["source_line"] == "observed"
+        assert first["field_provenance"]["instance_path"] == "observed"
+        assert first["field_provenance"]["failure_source"] == "derived"
+        assert first["field_provenance"]["failure_mechanism"] == "heuristic"
 
 
 class TestXceliumSummary:
@@ -135,6 +197,42 @@ class TestXceliumSummary:
     def test_uvm_time(self):
         groups = {group["signature"]: group for group in self.result["groups"]}
         assert groups["UVM_ERROR [TOP]"]["first_time_ps"] == 1429000
+
+
+class TestUvmParsing:
+    def test_uvm_reporter_allows_dotted_paths(self):
+        log_path = _write_log(UVM_DOTTED_REPORTER_LOG_SAMPLE)
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["group_signature"] == "UVM_ERROR [SCOREBOARD]"
+            assert event["instance_path"] == "uvm_test_top.env.scb"
+            assert event["failure_source"] == "scoreboard"
+        finally:
+            os.unlink(log_path)
+
+    def test_uvm_multiline_table_is_extracted(self):
+        log_path = _write_log(UVM_MULTILINE_TABLE_LOG_SAMPLE)
+        try:
+            events = SimLogParser(log_path, "vcs").parse_failure_events()
+            assert len(events) == 2
+            first = events[0]
+            assert first["group_signature"] == "UVM_ERROR [SCOREBOARD]"
+            assert first["expected"] == "dmac='h55183781a6be"
+            assert first["actual"] == "dmac='h55183781a6bf"
+            assert first["failure_mechanism"] == "mismatch"
+        finally:
+            os.unlink(log_path)
+
+    def test_uvm_continuation_stops_before_non_indented_runtime_error(self):
+        log_path = _write_log(UVM_CONTINUATION_BOUNDARY_LOG_SAMPLE)
+        try:
+            events = SimLogParser(log_path, "vcs").parse_failure_events()
+            assert len(events) == 2
+            assert events[0]["group_signature"] == "UVM_ERROR [SCOREBOARD]"
+            assert events[1]["group_signature"].startswith("ERROR: ERROR: unrelated runtime error")
+            assert events[1]["time_ps"] == 300000
+        finally:
+            os.unlink(log_path)
 
 
 class TestGenericErrorFallback:
@@ -184,6 +282,8 @@ class TestGenericErrorFallback:
             assert event["raw_time"] is None
             assert event["raw_time_unit"] is None
             assert event["time_parse_status"] == "missing"
+            assert "time_ps" in event["missing_fields"]
+            assert "time_ps" not in event["field_provenance"]
             assert SimLogParser(log_path, "vcs").parse()["groups"][0]["first_time_ps"] is None
         finally:
             os.unlink(log_path)
@@ -239,6 +339,87 @@ class TestCustomPatterns:
             assert event["source_line"] == 42
             assert event["instance_path"] == "top_tb.dut"
             assert event["structured_fields"]["signal"] == "data"
+        finally:
+            os.unlink(log_path)
+            custom_patterns.unlink()
+            custom_patterns.parent.rmdir()
+
+    def test_partial_custom_pattern_reports_missing_fields_and_provenance(self, monkeypatch):
+        custom_patterns = Path(tempfile.mkdtemp()) / "custom_patterns.yaml"
+        custom_patterns.write_text(
+            "\n".join(
+                [
+                    "patterns:",
+                    "  - name: partial_checker",
+                    "    severity: ERROR",
+                    "    regex: 'CHK_FAIL src=(?P<source_file>[^ ]+) inst=(?P<instance_path>[^ ]+) message=(?P<message>.+)'",
+                ]
+            )
+            + "\n"
+        )
+        log_path = _write_log("CHK_FAIL src=/tmp/tb.sv inst=top_tb.env.chk message=checker fired without timestamp\n")
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", str(custom_patterns))
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert "missing_fields" in event
+            assert "field_provenance" in event
+            assert set(event["missing_fields"]) >= {"time_ps", "source_line"}
+            assert event["field_provenance"]["source_file"] == "observed"
+            assert event["field_provenance"]["instance_path"] == "observed"
+            assert event["field_provenance"]["failure_source"] == "derived"
+            assert "source_line" not in event["field_provenance"]
+        finally:
+            os.unlink(log_path)
+            custom_patterns.unlink()
+            custom_patterns.parent.rmdir()
+
+    def test_custom_pattern_falls_back_to_generic_time_extraction(self, monkeypatch):
+        custom_patterns = Path(tempfile.mkdtemp()) / "custom_patterns.yaml"
+        custom_patterns.write_text(
+            "\n".join(
+                [
+                    "patterns:",
+                    "  - name: phase_checker",
+                    "    severity: ERROR",
+                    "    regex: 'PHASE_FAIL src=(?P<source_file>[^ ]+) message=(?P<message>.+)'",
+                ]
+            )
+            + "\n"
+        )
+        log_path = _write_log("PHASE_FAIL src=/tmp/tb.sv message=phase mismatch @7300000\n")
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", str(custom_patterns))
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["time_ps"] == 7300000
+            assert event["raw_time"] == "7300000"
+            assert event["raw_time_unit"] == "ps"
+            assert event["time_parse_status"] == "exact"
+        finally:
+            os.unlink(log_path)
+            custom_patterns.unlink()
+            custom_patterns.parent.rmdir()
+
+    def test_custom_pattern_compile_diagnostic_is_filtered_in_mixed_log(self, monkeypatch):
+        custom_patterns = Path(tempfile.mkdtemp()) / "custom_patterns.yaml"
+        custom_patterns.write_text(
+            "\n".join(
+                [
+                    "patterns:",
+                    "  - name: compile_syntax",
+                    "    severity: ERROR",
+                    "    regex: 'xmvlog:\\s+\\*E,SYNTAX\\s+\\((?P<source_file>[^,]+),(?P<source_line>\\d+)\\):\\s+(?P<message>.+)'",
+                ]
+            )
+            + "\n"
+        )
+        log_path = _write_log(MIXED_LOG_SAMPLE)
+        monkeypatch.setattr(log_parser_module, "CUSTOM_PATTERNS_FILE", str(custom_patterns))
+        try:
+            result = SimLogParser(log_path, "xcelium").parse()
+            events = SimLogParser(log_path, "xcelium").parse_failure_events()
+            assert result["runtime_total_errors"] == 1
+            assert len(events) == 1
+            assert events[0]["group_signature"] == "UVM_ERROR [SCOREBOARD]"
         finally:
             os.unlink(log_path)
             custom_patterns.unlink()
@@ -313,6 +494,38 @@ class TestRerunHints:
         assert result["previous_log_detected"] is True
         assert str(older.resolve()) in result["candidate_previous_logs"]
         assert result["suggested_followup_tool"] == "diff_sim_failure_results"
+
+
+class TestMixedLogRuntimeSafety:
+    def test_mixed_log_ignores_compile_errors_and_keeps_runtime_counts(self):
+        log_path = _write_log(MIXED_LOG_SAMPLE)
+        try:
+            result = SimLogParser(log_path, "xcelium").parse()
+            events = SimLogParser(log_path, "xcelium").parse_failure_events()
+            assert result["runtime_total_errors"] == 1
+            assert result["runtime_error_count"] == 1
+            assert result["runtime_fatal_count"] == 0
+            assert result["total_groups"] == 1
+            assert len(events) == 1
+            assert events[0]["group_signature"] == "UVM_ERROR [SCOREBOARD]"
+            assert events[0]["expected"] == "0x5a"
+            assert events[0]["actual"] == "0x58"
+            assert events[0]["transaction_hint"] == "84"
+        finally:
+            os.unlink(log_path)
+
+    def test_compile_elab_only_mixed_log_returns_zero_runtime_events(self):
+        log_path = _write_log(COMPILE_ONLY_MIXED_LOG_SAMPLE)
+        try:
+            result = SimLogParser(log_path, "xcelium").parse()
+            events = SimLogParser(log_path, "xcelium").parse_failure_events()
+            assert result["runtime_total_errors"] == 0
+            assert result["runtime_error_count"] == 0
+            assert result["runtime_fatal_count"] == 0
+            assert result["total_groups"] == 0
+            assert events == []
+        finally:
+            os.unlink(log_path)
 
 
 class TestGetErrorContext:

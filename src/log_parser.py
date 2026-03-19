@@ -22,6 +22,8 @@ from config import (
     DEFAULT_LOG_CONTEXT_AFTER,
     DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_GROUPS,
+    MAX_LOG_FILE_SIZE_FOR_MULTILINE,
+    MAX_UVM_CONTINUATION_LINES,
     UVM_PARSE_LEVELS,
 )
 
@@ -46,13 +48,15 @@ _UVM_RE = re.compile(
     r"(UVM_ERROR|UVM_FATAL)\s+"
     r"([^\s(]+)\((\d+)\)\s+"
     r"@\s+([\d.]+)\s*(ps|ns|us|fs)?:\s+"
-    r"(\w+)\s+"
+    r"([\w.]+)\s+"
     r"(?:\[([^\]]+)\]\s+)?"
     r"(.*)",
     re.IGNORECASE,
 )
 
 _GENERIC_ERROR_RE = re.compile(r"\berror\b", re.IGNORECASE)
+_UVM_TABLE_SEPARATOR_RE = re.compile(r"^\s*-{5,}\s*$")
+_UVM_TABLE_HEADER_RE = re.compile(r"^\s*Name\s+Type\s+Size\s+Value\s*$")
 _TIME_PATTERNS = (
     (re.compile(r"@\s*(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\b", re.IGNORECASE), "exact", None),
     (re.compile(r"\(time\s+(?P<value>[\d.]+)\s+(?P<unit>PS|NS|US|MS|S|FS)\)", re.IGNORECASE), "exact", None),
@@ -65,6 +69,24 @@ _TIME_PATTERNS = (
 SCHEMA_VERSION = "2.0"
 CONTRACT_VERSION = "1.0"
 FAILURE_EVENTS_SCHEMA_VERSION = "1.0"
+
+_NON_RUNTIME_DIAGNOSTIC_TOKENS = (
+    "xmvlog",
+    "xmelab",
+    "vlogan",
+    "vhdlan",
+    "parsing design file",
+    "parsing included file",
+    "recompiling module",
+    "recompiling interface",
+    "top level modules",
+    "compiling source file",
+    "elaborating the design",
+    "*e,cu",
+    "*e,vlog",
+    "*e,syntax",
+    "error-[",
+)
 
 
 @dataclass(frozen=True)
@@ -139,6 +161,26 @@ def _has_error_keyword(line_lower: str) -> bool:
     return any(keyword in line_lower for keyword in keywords)
 
 
+def _is_non_runtime_diagnostic(line_lower: str) -> bool:
+    if any(token in line_lower for token in _NON_RUNTIME_DIAGNOSTIC_TOKENS):
+        return True
+    return line_lower.startswith("file: ")
+
+
+def _is_non_runtime_candidate(error: "ParsedError", line_lower: str) -> bool:
+    if not _is_non_runtime_diagnostic(line_lower):
+        return False
+    signature = error.group_signature.lower()
+    message = error.message.lower()
+    if signature.startswith("assertion_fail:"):
+        return False
+    if "uvm_error" in signature or "uvm_fatal" in signature:
+        return False
+    if "*e,asrtst" in message:
+        return False
+    return True
+
+
 def _extract_structured_fields(line: str) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for match in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*([^\s,]+)", line):
@@ -160,6 +202,7 @@ class ParsedError:
     source_line: int | None = None
     instance_path: str | None = None
     structured_fields: dict[str, Any] | None = None
+    continuation_text: str | None = None
 
 
 class SimLogParser:
@@ -178,34 +221,60 @@ class SimLogParser:
         if not path.exists():
             raise FileNotFoundError(f"Log 文件不存在: {self.log_path}")
 
-        events: list[dict[str, Any]] = []
-        with path.open("r", errors="replace") as handle:
-            for line_num, raw_line in enumerate(handle, 1):
-                line = raw_line.rstrip("\n")
-                line_lower = line.lower()
-                error = self._try_match(line, line_lower, line_num)
-                if error is None:
-                    continue
+        try:
+            file_size = path.stat().st_size
+        except OSError:
+            file_size = 0
+        multiline_enabled = file_size <= MAX_LOG_FILE_SIZE_FOR_MULTILINE
 
-                event_index = len(events) + 1
-                event = {
-                    "event_id": self._make_event_id(event_index, error),
-                    "group_signature": error.group_signature,
-                    "severity": error.severity,
-                    "log_path": self.log_path,
-                    "line": error.line_num,
-                    "time_ps": error.time_ps,
-                    "raw_time": error.raw_time,
-                    "raw_time_unit": error.raw_time_unit,
-                    "time_parse_status": error.time_parse_status,
-                    "source_file": error.source_file,
-                    "source_line": error.source_line,
-                    "instance_path": error.instance_path,
-                    "message_text": error.message,
-                    "structured_fields": dict(error.structured_fields or {}),
-                }
-                event = _enrich_runtime_event(event)
-                events.append(event)
+        with path.open("r", errors="replace") as handle:
+            all_lines = handle.readlines()
+
+        events: list[dict[str, Any]] = []
+        i = 0
+        while i < len(all_lines):
+            line = all_lines[i].rstrip("\n")
+            line_num = i + 1
+            line_lower = line.lower()
+            error = self._try_match(line, line_lower, line_num)
+            if error is None:
+                i += 1
+                continue
+
+            if multiline_enabled and error.group_signature.startswith(("UVM_ERROR", "UVM_FATAL")):
+                continuation_lines, lines_consumed = self._collect_continuation(all_lines, i + 1)
+                if continuation_lines:
+                    error.continuation_text = "\n".join(continuation_lines)
+                    expected, actual = _extract_uvm_table_diff(error.continuation_text)
+                    if expected is not None or actual is not None:
+                        if error.structured_fields is None:
+                            error.structured_fields = {}
+                        if expected is not None:
+                            error.structured_fields["expected"] = expected
+                        if actual is not None:
+                            error.structured_fields["actual"] = actual
+                i += lines_consumed
+
+            event_index = len(events) + 1
+            event = {
+                "event_id": self._make_event_id(event_index, error),
+                "group_signature": error.group_signature,
+                "severity": error.severity,
+                "log_path": self.log_path,
+                "line": error.line_num,
+                "time_ps": error.time_ps,
+                "raw_time": error.raw_time,
+                "raw_time_unit": error.raw_time_unit,
+                "time_parse_status": error.time_parse_status,
+                "source_file": error.source_file,
+                "source_line": error.source_line,
+                "instance_path": error.instance_path,
+                "message_text": error.message,
+                "structured_fields": dict(error.structured_fields or {}),
+            }
+            event = _enrich_runtime_event(event)
+            events.append(event)
+            i += 1
         return events
 
     def diff_against(self, new_log_path: str) -> dict[str, Any]:
@@ -225,23 +294,23 @@ class SimLogParser:
         if self.simulator == "vcs":
             error = self._match_vcs_assertion(line, line_num)
             if error is not None:
-                return error
+                return self._filter_runtime_candidate(error, line_lower)
         elif self.simulator == "xcelium":
             error = self._match_xcelium_assertion(line, line_num)
             if error is not None:
-                return error
+                return self._filter_runtime_candidate(error, line_lower)
 
         error = self._match_uvm(line, line_num)
         if error is not None:
-            return error
+            return self._filter_runtime_candidate(error, line_lower)
 
         error = self._match_custom(line, line_num)
         if error is not None:
-            return error
+            return self._filter_runtime_candidate(error, line_lower)
 
         if _GENERIC_ERROR_RE.search(line_lower):
             time_info = _extract_time_info(line)
-            return ParsedError(
+            error = ParsedError(
                 group_signature=f"ERROR: {line.strip()[:80]}",
                 severity="ERROR",
                 time_ps=time_info.time_ps,
@@ -252,8 +321,14 @@ class SimLogParser:
                 time_parse_status=time_info.time_parse_status,
                 structured_fields=_extract_structured_fields(line),
             )
+            return self._filter_runtime_candidate(error, line_lower)
 
         return None
+
+    def _filter_runtime_candidate(self, error: ParsedError, line_lower: str) -> ParsedError | None:
+        if _is_non_runtime_candidate(error, line_lower):
+            return None
+        return error
 
     def _match_vcs_assertion(self, line: str, line_num: int) -> ParsedError | None:
         match = _VCS_ASSERT_RE.search(line)
@@ -350,8 +425,16 @@ class SimLogParser:
             groups = match.groupdict()
             severity = pattern.get("severity", "ERROR").upper()
             raw_time = groups.get("time")
-            raw_time_unit = _normalize_time_unit(groups.get("time_unit", "ns")) if raw_time else None
-            time_ps = _to_ps(float(raw_time), raw_time_unit) if raw_time else None
+            if raw_time:
+                raw_time_unit = _normalize_time_unit(groups.get("time_unit", "ns"))
+                time_ps = _to_ps(float(raw_time), raw_time_unit)
+                time_parse_status = "exact"
+            else:
+                time_info = _extract_time_info(line)
+                raw_time = time_info.raw_time
+                raw_time_unit = time_info.raw_time_unit
+                time_ps = time_info.time_ps
+                time_parse_status = time_info.time_parse_status
             structured_fields = {
                 key: value for key, value in groups.items()
                 if key not in {"message", "time", "time_unit", "source_file", "source_line", "instance_path"}
@@ -364,13 +447,49 @@ class SimLogParser:
                 message=groups.get("message", line.strip()),
                 raw_time=raw_time,
                 raw_time_unit=raw_time_unit,
-                time_parse_status="exact" if raw_time else "missing",
+                time_parse_status=time_parse_status,
                 source_file=groups.get("source_file"),
                 source_line=int(groups["source_line"]) if groups.get("source_line") else None,
                 instance_path=groups.get("instance_path"),
                 structured_fields=structured_fields,
             )
         return None
+
+    def _collect_continuation(self, all_lines: list[str], start_idx: int) -> tuple[list[str], int]:
+        continuation: list[str] = []
+        consecutive_empty = 0
+        idx = start_idx
+
+        while idx < len(all_lines) and len(continuation) < MAX_UVM_CONTINUATION_LINES:
+            raw = all_lines[idx].rstrip("\n")
+
+            if re.match(r"\s*UVM_(ERROR|FATAL|WARNING)\s", raw):
+                break
+            if _VCS_ASSERT_RE.search(raw):
+                break
+            if _XCE_ASSERT_RE.search(raw):
+                break
+
+            if raw.strip() == "":
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                continuation.append(raw)
+                idx += 1
+                continue
+
+            consecutive_empty = 0
+
+            if not raw[0:1].isspace() and not raw.strip().startswith("---"):
+                break
+
+            continuation.append(raw)
+            idx += 1
+
+        while continuation and continuation[-1].strip() == "":
+            continuation.pop()
+
+        return continuation, idx - start_idx
 
     def _make_event_id(self, event_index: int, error: ParsedError) -> str:
         raw = "|".join(
@@ -407,11 +526,13 @@ class SimLogParser:
 
 def _get_parser_capabilities() -> list[str]:
     return [
+        "mixed_log_detection",
         "assertion_parsing",
         "uvm_parsing",
         "custom_pattern_parsing",
         "expected_actual_extraction",
         "transaction_hint_extraction",
+        "uvm_table_multiline_extraction",
     ]
 
 
@@ -419,18 +540,38 @@ def _enrich_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(event)
     structured_fields = enriched.get("structured_fields") or {}
     message = enriched.get("message_text") or ""
-    expected, actual = _extract_expected_actual(message, structured_fields)
-    transaction_hint = _extract_transaction_hint(message, structured_fields)
+    provenance_hints: dict[str, str] = {}
+    expected, actual, expected_actual_provenance = _extract_expected_actual(message, structured_fields)
+    transaction_hint, transaction_hint_provenance = _extract_transaction_hint(message, structured_fields)
     enriched["log_phase"] = "runtime"
-    enriched["failure_source"] = _classify_failure_source(enriched)
-    enriched["failure_mechanism"] = _classify_failure_mechanism(enriched, expected, actual)
+    provenance_hints["log_phase"] = "derived"
+    if enriched.get("time_ps") is not None:
+        provenance_hints["time_ps"] = "observed"
+    if enriched.get("source_file") is not None:
+        provenance_hints["source_file"] = "observed"
+    if enriched.get("source_line") is not None:
+        provenance_hints["source_line"] = "observed"
+    if enriched.get("instance_path") is not None:
+        provenance_hints["instance_path"] = "observed"
+
+    failure_source, failure_source_provenance = _classify_failure_source(enriched)
+    failure_mechanism, failure_mechanism_provenance = _classify_failure_mechanism(enriched, expected, actual)
+    enriched["failure_source"] = failure_source
+    enriched["failure_mechanism"] = failure_mechanism
     enriched["transaction_hint"] = transaction_hint
     enriched["expected"] = expected
     enriched["actual"] = actual
+    provenance_hints["failure_source"] = failure_source_provenance
+    provenance_hints["failure_mechanism"] = failure_mechanism_provenance
+    provenance_hints.update(expected_actual_provenance)
+    if transaction_hint is not None and transaction_hint_provenance is not None:
+        provenance_hints["transaction_hint"] = transaction_hint_provenance
+    enriched["missing_fields"] = _compute_missing_fields(enriched)
+    enriched["field_provenance"] = _compute_field_provenance(enriched, provenance_hints)
     return enriched
 
 
-def _classify_failure_source(event: dict[str, Any]) -> str:
+def _classify_failure_source(event: dict[str, Any]) -> tuple[str, str]:
     signature = (event.get("group_signature") or "").lower()
     message = (event.get("message_text") or "").lower()
     instance_path = (event.get("instance_path") or "").lower()
@@ -438,23 +579,23 @@ def _classify_failure_source(event: dict[str, Any]) -> str:
     text = " ".join((signature, message, instance_path, source_file))
 
     if signature.startswith("assertion_fail:"):
-        return "assertion"
+        return "assertion", "derived"
     if any(token in text for token in ("scoreboard", "compare", "mismatch")):
-        return "scoreboard"
+        return "scoreboard", "derived"
     if any(token in text for token in ("checker", "monitor", "reporter", "uvm")):
-        return "checker"
+        return "checker", "derived"
     if any(token in text for token in ("xmsim", "simulator", "vcs")):
-        return "simulator"
+        return "simulator", "derived"
     if message or signature.startswith("custom:") or signature.startswith("error:"):
-        return "user_log"
-    return "unknown"
+        return "user_log", "derived"
+    return "unknown", "heuristic"
 
 
 def _classify_failure_mechanism(
     event: dict[str, Any],
     expected: str | None,
     actual: str | None,
-) -> str:
+) -> tuple[str, str]:
     text = " ".join(
         [
             event.get("group_signature") or "",
@@ -463,28 +604,33 @@ def _classify_failure_mechanism(
         ]
     ).lower()
     if expected is not None and actual is not None:
-        return "mismatch"
+        return "mismatch", "derived"
     if any(token in text for token in ("timeout", "timed out", "watchdog")):
-        return "timeout"
+        return "timeout", "derived"
     if any(token in text for token in ("xprop", " x ", " z ", "unknown value", "x-state")):
-        return "xprop"
+        return "xprop", "derived"
     if any(token in text for token in ("deadlock", "hang", "stuck", "stall")):
-        return "deadlock"
+        return "deadlock", "derived"
     if any(token in text for token in ("assert", "protocol", "ready", "valid", "handshake")):
-        return "protocol"
+        return "protocol", "heuristic"
     if any(token in text for token in ("uvm_fatal", "tb", "reporter", "checker")):
-        return "tb_error"
-    return "unknown"
+        return "tb_error", "heuristic"
+    return "unknown", "heuristic"
 
 
 def _extract_expected_actual(
     message: str,
     structured_fields: dict[str, Any],
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, dict[str, str]]:
     expected_keys = ("expected", "exp", "golden", "ref", "reference")
     actual_keys = ("actual", "act", "got", "observed")
     expected = _clean_extracted_value(_first_present(structured_fields, expected_keys))
     actual = _clean_extracted_value(_first_present(structured_fields, actual_keys))
+    provenance: dict[str, str] = {}
+    if expected is not None:
+        provenance["expected"] = "observed"
+    if actual is not None:
+        provenance["actual"] = "observed"
 
     patterns = (
         re.compile(
@@ -498,21 +644,99 @@ def _extract_expected_actual(
         if match:
             if expected is None:
                 expected = _clean_extracted_value(match.group("expected"))
+                if expected is not None:
+                    provenance["expected"] = "observed"
             if actual is None:
                 actual = _clean_extracted_value(match.group("actual"))
+                if actual is not None:
+                    provenance["actual"] = "observed"
             if expected is not None and actual is not None:
                 break
-    return expected, actual
+    return expected, actual, provenance
+
+
+def _extract_uvm_table_diff(text: str) -> tuple[str | None, str | None]:
+    lines = text.split("\n")
+    expect_start = None
+    actual_start = None
+
+    for index, line in enumerate(lines):
+        lower = line.lower().strip()
+        if "expect" in lower and any(token in lower for token in ("pkt", "packet", "trans", "item")):
+            expect_start = index
+        elif "actual" in lower and any(token in lower for token in ("pkt", "packet", "trans", "item")):
+            actual_start = index
+
+    if expect_start is None or actual_start is None:
+        return None, None
+
+    expect_fields = _parse_uvm_table_fields(lines[expect_start:actual_start])
+    actual_fields = _parse_uvm_table_fields(lines[actual_start:])
+    if not expect_fields or not actual_fields:
+        return None, None
+
+    for field_name, expect_value in expect_fields.items():
+        actual_value = actual_fields.get(field_name)
+        if actual_value is not None and actual_value != expect_value:
+            return f"{field_name}={expect_value}", f"{field_name}={actual_value}"
+
+    for field_name, actual_value in actual_fields.items():
+        if field_name not in expect_fields:
+            return None, f"{field_name}={actual_value}"
+
+    return None, None
+
+
+def _parse_uvm_table_fields(lines: list[str]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    in_table = False
+    header_seen = False
+    data_seen = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if _UVM_TABLE_SEPARATOR_RE.match(line):
+            if in_table and header_seen and data_seen:
+                break
+            in_table = True
+            continue
+
+        if not in_table:
+            continue
+
+        if _UVM_TABLE_HEADER_RE.match(line):
+            header_seen = True
+            continue
+
+        if not header_seen:
+            continue
+
+        parts = stripped.split()
+        if len(parts) < 4:
+            continue
+
+        field_name = parts[0]
+        value = parts[-1]
+        if value == "-" or value.startswith("@"):
+            continue
+        if field_name.startswith("[") and field_name.endswith("]"):
+            continue
+
+        data_seen = True
+        fields[field_name] = value
+
+    return fields
 
 
 def _extract_transaction_hint(
     message: str,
     structured_fields: dict[str, Any],
-) -> str | None:
+) -> tuple[str | None, str | None]:
     hint_keys = ("transaction", "transaction_id", "txn", "txn_id", "seq", "seq_id", "opcode", "op")
     hint = _first_present(structured_fields, hint_keys)
     if hint is not None:
-        return str(hint)
+        return str(hint), "observed"
 
     patterns = (
         re.compile(r"\b(?:txn|transaction|seq|sequence|op|opcode)(?:_id)?\s*[:=]\s*([A-Za-z0-9_.-]+)", re.IGNORECASE),
@@ -521,8 +745,73 @@ def _extract_transaction_hint(
     for pattern in patterns:
         match = pattern.search(message)
         if match:
-            return match.group(1)
-    return None
+            return match.group(1), "observed"
+    return None, None
+
+
+def _compute_missing_fields(event: dict[str, Any]) -> list[str]:
+    relevant: list[str] = ["time_ps", "failure_source", "failure_mechanism"]
+    failure_source = event.get("failure_source")
+    message_text = (event.get("message_text") or "").lower()
+    group_signature = (event.get("group_signature") or "").lower()
+
+    if failure_source in {"assertion", "scoreboard", "checker"} or group_signature.startswith("assertion_fail:"):
+        relevant.extend(["source_file", "source_line", "instance_path"])
+    elif event.get("source_file") is not None or event.get("source_line") is not None:
+        relevant.extend(["source_file", "source_line"])
+    elif event.get("instance_path") is not None:
+        relevant.append("instance_path")
+
+    if _comparison_fields_relevant(event):
+        relevant.extend(["expected", "actual"])
+    if _transaction_hint_relevant(event):
+        relevant.append("transaction_hint")
+
+    deduped = list(dict.fromkeys(relevant))
+    return [field for field in deduped if event.get(field) is None]
+
+
+def _comparison_fields_relevant(event: dict[str, Any]) -> bool:
+    mechanism = event.get("failure_mechanism")
+    text = (event.get("message_text") or "").lower()
+    return mechanism == "mismatch" or bool(
+        re.search(r"\b(expected|actual|got|compare|mismatch)\b", text)
+    )
+
+
+def _transaction_hint_relevant(event: dict[str, Any]) -> bool:
+    text = " ".join(
+        [
+            event.get("group_signature") or "",
+            event.get("message_text") or "",
+        ]
+    ).lower()
+    return any(token in text for token in ("txn", "transaction", "opcode", "seq"))
+
+
+def _compute_field_provenance(event: dict[str, Any], provenance_hints: dict[str, str]) -> dict[str, str]:
+    semantic_fields = (
+        "log_phase",
+        "time_ps",
+        "source_file",
+        "source_line",
+        "instance_path",
+        "failure_source",
+        "failure_mechanism",
+        "semantic_phase",
+        "transaction_hint",
+        "expected",
+        "actual",
+    )
+    missing = set(event.get("missing_fields", []))
+    provenance: dict[str, str] = {}
+    for field in semantic_fields:
+        if field in missing:
+            continue
+        if event.get(field) is None:
+            continue
+        provenance[field] = provenance_hints.get(field, "derived")
+    return provenance
 
 
 def _first_present(mapping: dict[str, Any], keys: tuple[str, ...]) -> Any:
