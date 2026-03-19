@@ -147,6 +147,38 @@ $enddefinitions $end
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
+    async def test_recommend_failure_debug_next_steps_without_top_hint(self, tmp_path):
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+            },
+        )
+        assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
+        assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
     async def test_explain_signal_driver(self, tmp_path):
         rtl = tmp_path / "dut.sv"
         compile_log = tmp_path / "compile.log"

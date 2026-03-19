@@ -175,6 +175,7 @@ claude mcp list
 - `schema_version` / `contract_version` / `failure_events_schema_version`：响应和 `failure_events` 的版本信息
 - `parser_capabilities`：当前 parser build 支持的结构化提取能力
 - `runtime_total_errors` / `runtime_fatal_count` / `runtime_error_count`：runtime-only 顶层计数器
+- `parser_capabilities` 当前可包含 `mixed_log_detection`，表示 mixed compile+runtime log 也只返回 runtime failures
 - `failure_events[].raw_time`：log 中原始时间 token
 - `failure_events[].raw_time_unit`：归一化后的单位，可能是 `ps/ns/us/ms/s/ticks/unknown`
 - `failure_events[].time_ps`：归一化后的 ps 时间；缺失时为 `null`
@@ -184,6 +185,8 @@ claude mcp list
 - `failure_events[].failure_mechanism`：失败机理分类，如 `protocol` / `mismatch` / `timeout`
 - `failure_events[].transaction_hint`：从 log 文本或结构化字段提取的事务提示
 - `failure_events[].expected` / `failure_events[].actual`：优先从结构化字段，其次从 message 中提取
+- `failure_events[].missing_fields`：当前 event 里相关但未成功提取的一等字段
+- `failure_events[].field_provenance`：每个非空一等字段的来源，取值为 `observed` / `derived` / `heuristic`
 - `previous_log_detected` / `candidate_previous_logs` / `suggested_followup_tool`：rerun-aware diff hint
 
 ### `recommend_failure_debug_next_steps` 关键新增字段

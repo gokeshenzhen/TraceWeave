@@ -147,3 +147,11 @@ class TestFailureEventAnalysis:
         assert result["suspected_failure_class"] == "assertion/protocol issue"
         assert result["recommendation_strategy"] == "role_rank_v1"
         assert result["failure_window_center_ps"] == 290000
+
+    def test_recommend_debug_next_steps_without_top_hint(self, log_path):
+        parser = FakeWaveParser()
+        analyzer = WaveformAnalyzer(log_path, parser, "vcs")
+        result = analyzer.recommend_debug_next_steps(wave_path="/tmp/wave.vcd")
+
+        assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
+        assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"

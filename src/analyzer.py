@@ -334,7 +334,10 @@ def _recommend_signals(
     dedup_keywords = []
     seen = set()
     for keyword in ordered_keywords:
-        if keyword in seen or len(keyword) < 2:
+        if not isinstance(keyword, str):
+            continue
+        keyword = keyword.strip()
+        if not keyword or keyword in seen or len(keyword) < 2:
             continue
         seen.add(keyword)
         dedup_keywords.append(keyword)
