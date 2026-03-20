@@ -432,3 +432,61 @@ class TestMixedLogDetection:
 
             assert result["compile_logs"][0]["path"] == str(compile_log.resolve())
             assert "is_mixed" not in result["compile_logs"][0]
+
+
+class TestNextRequiredStep:
+    def test_elaborate_log_produces_next_required_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_root = Path(tmpdir) / "work"
+            elab_log = work_root / "elab.log"
+            case_dir = work_root / "case0"
+            _write(elab_log, "Parsing design file 'a.sv'\nTop Level Modules:\n  top_tb\n")
+            _write(case_dir / "irun.log", "Chronologic VCS\n")
+            _write(case_dir / "top_tb.fsdb", "1" * 2048)
+
+            result = discover_sim_paths(str(work_root), "case0")
+
+            nrs = result["next_required_step"]
+            assert nrs["tool"] == "build_tb_hierarchy"
+            assert nrs["compile_log"] == str(elab_log.resolve())
+            assert nrs["simulator"] == "vcs"
+
+    def test_compile_only_log_falls_back_to_next_required_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_root = Path(tmpdir) / "work"
+            compile_log = work_root / "compile.log"
+            case_dir = work_root / "case0"
+            _write(compile_log, "vlogan\n")
+            _write(case_dir / "sim.log", "Chronologic VCS\n")
+            _write(case_dir / "wave.vcd", "$date\n$end\n")
+
+            result = discover_sim_paths(str(work_root), "case0")
+
+            nrs = result["next_required_step"]
+            assert nrs["tool"] == "build_tb_hierarchy"
+            assert nrs["compile_log"] == str(compile_log.resolve())
+
+    def test_no_compile_log_omits_next_required_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir) / "case0"
+            _write(case_dir / "sim.log", "Simulation begins\nUVM_INFO\n")
+            _write(case_dir / "wave.vcd", "$date\n$end\n")
+
+            result = discover_sim_paths(str(case_dir))
+
+            assert "next_required_step" not in result
+
+    def test_elaborate_preferred_over_compile_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir) / "case0"
+            compile_log = case_dir / "compile.log"
+            elab_log = case_dir / "elab.log"
+            _write(compile_log, "vlogan\n")
+            _write(elab_log, "Parsing design file 'a.sv'\nTop Level Modules:\n  top_tb\n")
+            _write(case_dir / "sim.log", "Chronologic VCS\n")
+            _write(case_dir / "wave.fsdb", "1" * 2048)
+
+            result = discover_sim_paths(str(case_dir))
+
+            nrs = result["next_required_step"]
+            assert nrs["compile_log"] == str(elab_log.resolve())

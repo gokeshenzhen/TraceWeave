@@ -228,7 +228,7 @@ def _build_discovery_result(
     merged_hints = list(hints)
     merged_hints.extend(_generate_hints(request_root, case_name, compile_logs, sim_logs, wave_files, fsdb_runtime))
     merged_hints = list(dict.fromkeys(merged_hints))
-    return {
+    result = {
         "verif_root": str(request_root),
         "case_name": case_name,
         "config_source": config_source,
@@ -243,6 +243,23 @@ def _build_discovery_result(
         "available_cases": available_cases,
         "hints": merged_hints,
     }
+
+    elaborate_log = next(
+        (log for log in compile_logs if log.get("phase") == "elaborate"),
+        None,
+    )
+    target_log = elaborate_log or (compile_logs[0] if compile_logs else None)
+    if target_log:
+        result["next_required_step"] = {
+            "tool": "build_tb_hierarchy",
+            "compile_log": target_log["path"],
+            "simulator": simulator or "auto",
+            "reason": "Must be called before reading any RTL/TB source files. "
+                      "Returns the ONLY files compiled in this session — "
+                      "use this file list to scope all subsequent source reads.",
+        }
+
+    return result
 
 
 def _classify_directory(root: Path) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[Path]]:
