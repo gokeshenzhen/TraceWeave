@@ -83,9 +83,91 @@ class TestDispatchParseSimLog:
             assert result["truncated"] is True
             assert result["max_groups"] == 2
             assert len(result["groups"]) == 2
-            assert len(result["failure_events"]) == 3
+            assert result["groups"][0]["group_index"] == 0
+            assert len(result["failure_events"]) == 2
+            assert result["detail_level"] == "compact"
+            assert result["failure_events_total"] == 2
+            assert result["failure_events_returned"] == 2
+            assert result["failure_events_truncated"] is False
             assert result["failure_events"][0]["time_parse_status"] == "exact"
             assert result["failure_events"][0]["log_phase"] == "runtime"
+        finally:
+            Path(log_path).unlink()
+
+    async def test_max_groups_limits_failure_events_to_summary_groups(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(LOG_SAMPLE)
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                    "max_groups": 2,
+                    "detail_level": "compact",
+                    "max_events_per_group": 3,
+                },
+            )
+
+            allowed = {group["signature"] for group in result["groups"]}
+            assert len(allowed) == 2
+            assert all(event["group_signature"] in allowed for event in result["failure_events"])
+            assert result["failure_events_total"] == 2
+        finally:
+            Path(log_path).unlink()
+
+    async def test_summary_detail_level_skips_failure_events(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(LOG_SAMPLE)
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                    "detail_level": "summary",
+                },
+            )
+
+            assert result["failure_events"] == []
+            assert result["failure_events_total"] == 3
+            assert result["failure_events_returned"] == 0
+            assert result["failure_events_truncated"] is True
+            assert "detail_hint" in result
+        finally:
+            Path(log_path).unlink()
+
+    async def test_compact_detail_level_limits_events_per_group(self):
+        repeated_log = "\n".join(
+            [
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 1 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 2 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 3 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 4 ns: reporter [TOP] repeated issue",
+            ]
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(repeated_log)
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                    "detail_level": "compact",
+                    "max_events_per_group": 2,
+                },
+            )
+
+            assert result["failure_events_total"] == 4
+            assert result["failure_events_returned"] == 2
+            assert result["failure_events_truncated"] is True
         finally:
             Path(log_path).unlink()
 
@@ -220,6 +302,158 @@ Top Level Modules:
         assert result["driver_kind"] == "assign"
         assert result["resolved_rtl_name"] == "K_sub"
         assert str(rtl) == result["source_file"]
+
+    async def test_explain_signal_driver_instance_ports(self, tmp_path):
+        rtl = tmp_path / "dut.sv"
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        rtl.write_text(
+            """\
+module top_tb;
+  dut u0();
+endmodule
+
+module leaf(output logic [3:0] dout);
+endmodule
+
+module dut;
+  logic [7:0] S;
+  leaf u_a(.dout(S[3:0]));
+  leaf u_b(.dout(S[7:4]));
+endmodule
+"""
+        )
+        compile_log.write_text(
+            f"""\
+Chronologic VCS simulator
+Parsing design file '{rtl}'
+Top Level Modules:
+    top_tb
+"""
+        )
+        wave_path.write_text("$date\n$end\n")
+
+        result = await server._dispatch(
+            "explain_signal_driver",
+            {
+                "signal_path": "top_tb.u0.S",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["driver_status"] == "resolved"
+        assert result["driver_kind"] == "instance_ports"
+        assert len(result["instance_port_connections"]) == 2
+
+    async def test_trace_x_source(self, tmp_path):
+        rtl = tmp_path / "dut.sv"
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        rtl.write_text(
+            """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut;
+  logic x_sig;
+  logic out_sig;
+  assign out_sig = x_sig;
+endmodule
+"""
+        )
+        compile_log.write_text(
+            f"""\
+Chronologic VCS simulator
+Parsing design file '{rtl}'
+Top Level Modules:
+    top_tb
+"""
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! x_sig $end
+$var wire 1 " out_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+x!
+x"
+"""
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.out_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["trace_status"] == "driver_unresolved"
+        assert len(result["propagation_chain"]) == 2
+        assert result["propagation_chain"][0]["signal_path"] == "top_tb.u0.out_sig"
+        assert result["propagation_chain"][1]["signal_path"] == "top_tb.u0.x_sig"
+
+    async def test_trace_x_source_signal_not_in_waveform(self, tmp_path):
+        rtl = tmp_path / "dut.sv"
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        rtl.write_text(
+            """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut;
+  logic only_sig;
+endmodule
+"""
+        )
+        compile_log.write_text(
+            f"""\
+Chronologic VCS simulator
+Parsing design file '{rtl}'
+Top Level Modules:
+    top_tb
+"""
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! different_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+"""
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.only_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["trace_status"] == "signal_not_in_waveform"
+        assert result["propagation_chain"][0]["trace_stop_reason"] == "signal_not_in_waveform"
 
 
 @pytest.mark.anyio

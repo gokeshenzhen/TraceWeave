@@ -80,6 +80,24 @@ def explain_signal_driver(
             "confidence": "heuristic",
         }
 
+    inst_ports = _find_instance_port_driver(scan, rtl_name)
+    if inst_ports:
+        return {
+            "signal_path": signal_path,
+            "wave_path": wave_path,
+            "resolved_rtl_name": rtl_name,
+            "resolved_module": module_name,
+            "resolved_instance_path": instance_path,
+            "driver_status": "resolved",
+            "driver_kind": "instance_ports",
+            "source_file": scan["path"],
+            "source_line": inst_ports[0]["source_line"],
+            "instance_port_connections": inst_ports,
+            "expression_summary": f"{rtl_name} driven by {len(inst_ports)} instance port(s)",
+            "upstream_signals": [f"{item['instance_name']}.{item['port_name']}" for item in inst_ports],
+            "confidence": "heuristic",
+        }
+
     return {
         "signal_path": signal_path,
         "wave_path": wave_path,
@@ -173,6 +191,27 @@ def _find_output_port(scan: dict[str, Any], signal_name: str) -> dict[str, Any] 
         if match.group("name") == signal_name:
             return {"source_line": _line_of_offset(scan["source_text"], match.start())}
     return None
+
+
+def _find_instance_port_driver(scan: dict[str, Any], signal_name: str) -> list[dict[str, Any]] | None:
+    results: list[dict[str, Any]] = []
+    sig_re = re.compile(rf"^{re.escape(signal_name)}(?:\s*\[[^\]]*\])?$")
+    for inst_match in _INSTANCE_RE.finditer(scan["source_text"]):
+        body = inst_match.group("body")
+        for port_match in _PORT_CONN_RE.finditer(body):
+            expr = port_match.group("expr").strip()
+            if not sig_re.match(expr):
+                continue
+            results.append(
+                {
+                    "instance_module": inst_match.group("module"),
+                    "instance_name": inst_match.group("inst"),
+                    "port_name": port_match.group("port"),
+                    "connected_expression": expr,
+                    "source_line": _line_of_offset(scan["source_text"], inst_match.start()),
+                }
+            )
+    return results or None
 
 
 def _line_of_offset(text: str, offset: int) -> int:

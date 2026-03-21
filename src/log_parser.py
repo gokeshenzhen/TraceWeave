@@ -884,6 +884,8 @@ def _build_summary(
     truncated = total_groups > max_groups
     if truncated:
         group_list = group_list[:max_groups]
+    for group_index, item in enumerate(group_list):
+        item["group_index"] = group_index
 
     fatal_count = sum(1 for event in events if event["severity"] == "FATAL")
     total_errors = len(events)

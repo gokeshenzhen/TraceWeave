@@ -32,8 +32,12 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from config import (
+    AUTO_DOWNGRADE_THRESHOLD,
+    DEFAULT_DETAIL_LEVEL,
     DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
+    DEFAULT_MAX_EVENTS_PER_GROUP,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_X_TRACE_MAX_DEPTH,
 )
 from src.log_parser import SimLogParser, get_error_context
 from src.vcd_parser import VCDParser
@@ -44,6 +48,7 @@ from src.compile_log_parser import parse_compile_log
 from src.path_discovery import discover_sim_paths
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
+from src.x_trace import trace_x_source
 from config import get_fsdb_runtime_info
 
 
@@ -67,6 +72,8 @@ Waveform debug workflow:
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
    - Use grouped errors to choose the first group_index to inspect.
    - If previous_log_detected is true, consider diff_sim_failure_results early.
+   - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="compact".
+   - Default detail_level is "compact" which limits failure_events per group for manageable output.
 
 4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
@@ -80,6 +87,7 @@ Waveform debug workflow:
 7. Use deep-dive tools when needed:
    - analyze_failure_event for failure-centric instance/source correlation
    - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
+   - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps
    - get_error_context for other groups
    - get_signal_transitions for longer history
    - get_signals_around_time for additional signals
@@ -170,6 +178,17 @@ async def list_tools():
                         "type": "integer",
                         "description": f"最多返回多少个 error group，默认 {DEFAULT_MAX_GROUPS}",
                         "default": DEFAULT_MAX_GROUPS,
+                    },
+                    "detail_level": {
+                        "type": "string",
+                        "enum": ["summary", "compact", "full"],
+                        "description": f"返回详细程度，默认 {DEFAULT_DETAIL_LEVEL}",
+                        "default": DEFAULT_DETAIL_LEVEL,
+                    },
+                    "max_events_per_group": {
+                        "type": "integer",
+                        "description": f"compact/full 降级时每个 group 最多返回几条 failure_event，默认 {DEFAULT_MAX_EVENTS_PER_GROUP}",
+                        "default": DEFAULT_MAX_EVENTS_PER_GROUP,
                     },
                 },
                 "required": ["log_path", "simulator"],
@@ -411,6 +430,30 @@ async def list_tools():
                 "required": ["signal_path", "wave_path", "compile_log"],
             },
         ),
+
+        Tool(
+            name="trace_x_source",
+            description=(
+                "当信号在指定时刻出现 X/Z 时，自动沿驱动逻辑追踪传播链。"
+                "遇到实例端口连接时会列出连接列表并停止。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string"},
+                    "signal_path": {"type": "string"},
+                    "time_ps": {"type": "integer"},
+                    "compile_log": {"type": "string"},
+                    "top_hint": {"type": "string"},
+                    "max_depth": {
+                        "type": "integer",
+                        "description": f"最大追踪深度，默认 {DEFAULT_X_TRACE_MAX_DEPTH}",
+                        "default": DEFAULT_X_TRACE_MAX_DEPTH,
+                    },
+                },
+                "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
+            },
+        ),
     ]
 
 
@@ -443,7 +486,39 @@ async def _dispatch(name: str, args: dict):
             args["simulator"]
         )
         summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
-        summary["failure_events"] = parser.parse_failure_events()
+        detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
+        max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
+
+        if detail_level not in {"summary", "compact", "full"}:
+            raise ValueError("detail_level 必须为 summary / compact / full")
+        if max_events_per_group <= 0:
+            raise ValueError("max_events_per_group 必须大于 0")
+
+        allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
+
+        if detail_level == "summary":
+            total = summary["runtime_total_errors"]
+            returned_events = []
+            summary["detail_hint"] = "use detail_level='compact' or get_error_context(group_index=N) for details"
+        else:
+            all_events = parser.parse_failure_events()
+            scoped_events = [
+                event for event in all_events
+                if event["group_signature"] in allowed_signatures
+            ]
+            total = len(scoped_events)
+            if detail_level == "full" and total <= AUTO_DOWNGRADE_THRESHOLD:
+                returned_events = scoped_events
+            else:
+                returned_events = _truncate_failure_events_by_group(scoped_events, max_events_per_group)
+                if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
+                    summary["auto_downgraded"] = True
+
+        summary["detail_level"] = detail_level
+        summary["failure_events"] = returned_events
+        summary["failure_events_total"] = total
+        summary["failure_events_returned"] = len(returned_events)
+        summary["failure_events_truncated"] = len(returned_events) < total
         return summary
 
     elif name == "diff_sim_failure_results":
@@ -552,8 +627,31 @@ async def _dispatch(name: str, args: dict):
             top_hint=args.get("top_hint"),
         )
 
+    elif name == "trace_x_source":
+        return trace_x_source(
+            wave_path=args["wave_path"],
+            signal_path=args["signal_path"],
+            time_ps=args["time_ps"],
+            compile_log=args["compile_log"],
+            parser=_get_parser(args["wave_path"]),
+            top_hint=args.get("top_hint"),
+            max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
+        )
+
     else:
         raise ValueError(f"未知工具: {name}")
+
+
+def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) -> list[dict]:
+    counts: dict[str, int] = {}
+    result: list[dict] = []
+    for event in events:
+        signature = event["group_signature"]
+        count = counts.get(signature, 0)
+        if count < max_per_group:
+            result.append(event)
+            counts[signature] = count + 1
+    return result
 
 
 def _format_error(exc: Exception) -> dict:

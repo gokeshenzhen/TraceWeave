@@ -64,6 +64,15 @@ SIGNAL_SEARCH_MAX_RESULTS = 100
 # parse_sim_log 最多返回的 error group 数
 DEFAULT_MAX_GROUPS = 50
 
+# parse_sim_log 结果控制
+DEFAULT_DETAIL_LEVEL = "compact"
+DEFAULT_MAX_EVENTS_PER_GROUP = 3
+AUTO_DOWNGRADE_THRESHOLD = 2000
+
+# trace_x_source 默认追踪参数
+DEFAULT_X_TRACE_MAX_DEPTH = 20
+X_TRACE_MAX_BRANCH_FANOUT = 5
+
 # UVM multi-line continuation collection
 MAX_UVM_CONTINUATION_LINES = 200
 
