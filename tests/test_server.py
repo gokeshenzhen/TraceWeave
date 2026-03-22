@@ -3,6 +3,7 @@ test_server.py
 覆盖：MCP dispatch 层的关键参数透传和 sim path 发现结果
 """
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from unittest.mock import patch
 
 import server
+from src.schemas import ToolErrorResult
 
 
 @pytest.fixture(autouse=True)
@@ -122,6 +124,9 @@ class TestDispatchParseSimLog:
             assert result["failure_events_truncated"] is False
             assert result["failure_events"][0]["time_parse_status"] == "exact"
             assert result["failure_events"][0]["log_phase"] == "runtime"
+            assert result["problem_hints"]["has_x"] is False
+            assert result["problem_hints"]["has_z"] is False
+            assert result["problem_hints"]["first_error_time_ps"] == 1000
         finally:
             Path(log_path).unlink()
 
@@ -202,6 +207,27 @@ class TestDispatchParseSimLog:
             assert result["failure_events_total"] == 4
             assert result["failure_events_returned"] == 2
             assert result["failure_events_truncated"] is True
+        finally:
+            Path(log_path).unlink()
+
+    async def test_problem_hints_detects_z_heuristically(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_z ERROR output is z @ 4 ns\n")
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result["problem_hints"]["has_x"] is True
+            assert result["problem_hints"]["has_z"] is True
+            assert result["problem_hints"]["error_pattern"] == "zprop"
         finally:
             Path(log_path).unlink()
 
@@ -508,6 +534,14 @@ class TestCallToolErrors:
         payload = result[0].text
         assert "fsdb_runtime_unavailable" in payload
         assert "prefer_vcd_waveforms" in payload
+
+    async def test_generic_error_is_serialized_through_tool_error_result(self):
+        with patch("server._dispatch", side_effect=ValueError("boom")):
+            result = await server.call_tool("search_signals", {"wave_path": "/tmp/a.vcd", "keyword": "sig"})
+
+        payload = json.loads(result[0].text)
+        parsed = ToolErrorResult.model_validate(payload)
+        assert parsed.error == "boom"
 
 
 @pytest.mark.anyio

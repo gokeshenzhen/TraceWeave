@@ -46,6 +46,7 @@ from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
 from src.path_discovery import discover_sim_paths
+from src.problem_hints import compute_problem_hints
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.x_trace import trace_x_source
@@ -113,64 +114,6 @@ def _build_suggested_call(step: str) -> dict:
             return {"tool": "build_tb_hierarchy", "arguments": args}
         return {"tool": "build_tb_hierarchy", "arguments": {}}
     return {"tool": step, "arguments": {}}
-
-
-def _compute_problem_hints(summary: dict, events: list[dict]) -> schemas.ProblemHints:
-    has_x = False
-    has_z = False
-    mechanisms: set[str] = set()
-    for event in events:
-        mechanism = event.get("failure_mechanism")
-        if mechanism == "xprop":
-            has_x = True
-        if _event_mentions_z(event):
-            has_z = True
-        if _event_mentions_x(event):
-            has_x = True
-        if mechanism and mechanism != "unknown":
-            mechanisms.add(mechanism)
-    first_time = None
-    groups = summary.get("groups", [])
-    if groups:
-        first_time = groups[0].get("first_time_ps")
-    return schemas.ProblemHints(
-        has_x=has_x,
-        has_z=has_z,
-        first_error_time_ps=first_time,
-        error_pattern=_select_error_pattern(mechanisms, has_x, has_z),
-    )
-
-
-def _event_mentions_x(event: dict) -> bool:
-    return _event_text_matches(event, r"(?<![A-Za-z0-9_])x(?![A-Za-z0-9_])")
-
-
-def _event_mentions_z(event: dict) -> bool:
-    return _event_text_matches(event, r"(?<![A-Za-z0-9_])z(?![A-Za-z0-9_])")
-
-
-def _event_text_matches(event: dict, pattern: str) -> bool:
-    import re
-
-    payloads = [event.get("message_text"), event.get("group_signature")]
-    structured_fields = event.get("structured_fields") or {}
-    payloads.extend(str(value) for value in structured_fields.values() if value is not None)
-    payloads.extend(
-        str(event.get(field))
-        for field in ("expected", "actual", "transaction_hint")
-        if event.get(field) is not None
-    )
-    return any(re.search(pattern, str(text), re.IGNORECASE) for text in payloads if text)
-
-
-def _select_error_pattern(mechanisms: set[str], has_x: bool, has_z: bool) -> str | None:
-    if has_x and has_z:
-        return "xzprop"
-    if has_x:
-        return "xprop"
-    if has_z:
-        return "zprop"
-    return ", ".join(sorted(mechanisms)) if mechanisms else None
 
 
 def _update_session_state(tool_name: str, args: dict, result: dict):
@@ -616,13 +559,9 @@ async def list_tools():
 async def call_tool(name: str, arguments: dict):
     try:
         result = await _dispatch(name, arguments)
-        if isinstance(result, BaseModel):
-            text = result.model_dump_json(indent=2, exclude_none=True)
-        else:
-            text = json.dumps(result, ensure_ascii=False, indent=2)
-        return [TextContent(type="text", text=text)]
+        return [TextContent(type="text", text=_serialize_result(result))]
     except Exception as e:
-        return [TextContent(type="text", text=json.dumps(_format_error(e), ensure_ascii=False))]
+        return [TextContent(type="text", text=_serialize_result(_format_error(e)))]
 
 
 async def _dispatch(name: str, args: dict):
@@ -639,47 +578,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.SimPathsResult.model_validate(result)
 
     elif name == "parse_sim_log":
-        parser = SimLogParser(
-            args["log_path"],
-            args["simulator"]
-        )
-        summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
-        detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
-        max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
-
-        if detail_level not in {"summary", "compact", "full"}:
-            raise ValueError("detail_level 必须为 summary / compact / full")
-        if max_events_per_group <= 0:
-            raise ValueError("max_events_per_group 必须大于 0")
-
-        allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
-        all_events = parser.parse_failure_events()
-
-        if detail_level == "summary":
-            total = summary["runtime_total_errors"]
-            returned_events = []
-            summary["detail_hint"] = "use detail_level='compact' or get_error_context(group_index=N) for details"
-        else:
-            all_events = parser.parse_failure_events()
-            scoped_events = [
-                event for event in all_events
-                if event["group_signature"] in allowed_signatures
-            ]
-            total = len(scoped_events)
-            if detail_level == "full" and total <= AUTO_DOWNGRADE_THRESHOLD:
-                returned_events = scoped_events
-            else:
-                returned_events = _truncate_failure_events_by_group(scoped_events, max_events_per_group)
-                if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
-                    summary["auto_downgraded"] = True
-
-        summary["detail_level"] = detail_level
-        summary["failure_events"] = returned_events
-        summary["failure_events_total"] = total
-        summary["failure_events_returned"] = len(returned_events)
-        summary["failure_events_truncated"] = len(returned_events) < total
-        summary["problem_hints"] = _compute_problem_hints(summary, all_events or returned_events)
-        return schemas.ParseSimLogResult.model_validate(summary)
+        return _handle_parse_sim_log(args)
 
     elif name == "diff_sim_failure_results":
         result = SimLogParser(
@@ -829,10 +728,56 @@ def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) ->
     return result
 
 
-def _format_error(exc: Exception) -> dict:
+def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
+    parser = SimLogParser(args["log_path"], args["simulator"])
+    summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
+    detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
+    max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
+
+    if detail_level not in {"summary", "compact", "full"}:
+        raise ValueError("detail_level 必须为 summary / compact / full")
+    if max_events_per_group <= 0:
+        raise ValueError("max_events_per_group 必须大于 0")
+
+    allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
+    all_events = parser.parse_failure_events()
+
+    if detail_level == "summary":
+        total = summary["runtime_total_errors"]
+        returned_events = []
+        summary["detail_hint"] = "use detail_level='compact' or get_error_context(group_index=N) for details"
+    else:
+        scoped_events = [
+            event for event in all_events
+            if event["group_signature"] in allowed_signatures
+        ]
+        total = len(scoped_events)
+        if detail_level == "full" and total <= AUTO_DOWNGRADE_THRESHOLD:
+            returned_events = scoped_events
+        else:
+            returned_events = _truncate_failure_events_by_group(scoped_events, max_events_per_group)
+            if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
+                summary["auto_downgraded"] = True
+
+    summary["detail_level"] = detail_level
+    summary["failure_events"] = returned_events
+    summary["failure_events_total"] = total
+    summary["failure_events_returned"] = len(returned_events)
+    summary["failure_events_truncated"] = len(returned_events) < total
+    summary["problem_hints"] = compute_problem_hints(summary, all_events)
+    return schemas.ParseSimLogResult.model_validate(summary)
+
+
+def _serialize_result(result: BaseModel | dict) -> str:
+    if isinstance(result, BaseModel):
+        return result.model_dump_json(indent=2, exclude_none=True)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def _format_error(exc: Exception) -> schemas.ToolErrorResult:
     message = str(exc)
     if "FSDB 解析不可用" in message:
-        return {
+        return schemas.ToolErrorResult.model_validate({
             "error": message,
             "error_code": "fsdb_runtime_unavailable",
             "fsdb_runtime": get_fsdb_runtime_info(),
@@ -840,8 +785,8 @@ def _format_error(exc: Exception) -> dict:
                 "supported_wave_formats": ["vcd"],
                 "action": "prefer_vcd_waveforms",
             },
-        }
-    return {"error": message}
+        })
+    return schemas.ToolErrorResult.model_validate({"error": message})
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -17,8 +17,8 @@ from config import (
 )
 from .compile_log_parser import parse_compile_log
 from .log_parser import SimLogParser
+from .problem_hints import problem_hints_from_event
 from .tb_hierarchy_builder import build_hierarchy
-from .schemas import ProblemHints
 
 
 _STOPWORDS = {
@@ -70,6 +70,7 @@ class WaveformAnalyzer:
                 "analysis_guide": {
                     "step1": "仿真 log 中未发现 ERROR 或 FATAL",
                 },
+                "problem_hints": problem_hints_from_event(None, None),
             }
 
         if group_index < 0 or group_index >= len(groups):
@@ -108,6 +109,7 @@ class WaveformAnalyzer:
                 "step3": "在 wave_context 中核对信号中心值、窗口内跳变和窗口前历史",
                 "step4": "若信号不够，再调用 recommend_failure_debug_next_steps 或 analyze_failure_event",
             },
+            "problem_hints": problem_hints_from_event(focused_event, first_time_ps),
         }
 
     def analyze_failure_event(
@@ -195,8 +197,6 @@ def _find_group_event(events: list[dict[str, Any]], event_id: str | None) -> dic
         if event["event_id"] == event_id:
             return event
     return None
-
-
 def _load_hierarchy(compile_log: str) -> dict[str, Any]:
     return build_hierarchy(parse_compile_log(compile_log, "auto"))
 

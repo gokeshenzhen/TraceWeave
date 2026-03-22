@@ -117,12 +117,32 @@ class TestAnalysisStructure:
         assert result["focused_event"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["focused_event"]["instance_path"] == "top_tb.sva_top_inst.apUNEXPECTED_ASSERTION"
 
+    def test_problem_hints(self, analysis):
+        result, _ = analysis
+        assert result["problem_hints"]["has_x"] is False
+        assert result["problem_hints"]["has_z"] is False
+        assert result["problem_hints"]["first_error_time_ps"] == 290000
+        assert result["problem_hints"]["error_pattern"] == "protocol"
+
 
 class TestAnalysisEdgeCases:
     def test_group_index_out_of_range(self, log_path):
         analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
         with pytest.raises(IndexError):
             analyzer.analyze(["top_tb.dut.req"], group_index=5)
+
+    def test_problem_hints_detects_z_heuristically(self):
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
+        handle.write("module_z ERROR output is z @ 4 ns\n")
+        handle.close()
+        try:
+            analyzer = WaveformAnalyzer(handle.name, FakeWaveParser(), "vcs")
+            result = analyzer.analyze([], group_index=0)
+            assert result["problem_hints"]["has_x"] is True
+            assert result["problem_hints"]["has_z"] is True
+            assert result["problem_hints"]["error_pattern"] == "zprop"
+        finally:
+            os.unlink(handle.name)
 
 
 class TestFailureEventAnalysis:
