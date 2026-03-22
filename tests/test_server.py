@@ -13,6 +13,36 @@ from unittest.mock import patch
 import server
 
 
+@pytest.fixture(autouse=True)
+def _reset_session_state():
+    """每个测试前后重置 session state。"""
+    server.reset_session_state()
+    yield
+    server.reset_session_state()
+
+
+def _prefill_get_sim_paths_state(**overrides):
+    """预填 get_sim_paths state 以绕过门禁。"""
+    state = {
+        "verif_root": "/tmp/verif",
+        "case_dir": "/tmp/verif/work/work_case0",
+        "simulator": "vcs",
+        "compile_log": "/tmp/verif/work/elab.log",
+    }
+    state.update(overrides)
+    server._session_state["get_sim_paths"] = state
+
+
+def _prefill_build_tb_hierarchy_state(**overrides):
+    """预填 build_tb_hierarchy state 以绕过门禁。"""
+    state = {
+        "compile_log": "/tmp/verif/work/elab.log",
+        "simulator": "vcs",
+    }
+    state.update(overrides)
+    server._session_state["build_tb_hierarchy"] = state
+
+
 LOG_SAMPLE = """\
 Booting simulation
 module_a ERROR unique issue a @ 1 ns
@@ -63,6 +93,7 @@ class TestDispatchGetSimPaths:
 @pytest.mark.anyio
 class TestDispatchParseSimLog:
     async def test_forwards_max_groups(self):
+        _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
             handle.write(LOG_SAMPLE)
             log_path = handle.name
@@ -95,6 +126,7 @@ class TestDispatchParseSimLog:
             Path(log_path).unlink()
 
     async def test_max_groups_limits_failure_events_to_summary_groups(self):
+        _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
             handle.write(LOG_SAMPLE)
             log_path = handle.name
@@ -119,6 +151,7 @@ class TestDispatchParseSimLog:
             Path(log_path).unlink()
 
     async def test_summary_detail_level_skips_failure_events(self):
+        _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
             handle.write(LOG_SAMPLE)
             log_path = handle.name
@@ -142,6 +175,7 @@ class TestDispatchParseSimLog:
             Path(log_path).unlink()
 
     async def test_compact_detail_level_limits_events_per_group(self):
+        _prefill_get_sim_paths_state()
         repeated_log = "\n".join(
             [
                 "UVM_ERROR /tmp/top_tb.sv(10) @ 1 ns: reporter [TOP] repeated issue",
@@ -172,6 +206,7 @@ class TestDispatchParseSimLog:
             Path(log_path).unlink()
 
     async def test_diff_sim_failure_results(self):
+        _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as base:
             base.write("module_a ERROR unique issue a @ 1 ns\n")
             base_path = base.name
@@ -197,6 +232,8 @@ class TestDispatchParseSimLog:
 @pytest.mark.anyio
 class TestNewAnalyzerTools:
     async def test_recommend_failure_debug_next_steps(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
         log_path = tmp_path / "run.log"
         wave_path = tmp_path / "wave.vcd"
         log_path.write_text(
@@ -230,6 +267,8 @@ $enddefinitions $end
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
     async def test_recommend_failure_debug_next_steps_without_top_hint(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
         log_path = tmp_path / "run.log"
         wave_path = tmp_path / "wave.vcd"
         log_path.write_text(
@@ -262,6 +301,7 @@ $enddefinitions $end
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
     async def test_explain_signal_driver(self, tmp_path):
+        _prefill_build_tb_hierarchy_state()
         rtl = tmp_path / "dut.sv"
         compile_log = tmp_path / "compile.log"
         wave_path = tmp_path / "wave.vcd"
@@ -304,6 +344,7 @@ Top Level Modules:
         assert str(rtl) == result["source_file"]
 
     async def test_explain_signal_driver_instance_ports(self, tmp_path):
+        _prefill_build_tb_hierarchy_state()
         rtl = tmp_path / "dut.sv"
         compile_log = tmp_path / "compile.log"
         wave_path = tmp_path / "wave.vcd"
@@ -348,6 +389,7 @@ Top Level Modules:
         assert len(result["instance_port_connections"]) == 2
 
     async def test_trace_x_source(self, tmp_path):
+        _prefill_build_tb_hierarchy_state()
         rtl = tmp_path / "dut.sv"
         compile_log = tmp_path / "compile.log"
         wave_path = tmp_path / "wave.vcd"
@@ -405,6 +447,7 @@ x"
         assert result["propagation_chain"][1]["signal_path"] == "top_tb.u0.x_sig"
 
     async def test_trace_x_source_signal_not_in_waveform(self, tmp_path):
+        _prefill_build_tb_hierarchy_state()
         rtl = tmp_path / "dut.sv"
         compile_log = tmp_path / "compile.log"
         wave_path = tmp_path / "wave.vcd"
@@ -465,6 +508,119 @@ class TestCallToolErrors:
         payload = result[0].text
         assert "fsdb_runtime_unavailable" in payload
         assert "prefer_vcd_waveforms" in payload
+
+
+@pytest.mark.anyio
+class TestPrerequisiteGating:
+    async def test_parse_sim_log_blocked_without_get_sim_paths(self, tmp_path):
+        log_path = tmp_path / "run.log"
+        log_path.write_text("module_a ERROR issue @ 1 ns\n")
+        result = await server._dispatch(
+            "parse_sim_log",
+            {"log_path": str(log_path), "simulator": "vcs"},
+        )
+        assert result["ok"] is False
+        assert result["error_code"] == "missing_prerequisite"
+        assert result["missing_step"] == "get_sim_paths"
+        assert result["required_before"] == "parse_sim_log"
+        assert result["suggested_call"]["tool"] == "get_sim_paths"
+
+    async def test_parse_sim_log_passes_after_get_sim_paths(self, tmp_path):
+        work_dir = tmp_path / "work"
+        case_dir = work_dir / "work_case0"
+        case_dir.mkdir(parents=True)
+        elab_log = work_dir / "elab.log"
+        sim_log = case_dir / "irun.log"
+        elab_log.write_text("xrun\nxmelab\n")
+        sim_log.write_text("module_a ERROR issue @ 1 ns\n")
+
+        await server._dispatch(
+            "get_sim_paths",
+            {"verif_root": str(work_dir), "case_name": "case0"},
+        )
+
+        result = await server._dispatch(
+            "parse_sim_log",
+            {"log_path": str(sim_log), "simulator": "xcelium"},
+        )
+        assert "schema_version" in result
+        assert result.get("ok") is not False
+
+    async def test_analyze_failures_blocked_without_build_tb_hierarchy(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        result = await server._dispatch(
+            "analyze_failures",
+            {
+                "log_path": "/tmp/run.log",
+                "wave_path": "/tmp/wave.vcd",
+                "signal_paths": ["top.sig"],
+                "simulator": "vcs",
+            },
+        )
+        assert result["ok"] is False
+        assert result["error_code"] == "missing_prerequisite"
+        assert result["missing_step"] == "build_tb_hierarchy"
+        assert result["required_before"] == "analyze_failures"
+
+    async def test_search_signals_no_gate(self, tmp_path):
+        wave_path = tmp_path / "wave.vcd"
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! clk $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+"""
+        )
+        result = await server._dispatch(
+            "search_signals",
+            {"wave_path": str(wave_path), "keyword": "clk"},
+        )
+        assert result.get("ok") is not False
+        assert any("clk" in m["path"] for m in result["results"])
+
+    async def test_get_sim_paths_clears_build_tb_hierarchy_state(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        assert server._session_state["build_tb_hierarchy"] is not None
+
+        work_dir = tmp_path / "work"
+        case_dir = work_dir / "work_case0"
+        case_dir.mkdir(parents=True)
+        elab_log = work_dir / "elab.log"
+        sim_log = case_dir / "irun.log"
+        elab_log.write_text("xrun\nxmelab\n")
+        sim_log.write_text("sim ok\n")
+
+        await server._dispatch(
+            "get_sim_paths",
+            {"verif_root": str(work_dir), "case_name": "case0"},
+        )
+        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._session_state["get_sim_paths"] is not None
+
+    async def test_suggested_call_includes_compile_log(self):
+        _prefill_get_sim_paths_state(
+            compile_log="/my/elab.log",
+            simulator="xcelium",
+        )
+        result = await server._dispatch(
+            "analyze_failures",
+            {
+                "log_path": "/tmp/run.log",
+                "wave_path": "/tmp/wave.vcd",
+                "signal_paths": ["top.sig"],
+                "simulator": "vcs",
+            },
+        )
+        assert result["ok"] is False
+        suggested = result["suggested_call"]
+        assert suggested["tool"] == "build_tb_hierarchy"
+        assert suggested["arguments"]["compile_log"] == "/my/elab.log"
+        assert suggested["arguments"]["simulator"] == "xcelium"
 
 
 class TestWaveCacheInvalidation:

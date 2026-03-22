@@ -18,6 +18,7 @@ from config import (
 from .compile_log_parser import parse_compile_log
 from .log_parser import SimLogParser
 from .tb_hierarchy_builder import build_hierarchy
+from .schemas import ProblemHints
 
 
 _STOPWORDS = {

@@ -50,6 +50,157 @@ from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.x_trace import trace_x_source
 from config import get_fsdb_runtime_info
+from pydantic import BaseModel
+import src.schemas as schemas
+
+
+# ── Session 状态机：工作流前置条件门禁 ──────────────────────────────
+_session_state: dict[str, dict | None] = {
+    "get_sim_paths": None,
+    "build_tb_hierarchy": None,
+}
+
+_PREREQUISITES: dict[str, list[str]] = {
+    "parse_sim_log": ["get_sim_paths"],
+    "diff_sim_failure_results": ["get_sim_paths"],
+    "get_error_context": ["get_sim_paths"],
+    "recommend_failure_debug_next_steps": ["get_sim_paths", "build_tb_hierarchy"],
+    "analyze_failures": ["get_sim_paths", "build_tb_hierarchy"],
+    "analyze_failure_event": ["get_sim_paths", "build_tb_hierarchy"],
+    "explain_signal_driver": ["build_tb_hierarchy"],
+    "trace_x_source": ["build_tb_hierarchy"],
+}
+
+_PREREQUISITE_REASONS: dict[str, str] = {
+    "get_sim_paths": (
+        "get_sim_paths must be called first to discover simulator type, "
+        "file paths, and FSDB runtime status."
+    ),
+    "build_tb_hierarchy": (
+        "build_tb_hierarchy must be called first to build the testbench "
+        "hierarchy used for source-aware analysis."
+    ),
+}
+
+
+def _check_prerequisites(tool_name: str) -> dict | None:
+    prereqs = _PREREQUISITES.get(tool_name)
+    if not prereqs:
+        return None
+    for step in prereqs:
+        if _session_state[step] is None:
+            block = {
+                "ok": False,
+                "error_code": "missing_prerequisite",
+                "missing_step": step,
+                "required_before": tool_name,
+                "reason": _PREREQUISITE_REASONS[step],
+                "suggested_call": _build_suggested_call(step),
+            }
+            return schemas.PrerequisiteBlockResult.model_validate(block)
+    return None
+
+
+def _build_suggested_call(step: str) -> dict:
+    if step == "get_sim_paths":
+        return {"tool": "get_sim_paths", "arguments": {}}
+    if step == "build_tb_hierarchy":
+        sim_state = _session_state.get("get_sim_paths")
+        if sim_state and sim_state.get("compile_log"):
+            args: dict = {"compile_log": sim_state["compile_log"]}
+            if sim_state.get("simulator"):
+                args["simulator"] = sim_state["simulator"]
+            return {"tool": "build_tb_hierarchy", "arguments": args}
+        return {"tool": "build_tb_hierarchy", "arguments": {}}
+    return {"tool": step, "arguments": {}}
+
+
+def _compute_problem_hints(summary: dict, events: list[dict]) -> schemas.ProblemHints:
+    has_x = False
+    has_z = False
+    mechanisms: set[str] = set()
+    for event in events:
+        mechanism = event.get("failure_mechanism")
+        if mechanism == "xprop":
+            has_x = True
+        if _event_mentions_z(event):
+            has_z = True
+        if _event_mentions_x(event):
+            has_x = True
+        if mechanism and mechanism != "unknown":
+            mechanisms.add(mechanism)
+    first_time = None
+    groups = summary.get("groups", [])
+    if groups:
+        first_time = groups[0].get("first_time_ps")
+    return schemas.ProblemHints(
+        has_x=has_x,
+        has_z=has_z,
+        first_error_time_ps=first_time,
+        error_pattern=_select_error_pattern(mechanisms, has_x, has_z),
+    )
+
+
+def _event_mentions_x(event: dict) -> bool:
+    return _event_text_matches(event, r"(?<![A-Za-z0-9_])x(?![A-Za-z0-9_])")
+
+
+def _event_mentions_z(event: dict) -> bool:
+    return _event_text_matches(event, r"(?<![A-Za-z0-9_])z(?![A-Za-z0-9_])")
+
+
+def _event_text_matches(event: dict, pattern: str) -> bool:
+    import re
+
+    payloads = [event.get("message_text"), event.get("group_signature")]
+    structured_fields = event.get("structured_fields") or {}
+    payloads.extend(str(value) for value in structured_fields.values() if value is not None)
+    payloads.extend(
+        str(event.get(field))
+        for field in ("expected", "actual", "transaction_hint")
+        if event.get(field) is not None
+    )
+    return any(re.search(pattern, str(text), re.IGNORECASE) for text in payloads if text)
+
+
+def _select_error_pattern(mechanisms: set[str], has_x: bool, has_z: bool) -> str | None:
+    if has_x and has_z:
+        return "xzprop"
+    if has_x:
+        return "xprop"
+    if has_z:
+        return "zprop"
+    return ", ".join(sorted(mechanisms)) if mechanisms else None
+
+
+def _update_session_state(tool_name: str, args: dict, result: dict):
+    if tool_name == "get_sim_paths":
+        compile_log = None
+        for entry in result.get("compile_logs", []):
+            if entry.get("phase") == "elaborate":
+                compile_log = entry["path"]
+                break
+        if compile_log is None:
+            logs = result.get("compile_logs", [])
+            if logs:
+                compile_log = logs[0]["path"]
+        _session_state["get_sim_paths"] = {
+            "verif_root": result.get("verif_root"),
+            "case_dir": result.get("case_dir"),
+            "simulator": result.get("simulator"),
+            "compile_log": compile_log,
+        }
+        _session_state["build_tb_hierarchy"] = None
+    elif tool_name == "build_tb_hierarchy":
+        _session_state["build_tb_hierarchy"] = {
+            "compile_log": args.get("compile_log"),
+            "simulator": args.get("simulator", "auto"),
+        }
+
+
+def reset_session_state():
+    _session_state["get_sim_paths"] = None
+    _session_state["build_tb_hierarchy"] = None
 
 
 SERVER_INSTRUCTIONS = """
@@ -465,20 +616,27 @@ async def list_tools():
 async def call_tool(name: str, arguments: dict):
     try:
         result = await _dispatch(name, arguments)
-        return [TextContent(type="text",
-                            text=json.dumps(result, ensure_ascii=False, indent=2))]
+        if isinstance(result, BaseModel):
+            text = result.model_dump_json(indent=2, exclude_none=True)
+        else:
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+        return [TextContent(type="text", text=text)]
     except Exception as e:
-        return [TextContent(type="text",
-                            text=json.dumps(_format_error(e), ensure_ascii=False))]
+        return [TextContent(type="text", text=json.dumps(_format_error(e), ensure_ascii=False))]
 
 
 async def _dispatch(name: str, args: dict):
+    block = _check_prerequisites(name)
+    if block is not None:
+        return schemas.PrerequisiteBlockResult.model_validate(block)
 
     if name == "get_sim_paths":
-        return discover_sim_paths(
+        result = discover_sim_paths(
             args["verif_root"],
             args.get("case_name"),
         )
+        _update_session_state(name, args, result)
+        return schemas.SimPathsResult.model_validate(result)
 
     elif name == "parse_sim_log":
         parser = SimLogParser(
@@ -495,6 +653,7 @@ async def _dispatch(name: str, args: dict):
             raise ValueError("max_events_per_group 必须大于 0")
 
         allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
+        all_events = parser.parse_failure_events()
 
         if detail_level == "summary":
             total = summary["runtime_total_errors"]
@@ -519,21 +678,24 @@ async def _dispatch(name: str, args: dict):
         summary["failure_events_total"] = total
         summary["failure_events_returned"] = len(returned_events)
         summary["failure_events_truncated"] = len(returned_events) < total
-        return summary
+        summary["problem_hints"] = _compute_problem_hints(summary, all_events or returned_events)
+        return schemas.ParseSimLogResult.model_validate(summary)
 
     elif name == "diff_sim_failure_results":
-        return SimLogParser(
+        result = SimLogParser(
             args["base_log_path"],
             args["simulator"],
         ).diff_against(args["new_log_path"])
+        return schemas.DiffResult.model_validate(result)
 
     elif name == "get_error_context":
-        return get_error_context(
+        result = get_error_context(
             args["log_path"],
             line=args["line"],
             before=args.get("before", DEFAULT_LOG_CONTEXT_BEFORE),
             after=args.get("after", DEFAULT_LOG_CONTEXT_AFTER),
         )
+        return schemas.ErrorContextResult.model_validate(result)
 
     elif name == "search_signals":
         wave_path  = args["wave_path"]
@@ -547,57 +709,66 @@ async def _dispatch(name: str, args: dict):
                 if cached is not None:
                     _dispose_cached_object(cached[1])
                 _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
-            return _fsdb_index_cache[wave_path][1].search(keyword, max_r)
+            result = _fsdb_index_cache[wave_path][1].search(keyword, max_r)
+            return schemas.SearchSignalsResult.model_validate(result)
         elif ext == "vcd":
-            return _get_parser(wave_path).search_signals(keyword, max_r)
+            result = _get_parser(wave_path).search_signals(keyword, max_r)
+            return schemas.SearchSignalsResult.model_validate(result)
         else:
             raise ValueError(f"不支持的格式: .{ext}")
 
     elif name == "get_signal_at_time":
-        return _get_parser(args["wave_path"]).get_value_at_time(
+        result = _get_parser(args["wave_path"]).get_value_at_time(
             args["signal_path"], args["time_ps"]
         )
+        return schemas.SignalAtTimeResult.model_validate(result)
 
     elif name == "get_signal_transitions":
-        return _get_parser(args["wave_path"]).get_transitions(
+        result = _get_parser(args["wave_path"]).get_transitions(
             args["signal_path"],
             args.get("start_time_ps", 0),
             args.get("end_time_ps", -1),
         )
+        return schemas.SignalTransitionsResult.model_validate(result)
 
     elif name == "get_signals_around_time":
-        return _get_parser(args["wave_path"]).get_signals_around_time(
+        result = _get_parser(args["wave_path"]).get_signals_around_time(
             args["signal_paths"],
             args["center_time_ps"],
             args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
             args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
+        return schemas.SignalsAroundTimeResult.model_validate(result)
 
     elif name == "get_waveform_summary":
-        return _get_parser(args["wave_path"]).get_summary()
+        result = _get_parser(args["wave_path"]).get_summary()
+        return schemas.WaveformSummaryResult.model_validate(result)
 
     elif name == "build_tb_hierarchy":
-        return build_hierarchy(
+        result = build_hierarchy(
             parse_compile_log(
                 args["compile_log"],
                 args.get("simulator", "auto"),
             )
         )
+        _update_session_state(name, args, result)
+        return schemas.BuildTbHierarchyResult.model_validate(result)
 
     elif name == "analyze_failures":
-        return WaveformAnalyzer(
-            log_path   = args["log_path"],
-            parser     = _get_parser(args["wave_path"]),
-            simulator  = args["simulator"],
+        result = WaveformAnalyzer(
+            log_path=args["log_path"],
+            parser=_get_parser(args["wave_path"]),
+            simulator=args["simulator"],
         ).analyze(
-            signal_paths = args["signal_paths"],
-            group_index  = args.get("group_index", 0),
-            window_ps    = args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
+            signal_paths=args["signal_paths"],
+            group_index=args.get("group_index", 0),
+            window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
             extra_transitions = args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
+        return schemas.AnalyzeFailuresResult.model_validate(result)
 
     elif name == "analyze_failure_event":
-        return WaveformAnalyzer(
+        result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
             simulator=args["simulator"],
@@ -607,9 +778,10 @@ async def _dispatch(name: str, args: dict):
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
         )
+        return schemas.AnalyzeFailureEventResult.model_validate(result)
 
     elif name == "recommend_failure_debug_next_steps":
-        return WaveformAnalyzer(
+        result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
             simulator=args["simulator"],
@@ -618,17 +790,19 @@ async def _dispatch(name: str, args: dict):
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
         )
+        return schemas.RecommendNextStepsResult.model_validate(result)
 
     elif name == "explain_signal_driver":
-        return explain_signal_driver(
+        result = explain_signal_driver(
             signal_path=args["signal_path"],
             wave_path=args["wave_path"],
             compile_log=args["compile_log"],
             top_hint=args.get("top_hint"),
         )
+        return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "trace_x_source":
-        return trace_x_source(
+        result = trace_x_source(
             wave_path=args["wave_path"],
             signal_path=args["signal_path"],
             time_ps=args["time_ps"],
@@ -637,6 +811,7 @@ async def _dispatch(name: str, args: dict):
             top_hint=args.get("top_hint"),
             max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
         )
+        return schemas.TraceXSourceResult.model_validate(result)
 
     else:
         raise ValueError(f"未知工具: {name}")
