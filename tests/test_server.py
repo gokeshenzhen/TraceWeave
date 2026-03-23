@@ -225,9 +225,106 @@ class TestDispatchParseSimLog:
                 },
             )
 
-            assert result["problem_hints"]["has_x"] is True
             assert result["problem_hints"]["has_z"] is True
             assert result["problem_hints"]["error_pattern"] == "zprop"
+        finally:
+            Path(log_path).unlink()
+
+    async def test_summary_detail_level_still_returns_first_group_context(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(
+                "".join(
+                    ["info line\n"] * 3
+                    + ["module_a ERROR summary path issue @ 100 ns\n"]
+                    + ["info after\n"] * 3
+                )
+            )
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                    "detail_level": "summary",
+                },
+            )
+
+            assert result["failure_events"] == []
+            assert result["first_group_context"] is not None
+            assert result["first_group_context"]["center_line"] == 4
+            assert "ERROR" in result["first_group_context"]["context"]
+        finally:
+            Path(log_path).unlink()
+
+    async def test_returns_first_group_context(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(
+                "".join(
+                    ["info line\n"] * 5
+                    + ["module_a ERROR some issue @ 100 ns\n"]
+                    + ["info after\n"] * 5
+                )
+            )
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert "first_group_context" in result
+            ctx = result["first_group_context"]
+            assert ctx is not None
+            assert ctx["center_line"] == 6
+            assert "ERROR" in ctx["context"]
+        finally:
+            Path(log_path).unlink()
+
+    async def test_no_errors_returns_no_first_group_context(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("info: all good\ninfo: simulation passed\n")
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result.get("first_group_context") is None
+        finally:
+            Path(log_path).unlink()
+
+    async def test_problem_hints_detects_x_annotation(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_x ERROR xprop detected on bus @ 4 ns\n")
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result["problem_hints"]["has_x"] is True
+            assert result["problem_hints"]["has_z"] is False
+            assert result["problem_hints"]["error_pattern"] == "xprop"
         finally:
             Path(log_path).unlink()
 

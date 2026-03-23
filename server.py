@@ -165,6 +165,8 @@ Waveform debug workflow:
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
    - Use grouped errors to choose the first group_index to inspect.
+   - first_group_context contains ~200 lines of raw log text around the first error.
+     Use get_error_context only for other groups.
    - If previous_log_detected is true, consider diff_sim_failure_results early.
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="compact".
    - Default detail_level is "compact" which limits failure_events per group for manageable output.
@@ -262,6 +264,8 @@ async def list_tools():
             description=(
                 "解析 VCS 或 Xcelium 仿真 log，返回按 signature 分组的报错摘要。"
                 "simulator 必传，不再自动识别。"
+                "自动附带首个 error group 前后各 100 行的 log context（first_group_context 字段），"
+                "其余 group 按需调 get_error_context。"
             ),
             inputSchema={
                 "type": "object",
@@ -759,11 +763,28 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
                 summary["auto_downgraded"] = True
 
+    first_group_context = None
+    groups = summary.get("groups", [])
+    if groups:
+        first_line = groups[0].get("first_line")
+        if isinstance(first_line, int) and first_line > 0:
+            try:
+                context = get_error_context(
+                    args["log_path"],
+                    first_line,
+                    before=DEFAULT_LOG_CONTEXT_BEFORE,
+                    after=DEFAULT_LOG_CONTEXT_AFTER,
+                )
+                first_group_context = schemas.ErrorContextResult.model_validate(context)
+            except Exception:
+                first_group_context = None
+
     summary["detail_level"] = detail_level
     summary["failure_events"] = returned_events
     summary["failure_events_total"] = total
     summary["failure_events_returned"] = len(returned_events)
     summary["failure_events_truncated"] = len(returned_events) < total
+    summary["first_group_context"] = first_group_context
     summary["problem_hints"] = compute_problem_hints(summary, all_events)
     return schemas.ParseSimLogResult.model_validate(summary)
 

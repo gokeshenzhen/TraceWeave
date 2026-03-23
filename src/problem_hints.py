@@ -18,6 +18,8 @@ _HEURISTIC_Z_PATTERNS = (
     re.compile(r"\btri[- ]?state\b", re.IGNORECASE),
     re.compile(r"\bhigh impedance\b", re.IGNORECASE),
 )
+_HEX_X_RE = re.compile(r"(?:[0-9a-fA-F][Xx]|[Xx][0-9a-fA-F]|^[Xx]+$)")
+_HEX_Z_RE = re.compile(r"(?:[0-9a-fA-F][Zz]|[Zz][0-9a-fA-F]|^[Zz]+$)")
 _ERROR_PATTERN_PRIORITY = (
     "mismatch",
     "timeout",
@@ -60,7 +62,11 @@ def _build_problem_hints(
         payload = _event_text(event)
         if mechanism == "xprop" or _matches_any(payload, _HEURISTIC_X_PATTERNS):
             has_x = True
+        if not has_x and _has_x_in_hex_value(event):
+            has_x = True
         if _matches_any(payload, _HEURISTIC_Z_PATTERNS):
+            has_z = True
+        if not has_z and _has_z_in_hex_value(event):
             has_z = True
 
     return ProblemHints(
@@ -96,3 +102,21 @@ def _event_text(event: dict[str, Any]) -> str:
         if event.get(field) is not None
     )
     return " ".join(str(text) for text in payloads if text)
+
+
+def _has_x_in_hex_value(event: dict[str, Any]) -> bool:
+    """Check whether expected/actual contains hex-adjacent X unknown bits."""
+    for field in ("expected", "actual"):
+        value = event.get(field)
+        if value is not None and _HEX_X_RE.search(str(value)):
+            return True
+    return False
+
+
+def _has_z_in_hex_value(event: dict[str, Any]) -> bool:
+    """Check whether expected/actual contains hex-adjacent Z high-impedance bits."""
+    for field in ("expected", "actual"):
+        value = event.get(field)
+        if value is not None and _HEX_Z_RE.search(str(value)):
+            return True
+    return False

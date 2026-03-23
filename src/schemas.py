@@ -131,6 +131,7 @@ class ParseSimLogResult(SchemaModel):
     previous_log_detected: bool = False
     candidate_previous_logs: list[str] = Field(default_factory=list)
     suggested_followup_tool: str | None = None
+    first_group_context: ErrorContextResult | None = None
     problem_hints: ProblemHints | None = None
 
 
