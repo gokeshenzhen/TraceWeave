@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -88,6 +88,25 @@ class BuildTbHierarchyResult(SchemaModel):
     class_hierarchy: list[str] = Field(default_factory=list)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
     compile_result: dict[str, Any] = Field(default_factory=dict)
+
+
+class StructuralRisk(SchemaModel):
+    type: str
+    file: str
+    line: int
+    module: str | None = None
+    risk_level: Literal["high", "medium", "low"]
+    detail: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ScanStructuralRisksResult(SchemaModel):
+    scan_scope: str = "scope1"
+    files_scanned: int = 0
+    total_risks: int = 0
+    risks: list[StructuralRisk] = Field(default_factory=list)
+    categories_scanned: list[str] = Field(default_factory=list)
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 class ErrorGroup(SchemaModel):

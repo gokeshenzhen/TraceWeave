@@ -109,6 +109,38 @@ claude mcp list
 # 应显示 waveform (connected)
 ```
 
+### Codex
+
+编辑 `~/.codex/config.toml`，添加以下配置：
+
+```toml
+[mcp_servers.waveform]
+command = "python3.11"
+args = ["/home/robin/Projects/mcp/waveform_mcp/server.py"]
+cwd = "/home/robin/Projects/mcp/waveform_mcp"
+
+[mcp_servers.waveform.env]
+VERDI_HOME = "/tools/synopsys/verdi/O-2018.09-SP2-11"
+VCS_HOME   = "/tools/synopsys/vcs/O-2018.09-SP2-11"
+XLM_ROOT   = "/tools/cadence/XCELIUM1803"
+PATH       = "/tools/synopsys/verdi/O-2018.09-SP2-11/bin:/tools/synopsys/vcs/O-2018.09-SP2-11/bin:/tools/cadence/XCELIUM1803/tools/bin:/usr/local/bin:/usr/bin:/bin"
+```
+
+如果 `~/.codex/config.toml` 已存在其他内容，只追加 `mcp_servers.waveform` 这一段即可，不要覆盖已有配置。
+
+配置后验证：
+
+```bash
+codex mcp list
+# 应显示 waveform，且 Status 为 enabled
+```
+
+建议再做一次功能验证：
+
+1. 在一个包含 `verif/`、sim log 和 wave 的工程目录启动 `codex`
+2. 直接提一个明确的波形调试请求，例如“调用 waveform MCP，先用 get_sim_paths 看这个 case 的日志和波形”
+3. 确认执行日志里实际出现了 `get_sim_paths`、`parse_sim_log`、`search_signals` 等 MCP tool 调用，而不是只用 shell 手工读文件
+
 ---
 
 ## Standard MCP Workflow

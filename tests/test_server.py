@@ -93,6 +93,42 @@ class TestDispatchGetSimPaths:
 
 
 @pytest.mark.anyio
+class TestStructuralScannerToolContract:
+    async def test_tool_schema_allows_default_simulator(self):
+        tools = await server.list_tools()
+        scan_tool = next(tool for tool in tools if tool.name == "scan_structural_risks")
+
+        assert scan_tool.inputSchema["required"] == ["compile_log"]
+        assert scan_tool.inputSchema["properties"]["simulator"]["default"] == "auto"
+
+    async def test_dispatch_uses_auto_simulator_default(self):
+        with patch.object(server, "scan_structural_risks", return_value={
+            "scan_scope": "scope1",
+            "files_scanned": 1,
+            "total_risks": 0,
+            "risks": [],
+            "categories_scanned": ["slice_overlap"],
+            "skipped_files": [],
+        }) as scan_mock:
+            result = await server._dispatch(
+                "scan_structural_risks",
+                {
+                    "compile_log": "/tmp/elab.log",
+                    "categories": ["slice_overlap"],
+                },
+            )
+
+        scan_mock.assert_called_once_with(
+            compile_log="/tmp/elab.log",
+            simulator="auto",
+            scan_scope="scope1",
+            categories=["slice_overlap"],
+        )
+        assert result["scan_scope"] == "scope1"
+        assert result["files_scanned"] == 1
+
+
+@pytest.mark.anyio
 class TestDispatchParseSimLog:
     async def test_forwards_max_groups(self):
         _prefill_get_sim_paths_state()

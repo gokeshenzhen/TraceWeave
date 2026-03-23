@@ -49,6 +49,7 @@ from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
+from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
 from config import get_fsdb_runtime_info
 from pydantic import BaseModel
@@ -444,6 +445,36 @@ async def list_tools():
         ),
 
         Tool(
+            name="scan_structural_risks",
+            description=(
+                "对编译文件列表中的 RTL/TB 源码做 Scope 1 正则静态结构风险扫描。"
+                "这是感知层工具，只报告值得关注的模式，不做确诊判断。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "compile_log": {"type": "string", "description": "编译或 elaborate 阶段 log 的绝对路径"},
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto（默认 auto）",
+                        "default": "auto",
+                    },
+                    "scan_scope": {
+                        "type": "string",
+                        "description": "扫描范围版本，当前仅支持 scope1",
+                        "default": "scope1",
+                    },
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ALL_CATEGORIES},
+                        "description": "可选，仅扫描指定风险类别；省略时扫描全部类别",
+                    },
+                },
+                "required": ["compile_log"],
+            },
+        ),
+
+        Tool(
             name="analyze_failures",
             description=(
                 "核心分析工具：聚焦单个报错 group 的第一次出现，"
@@ -656,6 +687,15 @@ async def _dispatch(name: str, args: dict):
         )
         _update_session_state(name, args, result)
         return schemas.BuildTbHierarchyResult.model_validate(result)
+
+    elif name == "scan_structural_risks":
+        result = scan_structural_risks(
+            compile_log=args["compile_log"],
+            simulator=args.get("simulator", "auto"),
+            scan_scope=args.get("scan_scope", "scope1"),
+            categories=args.get("categories"),
+        )
+        return schemas.ScanStructuralRisksResult.model_validate(result)
 
     elif name == "analyze_failures":
         result = WaveformAnalyzer(
