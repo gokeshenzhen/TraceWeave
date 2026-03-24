@@ -288,6 +288,29 @@ class RecommendNextStepsResult(SchemaModel):
 RecommendFailureDebugNextStepsResult = RecommendNextStepsResult
 
 
+class DiagnosticSnapshotSection(SchemaModel):
+    available: bool
+    stale: bool = False
+    summary: dict[str, Any] | None = None
+    suggested_call: dict[str, Any] | None = None
+
+
+class DiagnosticSnapshot(SchemaModel):
+    sim_paths: DiagnosticSnapshotSection
+    hierarchy: DiagnosticSnapshotSection
+    log_analysis: DiagnosticSnapshotSection
+    recommended_next: DiagnosticSnapshotSection
+    simulator: str | None = None
+    case_dir: str | None = None
+    top_module: str | None = None
+    total_errors: int | None = None
+    problem_hints: ProblemHints | None = None
+    primary_failure_target: dict[str, Any] | None = None
+    suspected_failure_class: str | None = None
+    recommended_signals: list[dict[str, Any]] | None = None
+    missing_steps: list[dict[str, Any]] | None = None
+
+
 class DriverChainHop(SchemaModel):
     depth: int
     signal_path: str

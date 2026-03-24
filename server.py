@@ -62,6 +62,26 @@ _session_state: dict[str, dict | None] = {
     "build_tb_hierarchy": None,
 }
 
+_result_cache: dict[str, schemas.SchemaModel | None] = {
+    "get_sim_paths": None,
+    "build_tb_hierarchy": None,
+    "parse_sim_log": None,
+    "recommend_failure_debug_next_steps": None,
+}
+
+_result_provenance: dict[str, dict | None] = {
+    "get_sim_paths": None,
+    "build_tb_hierarchy": None,
+    "parse_sim_log": None,
+    "recommend_failure_debug_next_steps": None,
+}
+
+_DOWNSTREAM_DEPS: dict[str, list[str]] = {
+    "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "recommend_failure_debug_next_steps"],
+    "build_tb_hierarchy": ["recommend_failure_debug_next_steps"],
+    "parse_sim_log": ["recommend_failure_debug_next_steps"],
+}
+
 _PREREQUISITES: dict[str, list[str]] = {
     "parse_sim_log": ["get_sim_paths"],
     "diff_sim_failure_results": ["get_sim_paths"],
@@ -114,10 +134,46 @@ def _build_suggested_call(step: str) -> dict:
                 args["simulator"] = sim_state["simulator"]
             return {"tool": "build_tb_hierarchy", "arguments": args}
         return {"tool": "build_tb_hierarchy", "arguments": {}}
+    if step == "parse_sim_log":
+        sim_result = _result_cache.get("get_sim_paths")
+        if sim_result and sim_result.sim_logs:
+            return {
+                "tool": "parse_sim_log",
+                "arguments": {
+                    "log_path": sim_result.sim_logs[0].path,
+                    "simulator": sim_result.simulator or "auto",
+                },
+            }
+        return {"tool": "parse_sim_log", "arguments": {}}
+    if step == "recommend_failure_debug_next_steps":
+        args: dict = {}
+        sim_result = _result_cache.get("get_sim_paths")
+        if sim_result:
+            if sim_result.sim_logs:
+                args["log_path"] = sim_result.sim_logs[0].path
+            if sim_result.wave_files:
+                args["wave_path"] = sim_result.wave_files[0].path
+            if sim_result.simulator:
+                args["simulator"] = sim_result.simulator
+        hier_state = _session_state.get("build_tb_hierarchy")
+        if hier_state and hier_state.get("compile_log"):
+            args["compile_log"] = hier_state["compile_log"]
+        return {"tool": "recommend_failure_debug_next_steps", "arguments": args}
     return {"tool": step, "arguments": {}}
 
 
+def _invalidate_downstream(from_tool: str):
+    for downstream in _DOWNSTREAM_DEPS.get(from_tool, []):
+        if downstream in _session_state:
+            _session_state[downstream] = None
+        if downstream in _result_cache:
+            _result_cache[downstream] = None
+        if downstream in _result_provenance:
+            _result_provenance[downstream] = None
+
+
 def _update_session_state(tool_name: str, args: dict, result: dict):
+    _invalidate_downstream(tool_name)
     if tool_name == "get_sim_paths":
         compile_log = None
         for entry in result.get("compile_logs", []):
@@ -134,7 +190,6 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             "simulator": result.get("simulator"),
             "compile_log": compile_log,
         }
-        _session_state["build_tb_hierarchy"] = None
     elif tool_name == "build_tb_hierarchy":
         _session_state["build_tb_hierarchy"] = {
             "compile_log": args.get("compile_log"),
@@ -145,6 +200,10 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
 def reset_session_state():
     _session_state["get_sim_paths"] = None
     _session_state["build_tb_hierarchy"] = None
+    for key in _result_cache:
+        _result_cache[key] = None
+    for key in _result_provenance:
+        _result_provenance[key] = None
 
 
 SERVER_INSTRUCTIONS = """
@@ -190,6 +249,12 @@ Waveform debug workflow:
    - get_signals_around_time for additional signals
    - get_signal_at_time for exact values
    - get_waveform_summary for waveform sanity checks
+
+8. Call get_diagnostic_snapshot at any time to see which workflow steps have been completed
+   and what data is available. This is especially useful at session start (cold start).
+   - Returns availability status for: sim_paths, hierarchy, log_analysis, recommended_next
+   - Missing items include suggested_call with pre-filled arguments
+   - Does NOT execute any sub-steps; only reads cached results
 """.strip()
 
 app = Server("waveform-mcp", instructions=SERVER_INSTRUCTIONS)
@@ -545,6 +610,28 @@ async def list_tools():
         ),
 
         Tool(
+            name="get_diagnostic_snapshot",
+            description=(
+                "冷启动加速器：聚合已有 tool 结果的摘要视图。"
+                "不执行任何子步骤，只读取缓存。"
+                "返回各数据源的可用性状态和精简摘要，以及缺失项的建议调用。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "verif_root": {
+                        "type": "string",
+                        "description": (
+                            "项目的 verif/ 目录绝对路径。"
+                            "仅在 get_sim_paths 尚未执行时用于生成 suggested_call。"
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        ),
+
+        Tool(
             name="explain_signal_driver",
             description=(
                 "从波形信号路径回溯最可能的 RTL 驱动位置。"
@@ -623,7 +710,10 @@ async def _dispatch(name: str, args: dict):
             args.get("case_name"),
         )
         _update_session_state(name, args, result)
-        return schemas.SimPathsResult.model_validate(result)
+        validated = schemas.SimPathsResult.model_validate(result)
+        _result_cache["get_sim_paths"] = validated
+        _result_provenance["get_sim_paths"] = _build_result_provenance(name, args, validated)
+        return validated
 
     elif name == "parse_sim_log":
         return _handle_parse_sim_log(args)
@@ -699,7 +789,10 @@ async def _dispatch(name: str, args: dict):
             )
         )
         _update_session_state(name, args, result)
-        return schemas.BuildTbHierarchyResult.model_validate(result)
+        validated = schemas.BuildTbHierarchyResult.model_validate(result)
+        _result_cache["build_tb_hierarchy"] = validated
+        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, args, validated)
+        return validated
 
     elif name == "scan_structural_risks":
         result = scan_structural_risks(
@@ -746,7 +839,13 @@ async def _dispatch(name: str, args: dict):
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
         )
-        return schemas.RecommendNextStepsResult.model_validate(result)
+        validated = schemas.RecommendNextStepsResult.model_validate(result)
+        _result_cache["recommend_failure_debug_next_steps"] = validated
+        _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, args, validated)
+        return validated
+
+    elif name == "get_diagnostic_snapshot":
+        return _handle_diagnostic_snapshot(args)
 
     elif name == "explain_signal_driver":
         result = explain_signal_driver(
@@ -785,6 +884,295 @@ def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) ->
             result.append(event)
             counts[signature] = count + 1
     return result
+
+
+# ── Diagnostic Snapshot helpers ──────────────────────────────────
+
+def _extract_sim_paths_summary(result: schemas.SimPathsResult) -> dict:
+    return {
+        "verif_root": result.verif_root,
+        "case_dir": result.case_dir,
+        "simulator": result.simulator,
+        "discovery_mode": result.discovery_mode,
+        "compile_log_count": len(result.compile_logs),
+        "sim_log_count": len(result.sim_logs),
+        "wave_file_count": len(result.wave_files),
+        "hints": result.hints,
+    }
+
+
+def _extract_hierarchy_summary(result: schemas.BuildTbHierarchyResult) -> dict:
+    return {
+        "top_module": result.project.get("top_module"),
+        "rtl_file_count": len(result.files.get("rtl", [])),
+        "tb_file_count": len(result.files.get("tb", [])),
+        "interface_count": len(result.interfaces),
+        "component_tree_depth": _tree_depth(result.component_tree),
+    }
+
+
+def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
+    return {
+        "log_file": result.log_file,
+        "runtime_total_errors": result.runtime_total_errors,
+        "group_count": len(result.groups),
+        "problem_hints": result.problem_hints.model_dump() if result.problem_hints else None,
+        "first_group_signature": result.groups[0].signature if result.groups else None,
+        "previous_log_detected": result.previous_log_detected,
+    }
+
+
+def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict:
+    return {
+        "suspected_failure_class": result.suspected_failure_class,
+        "failure_window_center_ps": result.failure_window_center_ps,
+        "primary_failure_target": result.primary_failure_target,
+        "signal_count": len(result.recommended_signals),
+        "instance_count": len(result.recommended_instances),
+    }
+
+
+def _tree_depth(tree: dict, _current: int = 0) -> int:
+    if not tree:
+        return _current
+
+    depths = []
+    for payload in tree.values():
+        children = payload.get("children", {})
+        if isinstance(children, dict) and children:
+            depths.append(_tree_depth(children, _current + 1))
+        elif isinstance(children, list) and children:
+            depths.append(max(_tree_depth(child, _current + 1) for child in children))
+        else:
+            depths.append(_current + 1)
+    return max(depths, default=_current)
+
+
+def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaModel) -> dict | None:
+    if tool_name == "get_sim_paths":
+        compile_log = None
+        for entry in result.compile_logs:
+            if entry.phase == "elaborate":
+                compile_log = entry.path
+                break
+        if compile_log is None and result.compile_logs:
+            compile_log = result.compile_logs[0].path
+        return {
+            "verif_root": result.verif_root,
+            "case_dir": result.case_dir,
+            "simulator": result.simulator,
+            "compile_log": compile_log,
+        }
+    if tool_name == "build_tb_hierarchy":
+        return {
+            "compile_log": args.get("compile_log"),
+            "simulator": result.project.get("simulator"),
+        }
+    if tool_name == "parse_sim_log":
+        return {
+            "log_path": result.log_file,
+            "simulator": result.simulator,
+        }
+    if tool_name == "recommend_failure_debug_next_steps":
+        return {
+            "log_path": args.get("log_path"),
+            "wave_path": args.get("wave_path"),
+            "simulator": args.get("simulator"),
+            "compile_log": args.get("compile_log"),
+        }
+    return None
+
+
+def _can_suggest_parse_sim_log(anchor: dict | None) -> bool:
+    sim_result = _result_cache.get("get_sim_paths")
+    return bool(anchor and anchor.get("simulator") and sim_result and sim_result.sim_logs)
+
+
+def _can_suggest_recommend(anchor: dict | None) -> bool:
+    sim_result = _result_cache.get("get_sim_paths")
+    return bool(
+        anchor
+        and anchor.get("simulator")
+        and anchor.get("compile_log")
+        and sim_result
+        and sim_result.sim_logs
+        and sim_result.wave_files
+        and _session_state.get("build_tb_hierarchy") is not None
+    )
+
+
+def _is_under_case_dir(path: str | None, case_dir: str | None) -> bool:
+    if not path or not case_dir:
+        return False
+    try:
+        return os.path.commonpath([os.path.realpath(path), os.path.realpath(case_dir)]) == os.path.realpath(case_dir)
+    except ValueError:
+        return False
+
+
+def _path_matches_session(path: str | None, candidates: list[str], case_dir: str | None) -> bool:
+    if not path:
+        return False
+    real_path = os.path.realpath(path)
+    if candidates:
+        return real_path in {os.path.realpath(candidate) for candidate in candidates}
+    return _is_under_case_dir(real_path, case_dir)
+
+
+def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None) -> bool:
+    if tool_name == "get_sim_paths":
+        return provenance is not None
+    if anchor is None or provenance is None:
+        return False
+    sim_result = _result_cache.get("get_sim_paths")
+    sim_logs = [entry.path for entry in sim_result.sim_logs] if sim_result is not None else []
+    wave_files = [entry.path for entry in sim_result.wave_files] if sim_result is not None else []
+    case_dir = anchor.get("case_dir")
+    if tool_name == "build_tb_hierarchy":
+        return (
+            provenance.get("compile_log") == anchor.get("compile_log")
+            and provenance.get("simulator") == anchor.get("simulator")
+        )
+    if tool_name == "parse_sim_log":
+        return (
+            provenance.get("simulator") == anchor.get("simulator")
+            and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
+        )
+    if tool_name == "recommend_failure_debug_next_steps":
+        return (
+            provenance.get("simulator") == anchor.get("simulator")
+            and provenance.get("compile_log") == anchor.get("compile_log")
+            and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
+            and _path_matches_session(provenance.get("wave_path"), wave_files, case_dir)
+        )
+    return False
+
+
+def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
+    sections: dict[str, schemas.DiagnosticSnapshotSection] = {}
+    quick_ref: dict[str, object] = {}
+    missing_steps: list[dict] = []
+
+    sim_result = _result_cache.get("get_sim_paths")
+    anchor = _result_provenance.get("get_sim_paths")
+    if sim_result is not None:
+        sections["sim_paths"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            summary=_extract_sim_paths_summary(sim_result),
+        )
+        quick_ref["simulator"] = sim_result.simulator
+        quick_ref["case_dir"] = sim_result.case_dir
+    else:
+        suggested = _build_suggested_call("get_sim_paths")
+        if args.get("verif_root"):
+            suggested["arguments"]["verif_root"] = args["verif_root"]
+        sections["sim_paths"] = schemas.DiagnosticSnapshotSection(
+            available=False,
+            suggested_call=suggested,
+        )
+        missing_steps.append({
+            "tool": "get_sim_paths",
+            "arguments": suggested["arguments"],
+            "reason": "路径发现尚未执行，无法确定仿真产物位置",
+        })
+
+    hier_result = _result_cache.get("build_tb_hierarchy")
+    if hier_result is not None:
+        is_stale = anchor is not None and not _matches_anchor(
+            "build_tb_hierarchy",
+            anchor,
+            _result_provenance.get("build_tb_hierarchy"),
+        )
+        sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            stale=is_stale,
+            summary=_extract_hierarchy_summary(hier_result),
+        )
+        if not is_stale and anchor is not None:
+            quick_ref["top_module"] = hier_result.project.get("top_module")
+    else:
+        sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
+            available=False,
+            suggested_call=_build_suggested_call("build_tb_hierarchy") if anchor is not None else None,
+        )
+    if anchor is not None and (hier_result is None or sections["hierarchy"].stale):
+        suggested = _build_suggested_call("build_tb_hierarchy")
+        sections["hierarchy"].suggested_call = suggested
+        missing_steps.append({
+            "tool": "build_tb_hierarchy",
+            "arguments": suggested["arguments"],
+            "reason": "层级结构尚未构建，无法确定模块/实例关系",
+        })
+
+    log_result = _result_cache.get("parse_sim_log")
+    if log_result is not None:
+        is_stale = anchor is not None and not _matches_anchor(
+            "parse_sim_log",
+            anchor,
+            _result_provenance.get("parse_sim_log"),
+        )
+        sections["log_analysis"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            stale=is_stale,
+            summary=_extract_log_summary(log_result),
+        )
+        if not is_stale and anchor is not None:
+            quick_ref["total_errors"] = log_result.runtime_total_errors
+            quick_ref["problem_hints"] = log_result.problem_hints
+    else:
+        sections["log_analysis"] = schemas.DiagnosticSnapshotSection(available=False)
+    if anchor is not None and (log_result is None or sections["log_analysis"].stale):
+        suggested = _build_suggested_call("parse_sim_log") if _can_suggest_parse_sim_log(anchor) else None
+        sections["log_analysis"].suggested_call = suggested
+        missing_steps.append({
+            "tool": "parse_sim_log",
+            "arguments": suggested["arguments"] if suggested else {},
+            "reason": "仿真日志尚未解析，无法获取错误信息",
+        })
+
+    is_clean_run = (
+        anchor is not None
+        and log_result is not None
+        and not sections["log_analysis"].stale
+        and getattr(log_result, "runtime_total_errors", None) == 0
+    )
+    rec_result = _result_cache.get("recommend_failure_debug_next_steps")
+    if rec_result is not None:
+        is_stale = anchor is not None and not _matches_anchor(
+            "recommend_failure_debug_next_steps",
+            anchor,
+            _result_provenance.get("recommend_failure_debug_next_steps"),
+        )
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            stale=is_stale,
+            summary=_extract_recommend_summary(rec_result),
+        )
+        if not is_stale and anchor is not None:
+            quick_ref["primary_failure_target"] = rec_result.primary_failure_target
+            quick_ref["suspected_failure_class"] = rec_result.suspected_failure_class
+            quick_ref["recommended_signals"] = rec_result.recommended_signals
+    elif is_clean_run:
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
+    else:
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
+    if anchor is not None and not is_clean_run and (rec_result is None or sections["recommended_next"].stale):
+        suggested = _build_suggested_call("recommend_failure_debug_next_steps") if _can_suggest_recommend(anchor) else None
+        sections["recommended_next"].suggested_call = suggested
+        missing_steps.append({
+            "tool": "recommend_failure_debug_next_steps",
+            "arguments": suggested["arguments"] if suggested else {},
+            "reason": "推荐分析尚未执行，无法给出优先调试目标",
+        })
+
+    return schemas.DiagnosticSnapshot(
+        sim_paths=sections["sim_paths"],
+        hierarchy=sections["hierarchy"],
+        log_analysis=sections["log_analysis"],
+        recommended_next=sections["recommended_next"],
+        missing_steps=missing_steps if missing_steps else None,
+        **quick_ref,
+    )
 
 
 def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
@@ -841,7 +1229,11 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     summary["failure_events_truncated"] = len(returned_events) < total
     summary["first_group_context"] = first_group_context
     summary["problem_hints"] = compute_problem_hints(summary, all_events)
-    return schemas.ParseSimLogResult.model_validate(summary)
+    validated = schemas.ParseSimLogResult.model_validate(summary)
+    _invalidate_downstream("parse_sim_log")
+    _result_cache["parse_sim_log"] = validated
+    _result_provenance["parse_sim_log"] = _build_result_provenance("parse_sim_log", args, validated)
+    return validated
 
 
 def _serialize_result(result: BaseModel | dict) -> str:
