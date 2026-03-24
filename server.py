@@ -201,7 +201,14 @@ def reset_session_state():
 SERVER_INSTRUCTIONS = """
 Waveform debug workflow:
 
+0. Call get_diagnostic_snapshot at session start before any other step.
+   - Zero-cost: only reads cached results, never triggers sub-steps.
+   - If prior steps are already cached, skip them and continue from the current state.
+   - Returns availability status for: sim_paths, hierarchy, log_analysis, recommended_next
+   - Missing items include suggested_call with pre-filled arguments
+
 1. ALWAYS start with get_sim_paths to discover file paths and simulator type.
+   (Skip if step 0 confirmed sim_paths is already cached and up to date.)
    - Inspect discovery_mode first: root_dir, case_dir, or unknown.
    - If discovery_mode is unknown, do not guess deeper paths; follow returned hints.
    - If case_name is unknown in root_dir mode, omit it to get available_cases first.
@@ -213,6 +220,9 @@ Waveform debug workflow:
    - Use the elaborate-phase compile_log and simulator from step 1.
    - The returned file list represents the ONLY files compiled in this session.
    - Use this file list to scope all subsequent source reads — do NOT use find/grep to scan directories for source files.
+   - Immediately after build_tb_hierarchy, call scan_structural_risks with the same compile_log
+     and simulator. Do not wait for parse_sim_log results before calling it.
+     Structural risks that overlap with failing signal paths are high-priority root cause candidates.
 
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
@@ -242,10 +252,7 @@ Waveform debug workflow:
    - get_signal_at_time for exact values
    - get_waveform_summary for waveform sanity checks
 
-8. Call get_diagnostic_snapshot at any time to see which workflow steps have been completed
-   and what data is available. This is especially useful at session start (cold start).
-   - Returns availability status for: sim_paths, hierarchy, log_analysis, recommended_next
-   - Missing items include suggested_call with pre-filled arguments
+8. Call get_diagnostic_snapshot at any time to check workflow state.
    - Does NOT execute any sub-steps; only reads cached results
 """.strip()
 
