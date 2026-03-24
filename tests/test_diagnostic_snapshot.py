@@ -98,7 +98,7 @@ def _make_parse_result(total_errors: int = 3) -> schemas.ParseSimLogResult:
         "log_file": "/tmp/verif/work/work_case0/irun.log",
         "simulator": "xcelium",
         "schema_version": "2.0",
-        "contract_version": "1.0",
+        "contract_version": "1.3",
         "failure_events_schema_version": "1.0",
         "parser_capabilities": ["mixed_log_detection"],
         "runtime_total_errors": total_errors,
@@ -151,7 +151,7 @@ def _make_recommend_result() -> schemas.RecommendNextStepsResult:
         "recommended_signals": [{"path": "top_tb.dut.state", "role": "state"}],
         "recommended_instances": [{"instance_path": "top_tb.dut", "score": 10}],
         "suspected_failure_class": "data-path corruption",
-        "recommendation_strategy": "role_rank_v1",
+        "recommendation_strategy": "role_rank_v2_structural",
         "failure_window_center_ps": 1000,
         "why": ["earliest failure"],
     })

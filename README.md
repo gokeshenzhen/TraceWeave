@@ -261,6 +261,7 @@ codex mcp list
 ### `parse_sim_log` 关键字段
 
 - `schema_version` / `contract_version` / `failure_events_schema_version`：响应和 `failure_events` 的版本信息
+- `groups[].xprop_priority`：当本次 log 存在 X/Z 症状时，标记每个 failure group 的 X/Z 传播优先级；取值为 `high` / `normal`。整体无 X/Z 时，该字段在 Python 对象里为 `None`，JSON 输出时通常省略
 - `parser_capabilities`：当前 parser build 支持的结构化提取能力
 - `runtime_total_errors` / `runtime_fatal_count` / `runtime_error_count`：runtime-only 顶层计数器
 - `parser_capabilities` 当前可包含 `mixed_log_detection`，表示 mixed compile+runtime log 也只返回 runtime failures
@@ -279,8 +280,9 @@ codex mcp list
 
 ### `recommend_failure_debug_next_steps` 关键新增字段
 
-- `recommendation_strategy`：当前为 `role_rank_v1`
+- `recommendation_strategy`：当前为 `role_rank_v2_structural`
 - `failure_window_center_ps`：本次推荐所围绕的失败时间
+- `correlated_structural_risks[]`：按主失败实例路径、当前 `problem_hints` 和风险等级重排后的静态结构风险
 - `recommended_signals[]` 额外包含 `role`、`reason_codes`、`confidence`
 
 ### `get_diagnostic_snapshot` 语义说明

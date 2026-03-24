@@ -14,7 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import src.log_parser as log_parser_module
 from src.log_parser import SimLogParser, get_error_context
-from src.problem_hints import compute_problem_hints_from_events, event_has_x_or_z
+from src.problem_hints import (
+    compute_problem_hints_from_events,
+    compute_xprop_priority_for_group,
+    event_has_x_or_z,
+)
 
 
 VCS_LOG_SAMPLE = """\
@@ -128,7 +132,7 @@ class TestGroupedSummary:
 
     def test_total_counts(self):
         assert self.result["schema_version"] == "2.0"
-        assert self.result["contract_version"] == "1.2"
+        assert self.result["contract_version"] == "1.3"
         assert self.result["failure_events_schema_version"] == "1.0"
         assert "mixed_log_detection" in self.result["parser_capabilities"]
         assert self.result["runtime_total_errors"] == 6
@@ -180,6 +184,37 @@ class TestGroupedSummary:
         assert first["field_provenance"]["instance_path"] == "observed"
         assert first["field_provenance"]["failure_source"] == "derived"
         assert first["field_provenance"]["failure_mechanism"] == "heuristic"
+
+    def test_xprop_priority_can_be_derived_from_real_parsed_events(self):
+        log_path = _write_log(
+            "\n".join(
+                [
+                    "UVM_ERROR /tmp/top_tb.sv(10) @ 10 ns: reporter [SCB] expected=0x12 actual=0xXX",
+                    "UVM_ERROR /tmp/top_tb.sv(20) @ 20 ns: reporter [CHK] expected=0x12 actual=0x34",
+                ]
+            )
+            + "\n"
+        )
+        try:
+            events = SimLogParser(log_path, "vcs").parse_failure_events()
+            grouped_events: dict[str, list[dict]] = {}
+            for event in events:
+                grouped_events.setdefault(event["group_signature"], []).append(event)
+
+            problem_hints = compute_problem_hints_from_events(events)
+
+            assert compute_xprop_priority_for_group(
+                grouped_events["UVM_ERROR [SCB]"],
+                problem_hints.has_x,
+                problem_hints.has_z,
+            ) == "high"
+            assert compute_xprop_priority_for_group(
+                grouped_events["UVM_ERROR [CHK]"],
+                problem_hints.has_x,
+                problem_hints.has_z,
+            ) == "normal"
+        finally:
+            os.unlink(log_path)
 
 
 class TestXceliumSummary:
