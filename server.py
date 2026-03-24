@@ -3,20 +3,12 @@
 Waveform Analysis MCP Server
 用于支持 MCP 的调试客户端（例如 Codex、Claude Code）
 
-支持工具：
-  1. get_sim_paths          - 自动发现 compile/sim/wave 路径，或列出可用 case
-  2. parse_sim_log          - 解析仿真 log 摘要分组
-  3. diff_sim_failure_results - 比较两次仿真的 failure_event 变化
-  4. get_error_context      - 按行号提取报错上下文
-  5. search_signals         - 在波形文件中按关键字搜索信号完整路径
-  6. get_signal_at_time     - 查询信号在某时刻的值
-  7. get_signal_transitions - 获取信号跳变列表
-  8. get_signals_around_time- 获取多个信号在某时刻前后的快照
-  9. get_waveform_summary   - 波形文件基本信息
-  10. analyze_failures      - 聚焦单个报错分组做 log + 波形联合分析
-  11. analyze_failure_event - 以 failure_event 为中心做联动分析
-  12. recommend_failure_debug_next_steps - 给出默认调试下一步
-  13. explain_signal_driver - 从波形信号路径回溯最可能的 RTL 驱动位置
+本服务围绕波形调试工作流提供 MCP tools，包括：
+- 路径发现和 session/workflow gate
+- compile/sim log 解析与 failure normalization
+- testbench hierarchy、源码/driver 关联分析
+- VCD/FSDB 波形查询与信号搜索
+- failure recommendation、结构风险扫描和 X/Z trace
 """
 
 import asyncio

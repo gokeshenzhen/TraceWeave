@@ -174,47 +174,8 @@ analyze_failures(group_index=0) → findings → need more signals?
     └─ Not enough info → analyze_failures(group_index=1) → next error group
 ```
 
-## Server Instructions
+## Notes
 
-The current `server.py` should keep these instructions in `Server(instructions=...)`:
-
-```
-Waveform debug workflow:
-
-1. ALWAYS start with get_sim_paths to discover file paths and simulator type.
-   - Inspect discovery_mode first: root_dir, case_dir, or unknown.
-   - If discovery_mode is unknown, do not guess deeper paths; follow returned hints.
-   - If case_name unknown in root_dir mode, omit it to get available_cases, then ask user.
-   - Pick compile_log with phase="elaborate" for build_tb_hierarchy.
-   - If fsdb_runtime.enabled is false, prefer `.vcd` wave files over `.fsdb`.
-
-2. Call build_tb_hierarchy to understand project structure BEFORE analyzing errors.
-   - Use the elaborate-phase compile_log and detected simulator from step 1.
-
-3. Call parse_sim_log to get grouped error summary, failure_events, and rerun hints.
-   - Use `sim_logs[0].path` and `simulator` from step 1 only when sim_logs is non-empty.
-   - Prefer normalized `failure_events[].time_ps` over parsing raw message text again.
-   - If `previous_log_detected` is true, consider diff_sim_failure_results before restarting analysis from scratch.
-
-4. Pick a usable waveform file.
-   - Prefer `.vcd` when fsdb_runtime.enabled is false.
-
-5. Call recommend_failure_debug_next_steps for a default target and role-ranked signals.
-   - Use `recommended_signals` as the first candidates for waveform inspection.
-
-6. Call search_signals to confirm full signal paths for investigation when needed.
-   - Derive keywords from: step 2's component_tree, step 3's error messages, or RTL source.
-
-7. Call analyze_failures to get combined log context + waveform snapshot.
-   - Pass confirmed signal_paths from step 6.
-   - Follow the returned analysis_guide.
-
-8. Use deep-dive tools as needed:
-   - analyze_failure_event: failure-centric instance/source correlation
-   - explain_signal_driver: map suspicious waveform signals back to likely RTL drivers
-   - get_error_context: inspect other error groups
-   - get_signal_transitions: full signal history when pre_window is insufficient
-   - get_signals_around_time: batch query additional signals at a time point
-   - get_signal_at_time: exact value at a precise time
-   - get_waveform_summary: simulation metadata and sanity checks
-```
+This document explains the recommended debug flow and the reasoning behind it.
+It is intentionally not a second copy of the runtime `Server(instructions=...)`
+text in `server.py`.

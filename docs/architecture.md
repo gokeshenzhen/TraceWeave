@@ -1,75 +1,28 @@
 # Architecture
 
-## Dependency Graph
+## System Shape
 
-```mermaid
-graph TD
-  A[server.py] --> B[config.py]
-  A --> C[src/path_discovery.py]
-  A --> D[src/log_parser.py]
-  A --> E[src/analyzer.py]
-  A --> F[src/vcd_parser.py]
-  A --> G[src/fsdb_parser.py]
-  A --> H[src/fsdb_signal_index.py]
-  A --> I[src/compile_log_parser.py]
-  A --> J[src/tb_hierarchy_builder.py]
-  A --> K[src/signal_driver.py]
-  A --> L[mcp.server / mcp.types]
-
-  C --> B
-  C --> I
-
-  E --> D
-  E --> B
-  E --> F
-  E --> G
-
-  D --> B
-  D --> M[custom_patterns.yaml]
-  D --> N[PyYAML]
-
-  K --> I
-  K --> J
-
-  H --> G
-  H --> B
-
-  G --> B
-  G --> O[libfsdb_wrapper.so]
-  G --> P[ctypes]
-  G --> Q[Verdi FSDB libs<br/>libnsys.so / libnffr.so]
-
-  O --> R[fsdb_wrapper.cpp]
-  R --> S[Verdi ffrAPI]
-
-  T[build_wrapper.sh] --> R
-  T --> Q
-
-  U[tests/conftest.py] --> A
-  V[tests/test_log_parser.py] --> D
-  V --> B
-  W[tests/test_fsdb_parser.py] --> G
-  W --> B
-  X[tests/test_analyzer.py] --> E
-  X --> G
-  X --> D
-  Y[tests/test_compile_log_parser.py] --> I
-  Z[tests/test_server.py] --> A
-  AA[tests/test_path_discovery.py] --> C
-```
+Waveform MCP is a workflow-oriented debug server. The core architecture is not
+just "parse log + parse wave"; it combines workflow gating, source-aware
+analysis, waveform backends, and extended debug capabilities.
 
 ## Layering
 
 ```text
-MCP interface
+MCP interface and workflow gate
   server.py
+  - tool registry and schema
+  - session state / prerequisite checks
+  - diagnostic snapshot and result caching
 
-Core logic
+Core log and failure analysis
   src/path_discovery.py
   src/compile_log_parser.py
-  src/tb_hierarchy_builder.py
-  src/analyzer.py
   src/log_parser.py
+  src/analyzer.py
+
+Source-aware structure analysis
+  src/tb_hierarchy_builder.py
   src/signal_driver.py
 
 Waveform backends
@@ -77,14 +30,20 @@ Waveform backends
   src/fsdb_parser.py
   src/fsdb_signal_index.py
 
+Extended analysis capabilities
+  src/structural_scanner.py
+  src/x_trace.py
+
 Native integration
   libfsdb_wrapper.so
   fsdb_wrapper.cpp
   Verdi ffrAPI/libs or repo-local runtime symlinks
 
-Config and extension
+Config and support
   config.py
   custom_patterns.yaml
+  src/problem_hints.py
+  src/schemas.py
 
 Verification
   tests/*
@@ -92,10 +51,16 @@ Verification
 
 ## Notes
 
-- `server.py` is the composition root and runtime entry point.
-- `src/path_discovery.py` is the path discovery layer for compile logs, sim logs, and waveforms.
-- `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` provide compile-log-based structure extraction.
-- `src/analyzer.py` depends on the shared parser interface implemented by `VCDParser` and `FSDBParser`.
-- `src/signal_driver.py` is a lightweight source-link layer built on compile-log discovery and source scanning.
-- `src/fsdb_parser.py` is the Python/native boundary and resolves FSDB runtime from repo-local links first, then `VERDI_HOME`.
-- `fsdb_wrapper.cpp` is the native/tool-vendor boundary.
+- `server.py` is both the composition root and the workflow gate; tool ordering,
+  prerequisite enforcement, and session-compatible cache reuse live there.
+- `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
+  `src/analyzer.py` form the main failure-analysis path from artifacts to
+  normalized failures and recommended next steps.
+- `src/tb_hierarchy_builder.py` and `src/signal_driver.py` turn the system into
+  a source-aware debug assistant rather than a parser-only tool.
+- `src/structural_scanner.py` and `src/x_trace.py` are first-class extended
+  analysis capabilities and should not be treated as optional side scripts.
+- `src/schemas.py` and `src/problem_hints.py` are support layers for structured
+  output contracts and lightweight analysis annotations.
+- `src/fsdb_parser.py` is the Python/native boundary and resolves FSDB runtime
+  from repo-local links first, then `VERDI_HOME`.

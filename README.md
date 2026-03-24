@@ -11,22 +11,38 @@
   - `src/log_parser.py`
   - `src/fsdb_parser.py`
 
+Waveform MCP is a workflow-oriented debug server rather than a loose set of
+parsers. The main product shape is:
+
+- MCP server with session state, prerequisite gates, and recommended tool order
+- Path discovery plus compile/sim log ingestion and failure normalization
+- Hierarchy building and source-aware driver correlation
+- VCD/FSDB waveform backends and signal search
+- Failure-centric recommendation plus extended analyses such as structural risk
+  scanning and X/Z trace
+- Structured result contracts for tool outputs
+
 ## 文件结构
 
 ```
 waveform_mcp/
 ├── config.py               ← 环境变量、默认行为和发现规则常量
-├── server.py               ← MCP 主入口
+├── server.py               ← MCP 主入口、session/workflow gate
 ├── custom_patterns.yaml    ← 工程师自定义报错格式（不改代码，改此文件）
-├── requirements.txt
 └── src/
     ├── path_discovery.py   ← 仿真产物路径自动发现
+    ├── compile_log_parser.py ← 编译/elab log 解析与 simulator 识别
+    ├── tb_hierarchy_builder.py ← testbench hierarchy 和文件分组
     ├── vcd_parser.py       ← VCD 纯 Python 解析
     ├── fsdb_parser.py      ← FSDB 信号值查询（libnffr.so）
     ├── fsdb_signal_index.py← FSDB 信号路径搜索（scope 树索引，GB 级友好）
     ├── log_parser.py       ← failure_event 归一化、group 摘要和 run diff
     ├── analyzer.py         ← failure_event + 波形 + hierarchy 联合分析与推荐
-    └── signal_driver.py    ← 从波形信号路径回溯最可能的 RTL 驱动位置
+    ├── signal_driver.py    ← 从波形信号路径回溯最可能的 RTL 驱动位置
+    ├── structural_scanner.py ← 源码结构风险扫描
+    ├── x_trace.py          ← X/Z 传播链追踪
+    ├── schemas.py          ← 结构化输出契约
+    └── problem_hints.py    ← failure symptom hints 支撑逻辑
 ```
 
 ---
