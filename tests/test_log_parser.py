@@ -128,7 +128,7 @@ class TestGroupedSummary:
 
     def test_total_counts(self):
         assert self.result["schema_version"] == "2.0"
-        assert self.result["contract_version"] == "1.0"
+        assert self.result["contract_version"] == "1.2"
         assert self.result["failure_events_schema_version"] == "1.0"
         assert "mixed_log_detection" in self.result["parser_capabilities"]
         assert self.result["runtime_total_errors"] == 6

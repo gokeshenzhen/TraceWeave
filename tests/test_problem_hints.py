@@ -1,4 +1,4 @@
-from src.problem_hints import compute_problem_hints
+from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 
 
 def test_compute_hints_detects_x():
@@ -103,3 +103,51 @@ def test_compute_hints_detects_z_in_hex_actual():
     assert hints.has_x is False
     assert hints.has_z is True
     assert hints.error_pattern == "zprop"
+
+
+def test_compute_xprop_priority_returns_none_when_globally_irrelevant():
+    assert compute_xprop_priority_for_group([], global_has_x=False, global_has_z=False) is None
+
+
+def test_compute_xprop_priority_detects_x_event():
+    priority = compute_xprop_priority_for_group(
+        [{"actual": "8X00a2Xcab814ebd", "message_text": "compare fail", "group_signature": "ERR"}],
+        global_has_x=True,
+        global_has_z=False,
+    )
+    assert priority == "high"
+
+
+def test_compute_xprop_priority_detects_z_event():
+    priority = compute_xprop_priority_for_group(
+        [{"actual": "ZZ", "message_text": "compare fail", "group_signature": "ERR"}],
+        global_has_x=False,
+        global_has_z=True,
+    )
+    assert priority == "high"
+
+
+def test_compute_xprop_priority_returns_normal_for_clean_group_when_global_x_exists():
+    priority = compute_xprop_priority_for_group(
+        [{"actual": "0x12", "expected": "0x34", "message_text": "compare fail", "group_signature": "ERR"}],
+        global_has_x=True,
+        global_has_z=False,
+    )
+    assert priority == "normal"
+
+
+def test_compute_xprop_priority_ignores_derived_failure_mechanism_without_raw_xz_evidence():
+    priority = compute_xprop_priority_for_group(
+        [
+            {
+                "failure_mechanism": "xprop",
+                "actual": "0x12",
+                "expected": "0x34",
+                "message_text": "compare fail",
+                "group_signature": "ERR",
+            }
+        ],
+        global_has_x=True,
+        global_has_z=False,
+    )
+    assert priority == "normal"

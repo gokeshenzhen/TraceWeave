@@ -38,7 +38,7 @@ from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
 from src.path_discovery import discover_sim_paths
-from src.problem_hints import compute_problem_hints
+from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
@@ -58,6 +58,7 @@ _result_cache: dict[str, schemas.SchemaModel | None] = {
     "get_sim_paths": None,
     "build_tb_hierarchy": None,
     "parse_sim_log": None,
+    "scan_structural_risks": None,
     "recommend_failure_debug_next_steps": None,
 }
 
@@ -65,13 +66,15 @@ _result_provenance: dict[str, dict | None] = {
     "get_sim_paths": None,
     "build_tb_hierarchy": None,
     "parse_sim_log": None,
+    "scan_structural_risks": None,
     "recommend_failure_debug_next_steps": None,
 }
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
     "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "recommend_failure_debug_next_steps"],
-    "build_tb_hierarchy": ["recommend_failure_debug_next_steps"],
+    "build_tb_hierarchy": ["scan_structural_risks", "recommend_failure_debug_next_steps"],
     "parse_sim_log": ["recommend_failure_debug_next_steps"],
+    "scan_structural_risks": ["recommend_failure_debug_next_steps"],
 }
 
 _PREREQUISITES: dict[str, list[str]] = {
@@ -800,7 +803,11 @@ async def _dispatch(name: str, args: dict):
             scan_scope=args.get("scan_scope", "scope1"),
             categories=args.get("categories"),
         )
-        return schemas.ScanStructuralRisksResult.model_validate(result)
+        validated = schemas.ScanStructuralRisksResult.model_validate(result)
+        _invalidate_downstream("scan_structural_risks")
+        _result_cache["scan_structural_risks"] = validated
+        _result_provenance["scan_structural_risks"] = _build_result_provenance(name, args, validated)
+        return validated
 
     elif name == "analyze_failures":
         result = WaveformAnalyzer(
@@ -829,6 +836,9 @@ async def _dispatch(name: str, args: dict):
         return schemas.AnalyzeFailureEventResult.model_validate(result)
 
     elif name == "recommend_failure_debug_next_steps":
+        request_context = _build_recommend_request_context(args)
+        scan_cache = _get_compatible_recommend_scan_cache(request_context)
+        parse_cache = _get_compatible_recommend_parse_cache(request_context)
         result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
@@ -837,6 +847,8 @@ async def _dispatch(name: str, args: dict):
             wave_path=args["wave_path"],
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
+            structural_risks=[risk.model_dump() for risk in scan_cache.risks] if scan_cache is not None else None,
+            problem_hints=parse_cache.problem_hints.model_dump() if parse_cache and parse_cache.problem_hints else None,
         )
         validated = schemas.RecommendNextStepsResult.model_validate(result)
         _result_cache["recommend_failure_debug_next_steps"] = validated
@@ -921,6 +933,14 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
     }
 
 
+def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) -> dict:
+    return {
+        "files_scanned": result.files_scanned,
+        "total_risks": result.total_risks,
+        "high_risk_count": sum(1 for risk in result.risks if risk.risk_level == "high"),
+    }
+
+
 def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict:
     return {
         "suspected_failure_class": result.suspected_failure_class,
@@ -947,6 +967,53 @@ def _tree_depth(tree: dict, _current: int = 0) -> int:
     return max(depths, default=_current)
 
 
+def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
+    hier_state = _session_state.get("build_tb_hierarchy") or {}
+    sim_state = _session_state.get("get_sim_paths") or {}
+    return {
+        "log_path": args.get("log_path"),
+        "wave_path": args.get("wave_path"),
+        "simulator": args.get("simulator") or sim_state.get("simulator"),
+        "compile_log": args.get("compile_log") or hier_state.get("compile_log") or sim_state.get("compile_log"),
+    }
+
+
+def _same_realpath(path_a: str | None, path_b: str | None) -> bool:
+    if not path_a or not path_b:
+        return False
+    return os.path.realpath(path_a) == os.path.realpath(path_b)
+
+
+def _get_compatible_recommend_parse_cache(
+    request_context: dict[str, str | None],
+) -> schemas.ParseSimLogResult | None:
+    parse_cache = _result_cache.get("parse_sim_log")
+    provenance = _result_provenance.get("parse_sim_log")
+    if parse_cache is None or provenance is None:
+        return None
+    if provenance.get("simulator") != request_context.get("simulator"):
+        return None
+    if not _same_realpath(provenance.get("log_path"), request_context.get("log_path")):
+        return None
+    return parse_cache
+
+
+def _get_compatible_recommend_scan_cache(
+    request_context: dict[str, str | None],
+) -> schemas.ScanStructuralRisksResult | None:
+    scan_cache = _result_cache.get("scan_structural_risks")
+    provenance = _result_provenance.get("scan_structural_risks")
+    if scan_cache is None or provenance is None:
+        return None
+    provenance_simulator = provenance.get("simulator")
+    request_simulator = request_context.get("simulator")
+    if provenance_simulator not in {None, "auto"} and provenance_simulator != request_simulator:
+        return None
+    if not _same_realpath(provenance.get("compile_log"), request_context.get("compile_log")):
+        return None
+    return scan_cache
+
+
 def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaModel) -> dict | None:
     if tool_name == "get_sim_paths":
         compile_log = None
@@ -971,6 +1038,11 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
         return {
             "log_path": result.log_file,
             "simulator": result.simulator,
+        }
+    if tool_name == "scan_structural_risks":
+        return {
+            "compile_log": args.get("compile_log"),
+            "simulator": args.get("simulator", "auto"),
         }
     if tool_name == "recommend_failure_debug_next_steps":
         return {
@@ -1034,6 +1106,12 @@ def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None
         return (
             provenance.get("simulator") == anchor.get("simulator")
             and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
+        )
+    if tool_name == "scan_structural_risks":
+        provenance_simulator = provenance.get("simulator")
+        return (
+            provenance.get("compile_log") == anchor.get("compile_log")
+            and provenance_simulator in {anchor.get("simulator"), "auto", None}
         )
     if tool_name == "recommend_failure_debug_next_steps":
         return (
@@ -1127,6 +1205,21 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "reason": "仿真日志尚未解析，无法获取错误信息",
         })
 
+    scan_result = _result_cache.get("scan_structural_risks")
+    if scan_result is not None:
+        is_stale = anchor is not None and not _matches_anchor(
+            "scan_structural_risks",
+            anchor,
+            _result_provenance.get("scan_structural_risks"),
+        )
+        sections["structural_scan"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            stale=is_stale,
+            summary=_extract_structural_scan_summary(scan_result),
+        )
+    else:
+        sections["structural_scan"] = None
+
     is_clean_run = (
         anchor is not None
         and log_result is not None
@@ -1166,6 +1259,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         sim_paths=sections["sim_paths"],
         hierarchy=sections["hierarchy"],
         log_analysis=sections["log_analysis"],
+        structural_scan=sections["structural_scan"],
         recommended_next=sections["recommended_next"],
         missing_steps=missing_steps if missing_steps else None,
         **quick_ref,
@@ -1225,7 +1319,17 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     summary["failure_events_returned"] = len(returned_events)
     summary["failure_events_truncated"] = len(returned_events) < total
     summary["first_group_context"] = first_group_context
-    summary["problem_hints"] = compute_problem_hints(summary, all_events)
+    problem_hints = compute_problem_hints(summary, all_events)
+    summary["problem_hints"] = problem_hints
+    grouped_events: dict[str, list[dict]] = {}
+    for event in all_events:
+        grouped_events.setdefault(event["group_signature"], []).append(event)
+    for group in summary.get("groups", []):
+        group["xprop_priority"] = compute_xprop_priority_for_group(
+            grouped_events.get(group["signature"], []),
+            problem_hints.has_x,
+            problem_hints.has_z,
+        )
     validated = schemas.ParseSimLogResult.model_validate(summary)
     _invalidate_downstream("parse_sim_log")
     _result_cache["parse_sim_log"] = validated

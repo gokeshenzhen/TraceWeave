@@ -122,6 +122,7 @@ class ErrorGroup(SchemaModel):
     source_line: int | None = None
     instance_path: str | None = None
     group_index: int | None = None
+    xprop_priority: Literal["high", "normal"] | None = None
 
 
 class ParseSimLogResult(SchemaModel):
@@ -275,10 +276,22 @@ class AnalyzeFailureEventResult(SchemaModel):
     reasoning_summary: list[str] = Field(default_factory=list)
 
 
+class StructuralRiskCorrelation(SchemaModel):
+    risk_type: str
+    file: str
+    line: int
+    module: str | None = None
+    risk_level: Literal["high", "medium", "low"]
+    detail: str
+    relevance_score: int
+    relevance_reasons: list[str] = Field(default_factory=list)
+
+
 class RecommendNextStepsResult(SchemaModel):
     primary_failure_target: dict[str, Any] | None = None
     recommended_signals: list[dict[str, Any]] = Field(default_factory=list)
     recommended_instances: list[dict[str, Any]] = Field(default_factory=list)
+    correlated_structural_risks: list[StructuralRiskCorrelation] = Field(default_factory=list)
     suspected_failure_class: str
     recommendation_strategy: str | None = None
     failure_window_center_ps: int | None = None
@@ -299,6 +312,7 @@ class DiagnosticSnapshot(SchemaModel):
     sim_paths: DiagnosticSnapshotSection
     hierarchy: DiagnosticSnapshotSection
     log_analysis: DiagnosticSnapshotSection
+    structural_scan: DiagnosticSnapshotSection | None = None
     recommended_next: DiagnosticSnapshotSection
     simulator: str | None = None
     case_dir: str | None = None

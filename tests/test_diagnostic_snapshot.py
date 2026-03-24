@@ -157,14 +157,55 @@ def _make_recommend_result() -> schemas.RecommendNextStepsResult:
     })
 
 
+def _make_scan_result() -> schemas.ScanStructuralRisksResult:
+    return schemas.ScanStructuralRisksResult.model_validate({
+        "scan_scope": "scope1",
+        "files_scanned": 4,
+        "total_risks": 3,
+        "risks": [
+            {
+                "type": "slice_overlap",
+                "file": "/tmp/src/dut.sv",
+                "line": 12,
+                "module": "dut",
+                "risk_level": "high",
+                "detail": "slice overlap",
+                "evidence": [],
+            },
+            {
+                "type": "multi_drive",
+                "file": "/tmp/src/dut.sv",
+                "line": 18,
+                "module": "dut",
+                "risk_level": "high",
+                "detail": "multiple drivers",
+                "evidence": [],
+            },
+            {
+                "type": "narrow_condition_injection",
+                "file": "/tmp/src/top_tb.sv",
+                "line": 24,
+                "module": "top_tb",
+                "risk_level": "medium",
+                "detail": "narrow condition",
+                "evidence": [],
+            },
+        ],
+        "categories_scanned": ["slice_overlap", "multi_drive", "narrow_condition_injection"],
+        "skipped_files": [],
+    })
+
+
 def _prefill_all():
     sim = _make_sim_paths_result()
     hier = _make_hierarchy_result()
     log = _make_parse_result()
+    scan = _make_scan_result()
     rec = _make_recommend_result()
     server._result_cache["get_sim_paths"] = sim
     server._result_cache["build_tb_hierarchy"] = hier
     server._result_cache["parse_sim_log"] = log
+    server._result_cache["scan_structural_risks"] = scan
     server._result_cache["recommend_failure_debug_next_steps"] = rec
     server._result_provenance["get_sim_paths"] = {
         "verif_root": sim.verif_root,
@@ -178,6 +219,10 @@ def _prefill_all():
     }
     server._result_provenance["parse_sim_log"] = {
         "log_path": sim.sim_logs[0].path,
+        "simulator": sim.simulator,
+    }
+    server._result_provenance["scan_structural_risks"] = {
+        "compile_log": sim.compile_logs[0].path,
         "simulator": sim.simulator,
     }
     server._result_provenance["recommend_failure_debug_next_steps"] = {
@@ -212,6 +257,7 @@ class TestDiagnosticSnapshot:
         assert result.sim_paths.available is False
         assert result.hierarchy.available is False
         assert result.log_analysis.available is False
+        assert result.structural_scan is None
         assert result.recommended_next.available is False
         assert len(result.missing_steps) == 1
         assert result.missing_steps[0]["tool"] == "get_sim_paths"
@@ -237,6 +283,7 @@ class TestDiagnosticSnapshot:
         assert result.sim_paths.available is True
         assert result.hierarchy.available is False
         assert result.log_analysis.available is False
+        assert result.structural_scan is None
         assert result.recommended_next.available is False
         assert result.simulator == "xcelium"
         assert len(result.missing_steps) == 3
@@ -251,6 +298,13 @@ class TestDiagnosticSnapshot:
         assert result.sim_paths.available is True
         assert result.hierarchy.available is True
         assert result.log_analysis.available is True
+        assert result.structural_scan is not None
+        assert result.structural_scan.available is True
+        assert result.structural_scan.summary == {
+            "files_scanned": 4,
+            "total_risks": 3,
+            "high_risk_count": 2,
+        }
         assert result.recommended_next.available is True
         assert result.total_errors == 3
         assert result.top_module == "top_tb"
@@ -320,6 +374,8 @@ class TestDiagnosticSnapshot:
         assert result.sim_paths.stale is False
         assert result.hierarchy.stale is False
         assert result.log_analysis.stale is False
+        assert result.structural_scan is not None
+        assert result.structural_scan.stale is False
         assert result.recommended_next.stale is False
 
     def test_schema_roundtrip(self):
@@ -462,3 +518,16 @@ class TestDiagnosticSnapshot:
         assert result.recommended_next.stale is True
         assert result.primary_failure_target is None
         assert {step["tool"] for step in result.missing_steps} >= {"recommend_failure_debug_next_steps"}
+
+    def test_structural_scan_stale_when_compile_log_mismatches(self):
+        _prefill_all()
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/other_elab.log",
+            "simulator": "xcelium",
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.structural_scan is not None
+        assert result.structural_scan.available is True
+        assert result.structural_scan.stale is True

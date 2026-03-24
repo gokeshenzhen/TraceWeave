@@ -266,6 +266,35 @@ class TestDispatchParseSimLog:
         finally:
             Path(log_path).unlink()
 
+    async def test_groups_include_xprop_priority_when_x_present(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(
+                "\n".join(
+                    [
+                        "UVM_ERROR /path/top_tb.sv(10) @ 10 ns: reporter [SCB] expected=0x12 actual=0xXX",
+                        "UVM_ERROR /path/top_tb.sv(20) @ 20 ns: reporter [CHK] expected=0x12 actual=0x34",
+                    ]
+                )
+                + "\n"
+            )
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            priorities = {group["signature"]: group["xprop_priority"] for group in result["groups"]}
+            assert priorities["UVM_ERROR [SCB]"] == "high"
+            assert priorities["UVM_ERROR [CHK]"] == "normal"
+        finally:
+            Path(log_path).unlink()
+
     async def test_summary_detail_level_still_returns_first_group_context(self):
         _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
@@ -426,6 +455,259 @@ $enddefinitions $end
         )
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
+    async def test_recommend_failure_debug_next_steps_consumes_scan_cache(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.2",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 1,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 1,
+                "unique_types": 1,
+                "total_groups": 1,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 1,
+                "problem_hints": {"has_x": True, "has_z": False, "error_pattern": "xprop"},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_path),
+            "simulator": "vcs",
+        }
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 1,
+                "risks": [
+                    {
+                        "type": "slice_overlap",
+                        "file": "/tmp/dut.sv",
+                        "line": 8,
+                        "module": "sva_top_inst",
+                        "risk_level": "high",
+                        "detail": "slice overlap",
+                        "evidence": [],
+                    }
+                ],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "vcs",
+        }
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
+        assert result["correlated_structural_risks"][0]["relevance_score"] == 17
+
+    async def test_recommend_failure_debug_next_steps_accepts_scan_cache_with_auto_simulator(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.2",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 1,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 1,
+                "unique_types": 1,
+                "total_groups": 1,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 1,
+                "problem_hints": {"has_x": True, "has_z": False, "error_pattern": "xprop"},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_path),
+            "simulator": "vcs",
+        }
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 1,
+                "risks": [
+                    {
+                        "type": "slice_overlap",
+                        "file": "/tmp/dut.sv",
+                        "line": 8,
+                        "module": "sva_top_inst",
+                        "risk_level": "high",
+                        "detail": "slice overlap",
+                        "evidence": [],
+                    }
+                ],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "auto",
+        }
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
+        assert result["correlated_structural_risks"][0]["relevance_score"] == 17
+
+    async def test_recommend_failure_debug_next_steps_ignores_incompatible_cached_inputs(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        stale_log_path = tmp_path / "stale.log"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        stale_log_path.write_text("module_a ERROR stale issue @ 1 ns\n")
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(stale_log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.2",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 1,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 1,
+                "unique_types": 1,
+                "total_groups": 1,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 1,
+                "problem_hints": {"has_x": True, "has_z": False, "error_pattern": "xprop"},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(stale_log_path),
+            "simulator": "vcs",
+        }
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 1,
+                "risks": [
+                    {
+                        "type": "slice_overlap",
+                        "file": "/tmp/dut.sv",
+                        "line": 8,
+                        "module": "sva_top_inst",
+                        "risk_level": "high",
+                        "detail": "slice overlap",
+                        "evidence": [],
+                    }
+                ],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": str(tmp_path / "stale_elab.log"),
+            "simulator": "vcs",
+        }
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["correlated_structural_risks"] == []
 
     async def test_recommend_failure_debug_next_steps_without_top_hint(self, tmp_path):
         _prefill_get_sim_paths_state()

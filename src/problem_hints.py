@@ -121,6 +121,27 @@ def event_has_x_or_z(event: dict[str, Any]) -> tuple[bool, bool]:
     return has_x, has_z
 
 
+def event_has_raw_x_or_z_evidence(event: dict[str, Any]) -> tuple[bool, bool]:
+    payload = _event_text(event)
+    has_x = _matches_any(payload, _HEURISTIC_X_PATTERNS) or _has_x_in_hex_value(event)
+    has_z = _matches_any(payload, _HEURISTIC_Z_PATTERNS) or _has_z_in_hex_value(event)
+    return has_x, has_z
+
+
+def compute_xprop_priority_for_group(
+    group_events: list[dict[str, Any]],
+    global_has_x: bool,
+    global_has_z: bool,
+) -> str | None:
+    if not global_has_x and not global_has_z:
+        return None
+    for event in group_events:
+        has_x, has_z = event_has_raw_x_or_z_evidence(event)
+        if has_x or has_z:
+            return "high"
+    return "normal"
+
+
 def _event_text(event: dict[str, Any]) -> str:
     payloads = [event.get("message_text"), event.get("group_signature"), event.get("instance_path")]
     structured_fields = event.get("structured_fields") or {}
