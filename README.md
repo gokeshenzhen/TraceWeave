@@ -29,6 +29,10 @@ waveform_mcp/
 ├── config.py               ← 环境变量、默认行为和发现规则常量
 ├── server.py               ← MCP 主入口、session/workflow gate
 ├── custom_patterns.yaml    ← 工程师自定义报错格式（不改代码，改此文件）
+├── fsdb_wrapper.cpp        ← FSDB native 绑定 C++ 源码
+├── build_wrapper.sh        ← 编译 libfsdb_wrapper.so 的脚本
+├── scripts/                ← 工具脚本（如 link_verdi_runtime.sh）
+├── tests/                  ← 单元测试和集成测试（见下方测试文件结构）
 └── src/
     ├── path_discovery.py   ← 仿真产物路径自动发现
     ├── compile_log_parser.py ← 编译/elab log 解析与 simulator 识别
@@ -207,17 +211,48 @@ codex mcp list
 
 ## 工具速查
 
+**Session 概览**
+
+| 工具 | 典型使用场景 |
+|------|-------------|
+| `get_diagnostic_snapshot` | 冷启动加速器：只读聚合当前 session 缓存，返回各步骤的 available/stale 状态、精简摘要和缺失步骤的建议调用 |
+
+**路径与层级（无需波形）**
+
 | 工具 | 典型使用场景 |
 |------|-------------|
 | `get_sim_paths` | 第一步，自动发现 compile/sim/wave 路径，或列出可用 case |
+| `build_tb_hierarchy` | 从 elaborate log 构建完整 testbench hierarchy：top module、UVM component tree、class hierarchy、interfaces |
+| `scan_structural_risks` | 对 RTL/TB 源码做 Scope 1 正则静态结构风险扫描（slice_overlap、multi_drive 等）；不依赖波形 |
+
+**日志分析**
+
+| 工具 | 典型使用场景 |
+|------|-------------|
 | `parse_sim_log` | 快速拿到 group 摘要、标准化 `failure_events`、时间归一化字段和 rerun hints |
 | `diff_sim_failure_results` | 比较两次仿真的已解决 / 持续 / 新增失败 |
-| `search_signals` | 从 RTL 信号名找波形完整路径；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
+| `get_error_context` | 按行号从 sim log 提取前后原始上下文；配合 `parse_sim_log` 返回的 `first_line` 使用 |
+
+**失败分析**
+
+| 工具 | 典型使用场景 |
+|------|-------------|
+| `recommend_failure_debug_next_steps` | 给出默认优先看哪个失败/信号/实例，附 role-based 排名理由 |
 | `analyze_failures` | 核心：报错 + 波形联合分析；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `analyze_failure_event` | 从单个 `failure_event` 出发，联动实例、信号和源码候选 |
-| `recommend_failure_debug_next_steps` | 用户只说“调这个失败”时，给出默认优先看哪个失败/信号/实例，并附 role-based 排名理由 |
-| `get_diagnostic_snapshot` | 冷启动加速器：只读聚合当前 session 缓存，返回 sim_paths / hierarchy / log_analysis / recommended_next 的 available/stale 状态、精简摘要和缺失步骤 |
-| `explain_signal_driver` | 从可疑波形信号回溯最可能的 RTL driver 位置和驱动类型 |
+
+**驱动与溯源**
+
+| 工具 | 典型使用场景 |
+|------|-------------|
+| `explain_signal_driver` | 从可疑波形信号回溯最可能的 RTL driver 位置和驱动类型；支持 `recursive` 多跳追踪 |
+| `trace_x_source` | 从出现 X/Z 的信号出发，沿驱动逻辑追踪传播链；遇到实例端口边界时停止并列出连接 |
+
+**波形查询**
+
+| 工具 | 典型使用场景 |
+|------|-------------|
+| `search_signals` | 从 RTL 信号名找波形完整路径；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_at_time` | 查特定时刻单个信号值；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_transitions` | 查信号完整跳变历史；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signals_around_time` | 查多个信号在某时刻的快照；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
@@ -383,10 +418,22 @@ wave_file: top_tb.fsdb
 
 ```
 tests/
-├── conftest.py          ← pytest 路径配置，自动加载
-├── test_log_parser.py   ← log 解析器测试
-├── test_fsdb_parser.py  ← FSDB 波形解析器测试
-└── test_analyzer.py     ← 联合分析器端到端测试
+├── conftest.py                  ← pytest 路径配置，自动加载
+├── test_log_parser.py           ← log 解析器测试
+├── test_compile_log_parser.py   ← 编译/elab log 解析测试
+├── test_fsdb_parser.py          ← FSDB 波形解析器测试
+├── test_fsdb_runtime.py         ← FSDB runtime 加载测试
+├── test_vcd_parser.py           ← VCD 解析器测试
+├── test_tb_hierarchy_builder.py ← testbench hierarchy 构建测试
+├── test_path_discovery.py       ← 路径发现测试
+├── test_analyzer.py             ← 联合分析器端到端测试
+├── test_signal_driver.py        ← 信号驱动回溯测试
+├── test_structural_scanner.py   ← 结构风险扫描测试
+├── test_x_trace.py              ← X/Z 传播链追踪测试
+├── test_schemas.py              ← 输出 schema 验证测试
+├── test_problem_hints.py        ← problem hints 支撑逻辑测试
+├── test_server.py               ← MCP server 工具注册测试
+└── test_diagnostic_snapshot.py  ← diagnostic snapshot 缓存测试
 ```
 
 ### 各测试文件职责
