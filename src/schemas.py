@@ -261,6 +261,21 @@ class RecommendNextStepsResult(SchemaModel):
 RecommendFailureDebugNextStepsResult = RecommendNextStepsResult
 
 
+class DriverChainHop(SchemaModel):
+    depth: int
+    signal_path: str
+    resolved_module: str | None = None
+    resolved_instance_path: str | None = None
+    driver_kind: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+    expression_summary: str | None = None
+    upstream_signals: list[str] = Field(default_factory=list)
+    instance_port_connections: list[dict[str, Any]] | None = None
+    branch_candidates: list[str] | None = None
+    stopped_at: str | None = None
+
+
 class ExplainDriverResult(SchemaModel):
     signal_path: str
     wave_path: str
@@ -276,6 +291,10 @@ class ExplainDriverResult(SchemaModel):
     instance_port_connections: list[dict[str, Any]] | None = None
     confidence: str | None = None
     unsupported_reason: str | None = None
+    stopped_at: str | None = None
+    recursive: bool = False
+    driver_chain: list[DriverChainHop] | None = None
+    chain_summary: str | None = None
 
 
 ExplainSignalDriverResult = ExplainDriverResult

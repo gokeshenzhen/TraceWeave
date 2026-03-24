@@ -547,6 +547,7 @@ async def list_tools():
             description=(
                 "从波形信号路径回溯最可能的 RTL 驱动位置。"
                 "支持 direct assign、简单 always 块和 module output port。"
+                "设置 recursive=true 可沿驱动链递归回溯多跳，包括穿越实例边界。"
             ),
             inputSchema={
                 "type": "object",
@@ -555,6 +556,16 @@ async def list_tools():
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
                     "top_hint": {"type": "string"},
+                    "recursive": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "是否递归追踪上游驱动链",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "递归最大深度（仅 recursive=true 时生效）",
+                    },
                 },
                 "required": ["signal_path", "wave_path", "compile_log"],
             },
@@ -741,6 +752,8 @@ async def _dispatch(name: str, args: dict):
             wave_path=args["wave_path"],
             compile_log=args["compile_log"],
             top_hint=args.get("top_hint"),
+            recursive=args.get("recursive", False),
+            max_depth=args.get("max_depth", 10),
         )
         return schemas.ExplainDriverResult.model_validate(result)
 
