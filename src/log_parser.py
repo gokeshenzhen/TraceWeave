@@ -26,6 +26,7 @@ from config import (
     MAX_UVM_CONTINUATION_LINES,
     UVM_PARSE_LEVELS,
 )
+from .problem_hints import compute_problem_hints_from_events, event_has_x_or_z
 
 
 _VCS_ASSERT_RE = re.compile(
@@ -993,6 +994,8 @@ def diff_failure_events(base_events: list[dict[str, Any]], new_events: list[dict
     matched_base: set[int] = set()
     matched_new: set[int] = set()
     persistent_events: list[dict[str, Any]] = []
+    base_hints = compute_problem_hints_from_events(base_events)
+    new_hints = compute_problem_hints_from_events(new_events)
 
     for new_idx, new_event in enumerate(new_events):
         best_idx = _find_best_event_match(new_event, base_events, matched_base)
@@ -1001,20 +1004,14 @@ def diff_failure_events(base_events: list[dict[str, Any]], new_events: list[dict
         matched_base.add(best_idx)
         matched_new.add(new_idx)
         base_event = base_events[best_idx]
-        persistent_events.append(
-            {
-                "base_event": base_event,
-                "new_event": new_event,
-                "time_shift_ps": _time_shift_value(base_event, new_event),
-                "group_changed": base_event["group_signature"] != new_event["group_signature"],
-            }
-        )
+        persistent_events.append(_analyze_persistent_event(base_event, new_event))
 
     resolved_events = [event for idx, event in enumerate(base_events) if idx not in matched_base]
     introduced_events = [event for idx, event in enumerate(new_events) if idx not in matched_new]
+    hints_comparison = _build_hints_comparison(base_hints, new_hints)
     changed_events = [
         item for item in persistent_events
-        if item["group_changed"] or ((item["time_shift_ps"] or 0) > 0)
+        if item["group_changed"] or ((item["time_shift_ps"] or 0) != 0)
     ]
 
     comparison_notes = []
@@ -1026,14 +1023,48 @@ def diff_failure_events(base_events: list[dict[str, Any]], new_events: list[dict
         comparison_notes.append(
             f"{len(changed_events)} persistent events changed timing or grouping."
         )
+    if hints_comparison["x_resolved"]:
+        comparison_notes.append("X propagation no longer present in new run.")
+    if hints_comparison["x_introduced"]:
+        comparison_notes.append("X propagation appeared in new run.")
+    if hints_comparison["z_resolved"]:
+        comparison_notes.append("Z (high-impedance) no longer present in new run.")
+    if hints_comparison["z_introduced"]:
+        comparison_notes.append("Z (high-impedance) appeared in new run.")
+    if hints_comparison["first_error_time_shift_ps"] is not None:
+        shift = hints_comparison["first_error_time_shift_ps"]
+        if shift != 0:
+            direction = "later" if shift > 0 else "earlier"
+            comparison_notes.append(
+                f"First failure time shifted {abs(shift)} ps {direction}."
+            )
+
+    mechanism_changed_count = sum(1 for item in persistent_events if item["mechanism_changed"])
+    if mechanism_changed_count > 0:
+        comparison_notes.append(
+            f"{mechanism_changed_count} persistent events changed failure mechanism."
+        )
+
+    x_to_deterministic_count = sum(1 for item in persistent_events if item["x_to_deterministic"])
+    if x_to_deterministic_count > 0:
+        comparison_notes.append(
+            f"{x_to_deterministic_count} persistent events transitioned from X/Z to deterministic values."
+        )
 
     return {
         "base_summary": _event_summary(base_events),
         "new_summary": _event_summary(new_events),
+        "problem_hints_comparison": hints_comparison,
         "resolved_events": resolved_events,
         "persistent_events": persistent_events,
         "new_events": introduced_events,
         "comparison_notes": comparison_notes,
+        "convergence_summary": _build_convergence_summary(
+            resolved_events,
+            persistent_events,
+            introduced_events,
+            hints_comparison,
+        ),
     }
 
 
@@ -1096,14 +1127,123 @@ def _message_tokens(message: str) -> set[str]:
     }
 
 
+def _build_hints_comparison(base_hints, new_hints) -> dict[str, Any]:
+    x_resolved = base_hints.has_x and not new_hints.has_x
+    z_resolved = base_hints.has_z and not new_hints.has_z
+    x_introduced = not base_hints.has_x and new_hints.has_x
+    z_introduced = not base_hints.has_z and new_hints.has_z
+
+    pattern_changed = base_hints.error_pattern != new_hints.error_pattern
+    pattern_transition = None
+    if pattern_changed and base_hints.error_pattern and new_hints.error_pattern:
+        pattern_transition = f"{base_hints.error_pattern} → {new_hints.error_pattern}"
+
+    time_shift = None
+    direction = None
+    base_time = base_hints.first_error_time_ps
+    new_time = new_hints.first_error_time_ps
+    if base_time is not None and new_time is not None:
+        time_shift = new_time - base_time
+        if time_shift > 0:
+            direction = "later"
+        elif time_shift < 0:
+            direction = "earlier"
+        else:
+            direction = "unchanged"
+
+    return {
+        "base": base_hints.model_dump(),
+        "new": new_hints.model_dump(),
+        "x_resolved": x_resolved,
+        "z_resolved": z_resolved,
+        "x_introduced": x_introduced,
+        "z_introduced": z_introduced,
+        "error_pattern_changed": pattern_changed,
+        "error_pattern_transition": pattern_transition,
+        "first_error_time_shift_ps": time_shift,
+        "first_error_time_direction": direction,
+    }
+
+
+def _analyze_persistent_event(base_event: dict[str, Any], new_event: dict[str, Any]) -> dict[str, Any]:
+    time_shift_ps = _time_shift_value(base_event, new_event)
+    time_direction = None
+    if time_shift_ps is not None and time_shift_ps != 0:
+        time_direction = "later" if time_shift_ps > 0 else "earlier"
+
+    group_changed = base_event["group_signature"] != new_event["group_signature"]
+    base_mechanism = base_event.get("failure_mechanism")
+    new_mechanism = new_event.get("failure_mechanism")
+    mechanism_changed = base_mechanism != new_mechanism
+    mechanism_transition = None
+    if mechanism_changed and base_mechanism and new_mechanism:
+        mechanism_transition = f"{base_mechanism} → {new_mechanism}"
+
+    return {
+        "base_event": base_event,
+        "new_event": new_event,
+        "time_shift_ps": time_shift_ps,
+        "time_direction": time_direction,
+        "group_changed": group_changed,
+        "mechanism_changed": mechanism_changed,
+        "mechanism_transition": mechanism_transition,
+        "x_to_deterministic": _detect_x_to_deterministic(base_event, new_event),
+        "value_changed": _detect_value_changed(base_event, new_event),
+    }
+
+
+def _detect_x_to_deterministic(base_event: dict[str, Any], new_event: dict[str, Any]) -> bool:
+    base_x, base_z = event_has_x_or_z(base_event)
+    new_x, new_z = event_has_x_or_z(new_event)
+    return (base_x or base_z) and not (new_x or new_z)
+
+
+def _detect_value_changed(base_event: dict[str, Any], new_event: dict[str, Any]) -> bool:
+    for field in ("expected", "actual"):
+        if base_event.get(field) != new_event.get(field):
+            return True
+    return False
+
+
+def _build_convergence_summary(
+    resolved_events: list[dict[str, Any]],
+    persistent_events: list[dict[str, Any]],
+    introduced_events: list[dict[str, Any]],
+    hints_comparison: dict[str, Any],
+) -> str | None:
+    parts = []
+
+    if len(resolved_events) > 0 and len(introduced_events) == 0:
+        parts.append(f"{len(resolved_events)} failures resolved, no new failures")
+    elif len(resolved_events) > 0 and len(introduced_events) > 0:
+        parts.append(f"{len(resolved_events)} resolved, {len(introduced_events)} new")
+    elif len(introduced_events) > 0:
+        parts.append(f"{len(introduced_events)} new failures introduced")
+
+    if hints_comparison["x_resolved"]:
+        parts.append("X propagation resolved")
+    if hints_comparison["x_introduced"]:
+        parts.append("X propagation introduced")
+
+    if hints_comparison["error_pattern_transition"]:
+        parts.append(f"error pattern: {hints_comparison['error_pattern_transition']}")
+
+    if hints_comparison["first_error_time_direction"] == "later":
+        parts.append("first failure shifted later")
+    elif hints_comparison["first_error_time_direction"] == "earlier":
+        parts.append("first failure shifted earlier")
+
+    return "; ".join(parts) if parts else None
+
+
 def _time_shifted(base_event: dict[str, Any], new_event: dict[str, Any]) -> bool:
     shift = _time_shift_value(base_event, new_event)
-    return shift is not None and shift > 0
+    return shift is not None and shift != 0
 
 
 def _time_shift_value(base_event: dict[str, Any], new_event: dict[str, Any]) -> int | None:
-    base_time = base_event.get("time_ps") or 0
-    new_time = new_event.get("time_ps") or 0
-    if base_time <= 0 or new_time <= 0:
+    base_time = base_event.get("time_ps")
+    new_time = new_event.get("time_ps")
+    if base_time is None or new_time is None:
         return None
-    return abs(new_time - base_time)
+    return new_time - base_time

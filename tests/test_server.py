@@ -383,6 +383,8 @@ class TestDispatchParseSimLog:
             )
             assert len(result["resolved_events"]) == 1
             assert len(result["new_events"]) == 1
+            assert "problem_hints_comparison" in result
+            assert "convergence_summary" in result
         finally:
             Path(base_path).unlink()
             Path(new_path).unlink()

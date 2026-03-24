@@ -299,6 +299,8 @@ async def list_tools():
             description=(
                 "比较两次仿真 log 的标准化 failure_event，"
                 "输出已解决、持续存在和新增的失败。"
+                "增强输出包含：问题类型变化、X/Z 消失/出现、"
+                "首次失败时间移动、收敛趋势总结。"
             ),
             inputSchema={
                 "type": "object",

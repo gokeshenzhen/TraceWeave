@@ -168,13 +168,40 @@ class DiffEventSummary(SchemaModel):
     groups: dict[str, int] = Field(default_factory=dict)
 
 
+class DiffProblemHintsComparison(SchemaModel):
+    base: ProblemHints
+    new: ProblemHints
+    x_resolved: bool = False
+    z_resolved: bool = False
+    x_introduced: bool = False
+    z_introduced: bool = False
+    error_pattern_changed: bool = False
+    error_pattern_transition: str | None = None
+    first_error_time_shift_ps: int | None = None
+    first_error_time_direction: Literal["later", "earlier", "unchanged"] | None = None
+
+
+class PersistentEventDetail(SchemaModel):
+    base_event: dict[str, Any]
+    new_event: dict[str, Any]
+    time_shift_ps: int | None = None
+    time_direction: Literal["later", "earlier"] | None = None
+    group_changed: bool = False
+    mechanism_changed: bool = False
+    mechanism_transition: str | None = None
+    x_to_deterministic: bool = False
+    value_changed: bool = False
+
+
 class DiffResult(SchemaModel):
     base_summary: DiffEventSummary
     new_summary: DiffEventSummary
+    problem_hints_comparison: DiffProblemHintsComparison | None = None
     resolved_events: list[dict[str, Any]] = Field(default_factory=list)
-    persistent_events: list[dict[str, Any]] = Field(default_factory=list)
+    persistent_events: list[PersistentEventDetail] = Field(default_factory=list)
     new_events: list[dict[str, Any]] = Field(default_factory=list)
     comparison_notes: list[str] = Field(default_factory=list)
+    convergence_summary: str | None = None
 
 
 class WaveformSummaryResult(SchemaModel):

@@ -18,8 +18,11 @@ _HEURISTIC_Z_PATTERNS = (
     re.compile(r"\btri[- ]?state\b", re.IGNORECASE),
     re.compile(r"\bhigh impedance\b", re.IGNORECASE),
 )
-_HEX_X_RE = re.compile(r"(?:[0-9a-fA-F][Xx]|[Xx][0-9a-fA-F]|^[Xx]+$)")
-_HEX_Z_RE = re.compile(r"(?:[0-9a-fA-F][Zz]|[Zz][0-9a-fA-F]|^[Zz]+$)")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_UNKNOWN_ONLY_RE = re.compile(r"^[xz?]+$", re.IGNORECASE)
+_SV_LITERAL_RE = re.compile(r"^(?:\d+)?'[bdho][0-9a-fxz?_]+$", re.IGNORECASE)
+_HEX_PREFIX_RE = re.compile(r"^0x[0-9a-fxz?_]+$", re.IGNORECASE)
+_HEX_UNKNOWN_RE = re.compile(r"^[0-9a-f]*[xz][0-9a-fxz]*$", re.IGNORECASE)
 _ERROR_PATTERN_PRIORITY = (
     "mismatch",
     "timeout",
@@ -36,6 +39,16 @@ def compute_problem_hints(summary: dict[str, Any], events: list[dict[str, Any]])
     if groups:
         first_time = groups[0].get("first_time_ps")
     return _build_problem_hints(events, first_time)
+
+
+def compute_problem_hints_from_events(events: list[dict[str, Any]]) -> ProblemHints:
+    first_error_time_ps = None
+    for event in events:
+        time_ps = event.get("time_ps")
+        if time_ps is not None and time_ps >= 0:
+            if first_error_time_ps is None or time_ps < first_error_time_ps:
+                first_error_time_ps = time_ps
+    return _build_problem_hints(events, first_error_time_ps)
 
 
 def problem_hints_from_event(
@@ -92,6 +105,22 @@ def _matches_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     return any(pattern.search(text) for pattern in patterns)
 
 
+def event_has_x_or_z(event: dict[str, Any]) -> tuple[bool, bool]:
+    payload = _event_text(event)
+    mechanism = event.get("failure_mechanism")
+
+    has_x = (
+        mechanism == "xprop"
+        or _matches_any(payload, _HEURISTIC_X_PATTERNS)
+        or _has_x_in_hex_value(event)
+    )
+    has_z = (
+        _matches_any(payload, _HEURISTIC_Z_PATTERNS)
+        or _has_z_in_hex_value(event)
+    )
+    return has_x, has_z
+
+
 def _event_text(event: dict[str, Any]) -> str:
     payloads = [event.get("message_text"), event.get("group_signature"), event.get("instance_path")]
     structured_fields = event.get("structured_fields") or {}
@@ -108,7 +137,7 @@ def _has_x_in_hex_value(event: dict[str, Any]) -> bool:
     """Check whether expected/actual contains hex-adjacent X unknown bits."""
     for field in ("expected", "actual"):
         value = event.get(field)
-        if value is not None and _HEX_X_RE.search(str(value)):
+        if _value_payload_contains_unknown(value, {"x"}):
             return True
     return False
 
@@ -117,6 +146,28 @@ def _has_z_in_hex_value(event: dict[str, Any]) -> bool:
     """Check whether expected/actual contains hex-adjacent Z high-impedance bits."""
     for field in ("expected", "actual"):
         value = event.get(field)
-        if value is not None and _HEX_Z_RE.search(str(value)):
+        if _value_payload_contains_unknown(value, {"z"}):
             return True
+    return False
+
+
+def _value_payload_contains_unknown(value: Any, unknown_chars: set[str]) -> bool:
+    if value is None:
+        return False
+    normalized = str(value).strip().lower()
+    if "=" in normalized:
+        normalized = normalized.split("=", 1)[1].strip()
+    if not normalized:
+        return False
+    if _UNKNOWN_ONLY_RE.fullmatch(normalized):
+        return any(char in unknown_chars for char in normalized)
+    if _IDENTIFIER_RE.fullmatch(normalized):
+        return False
+    if _SV_LITERAL_RE.fullmatch(normalized):
+        literal_body = normalized.split("'", 1)[1][1:]
+        return any(char in unknown_chars for char in literal_body)
+    if _HEX_PREFIX_RE.fullmatch(normalized):
+        return any(char in unknown_chars for char in normalized[2:])
+    if _HEX_UNKNOWN_RE.fullmatch(normalized):
+        return any(char in unknown_chars for char in normalized)
     return False

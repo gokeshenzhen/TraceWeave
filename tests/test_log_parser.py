@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import src.log_parser as log_parser_module
 from src.log_parser import SimLogParser, get_error_context
+from src.problem_hints import compute_problem_hints_from_events, event_has_x_or_z
 
 
 VCS_LOG_SAMPLE = """\
@@ -577,9 +578,185 @@ class TestFailureEventDiff:
             assert len(diff["resolved_events"]) == 1
             assert len(diff["new_events"]) == 1
             assert diff["persistent_events"][0]["time_shift_ps"] == 2000
+            assert diff["persistent_events"][0]["time_direction"] == "later"
+            assert diff["persistent_events"][0]["mechanism_changed"] is False
+            assert diff["persistent_events"][0]["x_to_deterministic"] is False
+            assert diff["persistent_events"][0]["value_changed"] is False
+            assert diff["problem_hints_comparison"]["first_error_time_shift_ps"] == -9000
+            assert diff["convergence_summary"] is not None
         finally:
             os.unlink(base_log)
             os.unlink(new_log)
+
+    def test_diff_x_resolved(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] xprop detected on bus\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] expected=0x1234, actual=0x5678\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            persistent = diff["persistent_events"][0]
+            assert diff["problem_hints_comparison"]["x_resolved"] is True
+            assert persistent["x_to_deterministic"] is True
+            assert "X propagation resolved" in diff["convergence_summary"]
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_x_introduced(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] expected=0x1234, actual=0x5678\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] xprop detected on bus\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            assert diff["problem_hints_comparison"]["x_introduced"] is True
+            assert "X propagation introduced" in diff["convergence_summary"]
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_first_error_time_shift(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 1000 ns: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 2000 ns: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            assert diff["problem_hints_comparison"]["first_error_time_shift_ps"] == 1_000_000
+            assert diff["problem_hints_comparison"]["first_error_time_direction"] == "later"
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_mechanism_transition(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] xprop detected on bus\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 20 ns: reporter [TOP] expected=0x1234, actual=0x5678\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            persistent = diff["persistent_events"][0]
+            assert persistent["mechanism_changed"] is True
+            assert persistent["mechanism_transition"] == "xprop → mismatch"
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_convergence_summary_all_resolved(self):
+        base_log = _write_log(
+            "\n".join(
+                [
+                    "module_a ERROR unique issue a @ 1 ns",
+                    "module_b ERROR unique issue b @ 2 ns",
+                    "module_c ERROR unique issue c @ 3 ns",
+                ]
+            )
+            + "\n"
+        )
+        new_log = _write_log("Booting simulation\n")
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            assert len(diff["resolved_events"]) == 3
+            assert "resolved" in diff["convergence_summary"]
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_time_shift_is_signed(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 2000 ns: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 1000 ns: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            persistent = diff["persistent_events"][0]
+            assert persistent["time_shift_ps"] < 0
+            assert persistent["time_direction"] == "earlier"
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+    def test_diff_keeps_zero_ps_time_shift(self):
+        base_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 0 ps: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        new_log = _write_log(
+            "UVM_ERROR /path/top_tb.sv(125) @ 1000 ps: reporter [TOP] expected=0x1, actual=0x0\n"
+        )
+        try:
+            diff = SimLogParser(base_log, "vcs").diff_against(new_log)
+            persistent = diff["persistent_events"][0]
+            assert persistent["time_shift_ps"] == 1000
+            assert persistent["time_direction"] == "later"
+            assert diff["problem_hints_comparison"]["first_error_time_shift_ps"] == 1000
+            assert diff["problem_hints_comparison"]["first_error_time_direction"] == "later"
+        finally:
+            os.unlink(base_log)
+            os.unlink(new_log)
+
+
+class TestProblemHintsUnknownValueDetection:
+    def test_identifier_values_do_not_trigger_x_or_z(self):
+        event = {
+            "message_text": "compare failed",
+            "group_signature": "UVM_ERROR [TOP]",
+            "instance_path": "uvm_test_top.env.scb",
+            "failure_mechanism": "mismatch",
+            "expected": "TX_IDLE",
+            "actual": "TX_BUSY",
+            "structured_fields": {},
+        }
+        assert event_has_x_or_z(event) == (False, False)
+
+    def test_literal_unknown_values_still_trigger_x_detection(self):
+        event = {
+            "message_text": "compare failed",
+            "group_signature": "UVM_ERROR [TOP]",
+            "instance_path": "uvm_test_top.env.scb",
+            "failure_mechanism": "mismatch",
+            "expected": "xx",
+            "actual": "12",
+            "structured_fields": {},
+        }
+        assert event_has_x_or_z(event) == (True, False)
+
+    def test_compute_problem_hints_keeps_zero_ps_first_error(self):
+        hints = compute_problem_hints_from_events(
+            [
+                {
+                    "message_text": "error at reset",
+                    "group_signature": "UVM_ERROR [TOP]",
+                    "instance_path": "reporter",
+                    "failure_mechanism": "timeout",
+                    "expected": None,
+                    "actual": None,
+                    "structured_fields": {},
+                    "time_ps": 0,
+                },
+                {
+                    "message_text": "later error",
+                    "group_signature": "UVM_ERROR [TOP]",
+                    "instance_path": "reporter",
+                    "failure_mechanism": "timeout",
+                    "expected": None,
+                    "actual": None,
+                    "structured_fields": {},
+                    "time_ps": 1000,
+                },
+            ]
+        )
+        assert hints["first_error_time_ps"] == 0
 
 
 REAL_LOG = "/home/robin/Projects/mcp_demo/tb/work/work_my_case0/run.log"
