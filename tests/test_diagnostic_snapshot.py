@@ -312,7 +312,7 @@ class TestDiagnosticSnapshot:
         assert result.log_analysis.suggested_call["arguments"]["simulator"] == "xcelium"
         assert result.recommended_next.suggested_call is None
 
-    def test_stale_always_false_in_v1(self):
+    def test_fresh_sections_have_stale_false(self):
         _prefill_all()
 
         result = server._handle_diagnostic_snapshot({})

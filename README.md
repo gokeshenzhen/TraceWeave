@@ -151,6 +151,7 @@ codex mcp list
    返回里还包含 `discovery_mode` 和可能的 `case_dir`
 2. 选 `phase == "elaborate"` 的 compile log，调用 `build_tb_hierarchy`
 3. 如果 `sim_logs` 非空，用 `sim_logs[0].path` 和 `simulator` 调用 `parse_sim_log`
+   也可以显式选择同一 case 下的其他 sim log；snapshot 会按当前 session-compatible 规则判断结果是否属于当前 session
    当前返回不仅有 `groups`，还包含版本字段、runtime-only 计数器、标准化后的 `failure_events`、时间归一化字段，以及 rerun diff hints
 4. 选择波形文件：
    如果 `fsdb_runtime.enabled == false`，优先选 `.vcd`；否则可用 `.fsdb` 或 `.vcd`
@@ -161,7 +162,9 @@ codex mcp list
 6. 需要指定信号和单 group 快照时，再用 `search_signals` + `analyze_failures`
 7. 如 `parse_sim_log` 返回 `previous_log_detected == true`，优先考虑调用 `diff_sim_failure_results`
 8. 波形上看到可疑信号后，可调用 `explain_signal_driver`
-9. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
+9. 任意时刻都可调用 `get_diagnostic_snapshot` 查看当前 session 已有哪些结果可复用、哪些步骤缺失
+   该 tool 只读缓存，不会触发任何子步骤
+10. 必要时补充 `get_error_context`、`get_signal_transitions`、`get_signals_around_time`、`get_signal_at_time`、`get_waveform_summary`
 
 推荐的默认顺序：
 
@@ -171,7 +174,8 @@ codex mcp list
 4. `recommend_failure_debug_next_steps` 或 `analyze_failure_event`
 5. 必要时 `search_signals` + `analyze_failures`
 6. 波形异常时 `explain_signal_driver`
-7. 迭代调试时 `diff_sim_failure_results`
+7. 需要快速盘点当前 session 时调用 `get_diagnostic_snapshot`
+8. 迭代调试时 `diff_sim_failure_results`
 
 ### Client Integration Example
 
@@ -196,6 +200,7 @@ codex mcp list
 | `analyze_failures` | 核心：报错 + 波形联合分析；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `analyze_failure_event` | 从单个 `failure_event` 出发，联动实例、信号和源码候选 |
 | `recommend_failure_debug_next_steps` | 用户只说“调这个失败”时，给出默认优先看哪个失败/信号/实例，并附 role-based 排名理由 |
+| `get_diagnostic_snapshot` | 冷启动加速器：只读聚合当前 session 缓存，返回 sim_paths / hierarchy / log_analysis / recommended_next 的 available/stale 状态、精简摘要和缺失步骤 |
 | `explain_signal_driver` | 从可疑波形信号回溯最可能的 RTL driver 位置和驱动类型 |
 | `get_signal_at_time` | 查特定时刻单个信号值；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_transitions` | 查信号完整跳变历史；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
@@ -226,6 +231,13 @@ codex mcp list
 - `recommendation_strategy`：当前为 `role_rank_v1`
 - `failure_window_center_ps`：本次推荐所围绕的失败时间
 - `recommended_signals[]` 额外包含 `role`、`reason_codes`、`confidence`
+
+### `get_diagnostic_snapshot` 语义说明
+
+- `get_sim_paths` 定义当前 session anchor：`verif_root`、`case_dir`、`simulator`、`compile_log`
+- `stale=true` 表示缓存存在，但不属于当前 session context；不是文件 mtime 过期检测
+- `quick_ref` 顶层字段只会从 `stale=false` 的 section 提升
+- `suggested_call` 只在当前 prerequisite 已满足且参数可直接调用时提供
 
 ---
 

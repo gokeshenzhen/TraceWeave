@@ -1020,8 +1020,6 @@ def _path_matches_session(path: str | None, candidates: list[str], case_dir: str
 
 
 def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None) -> bool:
-    if tool_name == "get_sim_paths":
-        return provenance is not None
     if anchor is None or provenance is None:
         return False
     sim_result = _result_cache.get("get_sim_paths")
