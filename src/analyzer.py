@@ -18,6 +18,7 @@ from config import (
 from .compile_log_parser import parse_compile_log
 from .log_parser import SimLogParser
 from .problem_hints import problem_hints_from_event
+from .schemas import ProblemHints
 from .tb_hierarchy_builder import build_hierarchy
 
 
@@ -158,6 +159,8 @@ class WaveformAnalyzer:
         wave_path: str,
         compile_log: str | None = None,
         top_hint: str | None = None,
+        structural_risks: list[dict[str, Any]] | None = None,
+        problem_hints: dict[str, Any] | ProblemHints | None = None,
     ) -> dict[str, Any]:
         log_parser = SimLogParser(self.log_path, self.simulator)
         events = log_parser.parse_failure_events()
@@ -166,6 +169,7 @@ class WaveformAnalyzer:
                 "primary_failure_target": None,
                 "recommended_signals": [],
                 "recommended_instances": [],
+                "correlated_structural_risks": [],
                 "suspected_failure_class": "no_failure_detected",
                 "why": ["仿真 log 中未发现可归一化的失败事件"],
             }
@@ -174,19 +178,24 @@ class WaveformAnalyzer:
         primary = ranked_events[0]
         event_analysis = self.analyze_failure_event(primary, wave_path, compile_log=compile_log, top_hint=top_hint)
         failure_class = _classify_failure(primary)
+        normalized_hints = _normalize_problem_hints(problem_hints)
+        correlated_risks = _rank_structural_risks(structural_risks or [], primary, normalized_hints)
         why = [
             "Selected the earliest failure with the strongest available timing/source anchor.",
             f"Failure classified heuristically as {failure_class}.",
         ]
         if event_analysis["likely_instances"]:
             why.append("Hierarchy ranking preferred DUT-facing instances over helper/checker nodes.")
+        if correlated_risks:
+            why.append("Structural scan risks were re-ranked against the primary failure instance and current symptom hints.")
 
         return {
             "primary_failure_target": primary,
             "recommended_signals": event_analysis["recommended_signals"],
             "recommended_instances": event_analysis["likely_instances"],
+            "correlated_structural_risks": correlated_risks,
             "suspected_failure_class": failure_class,
-            "recommendation_strategy": "role_rank_v1",
+            "recommendation_strategy": "role_rank_v2_structural",
             "failure_window_center_ps": primary.get("time_ps"),
             "why": why,
         }
@@ -520,3 +529,68 @@ def _classify_path(path: str) -> str:
     if any(token in lower for token in _DUT_TOKENS):
         return "dut"
     return "neutral"
+
+
+def _normalize_problem_hints(problem_hints: dict[str, Any] | ProblemHints | None) -> ProblemHints | None:
+    if problem_hints is None:
+        return None
+    if isinstance(problem_hints, ProblemHints):
+        return problem_hints
+    try:
+        return ProblemHints.model_validate(problem_hints)
+    except Exception:
+        return None
+
+
+def _rank_structural_risks(
+    risks: list[dict[str, Any]],
+    primary_event: dict[str, Any],
+    problem_hints: ProblemHints | None,
+) -> list[dict[str, Any]]:
+    if not risks:
+        return []
+
+    instance_path = (primary_event.get("instance_path") or "").lower()
+    ranked: list[dict[str, Any]] = []
+    for risk in risks:
+        score = 0
+        reasons: list[str] = []
+        module = risk.get("module")
+        if isinstance(module, str) and module and module.lower() in instance_path:
+            score += 10
+            reasons.append("module appears in failure instance path")
+        type_reason = _risk_type_hint_reason(risk.get("type"), problem_hints)
+        if type_reason is not None:
+            score += 5
+            reasons.append(type_reason)
+        if risk.get("risk_level") == "high":
+            score += 2
+            reasons.append("risk_level is high")
+        if score <= 0:
+            continue
+        ranked.append(
+            {
+                "risk_type": risk.get("type"),
+                "file": risk.get("file"),
+                "line": risk.get("line"),
+                "module": module,
+                "risk_level": risk.get("risk_level"),
+                "detail": risk.get("detail"),
+                "relevance_score": score,
+                "relevance_reasons": reasons,
+            }
+        )
+    ranked.sort(key=lambda item: (-item["relevance_score"], item["file"], item["line"]))
+    return ranked[:5]
+
+
+def _risk_type_hint_reason(risk_type: Any, problem_hints: ProblemHints | None) -> str | None:
+    if problem_hints is None or not isinstance(risk_type, str):
+        return None
+    if risk_type == "slice_overlap" and (problem_hints.has_x or problem_hints.has_z):
+        return "slice_overlap correlates with has_x/has_z"
+    if risk_type == "narrow_condition_injection" and problem_hints.error_pattern == "mismatch":
+        return "narrow_condition_injection correlates with mismatch"
+    if risk_type == "multi_drive" and problem_hints.has_x:
+        return "multi_drive correlates with has_x"
+    return None

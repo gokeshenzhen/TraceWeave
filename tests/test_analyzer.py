@@ -165,7 +165,7 @@ class TestFailureEventAnalysis:
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
         assert result["suspected_failure_class"] == "assertion/protocol issue"
-        assert result["recommendation_strategy"] == "role_rank_v1"
+        assert result["recommendation_strategy"] == "role_rank_v2_structural"
         assert result["failure_window_center_ps"] == 290000
 
     def test_recommend_debug_next_steps_without_top_hint(self, log_path):
@@ -175,3 +175,35 @@ class TestFailureEventAnalysis:
 
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
+    def test_recommend_debug_next_steps_ranks_correlated_structural_risks(self, log_path):
+        parser = FakeWaveParser()
+        analyzer = WaveformAnalyzer(log_path, parser, "vcs")
+        result = analyzer.recommend_debug_next_steps(
+            wave_path="/tmp/wave.vcd",
+            top_hint="top_tb",
+            structural_risks=[
+                {
+                    "type": "slice_overlap",
+                    "file": "/tmp/dut.sv",
+                    "line": 12,
+                    "module": "sva_top_inst",
+                    "risk_level": "high",
+                    "detail": "slice issue",
+                },
+                {
+                    "type": "magic_condition",
+                    "file": "/tmp/helper.sv",
+                    "line": 30,
+                    "module": "monitor",
+                    "risk_level": "low",
+                    "detail": "magic value compare",
+                },
+            ],
+            problem_hints={"has_x": True, "has_z": False, "error_pattern": "xprop"},
+        )
+
+        assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
+        assert result["correlated_structural_risks"][0]["relevance_score"] == 17
+        assert "module appears in failure instance path" in result["correlated_structural_risks"][0]["relevance_reasons"]
+        assert "slice_overlap correlates with has_x/has_z" in result["correlated_structural_risks"][0]["relevance_reasons"]
