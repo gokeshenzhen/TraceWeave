@@ -3,7 +3,14 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.schemas import ErrorContextResult, ParseSimLogResult, ProblemHints, SimPathsResult, WaveformSummaryResult
+from src.schemas import (
+    ErrorContextResult,
+    GetSignalsByCycleResult,
+    ParseSimLogResult,
+    ProblemHints,
+    SimPathsResult,
+    WaveformSummaryResult,
+)
 
 
 def test_sim_paths_result_minimal():
@@ -95,3 +102,34 @@ def test_waveform_summary_json_roundtrip():
         }
     )
     assert json.loads(result.model_dump_json(exclude_none=True))["format"] == "VCD"
+
+
+def test_get_signals_by_cycle_result_roundtrip():
+    result = GetSignalsByCycleResult.model_validate(
+        {
+            "clock_path": "top_tb.clk",
+            "edge": "posedge",
+            "sample_offset_ps": 1,
+            "clock_period_ps": 1000,
+            "total_edges_found": 3,
+            "start_cycle": 0,
+            "num_cycles_requested": 2,
+            "effective_num_cycles": 2,
+            "num_cycles_returned": 2,
+            "capped": False,
+            "truncated": False,
+            "cycles": [
+                {
+                    "cycle": 0,
+                    "time_ps": 500,
+                    "time_ns": 0.5,
+                    "signals": {
+                        "top_tb.data": {"bin": "0001", "hex": "0x1", "dec": 1},
+                    },
+                }
+            ],
+            "signal_errors": {},
+        }
+    )
+    payload = json.loads(result.model_dump_json(exclude_none=True))
+    assert payload["cycles"][0]["signals"]["top_tb.data"]["dec"] == 1

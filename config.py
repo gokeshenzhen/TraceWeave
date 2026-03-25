@@ -61,6 +61,9 @@ DEFAULT_LOG_CONTEXT_AFTER = 100
 # search_signals 返回的最大结果数
 SIGNAL_SEARCH_MAX_RESULTS = 100
 
+# get_signals_by_cycle 单次查询最大周期数
+MAX_CYCLES_PER_QUERY = 256
+
 # parse_sim_log 最多返回的 error group 数
 DEFAULT_MAX_GROUPS = 50
 

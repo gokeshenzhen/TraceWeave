@@ -1,0 +1,26 @@
+$timescale 1ps $end
+$scope module top_tb $end
+$var wire 1 ! clk $end
+$var wire 4 " data $end
+$var wire 1 # const_high $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+b0000 "
+1#
+#500
+1!
+b0001 "
+#1000
+0!
+#1500
+1!
+b0010 "
+#2000
+0!
+#2500
+1!
+b0011 "
+#3000
+0!

@@ -260,6 +260,21 @@ class FSDBParser:
             "hint": "使用 path 字段中的完整路径作为 get_signal_at_time 等工具的 signal_path 参数",
         }
 
+    def get_signal_width(self, signal_path: str) -> int:
+        exact = self.search_signals(signal_path, max_results=32)
+        for item in exact.get("results", []):
+            if item.get("path") == signal_path:
+                return int(item["width"])
+
+        leaf = signal_path.split(".")[-1]
+        fallback = self.search_signals(leaf, max_results=64)
+        for item in fallback.get("results", []):
+            path = item.get("path")
+            if path == signal_path or path.endswith("." + signal_path):
+                return int(item["width"])
+
+        raise KeyError(f"信号未找到：'{signal_path}'")
+
 
 # ── Utility ───────────────────────────────────────────────────────────
 

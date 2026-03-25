@@ -117,6 +117,11 @@ class VCDParser:
             "results":        matched,
         }
 
+    def get_signal_width(self, signal_path: str) -> int:
+        self._ensure_parsed()
+        sym = self._resolve(signal_path)
+        return int(self._signals[sym]["width"])
+
     # ── Internal ────────────────────────────────────────────────────
 
     def _ensure_parsed(self):

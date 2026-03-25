@@ -127,6 +127,49 @@ class TestStructuralScannerToolContract:
         assert result["scan_scope"] == "scope1"
         assert result["files_scanned"] == 1
 
+    async def test_cycle_query_tool_schema_and_dispatch(self):
+        tools = await server.list_tools()
+        cycle_tool = next(tool for tool in tools if tool.name == "get_signals_by_cycle")
+
+        assert cycle_tool.inputSchema["required"] == ["wave_path", "clock_path", "signal_paths"]
+        assert cycle_tool.inputSchema["properties"]["edge"]["default"] == "posedge"
+        assert cycle_tool.inputSchema["properties"]["sample_offset_ps"]["minimum"] == 0
+        assert cycle_tool.inputSchema["properties"]["num_cycles"]["minimum"] == 0
+
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        result = await server._dispatch(
+            "get_signals_by_cycle",
+            {
+                "wave_path": str(fixture),
+                "clock_path": "top_tb.clk",
+                "signal_paths": ["top_tb.data"],
+                "num_cycles": 2,
+            },
+        )
+
+        assert result["num_cycles_requested"] == 2
+        assert result["effective_num_cycles"] == 2
+        assert result["capped"] is False
+        assert result["num_cycles_returned"] == 2
+        assert [cycle["signals"]["top_tb.data"]["dec"] for cycle in result["cycles"]] == [1, 2]
+
+    async def test_cycle_query_dispatch_reports_capped_request(self):
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        result = await server._dispatch(
+            "get_signals_by_cycle",
+            {
+                "wave_path": str(fixture),
+                "clock_path": "top_tb.clk",
+                "signal_paths": ["top_tb.data"],
+                "num_cycles": 999,
+            },
+        )
+
+        assert result["num_cycles_requested"] == 999
+        assert result["effective_num_cycles"] == server.MAX_CYCLES_PER_QUERY
+        assert result["capped"] is True
+        assert result["num_cycles_returned"] == 3
+
 
 @pytest.mark.anyio
 class TestDispatchParseSimLog:

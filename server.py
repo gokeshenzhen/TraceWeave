@@ -28,6 +28,7 @@ from config import (
     DEFAULT_DETAIL_LEVEL,
     DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_EVENTS_PER_GROUP,
+    MAX_CYCLES_PER_QUERY,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
 )
@@ -43,6 +44,7 @@ from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
+from src.cycle_query import get_signals_by_cycle
 from config import get_fsdb_runtime_info
 from pydantic import BaseModel
 import src.schemas as schemas
@@ -249,6 +251,7 @@ Waveform debug workflow:
    - analyze_failure_event for failure-centric instance/source correlation
    - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
    - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps
+   - get_signals_by_cycle for clock-aligned cycle-level signal value tables; ideal for state machines, pipelines, and algorithm core round-by-round comparison
    - get_error_context for other groups
    - get_signal_transitions for longer history
    - get_signals_around_time for additional signals
@@ -481,6 +484,54 @@ async def list_tools():
                     },
                 },
                 "required": ["wave_path", "signal_paths", "center_time_ps"],
+            },
+        ),
+
+        Tool(
+            name="get_signals_by_cycle",
+            description=(
+                "按时钟边沿对齐，返回多个信号在指定周期范围内的逐周期值表。"
+                "适合状态机、流水线、算法核的 round-by-round 对拍。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "波形文件绝对路径"},
+                    "clock_path": {
+                        "type": "string",
+                        "description": "clock 信号完整层级路径，如 top_tb.des_clk",
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "采样边沿，默认 posedge",
+                        "default": "posedge",
+                    },
+                    "signal_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "需要采样的信号完整路径列表",
+                    },
+                    "start_cycle": {
+                        "type": "integer",
+                        "description": "起始周期编号（0-based），默认 0",
+                        "default": 0,
+                        "minimum": 0,
+                    },
+                    "num_cycles": {
+                        "type": "integer",
+                        "description": f"采样周期数，默认 16；服务端单次最多执行 {MAX_CYCLES_PER_QUERY} 个周期，超出部分会被显式裁剪",
+                        "default": 16,
+                        "minimum": 0,
+                    },
+                    "sample_offset_ps": {
+                        "type": "integer",
+                        "description": "采样时刻相对于 clock edge 的偏移(ps)，默认 1（捕获 delta 更新后的寄存器值）",
+                        "default": 1,
+                        "minimum": 0,
+                    },
+                },
+                "required": ["wave_path", "clock_path", "signal_paths"],
             },
         ),
 
@@ -778,6 +829,22 @@ async def _dispatch(name: str, args: dict):
             args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
         return schemas.SignalsAroundTimeResult.model_validate(result)
+
+    elif name == "get_signals_by_cycle":
+        requested_num_cycles = args.get("num_cycles", 16)
+        effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
+        result = get_signals_by_cycle(
+            parser=_get_parser(args["wave_path"]),
+            clock_path=args["clock_path"],
+            signal_paths=args["signal_paths"],
+            edge=args.get("edge", "posedge"),
+            start_cycle=args.get("start_cycle", 0),
+            num_cycles=effective_num_cycles,
+            sample_offset_ps=args.get("sample_offset_ps", 1),
+            requested_num_cycles=requested_num_cycles,
+            capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
+        )
+        return schemas.GetSignalsByCycleResult.model_validate(result)
 
     elif name == "get_waveform_summary":
         result = _get_parser(args["wave_path"]).get_summary()

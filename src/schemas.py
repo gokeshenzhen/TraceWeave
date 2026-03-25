@@ -223,6 +223,12 @@ class SearchSignalsResult(SchemaModel):
     hint: str | None = None
 
 
+class SignalValue(SchemaModel):
+    bin: str | None = None
+    hex: str | None = None
+    dec: int | None = None
+
+
 class SignalAtTimeResult(SchemaModel):
     signal: str
     time_ps: int
@@ -245,6 +251,29 @@ class SignalsAroundTimeResult(SchemaModel):
     extra_transitions: int
     signals: dict[str, Any] = Field(default_factory=dict)
     truncated: bool = False
+
+
+class CycleEntry(SchemaModel):
+    cycle: int
+    time_ps: int
+    time_ns: float
+    signals: dict[str, SignalValue] = Field(default_factory=dict)
+
+
+class GetSignalsByCycleResult(SchemaModel):
+    clock_path: str
+    edge: Literal["posedge", "negedge"]
+    sample_offset_ps: int = 1
+    clock_period_ps: int | None = None
+    total_edges_found: int
+    start_cycle: int
+    num_cycles_requested: int
+    effective_num_cycles: int
+    num_cycles_returned: int
+    capped: bool = False
+    truncated: bool
+    cycles: list[CycleEntry] = Field(default_factory=list)
+    signal_errors: dict[str, str] = Field(default_factory=dict)
 
 
 class AnalyzeFailuresResult(SchemaModel):

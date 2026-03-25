@@ -26,3 +26,65 @@ def test_load_wrapper_fails_cleanly_without_fsdb_runtime(monkeypatch):
 
     with pytest.raises(RuntimeError, match="FSDB 解析不可用"):
         fsdb_parser._load_wrapper()
+
+
+def test_get_signal_width_prefers_exact_path_match(monkeypatch):
+    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
+    parser._handle = None
+    parser._lib = None
+
+    calls: list[str] = []
+
+    def fake_search(keyword: str, max_results: int = 0):
+        calls.append(keyword)
+        return {
+            "results": [
+                {"path": "top_tb.other.clk", "width": 8},
+                {"path": "top_tb.dut.clk", "width": 1},
+            ]
+        }
+
+    monkeypatch.setattr(parser, "search_signals", fake_search)
+
+    assert parser.get_signal_width("top_tb.dut.clk") == 1
+    assert calls == ["top_tb.dut.clk"]
+
+
+def test_get_signal_width_uses_suffix_fallback_when_exact_search_misses(monkeypatch):
+    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
+    parser._handle = None
+    parser._lib = None
+
+    calls: list[str] = []
+    responses = {
+        "top_tb.dut.clk": {
+            "results": [
+                {"path": "top_tb.other.clk", "width": 8},
+            ]
+        },
+        "clk": {
+            "results": [
+                {"path": "top_tb.iface.clk", "width": 2},
+                {"path": "top_tb.dut.clk", "width": 1},
+            ]
+        },
+    }
+
+    def fake_search(keyword: str, max_results: int = 0):
+        calls.append(keyword)
+        return responses[keyword]
+
+    monkeypatch.setattr(parser, "search_signals", fake_search)
+
+    assert parser.get_signal_width("top_tb.dut.clk") == 1
+    assert calls == ["top_tb.dut.clk", "clk"]
+
+
+def test_get_signal_width_raises_keyerror_when_signal_missing(monkeypatch):
+    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
+    parser._handle = None
+    parser._lib = None
+    monkeypatch.setattr(parser, "search_signals", lambda keyword, max_results=0: {"results": []})
+
+    with pytest.raises(KeyError, match="信号未找到"):
+        parser.get_signal_width("top_tb.missing.clk")
