@@ -169,7 +169,7 @@ codex mcp list
 
 1. 调用 `get_sim_paths(verif_root, case_name?)`，自动发现 `compile_logs` / `sim_logs` / `wave_files` / `simulator`
    返回里还包含 `discovery_mode` 和可能的 `case_dir`
-2. 选 `phase == "elaborate"` 的 compile log，调用 `build_tb_hierarchy`
+2. 选 `phase == "elaborate"` 的 compile log，**并行**调用 `build_tb_hierarchy` 和 `scan_structural_risks`（两者独立解析同一份 compile log）
 3. 如果 `sim_logs` 非空，用 `sim_logs[0].path` 和 `simulator` 调用 `parse_sim_log`
    也可以显式选择同一 case 下的其他 sim log；snapshot 会按当前 session-compatible 规则判断结果是否属于当前 session
    当前返回不仅有 `groups`，还包含版本字段、runtime-only 计数器、标准化后的 `failure_events`、时间归一化字段，以及 rerun diff hints
@@ -189,7 +189,7 @@ codex mcp list
 推荐的默认顺序：
 
 1. `get_sim_paths`
-2. `build_tb_hierarchy`
+2. `build_tb_hierarchy` + `scan_structural_risks`（并行）
 3. `parse_sim_log`
 4. `recommend_failure_debug_next_steps` 或 `analyze_failure_event`
 5. 必要时 `search_signals` + `analyze_failures`

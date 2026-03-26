@@ -221,12 +221,14 @@ Waveform debug workflow:
    - Prefer compile_logs entries with phase="elaborate" for build_tb_hierarchy.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
 
-2. MUST call build_tb_hierarchy before reading any RTL/TB source files or analyzing failures.
-   - Use the elaborate-phase compile_log and simulator from step 1.
-   - The returned file list represents the ONLY files compiled in this session.
-   - Use this file list to scope all subsequent source reads — do NOT use find/grep to scan directories for source files.
-   - Immediately after build_tb_hierarchy, call scan_structural_risks with the same compile_log
-     and simulator. Do not wait for parse_sim_log results before calling it.
+2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
+   Both independently parse the same compile_log — call them in parallel.
+   - build_tb_hierarchy: builds testbench hierarchy for source-aware analysis.
+     Use the elaborate-phase compile_log and simulator from step 1.
+     The returned file list represents the ONLY files compiled in this session.
+     Use this file list to scope all subsequent source reads — do NOT use find/grep to scan directories for source files.
+   - scan_structural_risks: detects static structural risks (slice_overlap, multi_drive, etc.).
+     Use the same compile_log and simulator. Do not wait for parse_sim_log results.
      Structural risks that overlap with failing signal paths are high-priority root cause candidates.
 
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
@@ -858,6 +860,18 @@ async def _dispatch(name: str, args: dict):
             )
         )
         _update_session_state(name, args, result)
+        result["suggested_next"] = {
+            "tool": "scan_structural_risks",
+            "arguments": {
+                "compile_log": args["compile_log"],
+                "simulator": args.get("simulator", "auto"),
+            },
+            "reason": (
+                "scan_structural_risks independently parses the same compile_log "
+                "to detect structural risks (slice_overlap, multi_drive, etc.). "
+                "Results feed into recommend_failure_debug_next_steps."
+            ),
+        }
         validated = schemas.BuildTbHierarchyResult.model_validate(result)
         _result_cache["build_tb_hierarchy"] = validated
         _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, args, validated)
@@ -917,6 +931,15 @@ async def _dispatch(name: str, args: dict):
             structural_risks=[risk.model_dump() for risk in scan_cache.risks] if scan_cache is not None else None,
             problem_hints=parse_cache.problem_hints.model_dump() if parse_cache and parse_cache.problem_hints else None,
         )
+        missing = []
+        if scan_cache is None:
+            missing.append(
+                "scan_structural_risks was not called; "
+                "correlated_structural_risks is empty. "
+                "Call scan_structural_risks with the same compile_log for better risk correlation."
+            )
+        if missing:
+            result["missing_inputs"] = missing
         validated = schemas.RecommendNextStepsResult.model_validate(result)
         _result_cache["recommend_failure_debug_next_steps"] = validated
         _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, args, validated)
