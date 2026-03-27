@@ -1,5 +1,11 @@
 # TraceWeave
 
+## 公众号
+
+欢迎关注我的公众号：
+
+![微信公众号二维码](assets/QR.png)
+
 ## Architecture
 
 - Architecture map: `docs/architecture.md`
