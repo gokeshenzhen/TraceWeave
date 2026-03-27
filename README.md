@@ -1,4 +1,4 @@
-# Waveform Analysis MCP
+# TraceWeave
 
 ## Architecture
 
@@ -11,7 +11,7 @@
   - `src/log_parser.py`
   - `src/fsdb_parser.py`
 
-Waveform MCP is a workflow-oriented debug server rather than a loose set of
+TraceWeave is a workflow-oriented debug server rather than a loose set of
 parsers. The main product shape is:
 
 - MCP server with session state, prerequisite gates, and recommended tool order
@@ -25,7 +25,7 @@ parsers. The main product shape is:
 ## 文件结构
 
 ```
-waveform_mcp/
+TraceWeave/
 ├── config.py               ← 环境变量、默认行为和发现规则常量
 ├── server.py               ← MCP 主入口、session/workflow gate
 ├── custom_patterns.yaml    ← 工程师自定义报错格式（不改代码，改此文件）
@@ -72,7 +72,7 @@ export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
 bash scripts/link_verdi_runtime.sh
 ```
 
-目录约定见 [`third_party/verdi_runtime/README.md`](/home/robin/Projects/mcp/waveform_mcp/third_party/verdi_runtime/README.md)。
+目录约定见 [`third_party/verdi_runtime/README.md`](/home/robin/Projects/mcp/TraceWeave/third_party/verdi_runtime/README.md)。
 
 验证 FSDB runtime 可以加载：
 ```bash
@@ -95,7 +95,7 @@ print('FSDB runtime 加载 OK')
 
 - command: `python3`
 - 建议实际使用 `python3.11`
-- args: `["/home/robin/Projects/mcp/waveform_mcp/server.py"]`
+- args: `["/home/robin/Projects/mcp/TraceWeave/server.py"]`
 - env: 如果不提供本地 `third_party/verdi_runtime/linux64`，则至少显式提供 `VERDI_HOME`。没有这两者时仅支持 VCD，不支持 FSDB。
 
 如果客户端本身支持 server instructions，它会直接拿到本仓库内置的标准调试 workflow；否则也可以按下面的 `Standard MCP Workflow` 手动编排工具调用。
@@ -107,9 +107,9 @@ print('FSDB runtime 加载 OK')
 ```json
 {
   "mcpServers": {
-    "waveform": {
+    "traceweave": {
       "command": "python3.11",
-      "args": ["/home/robin/Projects/mcp/waveform_mcp/server.py"],
+      "args": ["/home/robin/Projects/mcp/TraceWeave/server.py"],
       "env": {
         "VERDI_HOME": "/tools/synopsys/verdi/O-2018.09-SP2-11",
         "VCS_HOME":   "/tools/synopsys/vcs/O-2018.09-SP2-11",
@@ -126,7 +126,7 @@ print('FSDB runtime 加载 OK')
 配置后验证：
 ```bash
 claude mcp list
-# 应显示 waveform (connected)
+# 应显示 traceweave (connected)
 ```
 
 ### Codex
@@ -134,31 +134,31 @@ claude mcp list
 编辑 `~/.codex/config.toml`，添加以下配置：
 
 ```toml
-[mcp_servers.waveform]
+[mcp_servers.traceweave]
 command = "python3.11"
-args = ["/home/robin/Projects/mcp/waveform_mcp/server.py"]
-cwd = "/home/robin/Projects/mcp/waveform_mcp"
+args = ["/home/robin/Projects/mcp/TraceWeave/server.py"]
+cwd = "/home/robin/Projects/mcp/TraceWeave"
 
-[mcp_servers.waveform.env]
+[mcp_servers.traceweave.env]
 VERDI_HOME = "/tools/synopsys/verdi/O-2018.09-SP2-11"
 VCS_HOME   = "/tools/synopsys/vcs/O-2018.09-SP2-11"
 XLM_ROOT   = "/tools/cadence/XCELIUM1803"
 PATH       = "/tools/synopsys/verdi/O-2018.09-SP2-11/bin:/tools/synopsys/vcs/O-2018.09-SP2-11/bin:/tools/cadence/XCELIUM1803/tools/bin:/usr/local/bin:/usr/bin:/bin"
 ```
 
-如果 `~/.codex/config.toml` 已存在其他内容，只追加 `mcp_servers.waveform` 这一段即可，不要覆盖已有配置。
+如果 `~/.codex/config.toml` 已存在其他内容，只追加 `mcp_servers.traceweave` 这一段即可，不要覆盖已有配置。
 
 配置后验证：
 
 ```bash
 codex mcp list
-# 应显示 waveform，且 Status 为 enabled
+# 应显示 traceweave，且 Status 为 enabled
 ```
 
 建议再做一次功能验证：
 
 1. 在一个包含 `verif/`、sim log 和 wave 的工程目录启动 `codex`
-2. 直接提一个明确的波形调试请求，例如“调用 waveform MCP，先用 get_sim_paths 看这个 case 的日志和波形”
+2. 直接提一个明确的波形调试请求，例如“调用 TraceWeave MCP，先用 get_sim_paths 看这个 case 的日志和波形”
 3. 确认执行日志里实际出现了 `get_sim_paths`、`parse_sim_log`、`search_signals` 等 MCP tool 调用，而不是只用 shell 手工读文件
 
 ---
@@ -459,8 +459,8 @@ tests/
 # 安装 pytest（只需一次）
 pip3.11 install pytest --user
 
-# 在 waveform_mcp/ 目录下运行全部测试
-cd /home/robin/Projects/mcp/waveform_mcp
+# 在 TraceWeave/ 目录下运行全部测试
+cd /home/robin/Projects/mcp/TraceWeave
 python3.11 -m pytest tests/ -v
 
 # 只跑某个文件

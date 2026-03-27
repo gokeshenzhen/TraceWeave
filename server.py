@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Waveform Analysis MCP Server
+TraceWeave MCP Server
 用于支持 MCP 的调试客户端（例如 Codex、Claude Code）
 
 本服务围绕波形调试工作流提供 MCP tools，包括：
@@ -16,7 +16,7 @@ import json
 import sys
 import os
 
-# 确保 waveform_mcp/ 目录在 Python 路径中
+# 确保 TraceWeave/ 目录在 Python 路径中
 sys.path.insert(0, os.path.dirname(__file__))
 
 from mcp.server import Server
@@ -264,7 +264,7 @@ Waveform debug workflow:
    - Does NOT execute any sub-steps; only reads cached results
 """.strip()
 
-app = Server("waveform-mcp", instructions=SERVER_INSTRUCTIONS)
+app = Server("traceweave", instructions=SERVER_INSTRUCTIONS)
 
 # ── 全局缓存 ──────────────────────────────────────────────────────
 _fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}

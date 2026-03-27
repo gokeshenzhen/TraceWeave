@@ -2,7 +2,7 @@
 
 ## System Shape
 
-Waveform MCP is a workflow-oriented debug server. The core architecture is not
+TraceWeave is a workflow-oriented debug server. The core architecture is not
 just "parse log + parse wave"; it combines workflow gating, source-aware
 analysis, waveform backends, and extended debug capabilities.
 

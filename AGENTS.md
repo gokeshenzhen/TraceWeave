@@ -1,6 +1,6 @@
 # Repository Guidance
 
-## Waveform MCP Usage
+## TraceWeave Usage
 
 当任务涉及仿真日志或波形（VCS/Xcelium log，FSDB/VCD）时，默认工具链使用：
 

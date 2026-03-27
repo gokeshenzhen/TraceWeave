@@ -23,7 +23,7 @@ def _load_wrapper():
     if not os.path.exists(so_path):
         raise RuntimeError(
             f"未找到 libfsdb_wrapper.so：{so_path}\n"
-            f"请在 waveform_mcp/ 目录下执行：bash build_wrapper.sh"
+            f"请在 TraceWeave/ 目录下执行：bash build_wrapper.sh"
         )
     runtime_info = get_fsdb_runtime_info()
     if not runtime_info["enabled"]:

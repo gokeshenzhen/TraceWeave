@@ -598,5 +598,5 @@ make simao_org
 
 *报告生成时间：2026-03-15*
 *AI Agent: Claude Opus 4.6*
-*MCP Server: waveform_mcp (FSDB runtime enabled)*
+*MCP Server: TraceWeave (FSDB runtime enabled)*
 *仿真命令：`make simaow`（执行目录：`sim/rtl_sim/bin/`）*

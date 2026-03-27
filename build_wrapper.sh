@@ -1,7 +1,7 @@
 #!/bin/bash
 # build_wrapper.sh
 # 编译 fsdb_wrapper.cpp → libfsdb_wrapper.so
-# 使用方法：在 waveform_mcp/ 目录下执行 bash build_wrapper.sh
+# 使用方法：在 TraceWeave/ 目录下执行 bash build_wrapper.sh
 
 set -e
 

@@ -36,7 +36,7 @@ CASE_DIR_MAX_DEPTH = 3
 # 自定义报错格式配置文件路径
 # ═══════════════════════════════════════════════════════════════════
 
-# 相对于 waveform_mcp/ 根目录
+# 相对于 TraceWeave/ 根目录
 CUSTOM_PATTERNS_FILE = os.path.join(
     os.path.dirname(__file__), "custom_patterns.yaml"
 )
