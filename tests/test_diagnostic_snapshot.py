@@ -287,6 +287,11 @@ class TestDiagnosticSnapshot:
         assert result.recommended_next.available is False
         assert result.simulator == "xcelium"
         assert len(result.missing_steps) == 3
+        assert {step["tool"] for step in result.missing_steps} == {
+            "build_tb_hierarchy",
+            "parse_sim_log",
+            "recommend_failure_debug_next_steps",
+        }
         assert result.log_analysis.suggested_call["arguments"]["log_path"] == sim.sim_logs[0].path
         assert result.recommended_next.suggested_call is None
 
@@ -531,3 +536,139 @@ class TestDiagnosticSnapshot:
         assert result.structural_scan is not None
         assert result.structural_scan.available is True
         assert result.structural_scan.stale is True
+
+    def test_snapshot_adds_missing_scan_with_failure_context(self):
+        sim = _make_sim_paths_result()
+        hier = _make_hierarchy_result()
+        log = _make_parse_result(total_errors=2)
+        server._result_cache["get_sim_paths"] = sim
+        server._result_cache["build_tb_hierarchy"] = hier
+        server._result_cache["parse_sim_log"] = log
+        server._result_provenance["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": sim.sim_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        server._session_state["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.structural_scan is None
+        assert result.missing_steps[0]["tool"] == "scan_structural_risks"
+        assert result.missing_steps[0]["arguments"] == {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        assert result.missing_steps[0]["reason"] == "结构扫描缺失，推荐分析将退化"
+
+    def test_snapshot_adds_missing_scan_without_failure_context(self):
+        sim = _make_sim_paths_result()
+        hier = _make_hierarchy_result()
+        server._result_cache["get_sim_paths"] = sim
+        server._result_cache["build_tb_hierarchy"] = hier
+        server._result_provenance["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        server._session_state["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        scan_step = next(step for step in result.missing_steps if step["tool"] == "scan_structural_risks")
+        assert scan_step["reason"] == "结构扫描尚未执行"
+
+    def test_snapshot_keeps_workflow_order_when_problem_hints_do_not_match_priority_rule(self):
+        sim = _make_sim_paths_result()
+        hier = _make_hierarchy_result()
+        log = schemas.ParseSimLogResult.model_validate(
+            {
+                **_make_parse_result(total_errors=2).model_dump(),
+                "problem_hints": {
+                    "has_x": False,
+                    "has_z": False,
+                    "first_error_time_ps": 1000,
+                    "error_pattern": "compare failed",
+                },
+            }
+        )
+        server._result_cache["get_sim_paths"] = sim
+        server._result_cache["build_tb_hierarchy"] = hier
+        server._result_cache["parse_sim_log"] = log
+        server._result_provenance["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": sim.sim_logs[0].path,
+            "simulator": sim.simulator,
+        }
+        server._session_state["get_sim_paths"] = {
+            "verif_root": sim.verif_root,
+            "case_dir": sim.case_dir,
+            "simulator": sim.simulator,
+            "compile_log": sim.compile_logs[0].path,
+        }
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": sim.compile_logs[0].path,
+            "simulator": sim.simulator,
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert [step["tool"] for step in result.missing_steps] == [
+            "scan_structural_risks",
+            "recommend_failure_debug_next_steps",
+        ]
+
+    def test_snapshot_does_not_request_scan_when_hierarchy_is_stale(self):
+        _prefill_all()
+        server._result_cache["scan_structural_risks"] = None
+        server._result_provenance["scan_structural_risks"] = None
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": "/tmp/verif/work/other_elab.log",
+            "simulator": "xcelium",
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.hierarchy.stale is True
+        assert all(step["tool"] != "scan_structural_risks" for step in result.missing_steps)

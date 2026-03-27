@@ -88,6 +88,7 @@ class BuildTbHierarchyResult(SchemaModel):
     class_hierarchy: list[str] = Field(default_factory=list)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
     compile_result: dict[str, Any] = Field(default_factory=dict)
+    required_next_call: dict[str, Any] | None = None
     suggested_next: dict[str, Any] | None = None
 
 
@@ -326,6 +327,9 @@ class RecommendNextStepsResult(SchemaModel):
     recommendation_strategy: str | None = None
     failure_window_center_ps: int | None = None
     why: list[str] = Field(default_factory=list)
+    workflow_incomplete: bool = False
+    degraded_reason: Literal["missing_structural_scan"] | None = None
+    required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
 
 

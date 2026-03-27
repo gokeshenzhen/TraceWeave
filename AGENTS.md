@@ -1,5 +1,18 @@
 # Repository Guidance
 
+## Waveform MCP Usage
+
+当任务涉及仿真日志或波形（VCS/Xcelium log，FSDB/VCD）时，默认工具链使用：
+
+`get_sim_paths -> build_tb_hierarchy + scan_structural_risks -> parse_sim_log -> recommend_failure_debug_next_steps`
+
+要求：
+
+- `build_tb_hierarchy` 和 `scan_structural_risks` 基于同一个 `compile_log` 并行执行
+- 默认不应省略 `scan_structural_risks`
+- 仅当用户显式要求跳过时，才允许跳过
+- 在获得 MCP 输出后再进行分析或给出修复建议
+
 ## First-Read Files
 
 For any new session, read these files first to build the project map:

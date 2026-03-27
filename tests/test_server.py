@@ -53,6 +53,14 @@ module_c ERROR unique issue c @ 3 ns
 """
 
 
+class TestScanRequiredNextCallHelpers:
+    def test_build_scan_required_next_call_returns_none_when_compile_log_missing(self):
+        assert server._build_scan_required_next_call(None, "vcs") is None
+
+    def test_build_scan_required_next_call_returns_none_when_simulator_missing(self):
+        assert server._build_scan_required_next_call("/tmp/elab.log", None) is None
+
+
 @pytest.mark.anyio
 class TestDispatchGetSimPaths:
     async def test_returns_discovery_result(self):
@@ -126,6 +134,66 @@ class TestStructuralScannerToolContract:
         )
         assert result["scan_scope"] == "scope1"
         assert result["files_scanned"] == 1
+
+    async def test_build_tb_hierarchy_returns_required_next_call_when_scan_missing(self):
+        with patch.object(server, "parse_compile_log", return_value={"files": []}), patch.object(
+            server,
+            "build_hierarchy",
+            return_value={
+                "project": {"top_module": "top_tb", "simulator": "vcs"},
+                "files": {},
+                "component_tree": {},
+                "class_hierarchy": [],
+                "interfaces": [],
+                "compile_result": {},
+            },
+        ):
+            result = await server._dispatch(
+                "build_tb_hierarchy",
+                {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
+            )
+
+        assert result["required_next_call"] == {
+            "tool": "scan_structural_risks",
+            "arguments": {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
+        }
+        assert result["suggested_next"]["tool"] == "scan_structural_risks"
+        assert result["suggested_next"]["arguments"] == result["required_next_call"]["arguments"]
+
+    async def test_build_tb_hierarchy_clears_required_next_call_when_scan_already_cached(self):
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/elab.log",
+            "simulator": "vcs",
+        }
+        with patch.object(server, "parse_compile_log", return_value={"files": []}), patch.object(
+            server,
+            "build_hierarchy",
+            return_value={
+                "project": {"top_module": "top_tb", "simulator": "vcs"},
+                "files": {},
+                "component_tree": {},
+                "class_hierarchy": [],
+                "interfaces": [],
+                "compile_result": {},
+            },
+        ):
+            result = await server._dispatch(
+                "build_tb_hierarchy",
+                {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
+            )
+
+        assert result["required_next_call"] is None
+        assert result["suggested_next"] is None
 
     async def test_cycle_query_tool_schema_and_dispatch(self):
         tools = await server.list_tools()
@@ -498,6 +566,16 @@ $enddefinitions $end
         )
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+        assert result["workflow_incomplete"] is True
+        assert result["degraded_reason"] == "missing_structural_scan"
+        assert result["required_next_call"] == {
+            "tool": "scan_structural_risks",
+            "arguments": {
+                "compile_log": "/tmp/verif/work/elab.log",
+                "simulator": "vcs",
+            },
+        }
+        assert result["missing_inputs"] == []
 
     async def test_recommend_failure_debug_next_steps_consumes_scan_cache(self, tmp_path):
         _prefill_get_sim_paths_state()
@@ -582,6 +660,9 @@ $enddefinitions $end
 
         assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
         assert result["correlated_structural_risks"][0]["relevance_score"] == 17
+        assert result["workflow_incomplete"] is False
+        assert result["degraded_reason"] is None
+        assert result["required_next_call"] is None
 
     async def test_recommend_failure_debug_next_steps_accepts_scan_cache_with_auto_simulator(self, tmp_path):
         _prefill_get_sim_paths_state()
@@ -666,6 +747,8 @@ $enddefinitions $end
 
         assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
         assert result["correlated_structural_risks"][0]["relevance_score"] == 17
+        assert result["workflow_incomplete"] is False
+        assert result["required_next_call"] is None
 
     async def test_recommend_failure_debug_next_steps_ignores_incompatible_cached_inputs(self, tmp_path):
         _prefill_get_sim_paths_state()
@@ -751,6 +834,16 @@ $enddefinitions $end
         )
 
         assert result["correlated_structural_risks"] == []
+        assert result["workflow_incomplete"] is True
+        assert result["degraded_reason"] == "missing_structural_scan"
+        assert result["required_next_call"] == {
+            "tool": "scan_structural_risks",
+            "arguments": {
+                "compile_log": "/tmp/verif/work/elab.log",
+                "simulator": "vcs",
+            },
+        }
+        assert result["missing_inputs"] == []
 
     async def test_recommend_failure_debug_next_steps_without_top_hint(self, tmp_path):
         _prefill_get_sim_paths_state()
@@ -785,6 +878,223 @@ $enddefinitions $end
         )
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apREQ"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
+
+    async def test_recommend_failure_debug_next_steps_clean_run_is_not_degraded(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "clean.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text("simulation completed cleanly\n")
+        wave_path.write_text("$timescale 1ps $end\n$enddefinitions $end\n#0\n")
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.3",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 0,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 0,
+                "unique_types": 0,
+                "total_groups": 0,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 0,
+                "problem_hints": {"has_x": False, "has_z": False, "error_pattern": None},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_path),
+            "simulator": "vcs",
+        }
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+            },
+        )
+
+        assert result["suspected_failure_class"] == "no_failure_detected"
+        assert result["workflow_incomplete"] is False
+        assert result["degraded_reason"] is None
+        assert result["required_next_call"] is None
+
+    async def test_recommend_failure_debug_next_steps_keeps_required_next_call_null_when_compile_log_unavailable(self, tmp_path):
+        _prefill_get_sim_paths_state(compile_log=None)
+        _prefill_build_tb_hierarchy_state(compile_log=None)
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sva_top.sv", 66: top_tb.sva_top_inst.apREQ: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module dut $end
+$var wire 1 ! req $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["workflow_incomplete"] is True
+        assert result["degraded_reason"] == "missing_structural_scan"
+        assert result["required_next_call"] is None
+
+    async def test_analyze_failures_inserts_step0_when_scan_missing(self):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+
+        class _FakeAnalyzer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze(self, **kwargs):
+                return {
+                    "summary": {},
+                    "focused_group": None,
+                    "focused_event": None,
+                    "log_context": None,
+                    "wave_context": None,
+                    "remaining_groups": 0,
+                    "analysis_guide": {"step1": "one", "step2": "two"},
+                    "problem_hints": None,
+                }
+
+        with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
+            server, "_get_parser", return_value=object()
+        ):
+            result = await server._dispatch(
+                "analyze_failures",
+                {
+                    "log_path": "/tmp/run.log",
+                    "wave_path": "/tmp/wave.vcd",
+                    "simulator": "vcs",
+                    "signal_paths": ["top_tb.sig"],
+                },
+            )
+
+        assert list(result["analysis_guide"].keys())[:2] == ["step0", "step1"]
+        assert result["analysis_guide"]["step0"] == "未执行 scan_structural_risks，当前分析未包含静态结构风险关联。"
+
+    async def test_analyze_failures_skips_step0_when_scan_is_compatible(self):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "vcs",
+        }
+
+        class _FakeAnalyzer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze(self, **kwargs):
+                return {
+                    "summary": {},
+                    "focused_group": None,
+                    "focused_event": None,
+                    "log_context": None,
+                    "wave_context": None,
+                    "remaining_groups": 0,
+                    "analysis_guide": {"step1": "one"},
+                    "problem_hints": None,
+                }
+
+        with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
+            server, "_get_parser", return_value=object()
+        ):
+            result = await server._dispatch(
+                "analyze_failures",
+                {
+                    "log_path": "/tmp/run.log",
+                    "wave_path": "/tmp/wave.vcd",
+                    "simulator": "vcs",
+                    "signal_paths": ["top_tb.sig"],
+                },
+            )
+
+        assert "step0" not in result["analysis_guide"]
+
+    async def test_analyze_failures_keeps_step0_when_scan_is_incompatible(self):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/other_elab.log",
+            "simulator": "vcs",
+        }
+
+        class _FakeAnalyzer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze(self, **kwargs):
+                return {
+                    "summary": {},
+                    "focused_group": None,
+                    "focused_event": None,
+                    "log_context": None,
+                    "wave_context": None,
+                    "remaining_groups": 0,
+                    "analysis_guide": {"step1": "one"},
+                    "problem_hints": None,
+                }
+
+        with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
+            server, "_get_parser", return_value=object()
+        ):
+            result = await server._dispatch(
+                "analyze_failures",
+                {
+                    "log_path": "/tmp/run.log",
+                    "wave_path": "/tmp/wave.vcd",
+                    "simulator": "vcs",
+                    "signal_paths": ["top_tb.sig"],
+                },
+            )
+
+        assert list(result["analysis_guide"].keys())[0] == "step0"
 
     async def test_explain_signal_driver(self, tmp_path):
         _prefill_build_tb_hierarchy_state()
