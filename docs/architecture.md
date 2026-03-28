@@ -29,6 +29,7 @@ Waveform backends
   src/vcd_parser.py
   src/fsdb_parser.py
   src/fsdb_signal_index.py
+  src/cycle_query.py
 
 Extended analysis capabilities
   src/structural_scanner.py

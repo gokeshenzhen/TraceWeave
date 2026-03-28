@@ -16,9 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parent
 LOCAL_FSDB_RUNTIME_DIR = REPO_ROOT / "third_party" / "verdi_runtime" / "linux64"
 FSDB_REQUIRED_LIBS = ("libnsys.so", "libnffr.so")
 
-# case_list 文件路径（相对 verif/）
-CASE_LIST_FILE = "testcase/case_list"
-
 # ═══════════════════════════════════════════════════════════════════
 # 仿真路径自动发现配置
 # ═══════════════════════════════════════════════════════════════════
@@ -128,11 +125,6 @@ def get_fsdb_runtime_info() -> dict:
             f"{LOCAL_FSDB_RUNTIME_DIR}"
         ),
     }
-
-
-def get_case_list(verif_root: str) -> str:
-    """verif/testcase/case_list"""
-    return os.path.join(verif_root, CASE_LIST_FILE)
 
 
 def _missing_fsdb_libs(lib_dir: Path) -> list[str]:

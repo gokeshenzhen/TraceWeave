@@ -32,8 +32,9 @@ For any new session, read these files first to build the project map:
 13. `src/signal_driver.py`
 14. `src/structural_scanner.py`
 15. `src/x_trace.py`
-16. `src/schemas.py`
-17. `src/problem_hints.py`
+16. `src/cycle_query.py`
+17. `src/schemas.py`
+18. `src/problem_hints.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -53,6 +54,7 @@ If the task involves behavior validation or regression checks, also read:
 - `tests/test_signal_driver.py`
 - `tests/test_structural_scanner.py`
 - `tests/test_x_trace.py`
+- `tests/test_cycle_query.py`
 - `tests/test_schemas.py`
 - `tests/test_problem_hints.py`
 - `tests/test_server.py`
@@ -66,6 +68,7 @@ If the task involves behavior validation or regression checks, also read:
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
 - `src/signal_driver.py` backtracks RTL driver from waveform signal paths.
 - `src/structural_scanner.py` and `src/x_trace.py` are first-class extended analysis capabilities.
+- `src/cycle_query.py` provides clock-edge-aligned cycle-level signal sampling for state machines and pipelines.
 - `src/schemas.py` is the single source of truth for all tool output contracts.
 - `src/problem_hints.py` provides lightweight failure symptom annotations.
 - `src/fsdb_parser.py` and `fsdb_wrapper.cpp` define the Python/native FSDB boundary.

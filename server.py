@@ -31,6 +31,7 @@ from config import (
     MAX_CYCLES_PER_QUERY,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
+    get_fsdb_runtime_info,
 )
 from src.log_parser import SimLogParser, get_error_context
 from src.vcd_parser import VCDParser
@@ -45,7 +46,6 @@ from src.signal_driver import explain_signal_driver
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
 from src.cycle_query import get_signals_by_cycle
-from config import get_fsdb_runtime_info
 from pydantic import BaseModel
 import src.schemas as schemas
 

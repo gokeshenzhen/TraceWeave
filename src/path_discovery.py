@@ -17,7 +17,6 @@ from config import (
     CASE_DIR_MAX_DEPTH,
     COMPILE_LOG_PATTERNS,
     DISCOVER_MAX_DEPTH_CASE,
-    DISCOVER_MAX_DEPTH_ROOT,
     get_fsdb_runtime_info,
     MCP_CONFIG_FILE,
     SIM_LOG_PATTERNS,
@@ -287,15 +286,6 @@ def _resolve_config_entries(base_dir: Path, entries: list[Any], kind: str) -> li
                 info["format"] = path.suffix.lstrip(".").lower()
             results.append(info)
     return _dedupe_sorted(results)
-
-
-def _find_case_dirs(verif_root: Path, case_name: str, max_depth: int) -> list[Path]:
-    needle = case_name.lower()
-    matches: list[Path] = []
-    for path in _iter_dirs(verif_root, max_depth):
-        if needle in path.name.lower():
-            matches.append(path)
-    return sorted(matches)
 
 
 def _find_immediate_case_dirs(root: Path) -> list[Path]:

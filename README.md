@@ -51,6 +51,7 @@ TraceWeave/
     ├── signal_driver.py    ← 从波形信号路径回溯最可能的 RTL 驱动位置
     ├── structural_scanner.py ← 源码结构风险扫描
     ├── x_trace.py          ← X/Z 传播链追踪
+    ├── cycle_query.py      ← 按 clock 边沿对齐的周期级信号采样
     ├── schemas.py          ← 结构化输出契约
     └── problem_hints.py    ← failure symptom hints 支撑逻辑
 ```
@@ -262,6 +263,7 @@ codex mcp list
 | `get_signal_at_time` | 查特定时刻单个信号值；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signal_transitions` | 查信号完整跳变历史；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_signals_around_time` | 查多个信号在某时刻的快照；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
+| `get_signals_by_cycle` | 按时钟边沿对齐的周期级多信号采样，适合状态机和流水线逐拍对比；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 | `get_waveform_summary` | 查波形文件基本信息；`.fsdb` 可用性受 `fsdb_runtime.enabled` 约束 |
 
 ### `parse_sim_log` 关键字段
@@ -438,6 +440,7 @@ tests/
 ├── test_signal_driver.py        ← 信号驱动回溯测试
 ├── test_structural_scanner.py   ← 结构风险扫描测试
 ├── test_x_trace.py              ← X/Z 传播链追踪测试
+├── test_cycle_query.py          ← 周期级信号采样测试
 ├── test_schemas.py              ← 输出 schema 验证测试
 ├── test_problem_hints.py        ← problem hints 支撑逻辑测试
 ├── test_server.py               ← MCP server 工具注册测试
@@ -449,7 +452,7 @@ tests/
 **`test_log_parser.py`**
 - 不依赖任何外部文件，内置真实 log 片段直接测试
 - 覆盖：VCS assertion fail 正则、Xcelium assertion fail 正则、UVM_ERROR/FATAL 解析、时间单位换算（ns→ps）、报错按时间排序
-- 同时用真实 `run.log` 做集成验证，断言 UVM_ERROR 数量与 log 末尾汇总一致
+- 如果本地存在真实 `run.log` 则额外做集成验证，断言 UVM_ERROR 数量与 log 末尾汇总一致（否则自动跳过）
 
 **`test_fsdb_parser.py`**
 - 依赖真实 `top_tb.fsdb`，验证 C++ wrapper 调用链路完整
