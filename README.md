@@ -1,21 +1,19 @@
-# TraceWeave
+# 🪡 TraceWeave
 
-## 公众号
+<p align="center">
+  <img src="assets/logo.png" alt="TraceWeave" width="160">
+</p>
 
-欢迎关注我的公众号：
+<p align="center">
+  <strong>MCP server for Claude Code to debug simulation failures via log parsing and waveform analysis</strong>
+</p>
 
-![微信公众号二维码](assets/QR.png)
-
-## Architecture
-
-- Architecture map: `docs/architecture.md`
-- New session bootstrap: read `AGENTS.md` first, then follow its first-read file list
-- Fast path for code understanding:
-  - `server.py`
-  - `config.py`
-  - `src/analyzer.py`
-  - `src/log_parser.py`
-  - `src/fsdb_parser.py`
+<p align="center">
+  <a href="https://github.com/gokeshenzhen/TraceWeave/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gokeshenzhen/TraceWeave/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache 2.0 License"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"></a>
+  <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
+</p>
 
 TraceWeave is a workflow-oriented debug server rather than a loose set of
 parsers. The main product shape is:
@@ -27,6 +25,21 @@ parsers. The main product shape is:
 - Failure-centric recommendation plus extended analyses such as structural risk
   scanning and X/Z trace
 - Structured result contracts for tool outputs
+
+[Architecture](docs/architecture.md) · [安装](#安装) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [工具速查](#工具速查) · [单元测试](#单元测试) · [公众号](#公众号)
+
+---
+
+## Architecture
+
+- Architecture map: `docs/architecture.md`
+- New session bootstrap: read `AGENTS.md` first, then follow its first-read file list
+- Fast path for code understanding:
+  - `server.py`
+  - `config.py`
+  - `src/analyzer.py`
+  - `src/log_parser.py`
+  - `src/fsdb_parser.py`
 
 ## 文件结构
 
@@ -74,6 +87,7 @@ pip install mcp pyyaml --user
 如果两者都没有，本 MCP 仍可工作，但**不支持 FSDB 解析**；后续工作流应优先使用 `.vcd` 波形。
 
 准备仓库本地 runtime：
+
 ```bash
 export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
 bash scripts/link_verdi_runtime.sh
@@ -82,6 +96,7 @@ bash scripts/link_verdi_runtime.sh
 目录约定见 [`third_party/verdi_runtime/README.md`](/home/robin/Projects/mcp/TraceWeave/third_party/verdi_runtime/README.md)。
 
 验证 FSDB runtime 可以加载：
+
 ```bash
 python3 -c "
 import ctypes, os
@@ -131,6 +146,7 @@ print('FSDB runtime 加载 OK')
 > 必须在 env 里显式写环境变量，Claude Code 不会自动 source ~/.bashrc
 
 配置后验证：
+
 ```bash
 claude mcp list
 # 应显示 traceweave (connected)
@@ -165,7 +181,7 @@ codex mcp list
 建议再做一次功能验证：
 
 1. 在一个包含 `verif/`、sim log 和 wave 的工程目录启动 `codex`
-2. 直接提一个明确的波形调试请求，例如“调用 TraceWeave MCP，先用 get_sim_paths 看这个 case 的日志和波形”
+2. 直接提一个明确的波形调试请求，例如"调用 TraceWeave MCP，先用 get_sim_paths 看这个 case 的日志和波形"
 3. 确认执行日志里实际出现了 `get_sim_paths`、`parse_sim_log`、`search_signals` 等 MCP tool 调用，而不是只用 shell 手工读文件
 
 ---
@@ -500,3 +516,13 @@ python3.11 -m pytest tests/ -v
 | `1661.000 ns` | `1661000 ps`（× 1000）|
 | `270000 ps` | `270000 ps`（不变）|
 | `270 NS`（Xcelium）| `270000 ps`（× 1000）|
+
+---
+
+## 公众号
+
+欢迎关注我的公众号：
+
+<p align="center">
+  <img src="assets/QR.png" alt="微信公众号二维码" width="200">
+</p>
