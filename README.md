@@ -1,4 +1,4 @@
-# 🪡 TraceWeave
+# 🐙 TraceWeave
 
 <p align="center">
   <img src="assets/logo.png" alt="TraceWeave" width="160">
@@ -93,7 +93,7 @@ export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
 bash scripts/link_verdi_runtime.sh
 ```
 
-目录约定见 [`third_party/verdi_runtime/README.md`](/home/robin/Projects/mcp/TraceWeave/third_party/verdi_runtime/README.md)。
+目录约定见 [`third_party/verdi_runtime/README.md`](third_party/verdi_runtime/README.md)（此目录需本地运行 `link_verdi_runtime.sh` 生成，不包含在仓库中）。
 
 验证 FSDB runtime 可以加载：
 
