@@ -24,7 +24,7 @@ TraceWeave is a workflow-oriented debug server rather than a loose collection of
 - Failure-centric recommendations, structural risk scanning, and X/Z propagation tracing
 - Structured output schemas designed for MCP clients
 
-[Architecture](docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing)
+[Architecture](docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing) · [WeChat](#wechat)
 
 ## Architecture
 
@@ -234,3 +234,11 @@ Recommended change flow:
 2. Run the relevant tests first.
 3. Run the full suite if the change affects shared behavior.
 4. Restart the MCP client so it reconnects to the updated server.
+
+## WeChat
+
+Follow the WeChat public account:
+
+<p align="center">
+  <img src="assets/QR.png" alt="WeChat public account QR code" width="200">
+</p>
