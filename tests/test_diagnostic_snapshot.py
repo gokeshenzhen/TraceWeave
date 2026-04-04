@@ -142,6 +142,7 @@ def _make_parse_result(total_errors: int = 3) -> schemas.ParseSimLogResult:
             "first_error_time_ps": 1000 if total_errors else None,
             "error_pattern": "compare failed" if total_errors else None,
         },
+        "auto_diff": None,
     })
 
 
@@ -314,6 +315,48 @@ class TestDiagnosticSnapshot:
         assert result.total_errors == 3
         assert result.top_module == "top_tb"
         assert result.missing_steps is None
+
+    def test_log_summary_reports_auto_diff_when_present(self):
+        _prefill_all()
+        server._result_cache["parse_sim_log"] = schemas.ParseSimLogResult.model_validate(
+            {
+                **_make_parse_result().model_dump(),
+                "auto_diff": {
+                    "base_summary": {"total_events": 3, "unique_groups": 1, "groups": {"UVM_ERROR [TOP]": 3}},
+                    "new_summary": {"total_events": 2, "unique_groups": 1, "groups": {"UVM_ERROR [TOP]": 2}},
+                    "problem_hints_comparison": {
+                        "base": {"has_x": False, "has_z": False, "first_error_time_ps": 1000, "error_pattern": None},
+                        "new": {"has_x": False, "has_z": False, "first_error_time_ps": 1000, "error_pattern": None},
+                        "x_resolved": False,
+                        "z_resolved": False,
+                        "x_introduced": False,
+                        "z_introduced": False,
+                        "error_pattern_changed": False,
+                        "error_pattern_transition": None,
+                        "first_error_time_shift_ps": 0,
+                        "first_error_time_direction": "unchanged",
+                    },
+                    "resolved_events": [{"event_id": "resolved-1"}],
+                    "persistent_events": [],
+                    "new_events": [{"event_id": "introduced-1"}, {"event_id": "introduced-2"}],
+                    "comparison_notes": [],
+                    "convergence_summary": "1 resolved, 2 new",
+                },
+            }
+        )
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.log_analysis.summary["auto_diff_available"] is True
+        assert result.log_analysis.summary["auto_diff_resolved_count"] == 1
+        assert result.log_analysis.summary["auto_diff_introduced_count"] == 2
+
+    def test_log_summary_reports_auto_diff_false_when_absent(self):
+        _prefill_all()
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.log_analysis.summary["auto_diff_available"] is False
 
     def test_cascade_invalidation(self):
         _prefill_all()

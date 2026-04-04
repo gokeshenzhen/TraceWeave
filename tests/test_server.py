@@ -241,6 +241,204 @@ class TestStructuralScannerToolContract:
 
 @pytest.mark.anyio
 class TestDispatchParseSimLog:
+    async def test_first_parse_omits_auto_diff(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result.auto_diff is None
+        finally:
+            Path(log_path).unlink()
+
+    async def test_second_parse_same_log_returns_auto_diff_when_file_changed(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = Path(handle.name)
+
+        try:
+            first = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+            assert first.auto_diff is None
+
+            stat = log_path.stat()
+            log_path.write_text("module_b ERROR unique issue b @ 2 ns\n")
+            os.utime(log_path, (stat.st_atime, stat.st_mtime + 1))
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            assert second["auto_diff"]["base_summary"]["total_events"] == 1
+            assert second["auto_diff"]["new_summary"]["total_events"] == 1
+            assert len(second["auto_diff"]["resolved_events"]) == 1
+            assert len(second["auto_diff"]["new_events"]) == 1
+            assert second["auto_diff"]["persistent_events"] == []
+        finally:
+            log_path.unlink()
+
+    async def test_second_parse_same_log_without_change_omits_auto_diff(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = handle.name
+
+        try:
+            await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert second.auto_diff is None
+        finally:
+            Path(log_path).unlink()
+
+    async def test_second_parse_different_log_omits_auto_diff(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as first_handle:
+            first_handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            first_log = first_handle.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as second_handle:
+            second_handle.write("module_b ERROR unique issue b @ 2 ns\n")
+            second_log = second_handle.name
+
+        try:
+            await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": first_log,
+                    "simulator": "vcs",
+                },
+            )
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": second_log,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert second.auto_diff is None
+        finally:
+            Path(first_log).unlink()
+            Path(second_log).unlink()
+
+    async def test_second_parse_same_log_with_different_simulator_omits_auto_diff(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = handle.name
+
+        try:
+            await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            stat = os.stat(log_path)
+            Path(log_path).write_text("module_b ERROR unique issue b @ 2 ns\n")
+            os.utime(log_path, (stat.st_atime, stat.st_mtime + 1))
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "xcelium",
+                },
+            )
+
+            assert second.auto_diff is None
+        finally:
+            Path(log_path).unlink()
+
+    async def test_auto_diff_uses_untruncated_failure_events(self):
+        _prefill_get_sim_paths_state()
+        repeated_before = "\n".join(
+            [
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 1 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 2 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 3 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 4 ns: reporter [TOP] repeated issue",
+            ]
+        ) + "\n"
+        repeated_after = "\n".join(
+            [
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 1 ns: reporter [TOP] repeated issue",
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 2 ns: reporter [TOP] repeated issue",
+            ]
+        ) + "\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(repeated_before)
+            log_path = Path(handle.name)
+
+        try:
+            first = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                    "detail_level": "compact",
+                    "max_events_per_group": 1,
+                },
+            )
+            assert first["failure_events_returned"] == 1
+
+            stat = log_path.stat()
+            log_path.write_text(repeated_after)
+            os.utime(log_path, (stat.st_atime, stat.st_mtime + 1))
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                    "detail_level": "compact",
+                    "max_events_per_group": 1,
+                },
+            )
+
+            assert second["failure_events_returned"] == 1
+            assert second["auto_diff"]["base_summary"]["total_events"] == 4
+            assert second["auto_diff"]["new_summary"]["total_events"] == 2
+            assert len(second["auto_diff"]["resolved_events"]) == 2
+            assert len(second["auto_diff"]["persistent_events"]) == 2
+        finally:
+            log_path.unlink()
+
     async def test_forwards_max_groups(self):
         _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:

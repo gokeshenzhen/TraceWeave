@@ -33,7 +33,7 @@ from config import (
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
 )
-from src.log_parser import SimLogParser, get_error_context
+from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
@@ -237,6 +237,9 @@ Waveform debug workflow:
    - first_group_context contains ~200 lines of raw log text around the first error.
      Use get_error_context only for other groups.
    - If previous_log_detected is true, consider diff_sim_failure_results early.
+   - When parse_sim_log returns auto_diff, it contains a diff against the previous
+     parse of the same log. Use it to verify which failures were resolved or
+     introduced by the latest code change. Do not ignore resolved/introduced counts.
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="compact".
    - Default detail_level is "compact" which limits failure_events per group for manageable output.
 
@@ -1033,7 +1036,7 @@ def _extract_hierarchy_summary(result: schemas.BuildTbHierarchyResult) -> dict:
 
 
 def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
-    return {
+    summary = {
         "log_file": result.log_file,
         "runtime_total_errors": result.runtime_total_errors,
         "group_count": len(result.groups),
@@ -1041,6 +1044,17 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
         "first_group_signature": result.groups[0].signature if result.groups else None,
         "previous_log_detected": result.previous_log_detected,
     }
+    if result.auto_diff is not None:
+        summary.update(
+            {
+                "auto_diff_available": True,
+                "auto_diff_resolved_count": len(result.auto_diff.resolved_events),
+                "auto_diff_introduced_count": len(result.auto_diff.new_events),
+            }
+        )
+    else:
+        summary["auto_diff_available"] = False
+    return summary
 
 
 def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) -> dict:
@@ -1179,11 +1193,6 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
         return {
             "compile_log": args.get("compile_log"),
             "simulator": result.project.get("simulator"),
-        }
-    if tool_name == "parse_sim_log":
-        return {
-            "log_path": result.log_file,
-            "simulator": result.simulator,
         }
     if tool_name == "scan_structural_risks":
         return {
@@ -1467,6 +1476,9 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
 
 
 def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
+    prev_provenance = _result_provenance.get("parse_sim_log")
+    log_mtime = os.path.getmtime(args["log_path"])
+    log_size = os.path.getsize(args["log_path"])
     parser = SimLogParser(args["log_path"], args["simulator"])
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
@@ -1531,9 +1543,36 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             problem_hints.has_z,
         )
     validated = schemas.ParseSimLogResult.model_validate(summary)
+    auto_diff = None
+    if (
+        prev_provenance is not None
+        and isinstance(prev_provenance.get("all_failure_events"), list)
+        and prev_provenance.get("simulator") == validated.simulator
+        and _same_realpath(prev_provenance.get("log_path"), validated.log_file)
+        and (
+            prev_provenance.get("log_mtime") != log_mtime
+            or prev_provenance.get("log_size") != log_size
+        )
+    ):
+        auto_diff = diff_failure_events(
+            prev_provenance["all_failure_events"],
+            all_events,
+        )
+        validated = schemas.ParseSimLogResult.model_validate(
+            {
+                **validated.model_dump(exclude_none=True),
+                "auto_diff": auto_diff,
+            }
+        )
     _invalidate_downstream("parse_sim_log")
     _result_cache["parse_sim_log"] = validated
-    _result_provenance["parse_sim_log"] = _build_result_provenance("parse_sim_log", args, validated)
+    _result_provenance["parse_sim_log"] = {
+        "log_path": validated.log_file,
+        "simulator": validated.simulator,
+        "all_failure_events": all_events,
+        "log_mtime": log_mtime,
+        "log_size": log_size,
+    }
     return validated
 
 

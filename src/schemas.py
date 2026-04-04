@@ -155,6 +155,7 @@ class ParseSimLogResult(SchemaModel):
     suggested_followup_tool: str | None = None
     first_group_context: ErrorContextResult | None = None
     problem_hints: ProblemHints | None = None
+    auto_diff: DiffResult | None = None
 
 
 class ErrorContextResult(SchemaModel):
