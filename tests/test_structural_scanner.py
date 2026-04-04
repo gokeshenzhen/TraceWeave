@@ -161,5 +161,5 @@ class TestStructuralScanner:
         assert len(result["skipped_files"]) == 1
 
     def test_rejects_unknown_category(self):
-        with pytest.raises(ValueError, match="未知 categories"):
+        with pytest.raises(ValueError, match="Unknown categories"):
             scan_structural_risks("/tmp/compile.log", "vcs", categories=["not_real"])

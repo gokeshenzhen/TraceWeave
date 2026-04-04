@@ -996,7 +996,9 @@ $enddefinitions $end
             )
 
         assert list(result["analysis_guide"].keys())[:2] == ["step0", "step1"]
-        assert result["analysis_guide"]["step0"] == "未执行 scan_structural_risks，当前分析未包含静态结构风险关联。"
+        assert result["analysis_guide"]["step0"] == (
+            "scan_structural_risks has not been run, so this analysis does not include structural risk correlation."
+        )
 
     async def test_analyze_failures_skips_step0_when_scan_is_compatible(self):
         _prefill_get_sim_paths_state()
@@ -1298,7 +1300,7 @@ $enddefinitions $end
 @pytest.mark.anyio
 class TestCallToolErrors:
     async def test_fsdb_runtime_error_is_structured(self):
-        with patch("server._dispatch", side_effect=RuntimeError("FSDB 解析不可用：runtime missing")):
+        with patch("server._dispatch", side_effect=RuntimeError("FSDB parsing unavailable: runtime missing")):
             result = await server.call_tool("search_signals", {"wave_path": "/tmp/a.fsdb", "keyword": "sig"})
 
         payload = result[0].text

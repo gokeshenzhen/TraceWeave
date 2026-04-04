@@ -1,6 +1,6 @@
 """
 path_discovery.py
-自动发现 verif/ 下的编译日志、仿真日志和波形文件。
+Auto-discover compile logs, simulation logs, and waveform files under verif/.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ _EXTENDED_LOG_PHASE_SCAN_LINES = 300
 def discover_sim_paths(verif_root: str, case_name: str | None = None) -> dict[str, Any]:
     root = Path(verif_root).expanduser().resolve()
     if not root.is_dir():
-        raise NotADirectoryError(f"verif_root 不是目录: {verif_root}")
+        raise NotADirectoryError(f"verif_root is not a directory: {verif_root}")
 
     config_match = _load_mcp_config(root)
     if config_match is not None:
@@ -144,7 +144,7 @@ def _load_mcp_config(start_dir: Path) -> tuple[Path, dict[str, Any]] | None:
             with config_path.open("r", encoding="utf-8") as handle:
                 loaded = yaml.safe_load(handle) or {}
             if not isinstance(loaded, dict):
-                raise ValueError(f"{config_path} 必须是 YAML object")
+                raise ValueError(f"{config_path} must contain a YAML object")
             return current, loaded
         if current.parent == current:
             return None

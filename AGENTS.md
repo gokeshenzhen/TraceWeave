@@ -2,16 +2,16 @@
 
 ## TraceWeave Usage
 
-当任务涉及仿真日志或波形（VCS/Xcelium log，FSDB/VCD）时，默认工具链使用：
+When the task involves simulation logs or waveforms (VCS/Xcelium logs, FSDB/VCD), the default toolchain is:
 
 `get_sim_paths -> build_tb_hierarchy + scan_structural_risks -> parse_sim_log -> recommend_failure_debug_next_steps`
 
-要求：
+Rules:
 
-- `build_tb_hierarchy` 和 `scan_structural_risks` 基于同一个 `compile_log` 并行执行
-- 默认不应省略 `scan_structural_risks`
-- 仅当用户显式要求跳过时，才允许跳过
-- 在获得 MCP 输出后再进行分析或给出修复建议
+- `build_tb_hierarchy` and `scan_structural_risks` must run in parallel on the same `compile_log`
+- `scan_structural_risks` should not be skipped by default
+- It may only be skipped if the user explicitly asks to skip it
+- Do not analyze or recommend fixes before MCP output is available
 
 ## First-Read Files
 
@@ -66,13 +66,13 @@ If the task involves behavior validation or regression checks, also read:
 - `src/path_discovery.py` owns compile/sim/wave path discovery.
 - `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction.
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
-- `src/signal_driver.py` backtracks RTL driver from waveform signal paths.
-- `src/structural_scanner.py` and `src/x_trace.py` are first-class extended analysis capabilities.
-- `src/cycle_query.py` provides clock-edge-aligned cycle-level signal sampling for state machines and pipelines.
-- `src/schemas.py` is the single source of truth for all tool output contracts.
+- `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.
+- `src/structural_scanner.py` and `src/x_trace.py` are first-class analysis capabilities.
+- `src/cycle_query.py` provides cycle-aligned signal sampling.
+- `src/schemas.py` is the single source of truth for tool output contracts.
 - `src/problem_hints.py` provides lightweight failure symptom annotations.
 - `src/fsdb_parser.py` and `fsdb_wrapper.cpp` define the Python/native FSDB boundary.
-- `config.py` centralizes environment-sensitive paths and discovery/behavior constants.
+- `config.py` centralizes environment-sensitive paths and behavior constants.
 
 ## Working Rule
 

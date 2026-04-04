@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 TraceWeave MCP Server
-用于支持 MCP 的调试客户端（例如 Codex、Claude Code）
+For MCP-compatible debug clients such as Codex and Claude Code.
 
-本服务围绕波形调试工作流提供 MCP tools，包括：
-- 路径发现和 session/workflow gate
-- compile/sim log 解析与 failure normalization
-- testbench hierarchy、源码/driver 关联分析
-- VCD/FSDB 波形查询与信号搜索
-- failure recommendation、结构风险扫描和 X/Z trace
+This server provides waveform-debug workflow tools, including:
+- path discovery and session/workflow gating
+- compile/sim log parsing and failure normalization
+- testbench hierarchy and source/driver correlation
+- VCD/FSDB waveform queries and signal search
+- failure recommendation, structural risk scanning, and X/Z trace
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import json
 import sys
 import os
 
-# 确保 TraceWeave/ 目录在 Python 路径中
+# Ensure the TraceWeave repo root is on the Python path.
 sys.path.insert(0, os.path.dirname(__file__))
 
 from mcp.server import Server
@@ -50,7 +50,7 @@ from pydantic import BaseModel
 import src.schemas as schemas
 
 
-# ── Session 状态机：工作流前置条件门禁 ──────────────────────────────
+# Session state and workflow prerequisite gating.
 _session_state: dict[str, dict | None] = {
     "get_sim_paths": None,
     "build_tb_hierarchy": None,
@@ -266,7 +266,7 @@ Waveform debug workflow:
 
 app = Server("traceweave", instructions=SERVER_INSTRUCTIONS)
 
-# ── 全局缓存 ──────────────────────────────────────────────────────
+# Global parser cache.
 _fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
 _parser_cache: dict[str, tuple[tuple[int, int], object]] = {}          # wave_path → ((mtime_ns, size), parser)
 
@@ -288,7 +288,7 @@ def _dispose_cached_object(obj: object):
 
 
 def _get_parser(wave_path: str):
-    """返回缓存的 parser 实例，避免 VCD 重复解析 / FSDB 重复打开"""
+    """Return a cached parser instance to avoid reparsing VCDs or reopening FSDBs."""
     signature = _get_wave_signature(wave_path)
     cached = _parser_cache.get(wave_path)
     if cached is not None and cached[0] == signature:
@@ -301,13 +301,13 @@ def _get_parser(wave_path: str):
     elif ext == "fsdb":
         parser = FSDBParser(wave_path)
     else:
-        raise ValueError(f"不支持的波形格式: .{ext}")
+        raise ValueError(f"Unsupported waveform format: .{ext}")
     _parser_cache[wave_path] = (signature, parser)
     return parser
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Tool 定义
+# Tool definitions
 # ═══════════════════════════════════════════════════════════════════
 
 @app.list_tools()
@@ -317,16 +317,16 @@ async def list_tools():
         Tool(
             name="get_sim_paths",
             description=(
-                "自动发现 verif 目录下的编译日志、仿真日志和波形文件。"
-                "case_name 可选；省略时返回可用 case 列表。"
+                "Discover compile logs, simulation logs, and waveform files under a verif directory. "
+                "If case_name is omitted, the tool returns available cases."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "verif_root": {"type": "string",
-                                   "description": "项目的 verif/ 目录绝对路径，如 /home/robin/Projects/i2c_lib/verif"},
+                                   "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif"},
                     "case_name":  {"type": "string",
-                                   "description": "可选，case 名称，如 case0（对应 make SV_CASE=case0）"},
+                                   "description": "Optional case name, for example case0 (matching make SV_CASE=case0)"},
                 },
                 "required": ["verif_root"],
             },
@@ -335,30 +335,30 @@ async def list_tools():
         Tool(
             name="parse_sim_log",
             description=(
-                "解析 VCS 或 Xcelium 仿真 log，返回按 signature 分组的报错摘要。"
-                "simulator 必传，不再自动识别。"
-                "自动附带首个 error group 前后各 100 行的 log context（first_group_context 字段），"
-                "其余 group 按需调 get_error_context。"
+                "Parse a VCS or Xcelium simulation log and return grouped runtime failures by signature. "
+                "The simulator argument is required and is not auto-detected here. "
+                "The first error group automatically includes about 100 lines of surrounding log context "
+                "in first_group_context; use get_error_context for other groups."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":  {"type": "string", "description": "仿真 log 文件绝对路径（irun.log）"},
+                    "log_path":  {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
                     "max_groups": {
                         "type": "integer",
-                        "description": f"最多返回多少个 error group，默认 {DEFAULT_MAX_GROUPS}",
+                        "description": f"Maximum number of error groups to return. Default: {DEFAULT_MAX_GROUPS}",
                         "default": DEFAULT_MAX_GROUPS,
                     },
                     "detail_level": {
                         "type": "string",
                         "enum": ["summary", "compact", "full"],
-                        "description": f"返回详细程度，默认 {DEFAULT_DETAIL_LEVEL}",
+                        "description": f"Detail level to return. Default: {DEFAULT_DETAIL_LEVEL}",
                         "default": DEFAULT_DETAIL_LEVEL,
                     },
                     "max_events_per_group": {
                         "type": "integer",
-                        "description": f"compact/full 降级时每个 group 最多返回几条 failure_event，默认 {DEFAULT_MAX_EVENTS_PER_GROUP}",
+                        "description": f"Maximum failure_events returned per group in compact/full modes. Default: {DEFAULT_MAX_EVENTS_PER_GROUP}",
                         "default": DEFAULT_MAX_EVENTS_PER_GROUP,
                     },
                 },
@@ -369,16 +369,15 @@ async def list_tools():
         Tool(
             name="diff_sim_failure_results",
             description=(
-                "比较两次仿真 log 的标准化 failure_event，"
-                "输出已解决、持续存在和新增的失败。"
-                "增强输出包含：问题类型变化、X/Z 消失/出现、"
-                "首次失败时间移动、收敛趋势总结。"
+                "Compare normalized failure events from two simulation logs. "
+                "Returns resolved, persistent, and newly introduced failures, plus changes in failure type, "
+                "X/Z presence, first-failure timing, and a convergence summary."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "base_log_path": {"type": "string", "description": "基线仿真 log"},
-                    "new_log_path": {"type": "string", "description": "新仿真 log"},
+                    "base_log_path": {"type": "string", "description": "Baseline simulation log"},
+                    "new_log_path": {"type": "string", "description": "New simulation log"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
                 },
                 "required": ["base_log_path", "new_log_path", "simulator"],
@@ -388,22 +387,22 @@ async def list_tools():
         Tool(
             name="get_error_context",
             description=(
-                "根据报错行号，从仿真 log 中提取前后 N 行原始文本。"
-                "通常配合 parse_sim_log 返回的 first_line 使用。"
+                "Extract raw log text around a given error line. "
+                "Typically used with first_line returned by parse_sim_log."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path": {"type": "string", "description": "仿真 log 文件绝对路径（irun.log）"},
-                    "line": {"type": "integer", "description": "中心报错行号"},
+                    "log_path": {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
+                    "line": {"type": "integer", "description": "Center error line number"},
                     "before": {
                         "type": "integer",
-                        "description": f"向前取多少行，默认 {DEFAULT_LOG_CONTEXT_BEFORE}",
+                        "description": f"Number of lines before the target line. Default: {DEFAULT_LOG_CONTEXT_BEFORE}",
                         "default": DEFAULT_LOG_CONTEXT_BEFORE,
                     },
                     "after": {
                         "type": "integer",
-                        "description": f"向后取多少行，默认 {DEFAULT_LOG_CONTEXT_AFTER}",
+                        "description": f"Number of lines after the target line. Default: {DEFAULT_LOG_CONTEXT_AFTER}",
                         "default": DEFAULT_LOG_CONTEXT_AFTER,
                     },
                 },
@@ -414,17 +413,17 @@ async def list_tools():
         Tool(
             name="search_signals",
             description=(
-                "在波形文件（FSDB/VCD）中搜索包含关键字的信号，返回完整层级路径。"
-                "当客户端已知信号名但不知道完整层级路径时使用。"
-                "FSDB 通过遍历 scope 树建索引，不读 value change，适合 GB 级文件。"
-                "对 .fsdb 的支持受 get_sim_paths 返回的 fsdb_runtime.enabled 约束。"
+                "Search for signals in a waveform file (FSDB/VCD) and return full hierarchical paths. "
+                "Use this when the client knows a leaf signal name but not the full path. "
+                "FSDB search uses a scope-tree index and does not read value changes, so it scales well to large files. "
+                "FSDB support depends on fsdb_runtime.enabled returned by get_sim_paths."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "波形文件绝对路径"},
-                    "keyword":   {"type": "string", "description": "信号名关键字，如 s_bits、clk、data"},
-                    "max_results": {"type": "integer", "description": "最多返回结果数，默认 50",
+                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
+                    "keyword":   {"type": "string", "description": "Signal keyword, for example s_bits, clk, or data"},
+                    "max_results": {"type": "integer", "description": "Maximum number of matches to return. Default: 50",
                                     "default": 50},
                 },
                 "required": ["wave_path", "keyword"],
@@ -433,14 +432,14 @@ async def list_tools():
 
         Tool(
             name="get_signal_at_time",
-            description="查询波形文件中某个信号在指定时刻的值（ps 精度）。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
+            description="Query a signal value in a waveform file at a specific time in ps. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "wave_path":   {"type": "string"},
                     "signal_path": {"type": "string",
-                                    "description": "完整层级路径，如 top_tb.dut.s_bits"},
-                    "time_ps":     {"type": "integer", "description": "查询时刻（ps）"},
+                                    "description": "Full hierarchical path, for example top_tb.dut.s_bits"},
+                    "time_ps":     {"type": "integer", "description": "Query time in ps"},
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
             },
@@ -448,7 +447,7 @@ async def list_tools():
 
         Tool(
             name="get_signal_transitions",
-            description="获取信号在时间范围内的所有跳变记录。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
+            description="Return all transitions for a signal over a time range. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -456,7 +455,7 @@ async def list_tools():
                     "signal_path":   {"type": "string"},
                     "start_time_ps": {"type": "integer", "default": 0},
                     "end_time_ps":   {"type": "integer", "default": -1,
-                                      "description": "-1 表示到仿真结束"},
+                                      "description": "-1 means through the end of simulation"},
                 },
                 "required": ["wave_path", "signal_path"],
             },
@@ -465,23 +464,23 @@ async def list_tools():
         Tool(
             name="get_signals_around_time",
             description=(
-                "获取多个信号在指定时刻前后窗口内的值和跳变。"
-                "常用于：已知报错时刻，查看相关信号的上下文。"
-                "对 .fsdb 的支持受 fsdb_runtime.enabled 约束。"
+                "Return values and transitions for multiple signals around a target time window. "
+                "Commonly used to inspect signal context around a known failure timestamp. "
+                "FSDB support depends on fsdb_runtime.enabled."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "wave_path":     {"type": "string"},
                     "signal_paths":  {"type": "array", "items": {"type": "string"},
-                                      "description": "信号完整路径列表"},
-                    "center_time_ps":{"type": "integer", "description": "中心时刻（ps），通常为报错时刻"},
+                                      "description": "List of full hierarchical signal paths"},
+                    "center_time_ps":{"type": "integer", "description": "Center time in ps, usually the failure timestamp"},
                     "window_ps":     {"type": "integer",
-                                      "description": f"前后各取多少 ps，默认 {DEFAULT_WAVE_WINDOW_PS}",
+                                      "description": f"Window size before and after the center time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
                                       "default": DEFAULT_WAVE_WINDOW_PS},
                     "extra_transitions": {
                         "type": "integer",
-                        "description": f"窗口前额外回溯多少次跳变，默认 {DEFAULT_EXTRA_TRANSITIONS}",
+                        "description": f"Extra transitions to include before the time window. Default: {DEFAULT_EXTRA_TRANSITIONS}",
                         "default": DEFAULT_EXTRA_TRANSITIONS,
                     },
                 },
@@ -492,43 +491,43 @@ async def list_tools():
         Tool(
             name="get_signals_by_cycle",
             description=(
-                "按时钟边沿对齐，返回多个信号在指定周期范围内的逐周期值表。"
-                "适合状态机、流水线、算法核的 round-by-round 对拍。"
+                "Return cycle-by-cycle sampled values for multiple signals aligned to a clock edge. "
+                "Useful for state machines, pipelines, and round-by-round algorithm checks."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "波形文件绝对路径"},
+                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
                     "clock_path": {
                         "type": "string",
-                        "description": "clock 信号完整层级路径，如 top_tb.des_clk",
+                        "description": "Full hierarchical clock path, for example top_tb.des_clk",
                     },
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge"],
-                        "description": "采样边沿，默认 posedge",
+                        "description": "Sampling edge. Default: posedge",
                         "default": "posedge",
                     },
                     "signal_paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "需要采样的信号完整路径列表",
+                        "description": "List of full hierarchical signal paths to sample",
                     },
                     "start_cycle": {
                         "type": "integer",
-                        "description": "起始周期编号（0-based），默认 0",
+                        "description": "Starting cycle index (0-based). Default: 0",
                         "default": 0,
                         "minimum": 0,
                     },
                     "num_cycles": {
                         "type": "integer",
-                        "description": f"采样周期数，默认 16；服务端单次最多执行 {MAX_CYCLES_PER_QUERY} 个周期，超出部分会被显式裁剪",
+                        "description": f"Number of cycles to sample. Default: 16. The server caps a single query at {MAX_CYCLES_PER_QUERY} cycles.",
                         "default": 16,
                         "minimum": 0,
                     },
                     "sample_offset_ps": {
                         "type": "integer",
-                        "description": "采样时刻相对于 clock edge 的偏移(ps)，默认 1（捕获 delta 更新后的寄存器值）",
+                        "description": "Sampling offset relative to the clock edge in ps. Default: 1, to capture post-delta register values.",
                         "default": 1,
                         "minimum": 0,
                     },
@@ -539,7 +538,7 @@ async def list_tools():
 
         Tool(
             name="get_waveform_summary",
-            description="获取波形文件基本信息：格式、仿真时长、顶层模块等。对 .fsdb 的支持受 fsdb_runtime.enabled 约束。",
+            description="Return basic waveform metadata such as format, duration, and top modules. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -552,14 +551,14 @@ async def list_tools():
         Tool(
             name="build_tb_hierarchy",
             description=(
-                "从编译阶段 log 自动提取用户文件并扫描源代码，构建完整 testbench hierarchy。"
-                "返回 top module、文件分类、component tree、class hierarchy、interfaces。"
+                "Extract user files from a compile or elaborate log, scan source files, and build the full testbench hierarchy. "
+                "Returns top module, file grouping, component tree, class hierarchy, and interfaces."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "编译或 elaborate 阶段 log 的绝对路径"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto（默认 auto）",
+                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / auto (default: auto)",
                                   "default": "auto"},
                 },
                 "required": ["compile_log"],
@@ -569,27 +568,27 @@ async def list_tools():
         Tool(
             name="scan_structural_risks",
             description=(
-                "对编译文件列表中的 RTL/TB 源码做 Scope 1 正则静态结构风险扫描。"
-                "这是感知层工具，只报告值得关注的模式，不做确诊判断。"
+                "Run a Scope 1 regex-based structural risk scan on RTL/TB source files from the compile file list. "
+                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "编译或 elaborate 阶段 log 的绝对路径"},
+                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto（默认 auto）",
+                        "description": "vcs / xcelium / auto (default: auto)",
                         "default": "auto",
                     },
                     "scan_scope": {
                         "type": "string",
-                        "description": "扫描范围版本，当前仅支持 scope1",
+                        "description": "Scan scope version. Currently only scope1 is supported.",
                         "default": "scope1",
                     },
                     "categories": {
                         "type": "array",
                         "items": {"type": "string", "enum": ALL_CATEGORIES},
-                        "description": "可选，仅扫描指定风险类别；省略时扫描全部类别",
+                        "description": "Optional list of risk categories to scan. If omitted, all categories are scanned.",
                     },
                 },
                 "required": ["compile_log"],
@@ -599,25 +598,24 @@ async def list_tools():
         Tool(
             name="analyze_failures",
             description=(
-                "核心分析工具：聚焦单个报错 group 的第一次出现，"
-                "返回 log 摘要、报错原始上下文和波形快照。"
-                "对 .fsdb 的支持受 get_sim_paths 返回的 fsdb_runtime.enabled 约束。"
+                "Core failure-analysis tool. Focuses on the first occurrence of a single failure group and returns "
+                "the log summary, raw error context, and waveform snapshot. FSDB support depends on fsdb_runtime.enabled."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":     {"type": "string", "description": "仿真 log 路径（irun.log）"},
-                    "wave_path":    {"type": "string", "description": "波形文件路径（top_tb.fsdb）"},
+                    "log_path":     {"type": "string", "description": "Simulation log path, for example irun.log"},
+                    "wave_path":    {"type": "string", "description": "Waveform file path, for example top_tb.fsdb"},
                     "signal_paths": {"type": "array", "items": {"type": "string"},
-                                     "description": "需要提取的信号完整路径列表（客户端从 RTL 或 log 推断后用 search_signals 确认）"},
+                                     "description": "Signal paths to inspect. Clients should confirm full paths with search_signals after inferring candidates from RTL or log output."},
                     "window_ps":    {"type": "integer",
-                                     "description": f"每个报错时刻前后的波形窗口 ps，默认 {DEFAULT_WAVE_WINDOW_PS}",
+                                     "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
                                      "default": DEFAULT_WAVE_WINDOW_PS},
                     "simulator":    {"type": "string", "description": "vcs / xcelium"},
-                    "group_index":  {"type": "integer", "description": "分析哪个报错分组，默认 0", "default": 0},
+                    "group_index":  {"type": "integer", "description": "Failure group index to analyze. Default: 0", "default": 0},
                     "extra_transitions": {
                         "type": "integer",
-                        "description": f"每个信号在窗口前额外回溯多少次跳变，默认 {DEFAULT_EXTRA_TRANSITIONS}",
+                        "description": f"Extra transitions to include before the window for each signal. Default: {DEFAULT_EXTRA_TRANSITIONS}",
                         "default": DEFAULT_EXTRA_TRANSITIONS,
                     },
                 },
@@ -628,8 +626,8 @@ async def list_tools():
         Tool(
             name="analyze_failure_event",
             description=(
-                "从单个标准化 failure_event 出发，"
-                "联动波形、hierarchy 和源码信息返回推荐实例、信号和源码文件。"
+                "Start from a single normalized failure_event and combine waveform, hierarchy, and source information "
+                "to return recommended instances, signals, and source files."
             ),
             inputSchema={
                 "type": "object",
@@ -637,7 +635,7 @@ async def list_tools():
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
-                    "failure_event": {"type": "object", "description": "parse_sim_log 对应 log 的标准化 failure_event"},
+                    "failure_event": {"type": "object", "description": "Normalized failure_event from parse_sim_log for the same log"},
                     "compile_log": {"type": "string"},
                     "top_hint": {"type": "string"},
                 },
@@ -648,8 +646,8 @@ async def list_tools():
         Tool(
             name="recommend_failure_debug_next_steps",
             description=(
-                "根据当前 log、wave 和可选 hierarchy，"
-                "自动选择优先分析的失败并推荐下一步看的信号、实例和故障类型。"
+                "Choose the highest-priority failure to investigate from the current log, waveform, and optional hierarchy, "
+                "then recommend signals, instances, and suspected failure class."
             ),
             inputSchema={
                 "type": "object",
@@ -667,9 +665,9 @@ async def list_tools():
         Tool(
             name="get_diagnostic_snapshot",
             description=(
-                "冷启动加速器：聚合已有 tool 结果的摘要视图。"
-                "不执行任何子步骤，只读取缓存。"
-                "返回各数据源的可用性状态和精简摘要，以及缺失项的建议调用。"
+                "Cold-start accelerator that aggregates cached tool results into a single summary view. "
+                "It never triggers sub-steps and only reads cache. "
+                "Returns availability status, compact summaries, and suggested calls for missing steps."
             ),
             inputSchema={
                 "type": "object",
@@ -677,8 +675,8 @@ async def list_tools():
                     "verif_root": {
                         "type": "string",
                         "description": (
-                            "项目的 verif/ 目录绝对路径。"
-                            "仅在 get_sim_paths 尚未执行时用于生成 suggested_call。"
+                            "Absolute path to the project's verif/ directory. "
+                            "Used only to build a suggested_call when get_sim_paths has not run yet."
                         ),
                     },
                 },
@@ -689,9 +687,9 @@ async def list_tools():
         Tool(
             name="explain_signal_driver",
             description=(
-                "从波形信号路径回溯最可能的 RTL 驱动位置。"
-                "支持 direct assign、简单 always 块和 module output port。"
-                "设置 recursive=true 可沿驱动链递归回溯多跳，包括穿越实例边界。"
+                "Trace a waveform signal path back to the most likely RTL driver. "
+                "Supports direct assigns, simple always blocks, and module output ports. "
+                "Set recursive=true to walk multiple hops upstream across instance boundaries."
             ),
             inputSchema={
                 "type": "object",
@@ -703,12 +701,12 @@ async def list_tools():
                     "recursive": {
                         "type": "boolean",
                         "default": False,
-                        "description": "是否递归追踪上游驱动链",
+                        "description": "Whether to trace the upstream driver chain recursively",
                     },
                     "max_depth": {
                         "type": "integer",
                         "default": 10,
-                        "description": "递归最大深度（仅 recursive=true 时生效）",
+                        "description": "Maximum recursive depth when recursive=true",
                     },
                 },
                 "required": ["signal_path", "wave_path", "compile_log"],
@@ -718,8 +716,8 @@ async def list_tools():
         Tool(
             name="trace_x_source",
             description=(
-                "当信号在指定时刻出现 X/Z 时，自动沿驱动逻辑追踪传播链。"
-                "遇到实例端口连接时会列出连接列表并停止。"
+                "When a signal shows X/Z at a target time, trace its propagation chain through upstream driver logic. "
+                "If the trace reaches instance port connections, the tool lists them and stops there."
             ),
             inputSchema={
                 "type": "object",
@@ -731,7 +729,7 @@ async def list_tools():
                     "top_hint": {"type": "string"},
                     "max_depth": {
                         "type": "integer",
-                        "description": f"最大追踪深度，默认 {DEFAULT_X_TRACE_MAX_DEPTH}",
+                        "description": f"Maximum trace depth. Default: {DEFAULT_X_TRACE_MAX_DEPTH}",
                         "default": DEFAULT_X_TRACE_MAX_DEPTH,
                     },
                 },
@@ -742,7 +740,7 @@ async def list_tools():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Tool 调用处理
+# Tool dispatch
 # ═══════════════════════════════════════════════════════════════════
 
 @app.call_tool()
@@ -807,7 +805,7 @@ async def _dispatch(name: str, args: dict):
             result = _get_parser(wave_path).search_signals(keyword, max_r)
             return schemas.SearchSignalsResult.model_validate(result)
         else:
-            raise ValueError(f"不支持的格式: .{ext}")
+            raise ValueError(f"Unsupported format: .{ext}")
 
     elif name == "get_signal_at_time":
         result = _get_parser(args["wave_path"]).get_value_at_time(
@@ -909,7 +907,7 @@ async def _dispatch(name: str, args: dict):
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
             result["analysis_guide"] = {
-                "step0": "未执行 scan_structural_risks，当前分析未包含静态结构风险关联。",
+                "step0": "scan_structural_risks has not been run, so this analysis does not include structural risk correlation.",
                 **original_guide,
             }
         return schemas.AnalyzeFailuresResult.model_validate(result)
@@ -994,7 +992,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.TraceXSourceResult.model_validate(result)
 
     else:
-        raise ValueError(f"未知工具: {name}")
+        raise ValueError(f"Unknown tool: {name}")
 
 
 def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) -> list[dict]:
@@ -1296,7 +1294,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         missing_steps.append({
             "tool": "get_sim_paths",
             "arguments": suggested["arguments"],
-            "reason": "路径发现尚未执行，无法确定仿真产物位置",
+            "reason": "Path discovery has not run yet, so simulation artifacts cannot be located.",
         })
 
     hier_result = _result_cache.get("build_tb_hierarchy")
@@ -1324,7 +1322,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         missing_steps.append({
             "tool": "build_tb_hierarchy",
             "arguments": suggested["arguments"],
-            "reason": "层级结构尚未构建，无法确定模块/实例关系",
+            "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
         })
 
     log_result = _result_cache.get("parse_sim_log")
@@ -1352,7 +1350,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         missing_steps.append({
             "tool": "parse_sim_log",
             "arguments": suggested["arguments"] if suggested else {},
-            "reason": "仿真日志尚未解析，无法获取错误信息",
+            "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
         })
 
     scan_result = _result_cache.get("scan_structural_risks")
@@ -1392,9 +1390,9 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "tool": "scan_structural_risks",
             "arguments": scan_call["arguments"] if scan_call else {},
             "reason": (
-                "结构扫描缺失，推荐分析将退化"
+                "Structural scan is missing, so recommendation quality will be degraded."
                 if has_failure_context
-                else "结构扫描尚未执行"
+                else "Structural scan has not been run yet."
             ),
         })
 
@@ -1430,7 +1428,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         missing_steps.append({
             "tool": "recommend_failure_debug_next_steps",
             "arguments": suggested["arguments"] if suggested else {},
-            "reason": "推荐分析尚未执行，无法给出优先调试目标",
+            "reason": "Recommendation analysis has not run yet, so no prioritized debug target is available.",
         })
 
     if missing_steps:
@@ -1475,9 +1473,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
 
     if detail_level not in {"summary", "compact", "full"}:
-        raise ValueError("detail_level 必须为 summary / compact / full")
+        raise ValueError("detail_level must be one of: summary, compact, full")
     if max_events_per_group <= 0:
-        raise ValueError("max_events_per_group 必须大于 0")
+        raise ValueError("max_events_per_group must be greater than 0")
 
     allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
     all_events = parser.parse_failure_events()
@@ -1547,7 +1545,7 @@ def _serialize_result(result: BaseModel | dict) -> str:
 
 def _format_error(exc: Exception) -> schemas.ToolErrorResult:
     message = str(exc)
-    if "FSDB 解析不可用" in message:
+    if "FSDB parsing unavailable" in message:
         return schemas.ToolErrorResult.model_validate({
             "error": message,
             "error_code": "fsdb_runtime_unavailable",

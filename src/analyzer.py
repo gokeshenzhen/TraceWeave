@@ -1,6 +1,6 @@
 """
 analyzer.py
-聚焦单个报错分组与 failure_event 的联合分析器。
+Joint analyzer for focused failure groups and failure_event-driven debug.
 """
 
 from __future__ import annotations
@@ -69,13 +69,13 @@ class WaveformAnalyzer:
                 "wave_context": None,
                 "remaining_groups": 0,
                 "analysis_guide": {
-                    "step1": "仿真 log 中未发现 ERROR 或 FATAL",
+                    "step1": "No ERROR or FATAL entries were found in the simulation log.",
                 },
                 "problem_hints": problem_hints_from_event(None, None),
             }
 
         if group_index < 0 or group_index >= len(groups):
-            raise IndexError(f"group_index {group_index} 超出范围，当前 groups={len(groups)}")
+            raise IndexError(f"group_index {group_index} is out of range; groups={len(groups)}")
 
         focused_group = dict(groups[group_index])
         focused_event = _find_group_event(events, focused_group["sample_event_id"])
@@ -105,10 +105,10 @@ class WaveformAnalyzer:
             "signals_queried": signal_paths,
             "extra_transitions": extra_transitions,
             "analysis_guide": {
-                "step1": "先看 focused_group 是否是最早出现且更接近 DUT 的报错类型",
-                "step2": "结合 focused_event 的 source_file / instance_path 确定失败锚点",
-                "step3": "在 wave_context 中核对信号中心值、窗口内跳变和窗口前历史",
-                "step4": "若信号不够，再调用 recommend_failure_debug_next_steps 或 analyze_failure_event",
+                "step1": "Check whether focused_group is the earliest failure and whether it is closer to the DUT than checker-side symptoms.",
+                "step2": "Use focused_event.source_file and focused_event.instance_path to identify the failure anchor.",
+                "step3": "Inspect center values, in-window transitions, and pre-window history in wave_context.",
+                "step4": "If the current signals are insufficient, call recommend_failure_debug_next_steps or analyze_failure_event.",
             },
             "problem_hints": problem_hints_from_event(focused_event, first_time_ps),
         }
@@ -171,7 +171,7 @@ class WaveformAnalyzer:
                 "recommended_instances": [],
                 "correlated_structural_risks": [],
                 "suspected_failure_class": "no_failure_detected",
-                "why": ["仿真 log 中未发现可归一化的失败事件"],
+                "why": ["No normalized failure events were found in the simulation log."],
             }
 
         ranked_events = sorted(events, key=_failure_priority_key)

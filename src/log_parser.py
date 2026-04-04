@@ -211,7 +211,7 @@ class SimLogParser:
         self.log_path = log_path
         self.simulator = simulator.lower()
         if self.simulator not in {"vcs", "xcelium"}:
-            raise ValueError("simulator 必须为 'vcs' 或 'xcelium'")
+            raise ValueError("simulator must be 'vcs' or 'xcelium'")
         self._custom_patterns = self._load_custom_patterns()
 
     def parse(self, max_groups: int = DEFAULT_MAX_GROUPS) -> dict[str, Any]:
@@ -220,7 +220,7 @@ class SimLogParser:
     def parse_failure_events(self) -> list[dict[str, Any]]:
         path = Path(self.log_path)
         if not path.exists():
-            raise FileNotFoundError(f"Log 文件不存在: {self.log_path}")
+            raise FileNotFoundError(f"Log file does not exist: {self.log_path}")
 
         try:
             file_size = path.stat().st_size
@@ -513,14 +513,14 @@ class SimLogParser:
         except FileNotFoundError:
             return []
         except Exception as ex:
-            print(f"[WARN] 加载 custom_patterns.yaml 失败: {ex}")
+            print(f"[WARN] Failed to load custom_patterns.yaml: {ex}")
             return []
 
         for pattern in patterns:
             try:
                 pattern["compiled"] = re.compile(pattern["regex"])
             except (KeyError, re.error) as ex:
-                print(f"[WARN] custom_patterns.yaml 正则编译失败 ({pattern.get('name')}): {ex}")
+                print(f"[WARN] Failed to compile regex in custom_patterns.yaml ({pattern.get('name')}): {ex}")
                 pattern["compiled"] = None
         return patterns
 
@@ -951,13 +951,13 @@ def get_error_context(
     after: int = DEFAULT_LOG_CONTEXT_AFTER,
 ) -> dict[str, Any]:
     if line <= 0:
-        raise ValueError("line 必须大于 0")
+        raise ValueError("line must be greater than 0")
     if before < 0 or after < 0:
-        raise ValueError("before/after 不能为负数")
+        raise ValueError("before/after must be non-negative")
 
     path = Path(log_path)
     if not path.exists():
-        raise FileNotFoundError(f"Log 文件不存在: {log_path}")
+        raise FileNotFoundError(f"Log file does not exist: {log_path}")
 
     prev_lines: deque[tuple[int, str]] = deque(maxlen=before)
     post_lines: list[tuple[int, str]] = []
@@ -978,7 +978,7 @@ def get_error_context(
             break
 
     if center_line is None:
-        raise ValueError(f"line {line} 超出文件范围")
+        raise ValueError(f"line {line} is outside the file range")
 
     selected = list(prev_lines) + [center_line] + post_lines
     return {

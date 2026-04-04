@@ -577,7 +577,7 @@ class TestDiagnosticSnapshot:
             "compile_log": sim.compile_logs[0].path,
             "simulator": sim.simulator,
         }
-        assert result.missing_steps[0]["reason"] == "结构扫描缺失，推荐分析将退化"
+        assert result.missing_steps[0]["reason"] == "Structural scan is missing, so recommendation quality will be degraded."
 
     def test_snapshot_adds_missing_scan_without_failure_context(self):
         sim = _make_sim_paths_result()
@@ -608,7 +608,7 @@ class TestDiagnosticSnapshot:
         result = server._handle_diagnostic_snapshot({})
 
         scan_step = next(step for step in result.missing_steps if step["tool"] == "scan_structural_risks")
-        assert scan_step["reason"] == "结构扫描尚未执行"
+        assert scan_step["reason"] == "Structural scan has not been run yet."
 
     def test_snapshot_keeps_workflow_order_when_problem_hints_do_not_match_priority_rule(self):
         sim = _make_sim_paths_result()

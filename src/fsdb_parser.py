@@ -1,7 +1,7 @@
 """
 fsdb_parser.py
-通过 libfsdb_wrapper.so（C++ wrapper）读取 FSDB 波形
-接口与 vcd_parser.py 完全一致
+Read FSDB waveforms through libfsdb_wrapper.so (C++ wrapper).
+The public API matches vcd_parser.py.
 """
 
 import ctypes
@@ -14,7 +14,7 @@ from config import (
     SIGNAL_SEARCH_MAX_RESULTS,
 )
 
-# wrapper .so 与本文件同目录
+# Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
 
 
@@ -22,18 +22,18 @@ def _load_wrapper():
     so_path = os.path.abspath(_WRAPPER_SO)
     if not os.path.exists(so_path):
         raise RuntimeError(
-            f"未找到 libfsdb_wrapper.so：{so_path}\n"
-            f"请在 TraceWeave/ 目录下执行：bash build_wrapper.sh"
+            f"libfsdb_wrapper.so not found: {so_path}\n"
+            "Run `bash build_wrapper.sh` from the TraceWeave repo root."
         )
     runtime_info = get_fsdb_runtime_info()
     if not runtime_info["enabled"]:
         raise RuntimeError(
-            "FSDB 解析不可用："
+            "FSDB parsing unavailable: "
             f"{runtime_info['message']}。\n"
-            "如果当前工程同时提供 VCD，请在后续工作流中优先使用 .vcd 波形。"
+            "If a VCD waveform is available, prefer it in follow-up workflow steps."
         )
     _ensure_wrapper_runtime_dir(runtime_info)
-    # 先加载 Verdi 依赖库
+    # Load Verdi runtime dependencies first.
     for libz in ("libz.so.1", "libz.so"):
         try:
             ctypes.CDLL(libz, ctypes.RTLD_GLOBAL)
@@ -106,7 +106,7 @@ def _setup(lib):
     lib.fsdb_get_signal_count.argtypes = [ctypes.c_void_p]
 
 
-_BUF_SIZE = 64 * 1024 * 1024   # 64 MB 结果缓冲
+_BUF_SIZE = 64 * 1024 * 1024
 
 
 class FSDBParser:
@@ -114,9 +114,7 @@ class FSDBParser:
         self.file_path = file_path
         self._lib    = None
         self._handle = None
-        self._buf    = None   # 延迟初始化的 64MB 复用缓冲区
-
-    # ── 生命周期 ─────────────────────────────────────────────────────
+        self._buf    = None
 
     def _open(self):
         if self._handle:
@@ -125,7 +123,7 @@ class FSDBParser:
             self._lib = _load_wrapper()
         handle = self._lib.fsdb_open(self.file_path.encode())
         if not handle:
-            raise RuntimeError(f"无法打开 FSDB：{self.file_path}")
+            raise RuntimeError(f"Unable to open FSDB: {self.file_path}")
         self._handle = handle
 
     def close(self):
@@ -137,12 +135,10 @@ class FSDBParser:
         self.close()
 
     def _get_buf(self):
-        """返回复用的 64MB 缓冲区，懒初始化"""
+        """Return the shared 64 MB buffer, created lazily."""
         if self._buf is None:
             self._buf = ctypes.create_string_buffer(_BUF_SIZE)
         return self._buf
-
-    # ── Public API ────────────────────────────────────────────────────
 
     def get_value_at_time(self, signal_path: str, time_ps: int) -> dict:
         self._open()
@@ -152,9 +148,11 @@ class FSDBParser:
             ctypes.c_uint64(time_ps), buf, 1024
         )
         if rc == -2:
-            raise KeyError(f"信号未找到：'{signal_path}'，请先用 search_signals 确认完整路径")
+            raise KeyError(
+                f"Signal not found: '{signal_path}'. Use search_signals to confirm the full path first."
+            )
         if rc < 0:
-            raise RuntimeError(f"fsdb_get_value_at_time 失败，rc={rc}")
+            raise RuntimeError(f"fsdb_get_value_at_time failed, rc={rc}")
         return {
             "signal":  signal_path,
             "time_ps": time_ps,
@@ -173,9 +171,9 @@ class FSDBParser:
             buf, _BUF_SIZE
         )
         if rc == -2:
-            raise KeyError(f"信号未找到：'{signal_path}'")
+            raise KeyError(f"Signal not found: '{signal_path}'")
         if rc < 0:
-            raise RuntimeError(f"fsdb_get_transitions 失败，rc={rc}")
+            raise RuntimeError(f"fsdb_get_transitions failed, rc={rc}")
         transitions = _parse_trans_buf(buf.value.decode())
         return {
             "signal":           signal_path,
@@ -214,7 +212,7 @@ class FSDBParser:
             _BUF_SIZE,
         )
         if rc < 0:
-            raise RuntimeError(f"fsdb_get_multi_signals_around_time 失败，rc={rc}")
+            raise RuntimeError(f"fsdb_get_multi_signals_around_time failed, rc={rc}")
         return _parse_multi_signal_buf(
             buf.value.decode(),
             center_ps=center_ps,
@@ -257,7 +255,7 @@ class FSDBParser:
             "keyword":       keyword,
             "total_matched": count,
             "results":       results,
-            "hint": "使用 path 字段中的完整路径作为 get_signal_at_time 等工具的 signal_path 参数",
+            "hint": "Use the full path from the path field as the signal_path argument for tools such as get_signal_at_time.",
         }
 
     def get_signal_width(self, signal_path: str) -> int:
@@ -273,7 +271,7 @@ class FSDBParser:
             if path == signal_path or path.endswith("." + signal_path):
                 return int(item["width"])
 
-        raise KeyError(f"信号未找到：'{signal_path}'")
+        raise KeyError(f"Signal not found: '{signal_path}'")
 
 
 # ── Utility ───────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 """
 vcd_parser.py
-纯 Python VCD 解析器，不依赖任何外部库
-接口与 FSDBParser 完全一致
+Pure-Python VCD parser with no external dependencies.
+The public API matches FSDBParser.
 """
 
 import re
@@ -100,7 +100,7 @@ class VCDParser:
         }
 
     def search_signals(self, keyword: str, max_results: int = 100) -> dict:
-        """VCD 版的信号搜索（已有完整索引，直接查）"""
+        """Search signals in a VCD using the in-memory path index."""
         self._ensure_parsed()
         kw = keyword.lower()
         matched = [
@@ -136,11 +136,11 @@ class VCDParser:
             if full.endswith("." + signal_path) or full == signal_path:
                 return sym
         sample = list(self._path_to_sym.keys())[:5]
-        raise KeyError(f"信号未找到: '{signal_path}'。示例路径: {sample}")
+        raise KeyError(f"Signal not found: '{signal_path}'. Example paths: {sample}")
 
     def _parse(self):
         if not Path(self.file_path).exists():
-            raise FileNotFoundError(f"VCD 文件不存在: {self.file_path}")
+            raise FileNotFoundError(f"VCD file does not exist: {self.file_path}")
         with open(self.file_path, "r", errors="replace") as f:
             content = f.read()
 
@@ -202,10 +202,9 @@ class VCDParser:
 # ── Utility ────────────────────────────────────────────────────────
 
 def _value_at(transitions: list, time_ps: int):
-    """二分查找 transitions 中 time_ps 时刻的值，O(log n)"""
+    """Return the value at time_ps using binary search over transitions."""
     if not transitions:
         return None
-    # transitions 是 (time_ps, value) 的有序列表
     times = [t for t, _ in transitions]
     idx = bisect_right(times, time_ps) - 1
     if idx < 0:

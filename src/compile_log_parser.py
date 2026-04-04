@@ -1,6 +1,7 @@
 """
 compile_log_parser.py
-从编译/elab log 中提取用户文件、filelist 关系、include 关系和顶层信息。
+Extract user files, filelist relationships, include relationships, and top information
+from compile and elaborate logs.
 """
 
 import os
@@ -259,4 +260,4 @@ def parse_compile_log(log_path: str, simulator: str = "auto") -> dict:
         return parse_vcs_compile_log(log_path)
     if sim_type == "xcelium":
         return parse_xcelium_compile_log(log_path)
-    raise ValueError(f"无法识别编译 log 的仿真器类型: {log_path}")
+    raise ValueError(f"Unable to determine simulator type from compile log: {log_path}")

@@ -73,7 +73,7 @@ def scan_structural_risks(
     categories: list[str] | None = None,
 ) -> dict:
     if scan_scope != SUPPORTED_SCAN_SCOPE:
-        raise ValueError(f"scan_scope 仅支持 {SUPPORTED_SCAN_SCOPE}")
+        raise ValueError(f"scan_scope only supports {SUPPORTED_SCAN_SCOPE}")
 
     categories_scanned = _normalize_categories(categories)
     compile_result = parse_compile_log(compile_log, simulator)
@@ -115,7 +115,7 @@ def _normalize_categories(categories: list[str] | None) -> list[str]:
         elif item not in ALL_CATEGORIES:
             unknown.append(item)
     if unknown:
-        raise ValueError(f"未知 categories: {', '.join(sorted(unknown))}")
+        raise ValueError(f"Unknown categories: {', '.join(sorted(unknown))}")
     return normalized
 
 

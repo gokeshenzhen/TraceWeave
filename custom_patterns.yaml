@@ -1,30 +1,31 @@
 # custom_patterns.yaml
-# 自定义报错格式，工程师直接在此添加新格式，不需要改 Python 代码
+# Add custom runtime error formats here without changing Python code.
 #
-# 每个 pattern 的字段说明：
-#   name        : 格式标识符（英文，不含空格）
-#   regex       : Python 正则表达式
-#                 必须包含命名捕获组：
-#                   (?P<file>...)       源文件路径（可选）
-#                   (?P<line>\d+)       行号（可选）
-#                   (?P<time>[\d.]+)    时间数值（可选）
-#                   (?P<time_unit>...)  时间单位 ps/ns/us（可选）
-#                   (?P<message>.+)     错误消息（必须）
+# Pattern fields:
+#   name        : pattern identifier (English, no spaces)
+#   regex       : Python regular expression
+#                 Supported named capture groups:
+#                   (?P<file>...)       source file path (optional)
+#                   (?P<line>\d+)       source line number (optional)
+#                   (?P<time>[\d.]+)    numeric time value (optional)
+#                   (?P<time_unit>...)  time unit such as ps/ns/us (optional)
+#                   (?P<message>.+)     error message (required)
 #   severity    : ERROR / FATAL / WARNING
-#   description : 格式说明（给工程师看的注释）
+#   description : free-form comment for maintainers
 #
 # ──────────────────────────────────────────────────────────────────
-# 示例：添加自定义 checker 的报错格式
+# Example: add a custom checker format
 # ──────────────────────────────────────────────────────────────────
 # - name: my_custom_checker
 #   severity: ERROR
-#   description: "自定义总线协议 checker 输出"
+#   description: "Custom bus protocol checker output"
 #   regex: 'CHECKER_ERROR\s+\[(?P<message>[^\]]+)\]\s+@\s+(?P<time>[\d.]+)\s+(?P<time_unit>ns|ps)'
 
 patterns: []
 
 # ──────────────────────────────────────────────────────────────────
-# 以下为内置格式参考（只读，修改不生效，内置格式在 log_parser.py 里硬编码）
+# Built-in format reference below. Read-only: built-in formats are hard-coded
+# in log_parser.py and cannot be changed here.
 # ──────────────────────────────────────────────────────────────────
 # VCS assertion fail:
 #   "file.sv", 66: hier.ASSERT_NAME: started at 290000ps failed at 310000ps
@@ -33,6 +34,6 @@ patterns: []
 # Xcelium assertion fail:
 #   xmsim: *E,ASRTST (file.sv,66): (time 270 NS) Assertion hier.ASSERT_NAME has failed
 #
-# UVM_ERROR / UVM_FATAL (VCS + Xcelium 格式相同):
+# UVM_ERROR / UVM_FATAL (same format for VCS and Xcelium):
 #   UVM_ERROR file.sv(129) @ 1429.000 ns: reporter [TAG] message
 #   UVM_FATAL file.sv(129) @ 1429.000 ns: reporter [TAG] message

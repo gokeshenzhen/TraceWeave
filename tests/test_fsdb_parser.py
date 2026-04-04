@@ -97,7 +97,7 @@ class TestGetValueAtTime:
             assert field in result
 
     def test_nonexistent_signal_raises(self, parser):
-        with pytest.raises(KeyError, match="信号未找到"):
+        with pytest.raises(KeyError, match="Signal not found"):
             parser.get_value_at_time("top_tb.nonexistent.signal", 0)
 
 

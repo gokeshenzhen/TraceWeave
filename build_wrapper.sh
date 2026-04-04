@@ -1,7 +1,7 @@
 #!/bin/bash
 # build_wrapper.sh
-# 编译 fsdb_wrapper.cpp → libfsdb_wrapper.so
-# 使用方法：在 TraceWeave/ 目录下执行 bash build_wrapper.sh
+# Build fsdb_wrapper.cpp into libfsdb_wrapper.so
+# Usage: run `bash build_wrapper.sh` from the TraceWeave repo root
 
 set -e
 
@@ -32,6 +32,6 @@ g++ -shared -fPIC -std=c++11 \
     -Wl,-rpath,"$RUNTIME_RPATH"
 
 echo ""
-echo "编译成功：$OUT"
-echo "验证符号："
+echo "Build succeeded: $OUT"
+echo "Exported symbols:"
 nm -D "$OUT" | grep " T fsdb_" | c++filt

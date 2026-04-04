@@ -24,7 +24,7 @@ def test_load_wrapper_fails_cleanly_without_fsdb_runtime(monkeypatch):
     )
     monkeypatch.setattr(fsdb_parser.os.path, "exists", lambda path: True if path == str(Path(fsdb_parser._WRAPPER_SO).resolve()) else True)
 
-    with pytest.raises(RuntimeError, match="FSDB 解析不可用"):
+    with pytest.raises(RuntimeError, match="FSDB parsing unavailable"):
         fsdb_parser._load_wrapper()
 
 
@@ -86,5 +86,5 @@ def test_get_signal_width_raises_keyerror_when_signal_missing(monkeypatch):
     parser._lib = None
     monkeypatch.setattr(parser, "search_signals", lambda keyword, max_results=0: {"results": []})
 
-    with pytest.raises(KeyError, match="信号未找到"):
+    with pytest.raises(KeyError, match="Signal not found"):
         parser.get_signal_width("top_tb.missing.clk")
