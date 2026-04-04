@@ -1200,11 +1200,23 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
             "simulator": args.get("simulator", "auto"),
         }
     if tool_name == "recommend_failure_debug_next_steps":
+        log_path = args.get("log_path")
+        log_mtime = None
+        log_size = None
+        if log_path:
+            try:
+                stat_result = os.stat(log_path)
+                log_mtime = stat_result.st_mtime
+                log_size = stat_result.st_size
+            except OSError:
+                pass
         return {
-            "log_path": args.get("log_path"),
+            "log_path": log_path,
             "wave_path": args.get("wave_path"),
             "simulator": args.get("simulator"),
             "compile_log": args.get("compile_log"),
+            "log_mtime": log_mtime,
+            "log_size": log_size,
         }
     return None
 
@@ -1245,6 +1257,23 @@ def _path_matches_session(path: str | None, candidates: list[str], case_dir: str
     return _is_under_case_dir(real_path, case_dir)
 
 
+def _file_unchanged(provenance: dict, path_key: str, mtime_key: str, size_key: str) -> bool:
+    """Return True when the file on disk still matches cached provenance."""
+    fpath = provenance.get(path_key)
+    expected_mtime = provenance.get(mtime_key)
+    expected_size = provenance.get(size_key)
+    if fpath is None or expected_mtime is None or expected_size is None:
+        return True
+    try:
+        stat_result = os.stat(fpath)
+    except OSError:
+        return False
+    return (
+        stat_result.st_mtime == expected_mtime
+        and stat_result.st_size == expected_size
+    )
+
+
 def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None) -> bool:
     if anchor is None or provenance is None:
         return False
@@ -1261,6 +1290,7 @@ def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None
         return (
             provenance.get("simulator") == anchor.get("simulator")
             and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
+            and _file_unchanged(provenance, "log_path", "log_mtime", "log_size")
         )
     if tool_name == "scan_structural_risks":
         return _scan_request_is_compatible(
@@ -1274,6 +1304,7 @@ def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None
             and provenance.get("compile_log") == anchor.get("compile_log")
             and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
             and _path_matches_session(provenance.get("wave_path"), wave_files, case_dir)
+            and _file_unchanged(provenance, "log_path", "log_mtime", "log_size")
         )
     return False
 

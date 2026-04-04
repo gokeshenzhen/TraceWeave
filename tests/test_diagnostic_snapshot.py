@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import server
@@ -521,6 +523,141 @@ class TestDiagnosticSnapshot:
         assert result.log_analysis.available is True
         assert result.log_analysis.stale is False
         assert result.total_errors == 3
+
+    def test_same_log_path_modified_on_disk_is_stale(self, tmp_path):
+        log_file = tmp_path / "irun.log"
+        log_file.write_text("original content")
+        original_stat = log_file.stat()
+
+        _prefill_all()
+
+        sim_result = server._result_cache["get_sim_paths"]
+        sim_result.sim_logs[0].path = str(log_file)
+
+        server._result_cache["parse_sim_log"] = schemas.ParseSimLogResult.model_validate({
+            **_make_parse_result().model_dump(),
+            "log_file": str(log_file),
+        })
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_file),
+            "simulator": "xcelium",
+            "all_failure_events": [],
+            "log_mtime": original_stat.st_mtime,
+            "log_size": original_stat.st_size,
+        }
+
+        log_file.write_text("new content after rerun - completely different")
+        new_mtime = original_stat.st_mtime + 10.0
+        os.utime(log_file, (new_mtime, new_mtime))
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.log_analysis.available is True
+        assert result.log_analysis.stale is True
+        assert result.total_errors is None
+        assert {step["tool"] for step in result.missing_steps} >= {"parse_sim_log"}
+
+    def test_same_log_path_unchanged_on_disk_stays_fresh(self, tmp_path):
+        log_file = tmp_path / "irun.log"
+        log_file.write_text("original content")
+        original_stat = log_file.stat()
+
+        _prefill_all()
+
+        sim_result = server._result_cache["get_sim_paths"]
+        sim_result.sim_logs[0].path = str(log_file)
+
+        server._result_cache["parse_sim_log"] = schemas.ParseSimLogResult.model_validate({
+            **_make_parse_result().model_dump(),
+            "log_file": str(log_file),
+        })
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_file),
+            "simulator": sim_result.simulator,
+            "all_failure_events": [],
+            "log_mtime": original_stat.st_mtime,
+            "log_size": original_stat.st_size,
+        }
+        server._result_provenance["recommend_failure_debug_next_steps"] = {
+            "log_path": str(log_file),
+            "wave_path": sim_result.wave_files[0].path,
+            "simulator": sim_result.simulator,
+            "compile_log": sim_result.compile_logs[0].path,
+            "log_mtime": original_stat.st_mtime,
+            "log_size": original_stat.st_size,
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.log_analysis.available is True
+        assert result.log_analysis.stale is False
+        assert result.recommended_next.available is True
+        assert result.recommended_next.stale is False
+        assert result.total_errors == 3
+        assert result.primary_failure_target is not None
+
+    def test_legacy_provenance_without_log_signature_stays_compatible(self, tmp_path):
+        log_file = tmp_path / "irun.log"
+        log_file.write_text("original content")
+
+        _prefill_all()
+
+        sim_result = server._result_cache["get_sim_paths"]
+        sim_result.sim_logs[0].path = str(log_file)
+
+        server._result_cache["parse_sim_log"] = schemas.ParseSimLogResult.model_validate({
+            **_make_parse_result().model_dump(),
+            "log_file": str(log_file),
+        })
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_file),
+            "simulator": sim_result.simulator,
+        }
+        server._result_provenance["recommend_failure_debug_next_steps"] = {
+            "log_path": str(log_file),
+            "wave_path": sim_result.wave_files[0].path,
+            "simulator": sim_result.simulator,
+            "compile_log": sim_result.compile_logs[0].path,
+        }
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.log_analysis.available is True
+        assert result.log_analysis.stale is False
+        assert result.recommended_next.available is True
+        assert result.recommended_next.stale is False
+        assert result.total_errors == 3
+        assert result.primary_failure_target is not None
+
+    def test_recommend_same_log_path_modified_on_disk_is_stale(self, tmp_path):
+        log_file = tmp_path / "irun.log"
+        log_file.write_text("original content")
+        original_stat = log_file.stat()
+
+        _prefill_all()
+
+        sim_result = server._result_cache["get_sim_paths"]
+        sim_result.sim_logs[0].path = str(log_file)
+
+        server._result_provenance["recommend_failure_debug_next_steps"] = {
+            "log_path": str(log_file),
+            "wave_path": sim_result.wave_files[0].path,
+            "simulator": sim_result.simulator,
+            "compile_log": sim_result.compile_logs[0].path,
+            "log_mtime": original_stat.st_mtime,
+            "log_size": original_stat.st_size,
+        }
+
+        log_file.write_text("new content after rerun - completely different")
+        new_mtime = original_stat.st_mtime + 10.0
+        os.utime(log_file, (new_mtime, new_mtime))
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.recommended_next.available is True
+        assert result.recommended_next.stale is True
+        assert result.primary_failure_target is None
+        assert {step["tool"] for step in result.missing_steps} >= {"recommend_failure_debug_next_steps"}
 
     def test_second_wave_in_same_case_is_fresh(self):
         _prefill_all()
