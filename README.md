@@ -118,7 +118,7 @@ Add this to `~/.claude.json`:
 ```json
 {
   "mcpServers": {
-    "traceweave": {
+    "TraceWeave": {
       "command": "python3.11",
       "args": ["/home/robin/Projects/mcp/TraceWeave/server.py"],
       "env": {
@@ -134,17 +134,24 @@ Add this to `~/.claude.json`:
 
 Environment variables must be set explicitly in the config. Claude Code does not automatically source your shell profile.
 
+Verify the connection:
+
+```bash
+claude mcp list
+# Should show TraceWeave (connected)
+```
+
 ### Codex
 
 Add this to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.traceweave]
+[mcp_servers.TraceWeave]
 command = "python3.11"
 args = ["/home/robin/Projects/mcp/TraceWeave/server.py"]
 cwd = "/home/robin/Projects/mcp/TraceWeave"
 
-[mcp_servers.traceweave.env]
+[mcp_servers.TraceWeave.env]
 VERDI_HOME = "/tools/synopsys/verdi/O-2018.09-SP2-11"
 VCS_HOME   = "/tools/synopsys/vcs/O-2018.09-SP2-11"
 XLM_ROOT   = "/tools/cadence/XCELIUM1803"
@@ -152,6 +159,21 @@ PATH       = "/tools/synopsys/verdi/O-2018.09-SP2-11/bin:/tools/synopsys/vcs/O-2
 ```
 
 If the file already contains other configuration, append this block instead of overwriting it.
+
+Verify the connection:
+
+```bash
+codex mcp list
+# Should show TraceWeave with Status: enabled
+```
+
+### Functional Verification
+
+After connecting either client, run a quick end-to-end smoke test:
+
+1. Start `codex` or `claude` inside a project directory that contains a sim log and waveform files.
+2. Submit a direct waveform-debug request, for example: "Call the TraceWeave MCP. Start with `get_sim_paths` to list the logs and waves for this case."
+3. Confirm that the execution log shows actual MCP tool calls such as `get_sim_paths`, `parse_sim_log`, and `search_signals` — not just shell commands reading files manually.
 
 ## Standard MCP Workflow
 
