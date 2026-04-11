@@ -51,6 +51,16 @@ DEFAULT_WAVE_WINDOW_PS = 2000
 # get_signals_around_time 默认额外回溯的跳变数
 DEFAULT_EXTRA_TRANSITIONS = 5
 
+# get_signals_around_time 单次调用允许的最大窗口（以时钟周期数为单位）
+# 与 MAX_CYCLES_PER_QUERY 对齐——超过这个范围就应该改用 get_signals_by_cycle
+MAX_WAVE_WINDOW_CYCLES = 256
+
+# 时钟自动检测失败时的兜底窗口上限（无 1-bit clock 可推算周期时使用）
+FALLBACK_WAVE_WINDOW_PS = 50_000_000  # 50 us
+
+# 时钟周期自动检测的采样预算（足以推算中位数，无论频率高低）
+CLOCK_DETECT_SAMPLE_PS = 50_000_000
+
 # get_error_context 默认上下文行数
 DEFAULT_LOG_CONTEXT_BEFORE = 100
 DEFAULT_LOG_CONTEXT_AFTER = 100

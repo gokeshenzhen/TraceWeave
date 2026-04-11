@@ -12,6 +12,7 @@ import pytest
 from unittest.mock import patch
 
 import server
+from config import DEFAULT_EXTRA_TRANSITIONS
 from src.schemas import ToolErrorResult
 
 
@@ -1655,3 +1656,282 @@ class TestWaveCacheInvalidation:
         assert first is not second
         assert created[0].closed is True
         assert created[1].closed is False
+
+
+class _FakeParserForGuards:
+    """Minimal parser double for get_signals_around_time guard tests."""
+
+    def __init__(self, clock_period_ps=None, sim_end_ps=6_300_000_000):
+        self._clock_period_ps = clock_period_ps
+        self._sim_end_ps = sim_end_ps
+        self.called_with = None
+
+    def search_signals(self, keyword, max_results=20):
+        if self._clock_period_ps is None:
+            return {"results": []}
+        return {"results": [{"path": "top_tb.clk", "width": 1}]}
+
+    def get_transitions(self, signal_path, start_ps, end_ps):
+        if self._clock_period_ps is None:
+            return {"transitions": []}
+        half_period = self._clock_period_ps // 2
+        transitions = []
+        for index in range(20):
+            transitions.append(
+                {"time_ps": index * half_period, "value": {"dec": index % 2}}
+            )
+        return {"transitions": transitions}
+
+    def get_summary(self):
+        return {"simulation_duration_ps": self._sim_end_ps}
+
+    def get_signals_around_time(self, signal_paths, center_ps, window_ps, extra):
+        self.called_with = (signal_paths, center_ps, window_ps, extra)
+        return {
+            "center_time_ps": center_ps,
+            "center_time_ns": center_ps / 1000,
+            "window_ps": window_ps,
+            "extra_transitions": extra,
+            "signals": {},
+            "truncated": False,
+        }
+
+
+class _FakeParserMultiSig:
+    """Flexible parser double for clock auto-detect tests."""
+
+    def __init__(self, sig_map, sim_end_ps=6_300_000_000):
+        self._sigs = sig_map
+        self._sim_end_ps = sim_end_ps
+        self.called_with = None
+
+    def search_signals(self, keyword, max_results=20):
+        keyword = keyword.lower()
+        results = [
+            {"path": path, "width": width}
+            for path, (width, _, _) in self._sigs.items()
+            if keyword in path.lower()
+        ]
+        return {"results": results[:max_results]}
+
+    def get_transitions(self, signal_path, start_ps, end_ps):
+        _, period_ps, edge_count = self._sigs[signal_path]
+        if period_ps is None or edge_count < 2:
+            return {"transitions": []}
+
+        transitions = []
+        half_period = period_ps // 2
+        for index in range(2 * edge_count):
+            transitions.append(
+                {"time_ps": index * half_period, "value": {"dec": index % 2}}
+            )
+        return {"transitions": transitions}
+
+    def get_summary(self):
+        return {"simulation_duration_ps": self._sim_end_ps}
+
+    def get_signals_around_time(self, signal_paths, center_ps, window_ps, extra):
+        self.called_with = (signal_paths, center_ps, window_ps, extra)
+        return {
+            "center_time_ps": center_ps,
+            "center_time_ns": center_ps / 1000,
+            "window_ps": window_ps,
+            "extra_transitions": extra,
+            "signals": {},
+            "truncated": False,
+        }
+
+
+class _FakeParserClockDetectFailure(_FakeParserForGuards):
+    """Parser double that forces clock auto-detect failure with a real exception."""
+
+    def search_signals(self, keyword, max_results=20):
+        raise RuntimeError(f"signal index unavailable for {keyword}")
+
+
+@pytest.mark.anyio
+class TestDispatchGetSignalsAroundTimeGuards:
+    async def test_rejects_window_past_cycle_cap(self, monkeypatch):
+        fake = _FakeParserForGuards(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.dut.sig"],
+                    "center_time_ps": 1_000_000,
+                    "window_ps": 4_000_000_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "20000 clock cycles" in msg
+        assert "MAX_WAVE_WINDOW_CYCLES" in msg
+        assert "get_signals_by_cycle" in msg
+        assert fake.called_with is None
+
+    async def test_rejects_center_past_sim_end(self, monkeypatch):
+        fake = _FakeParserForGuards(
+            clock_period_ps=200_000, sim_end_ps=6_300_000_000
+        )
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.dut.sig"],
+                    "center_time_ps": 7_500_000_000,
+                    "window_ps": 2_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "past the recorded waveform end" in msg
+        assert "ns->ps" in msg or "ns-ps" in msg
+        assert fake.called_with is None
+
+    async def test_rejects_center_one_ps_past_sim_end(self, monkeypatch):
+        fake = _FakeParserForGuards(
+            clock_period_ps=200_000, sim_end_ps=6_300_000_000
+        )
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.dut.sig"],
+                    "center_time_ps": 6_300_000_001,
+                    "window_ps": 500_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "past the recorded waveform end" in msg
+        assert fake.called_with is None
+
+    async def test_happy_path_still_works(self, monkeypatch):
+        fake = _FakeParserForGuards(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        await server._dispatch(
+            "get_signals_around_time",
+            {
+                "wave_path": "/tmp/a.fsdb",
+                "signal_paths": ["top_tb.dut.sig"],
+                "center_time_ps": 1_000_000,
+                "window_ps": 2_000,
+            },
+        )
+
+        assert fake.called_with == (
+            ["top_tb.dut.sig"],
+            1_000_000,
+            2_000,
+            DEFAULT_EXTRA_TRANSITIONS,
+        )
+
+    @pytest.mark.parametrize(
+        "window_ps,should_raise",
+        [
+            (256 * 200_000, False),
+            (257 * 200_000, True),
+        ],
+    )
+    async def test_cycle_cap_boundary_inclusive(
+        self, monkeypatch, window_ps, should_raise
+    ):
+        fake = _FakeParserForGuards(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        args = {
+            "wave_path": "/tmp/a.fsdb",
+            "signal_paths": ["top_tb.dut.sig"],
+            "center_time_ps": 1_000_000,
+            "window_ps": window_ps,
+        }
+
+        if should_raise:
+            with pytest.raises(ValueError):
+                await server._dispatch("get_signals_around_time", args)
+            assert fake.called_with is None
+        else:
+            await server._dispatch("get_signals_around_time", args)
+            assert fake.called_with is not None
+
+    async def test_detects_clock_named_clock(self, monkeypatch):
+        fake = _FakeParserMultiSig(
+            {
+                "top_tb.sys_clock": (1, 200_000, 100),
+                "top_tb.data": (8, None, 0),
+            }
+        )
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.data"],
+                    "center_time_ps": 1_000_000,
+                    "window_ps": 257 * 200_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "257 clock cycles" in msg
+        assert "top_tb.sys_clock" in msg
+        assert "FALLBACK_WAVE_WINDOW_PS" not in msg
+
+    async def test_prefers_high_edge_density_over_gated_signal(self, monkeypatch):
+        fake = _FakeParserMultiSig(
+            {
+                "top_tb.clk_gate": (1, 1_000_000, 2),
+                "top_tb.clk": (1, 200_000, 1000),
+                "top_tb.data": (8, None, 0),
+            }
+        )
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.data"],
+                    "center_time_ps": 1_000_000,
+                    "window_ps": 257 * 200_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "top_tb.clk" in msg
+        assert "top_tb.clk_gate" not in msg
+        assert "clock_period_ps=200000" in msg
+
+    async def test_fallback_error_surfaces_clock_detect_failure_reason(self, monkeypatch):
+        fake = _FakeParserClockDetectFailure(clock_period_ps=None)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError) as excinfo:
+            await server._dispatch(
+                "get_signals_around_time",
+                {
+                    "wave_path": "/tmp/a.fsdb",
+                    "signal_paths": ["top_tb.data"],
+                    "center_time_ps": 1_000_000,
+                    "window_ps": 60_000_000,
+                },
+            )
+
+        msg = str(excinfo.value)
+        assert "FALLBACK_WAVE_WINDOW_PS" in msg
+        assert "detection error:" in msg
+        assert "RuntimeError: signal index unavailable for clk" in msg
+        assert fake.called_with is None

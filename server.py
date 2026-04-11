@@ -26,10 +26,13 @@ from mcp.types import Tool, TextContent
 
 from config import (
     AUTO_DOWNGRADE_THRESHOLD,
+    CLOCK_DETECT_SAMPLE_PS,
     DEFAULT_DETAIL_LEVEL,
     DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_EVENTS_PER_GROUP,
+    FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
+    MAX_WAVE_WINDOW_CYCLES,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
@@ -46,7 +49,11 @@ from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
-from src.cycle_query import get_signals_by_cycle
+from src.cycle_query import (
+    _compute_clock_period_ps,
+    _extract_edge_times,
+    get_signals_by_cycle,
+)
 from pydantic import BaseModel
 import src.schemas as schemas
 
@@ -378,6 +385,125 @@ def _get_parser(wave_path: str):
     return parser
 
 
+def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
+    """Best-effort clock auto-detect, cached on the parser instance."""
+    cached = getattr(parser, "_cached_clock_info", None)
+    if cached is not None:
+        return cached
+
+    clock_path: str | None = None
+    period_ps: int | None = None
+    detect_reason: str | None = None
+
+    try:
+        candidate_paths: set[str] = set()
+        for keyword in ("clk", "clock"):
+            try:
+                search = parser.search_signals(keyword, max_results=20)
+            except Exception as exc:
+                if detect_reason is None:
+                    detect_reason = (
+                        f"search_signals({keyword!r}) failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                continue
+            for item in search.get("results", []):
+                if item.get("width", 0) == 1 and item.get("path"):
+                    candidate_paths.add(item["path"])
+
+        scored: list[tuple[str, int, int]] = []
+        for candidate in sorted(candidate_paths, key=lambda path: (path.count("."), len(path))):
+            try:
+                transitions = parser.get_transitions(
+                    candidate, 0, CLOCK_DETECT_SAMPLE_PS
+                ).get("transitions", [])
+                edge_times = _extract_edge_times(transitions, "posedge")
+                period = _compute_clock_period_ps(edge_times)
+                if period and period > 0:
+                    scored.append((candidate, period, len(edge_times)))
+            except Exception as exc:
+                if detect_reason is None:
+                    detect_reason = (
+                        f"get_transitions({candidate!r}) failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                continue
+
+        if scored:
+            scored.sort(key=lambda item: -item[2])
+            clock_path, period_ps, _ = scored[0]
+            detect_reason = None
+    except Exception as exc:
+        detect_reason = f"{type(exc).__name__}: {exc}"
+
+    try:
+        parser._cached_clock_info = (clock_path, period_ps)
+        parser._cached_clock_detect_reason = detect_reason
+    except Exception:
+        pass
+
+    return clock_path, period_ps
+
+
+def _validate_signals_around_time_args(
+    parser,
+    center_ps: int,
+    window_ps: int,
+    signal_paths: list[str] | None,
+) -> None:
+    """Guardrails for get_signals_around_time; raise ValueError with recovery hints."""
+    signal_paths = signal_paths or []
+
+    if window_ps < 0:
+        raise ValueError("window_ps must be non-negative")
+
+    clock_path, clock_period_ps = _detect_wave_clock(parser)
+
+    if clock_period_ps and clock_period_ps > 0:
+        requested_cycles = window_ps // clock_period_ps
+        if requested_cycles > MAX_WAVE_WINDOW_CYCLES:
+            raise ValueError(
+                f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) "
+                f"= {requested_cycles} clock cycles, exceeds the per-call cap "
+                f"MAX_WAVE_WINDOW_CYCLES={MAX_WAVE_WINDOW_CYCLES} "
+                f"(clock_period_ps={clock_period_ps}, detected from {clock_path}). "
+                f"This tool is for local causal-chain inspection around a failure "
+                f"timestamp. For multi-cycle sampling use get_signals_by_cycle "
+                f"(same {MAX_CYCLES_PER_QUERY}-cycle budget). "
+                f"Typical window_ps: glitch 1-5 ns; 1 clock cycle = clock_period_ps; "
+                f"N cycles = N * clock_period_ps."
+            )
+    elif window_ps > FALLBACK_WAVE_WINDOW_PS:
+        detect_reason = getattr(parser, "_cached_clock_detect_reason", None)
+        reason_suffix = (
+            f" (detection error: {detect_reason})" if detect_reason else ""
+        )
+        raise ValueError(
+            f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) exceeds the "
+            f"fallback cap FALLBACK_WAVE_WINDOW_PS={FALLBACK_WAVE_WINDOW_PS} ps "
+            f"(auto-detect found no 1-bit clock signal matching 'clk'/'clock' "
+            f"in this waveform{reason_suffix}). For multi-cycle sampling use "
+            f"get_signals_by_cycle."
+        )
+
+    sim_end_ps = 0
+    try:
+        sim_end_ps = int(parser.get_summary().get("simulation_duration_ps") or 0)
+    except Exception:
+        pass
+
+    if sim_end_ps > 0 and center_ps > sim_end_ps:
+        raise ValueError(
+            f"center_time_ps={center_ps} ({center_ps/1000:.0f} ns, "
+            f"{center_ps/1_000_000_000:.3f} ms) is past the recorded waveform end "
+            f"(simulation_duration_ps={sim_end_ps}, "
+            f"{sim_end_ps/1_000_000_000:.3f} ms). "
+            f"Common pitfall: ns->ps conversion - if the sim log shows `Time: X ns`, "
+            f"set center_time_ps = X*1000. Call get_waveform_summary to confirm "
+            f"the recorded duration."
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
@@ -536,9 +662,31 @@ async def list_tools():
         Tool(
             name="get_signals_around_time",
             description=(
-                "Return values and transitions for multiple signals around a target time window. "
-                "Commonly used to inspect signal context around a known failure timestamp. "
-                "FSDB support depends on fsdb_runtime.enabled."
+                "Return values and transitions for multiple signals in a NARROW window "
+                "around a target timestamp (typically the failure time). Designed for "
+                "local causal-chain inspection; NOT for bulk trace extraction. For "
+                "round-by-round or multi-cycle sampling use get_signals_by_cycle.\n"
+                "\n"
+                "Unit reminder: all times are picoseconds. If the sim log reports "
+                "`Time: X ns`, set center_time_ps = X*1000 (example: 75,100 ns -> "
+                "75,100,000 ps).\n"
+                "\n"
+                "Typical window_ps:\n"
+                "  - Glitch inspection:     1,000 - 5,000 ps\n"
+                "  - One clock cycle:       = clock_period_ps (NOT exposed by\n"
+                "                             get_waveform_summary; use\n"
+                "                             get_signals_by_cycle after you\n"
+                "                             identify a clock_path, or read it\n"
+                "                             from your sim environment /\n"
+                "                             compile log)\n"
+                "  - N cycles around fail:  N * clock_period_ps\n"
+                "\n"
+                "The server enforces a cap of MAX_WAVE_WINDOW_CYCLES (default 256) "
+                "clock cycles per call, computed at runtime from an auto-detected "
+                "clock_period_ps. It also rejects center_time_ps past the recorded "
+                "simulation end. For multi-cycle sampling, get_signals_by_cycle "
+                "still requires an explicit clock_path. FSDB support depends on "
+                "fsdb_runtime.enabled."
             ),
             inputSchema={
                 "type": "object",
@@ -546,10 +694,24 @@ async def list_tools():
                     "wave_path":     {"type": "string"},
                     "signal_paths":  {"type": "array", "items": {"type": "string"},
                                       "description": "List of full hierarchical signal paths"},
-                    "center_time_ps":{"type": "integer", "description": "Center time in ps, usually the failure timestamp"},
-                    "window_ps":     {"type": "integer",
-                                      "description": f"Window size before and after the center time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
-                                      "default": DEFAULT_WAVE_WINDOW_PS},
+                    "center_time_ps": {
+                        "type": "integer",
+                        "description": (
+                            "Center time in PICOSECONDS (not ns). Convert sim-log ns "
+                            "via *1000. Must be within the waveform duration reported "
+                            "by get_waveform_summary."
+                        ),
+                    },
+                    "window_ps": {
+                        "type": "integer",
+                        "description": (
+                            f"Half-window in ps (center +/- window_ps). "
+                            f"Default: {DEFAULT_WAVE_WINDOW_PS}. "
+                            f"Hard cap: MAX_WAVE_WINDOW_CYCLES clock cycles. "
+                            f"For N-cycle sweeps prefer get_signals_by_cycle."
+                        ),
+                        "default": DEFAULT_WAVE_WINDOW_PS,
+                    },
                     "extra_transitions": {
                         "type": "integer",
                         "description": f"Extra transitions to include before the time window. Default: {DEFAULT_EXTRA_TRANSITIONS}",
@@ -904,10 +1066,17 @@ async def _dispatch(name: str, args: dict):
         return schemas.SignalTransitionsResult.model_validate(result)
 
     elif name == "get_signals_around_time":
-        result = _get_parser(args["wave_path"]).get_signals_around_time(
-            args["signal_paths"],
-            args["center_time_ps"],
-            args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
+        parser = _get_parser(args["wave_path"])
+        center_ps = int(args["center_time_ps"])
+        window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
+        signal_paths = args.get("signal_paths") or []
+        _validate_signals_around_time_args(
+            parser, center_ps, window_ps, signal_paths
+        )
+        result = parser.get_signals_around_time(
+            signal_paths,
+            center_ps,
+            window_ps,
             args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
         return schemas.SignalsAroundTimeResult.model_validate(result)
