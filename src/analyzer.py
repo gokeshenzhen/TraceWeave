@@ -120,7 +120,7 @@ class WaveformAnalyzer:
         compile_log: str | None = None,
         top_hint: str | None = None,
     ) -> dict[str, Any]:
-        hierarchy = _load_hierarchy(compile_log) if compile_log else None
+        hierarchy = _load_hierarchy(compile_log, self.simulator) if compile_log else None
         likely_instances = _rank_likely_instances(failure_event, hierarchy, top_hint)
         related_source_files = _rank_related_source_files(failure_event, hierarchy, likely_instances)
         recommended_signals = _recommend_signals(
@@ -179,7 +179,10 @@ class WaveformAnalyzer:
         event_analysis = self.analyze_failure_event(primary, wave_path, compile_log=compile_log, top_hint=top_hint)
         failure_class = _classify_failure(primary)
         normalized_hints = _normalize_problem_hints(problem_hints)
-        correlated_risks = _rank_structural_risks(structural_risks or [], primary, normalized_hints)
+        primary_for_risk = dict(primary)
+        if event_analysis["recommended_signals"]:
+            primary_for_risk["failing_signal_path"] = event_analysis["recommended_signals"][0].get("path")
+        correlated_risks = _rank_structural_risks(structural_risks or [], primary_for_risk, normalized_hints)
         why = [
             "Selected the earliest failure with the strongest available timing/source anchor.",
             f"Failure classified heuristically as {failure_class}.",
@@ -198,6 +201,18 @@ class WaveformAnalyzer:
             "recommendation_strategy": "role_rank_v2_structural",
             "failure_window_center_ps": primary.get("time_ps"),
             "why": why,
+            "next_iteration_hint": {
+                "tool": "diff_sim_failure_results",
+                "when_to_call": (
+                    "After you apply a source change and rerun the simulation, call this tool with "
+                    "the previous log as base_log_path and the new log as new_log_path to see which "
+                    "failures were eliminated and which regressed."
+                ),
+                "suggested_arguments": {
+                    "base_log_path": self.log_path,
+                    "simulator": self.simulator,
+                },
+            },
         }
 
 
@@ -206,8 +221,8 @@ def _find_group_event(events: list[dict[str, Any]], event_id: str | None) -> dic
         if event["event_id"] == event_id:
             return event
     return None
-def _load_hierarchy(compile_log: str) -> dict[str, Any]:
-    return build_hierarchy(parse_compile_log(compile_log, "auto"))
+def _load_hierarchy(compile_log: str, simulator: str = 'auto') -> dict[str, Any]:
+    return build_hierarchy(parse_compile_log(compile_log, simulator))
 
 
 def _failure_priority_key(event: dict[str, Any]) -> tuple[int, int, int]:
@@ -551,6 +566,12 @@ def _rank_structural_risks(
         return []
 
     instance_path = (primary_event.get("instance_path") or "").lower()
+    signal_anchor = (
+        primary_event.get("failing_signal_path")
+        or primary_event.get("group_signature")
+        or primary_event.get("message_text")
+        or ""
+    )
     ranked: list[dict[str, Any]] = []
     for risk in risks:
         score = 0
@@ -566,6 +587,10 @@ def _rank_structural_risks(
         if risk.get("risk_level") == "high":
             score += 2
             reasons.append("risk_level is high")
+        target_signal = _extract_risk_target_signal(risk)
+        if _signal_path_intersects(target_signal, signal_anchor):
+            score += 12
+            reasons.append(f"signal path intersects risk target {target_signal}")
         if score <= 0:
             continue
         ranked.append(
@@ -594,3 +619,60 @@ def _risk_type_hint_reason(risk_type: Any, problem_hints: ProblemHints | None) -
     if risk_type == "multi_drive" and problem_hints.has_x:
         return "multi_drive correlates with has_x"
     return None
+
+
+def _extract_risk_target_signal(risk: dict[str, Any]) -> str:
+    for key in ("target_signal", "signal", "target_bits"):
+        value = risk.get(key)
+        if isinstance(value, str) and value:
+            return value
+    detail = risk.get("detail")
+    if isinstance(detail, str):
+        match = re.search(r"\bTarget\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]]+\])?)\b", detail)
+        if match:
+            return match.group(1)
+    for evidence in risk.get("evidence") or []:
+        if not isinstance(evidence, str):
+            continue
+        match = re.search(r"\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]]+\])?)\s*\)", evidence)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _signal_path_intersects(risk_signal: str, failure_signal: str) -> bool:
+    if not risk_signal or not failure_signal:
+        return False
+    bare_risk, risk_range = _split_signal_name_and_range(risk_signal)
+    bare_failure, failure_range = _split_signal_name_and_range(failure_signal)
+    if bare_risk and bare_failure:
+        risk_leaf = bare_risk.split(".")[-1].lower()
+        failure_text = failure_signal.lower()
+        if risk_leaf and risk_leaf in failure_text:
+            if risk_range is None or failure_range is None:
+                return True
+            return _ranges_intersect(risk_range, failure_range)
+        failure_leaf = bare_failure.split(".")[-1].lower()
+        if failure_leaf and failure_leaf in risk_signal.lower():
+            if risk_range is None or failure_range is None:
+                return True
+            return _ranges_intersect(risk_range, failure_range)
+    return False
+
+
+def _split_signal_name_and_range(signal_text: str) -> tuple[str, tuple[int, int] | None]:
+    match = re.search(r"(?P<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\[(?P<lhs>\d+):(?P<rhs>\d+)\])?", signal_text)
+    if not match:
+        return "", None
+    name = match.group("name")
+    lhs = match.group("lhs")
+    rhs = match.group("rhs")
+    if lhs is None or rhs is None:
+        return name, None
+    lo = min(int(lhs), int(rhs))
+    hi = max(int(lhs), int(rhs))
+    return name, (lo, hi)
+
+
+def _ranges_intersect(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return max(left[0], right[0]) <= min(left[1], right[1])

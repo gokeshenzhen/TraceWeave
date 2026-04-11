@@ -21,6 +21,7 @@ def trace_x_source(
     parser,
     top_hint: str | None = None,
     max_depth: int = DEFAULT_X_TRACE_MAX_DEPTH,
+    simulator: str = 'auto',
 ) -> dict[str, Any]:
     chain: list[dict[str, Any]] = []
     visited: set[str] = set()
@@ -61,6 +62,7 @@ def trace_x_source(
             wave_path=wave_path,
             compile_log=compile_log,
             top_hint=top_hint,
+            simulator=simulator,
         )
         node = _build_chain_node(current_signal, depth, value_result, driver)
         chain.append(node)

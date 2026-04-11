@@ -33,6 +33,16 @@ class SchemaModel(BaseModel):
         return iter(self._as_dict())
 
 
+TOKEN_BUDGET_SOFT_LIMIT = 80_000
+
+
+class TruncatableResult(SchemaModel):
+    detail_level: str = "summary"
+    detail_hint: str | None = None
+    auto_downgraded: bool = False
+    payload_bytes: int | None = None
+
+
 class ProblemHints(SchemaModel):
     has_x: bool = False
     has_z: bool = False
@@ -102,7 +112,7 @@ class StructuralRisk(SchemaModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-class ScanStructuralRisksResult(SchemaModel):
+class ScanStructuralRisksResult(TruncatableResult):
     scan_scope: str = "scope1"
     files_scanned: int = 0
     total_risks: int = 0
@@ -127,7 +137,7 @@ class ErrorGroup(SchemaModel):
     xprop_priority: Literal["high", "normal"] | None = None
 
 
-class ParseSimLogResult(SchemaModel):
+class ParseSimLogResult(TruncatableResult):
     log_file: str
     simulator: str
     schema_version: str
@@ -143,9 +153,7 @@ class ParseSimLogResult(SchemaModel):
     max_groups: int
     first_error_line: int
     groups: list[ErrorGroup] = Field(default_factory=list)
-    detail_level: str | None = None
-    detail_hint: str | None = None
-    auto_downgraded: bool | None = None
+    sampling_strategy: str | None = None
     failure_events: list[dict[str, Any]] = Field(default_factory=list)
     failure_events_total: int = 0
     failure_events_returned: int = 0
@@ -279,7 +287,7 @@ class GetSignalsByCycleResult(SchemaModel):
     signal_errors: dict[str, str] = Field(default_factory=dict)
 
 
-class AnalyzeFailuresResult(SchemaModel):
+class AnalyzeFailuresResult(TruncatableResult):
     summary: dict[str, Any] = Field(default_factory=dict)
     focused_group: dict[str, Any] | None = None
     focused_event: dict[str, Any] | None = None
@@ -332,6 +340,7 @@ class RecommendNextStepsResult(SchemaModel):
     degraded_reason: Literal["missing_structural_scan"] | None = None
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
+    next_iteration_hint: dict[str, Any] | None = None
 
 
 RecommendFailureDebugNextStepsResult = RecommendNextStepsResult

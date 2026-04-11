@@ -25,12 +25,14 @@ ALL_CATEGORIES = [
 
 _MODULE_BLOCK_RE = re.compile(r"^\s*module\s+(\w+)\b(.*?)(?=^\s*endmodule\b)", re.IGNORECASE | re.MULTILINE | re.DOTALL)
 _INST_PORT_SLICE_RE = re.compile(r"\.(\w+)\s*\(\s*(\w+)\s*\[(\d+):(\d+)\]\s*\)")
+_INSTANCE_BLOCK_RE = re.compile(r"(?P<module>\w+)\s+(?P<inst>\w+)\s*\((?P<body>.*?)\);", re.DOTALL)
 _ASSIGN_SLICE_RE = re.compile(r"assign\s+(\w+)\s*\[(\d+):(\d+)\]\s*=", re.IGNORECASE)
 _ASSIGN_FULL_RE = re.compile(r"\bassign\s+(\w+)\s*=", re.IGNORECASE)
 _ASSIGN_WITH_SLICE_RE = re.compile(r"\bassign\s+\w+\s*\[", re.IGNORECASE)
 _CASE_START_RE = re.compile(r"\b(case[zx]?)\s*\(", re.IGNORECASE)
 _CASE_OR_ENDCASE_RE = re.compile(r"\b(case[zx]?|endcase)\b", re.IGNORECASE)
 _DEFAULT_RE = re.compile(r"\bdefault\s*:", re.IGNORECASE)
+_FULL_CASE_COMMENT_RE = re.compile(r"synopsys\s+full_case", re.IGNORECASE)
 _MAGIC_COMPARE_RE = re.compile(
     r"(?P<lhs>[A-Za-z_]\w*(?:\s*\[[^\]]+\])?)\s*(?P<op>==|!=)\s*(?P<lit>\d+'[bBhHdDoO][0-9a-fA-F_xXzZ]+)"
 )
@@ -44,6 +46,12 @@ _BLOCK_TOKEN_RE = re.compile(
 _CASE_ITEM_LINE_RE = re.compile(r"^\s*\d+'[bBhHdDoO][0-9a-fA-F_xXzZ]+\s*.*:")
 _DEFAULT_LINE_RE = re.compile(r"^\s*default\s*:", re.IGNORECASE)
 _ZERO_LITERAL_RE = re.compile(r"(\d+)'b(0+)", re.IGNORECASE)
+_MODULE_HEADER_RE = re.compile(
+    r"^\s*module\s+(?P<name>\w+)(?:\s*#\s*\(.*?\))?\s*\((?P<ports>.*?)\)\s*;",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+_PORT_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\b")
+_CONDITION_OP_RE = re.compile(r"(==|!=|<=|>=|&&|\|\||[<>!])")
 
 
 @dataclass(frozen=True)
@@ -78,6 +86,7 @@ def scan_structural_risks(
     categories_scanned = _normalize_categories(categories)
     compile_result = parse_compile_log(compile_log, simulator)
     file_entries = compile_result.get("files", {}).get("user", [])
+    module_port_dirs = _build_module_port_directions(file_entries)
 
     risks: list[_Risk] = []
     skipped_files: list[str] = []
@@ -91,7 +100,7 @@ def scan_structural_risks(
         if not _should_scan_file(path):
             continue
         files_scanned += 1
-        risks.extend(_scan_file(path, categories_scanned))
+        risks.extend(_scan_file(path, categories_scanned, module_port_dirs))
 
     ordered_risks = sorted(risks, key=lambda item: (item.file, item.line, item.type, item.detail))
     return {
@@ -123,19 +132,24 @@ def _should_scan_file(path: str) -> bool:
     return path.lower().endswith((".sv", ".svh", ".v", ".vh"))
 
 
-def _scan_file(path: str, categories: list[str]) -> list[_Risk]:
+def _scan_file(
+    path: str,
+    categories: list[str],
+    module_port_dirs: dict[str, dict[str, str]],
+) -> list[_Risk]:
     with open(path, "r", errors="replace") as handle:
         raw_text = handle.read()
     text = _strip_comments_keep_lines(raw_text)
+    source_lines = raw_text.splitlines()
 
     risks: list[_Risk] = []
     for module_name, module_text, module_start_line in _iter_modules(text):
         if "slice_overlap" in categories:
-            risks.extend(_scan_slice_overlap(path, module_name, module_text, module_start_line))
+            risks.extend(_scan_slice_overlap(path, module_name, module_text, module_start_line, module_port_dirs))
         if "multi_drive" in categories:
             risks.extend(_scan_multi_drive(path, module_name, module_text, module_start_line))
         if "incomplete_case" in categories:
-            risks.extend(_scan_incomplete_case(path, module_name, module_text, module_start_line))
+            risks.extend(_scan_incomplete_case(path, module_name, module_text, module_start_line, source_lines))
     if "narrow_condition_injection" in categories:
         risks.extend(_scan_narrow_condition_injection(path, text))
     if "magic_condition" in categories:
@@ -169,14 +183,29 @@ def _normalize_slice(a: str, b: str) -> tuple[int, int]:
     return lo, hi
 
 
-def _scan_slice_overlap(path: str, module_name: str, module_text: str, module_start_line: int) -> list[_Risk]:
+def _scan_slice_overlap(
+    path: str,
+    module_name: str,
+    module_text: str,
+    module_start_line: int,
+    module_port_dirs: dict[str, dict[str, str]],
+) -> list[_Risk]:
     slices_by_target: dict[str, list[_SliceUse]] = defaultdict(list)
-    for match in _INST_PORT_SLICE_RE.finditer(module_text):
-        port_name, target, lhs, rhs = match.groups()
-        lo, hi = _normalize_slice(lhs, rhs)
-        line = _line_number(module_text, match.start(), module_start_line)
-        snippet = match.group(0).strip()
-        slices_by_target[target].append(_SliceUse(target, lo, hi, line, f"port {port_name}: {snippet}"))
+    output_slices_by_target: dict[str, list[_SliceUse]] = defaultdict(list)
+    for inst_match in _INSTANCE_BLOCK_RE.finditer(module_text):
+        instance_module = inst_match.group("module")
+        body = inst_match.group("body")
+        port_dirs = module_port_dirs.get(instance_module, {})
+        for match in _INST_PORT_SLICE_RE.finditer(body):
+            port_name, target, lhs, rhs = match.groups()
+            lo, hi = _normalize_slice(lhs, rhs)
+            line = _line_number(module_text, inst_match.start("body") + match.start(), module_start_line)
+            snippet = match.group(0).strip()
+            use = _SliceUse(target, lo, hi, line, f"port {port_name}: {snippet}")
+            if port_dirs.get(port_name) == "output":
+                output_slices_by_target[target].append(use)
+            else:
+                slices_by_target[target].append(use)
     for match in _ASSIGN_SLICE_RE.finditer(module_text):
         target, lhs, rhs = match.groups()
         lo, hi = _normalize_slice(lhs, rhs)
@@ -186,6 +215,32 @@ def _scan_slice_overlap(path: str, module_name: str, module_text: str, module_st
 
     risks: list[_Risk] = []
     for target, uses in slices_by_target.items():
+        if len(uses) < 2:
+            continue
+        ordered = sorted(uses, key=lambda item: (item.lo, item.hi, item.line))
+        findings: list[str] = []
+        for prev, curr in zip(ordered, ordered[1:]):
+            if curr.lo <= prev.hi:
+                overlap_lo = curr.lo
+                overlap_hi = min(prev.hi, curr.hi)
+                if overlap_lo == overlap_hi:
+                    findings.append(f"overlap at bit {overlap_lo}")
+                else:
+                    findings.append(f"overlap at bits {overlap_lo}:{overlap_hi}")
+            if curr.lo > prev.hi + 1:
+                gap_lo = prev.hi + 1
+                gap_hi = curr.lo - 1
+                if gap_lo == gap_hi:
+                    findings.append(f"gap at bit {gap_lo}")
+                else:
+                    findings.append(f"gap at bits {gap_lo}:{gap_hi}")
+        if findings:
+            line = ordered[0].line
+            detail = f"Target {target} has slice coverage issues: {'; '.join(findings)}"
+            evidence = [item.evidence for item in ordered]
+            evidence.append("-> " + ", ".join(findings))
+            risks.append(_Risk("slice_overlap", path, line, module_name, "high", detail, evidence))
+    for target, uses in output_slices_by_target.items():
         if len(uses) < 2:
             continue
         ordered = sorted(uses, key=lambda item: (item.lo, item.hi, item.line))
@@ -235,7 +290,13 @@ def _scan_multi_drive(path: str, module_name: str, module_text: str, module_star
     return risks
 
 
-def _scan_incomplete_case(path: str, module_name: str, module_text: str, module_start_line: int) -> list[_Risk]:
+def _scan_incomplete_case(
+    path: str,
+    module_name: str,
+    module_text: str,
+    module_start_line: int,
+    source_lines: list[str],
+) -> list[_Risk]:
     risks: list[_Risk] = []
     for match in _CASE_START_RE.finditer(module_text):
         start = match.start()
@@ -246,6 +307,8 @@ def _scan_incomplete_case(path: str, module_name: str, module_text: str, module_
         if _DEFAULT_RE.search(case_body):
             continue
         line = _line_number(module_text, start, module_start_line)
+        if _has_full_case_pragma(source_lines, line):
+            continue
         detail = f"{match.group(1).lower()} statement has no default branch"
         risks.append(
             _Risk(
@@ -296,6 +359,8 @@ def _scan_narrow_condition_injection(path: str, text: str) -> list[_Risk]:
             continue
         analysis = _analyze_narrow_injection(brace_text)
         if analysis is None:
+            continue
+        if _is_plain_zero_extend_assignment(text, brace_start, brace_text):
             continue
         zero_width, total_width = analysis
         line = _line_number(text, brace_start)
@@ -525,6 +590,86 @@ def _is_allowed_literal(literal: str) -> bool:
     if base.lower() == "h" and set(normalized) == {"f"}:
         return True
     return False
+
+
+def _build_module_port_directions(file_entries: list[dict]) -> dict[str, dict[str, str]]:
+    module_port_dirs: dict[str, dict[str, str]] = {}
+    for entry in file_entries:
+        path = entry["path"]
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", errors="replace") as handle:
+            raw_text = handle.read()
+        for match in _MODULE_HEADER_RE.finditer(raw_text):
+            module_name = match.group("name")
+            ports_blob = match.group("ports")
+            directions = module_port_dirs.setdefault(module_name, {})
+            for part in _split_top_level_commas(ports_blob):
+                lower = part.lower()
+                direction = None
+                if "input" in lower:
+                    direction = "input"
+                elif "output" in lower:
+                    direction = "output"
+                elif "inout" in lower:
+                    direction = "inout"
+                if direction is None:
+                    continue
+                for port_name in _extract_declared_names(part):
+                    directions.setdefault(port_name, direction)
+    return module_port_dirs
+
+
+def _extract_declared_names(port_decl: str) -> list[str]:
+    scrubbed = re.sub(r"\[[^\]]+\]", " ", port_decl)
+    scrubbed = re.sub(
+        r"\b(input|output|inout|wire|reg|logic|signed|unsigned|var)\b",
+        " ",
+        scrubbed,
+        flags=re.IGNORECASE,
+    )
+    return [
+        match.group(1)
+        for match in _PORT_NAME_RE.finditer(scrubbed)
+        if match.group(1) not in {"input", "output", "inout"}
+    ]
+
+
+def _has_full_case_pragma(source_lines: list[str], case_line: int) -> bool:
+    candidate_lines: list[str] = []
+    if 0 < case_line <= len(source_lines):
+        candidate_lines.append(source_lines[case_line - 1])
+    if 0 <= case_line < len(source_lines):
+        candidate_lines.append(source_lines[case_line])
+    return any(_FULL_CASE_COMMENT_RE.search(line) for line in candidate_lines)
+
+
+def _is_plain_zero_extend_assignment(text: str, brace_start: int | None, brace_text: str) -> bool:
+    if brace_start is None:
+        return False
+    stmt_start, stmt_end = _find_statement_bounds(text, brace_start)
+    statement = text[stmt_start:stmt_end]
+    assign_op_pos = _find_top_level_assignment_pos(statement)
+    if assign_op_pos is None:
+        return False
+    assign_len = 2 if statement[assign_op_pos:assign_op_pos + 2] == "<=" else 1
+    rhs = statement[assign_op_pos + assign_len:].strip()
+    if rhs != brace_text.strip():
+        return False
+    other_part = _extract_narrow_injection_other_part(brace_text)
+    return other_part is not None and not _CONDITION_OP_RE.search(other_part)
+
+
+def _extract_narrow_injection_other_part(brace_text: str) -> str | None:
+    inner = brace_text[1:-1].strip()
+    parts = _split_top_level_commas(inner)
+    if len(parts) != 2:
+        return None
+    left_zero = _parse_zero_literal(parts[0])
+    right_zero = _parse_zero_literal(parts[1])
+    if left_zero is None and right_zero is None:
+        return None
+    return parts[1] if left_zero is not None else parts[0]
 
 
 def _dedupe_risks(risks: list[_Risk]) -> list[_Risk]:

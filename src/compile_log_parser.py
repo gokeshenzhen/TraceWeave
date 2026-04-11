@@ -31,6 +31,32 @@ _XCE_FILE_RE = re.compile(r"^file:\s+(.+)$")
 _XCE_ENTITY_RE = re.compile(r"^\s*(module|interface|package)\s+worklib\.(\w+):", re.IGNORECASE)
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
 _FILELIST_RE = re.compile(r"(?:^|\s)-f\s+(\S+)")
+_VCS_MARKERS = (
+    "chronologic vcs",
+    "parsing design file",
+    "parsing included file",
+    "back to file '",
+    "synopsys vcs",
+    "vcs-mx",
+    "vlogan",
+    "vhdlan",
+    "/vcs_mx/",
+    "/vcs/",
+    "vcs_home",
+    "simv.daidir",
+    "script_home",
+)
+_XCE_MARKERS = (
+    "xrun",
+    "xmvlog",
+    "xmelab",
+    "xmsim",
+    "xcelium",
+    "incisive",
+    "cadence design systems",
+    "xlm_",
+    "xcelium_home",
+)
 
 
 def _normalize_path(path: str, parent: str | None = None) -> str:
@@ -62,13 +88,16 @@ def _categorize(path: str) -> str:
 
 
 def detect_simulator(log_path: str) -> str:
-    with open(log_path, "r", errors="replace") as f:
-        for _, line in zip(range(20), f):
-            lower = line.lower()
-            if "chronologic vcs" in lower or "parsing design file" in lower:
-                return "vcs"
-            if "xrun" in lower or "xmvlog" in lower or "xmelab" in lower:
-                return "xcelium"
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            for _, line in zip(range(200), f):
+                lower = line.lower()
+                if any(marker in lower for marker in _VCS_MARKERS):
+                    return "vcs"
+                if any(marker in lower for marker in _XCE_MARKERS):
+                    return "xcelium"
+    except OSError:
+        return "unknown"
     return "unknown"
 
 

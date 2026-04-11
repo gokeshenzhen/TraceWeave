@@ -224,12 +224,27 @@ class FSDBParser:
         self._open()
         end_ps = int(self._lib.fsdb_get_end_time(self._handle))
         count  = self._lib.fsdb_get_signal_count(self._handle)
+        sample_signals: list[str] = []
+        top_modules: list[str] = []
+        try:
+            search_result = self.search_signals("", max_results=20)
+            sample_signals = [item["path"] for item in search_result.get("results", [])[:20]]
+            top_modules = sorted({path.split(".")[0] for path in sample_signals if "." in path})
+            if end_ps <= 0:
+                for signal_path in sample_signals[:8]:
+                    transitions = self.get_transitions(signal_path, 0, -1).get("transitions", [])
+                    if transitions:
+                        end_ps = max(end_ps, transitions[-1]["time_ps"])
+        except Exception:
+            pass
         return {
             "file":                   self.file_path,
             "format":                 "FSDB",
             "simulation_duration_ps": end_ps,
             "simulation_duration_ns": end_ps / 1000,
             "total_signals":          count,
+            "top_modules":            top_modules,
+            "sample_signals":         sample_signals,
         }
 
     def search_signals(self, keyword: str,

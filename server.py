@@ -12,6 +12,7 @@ This server provides waveform-debug workflow tools, including:
 """
 
 import asyncio
+from collections.abc import Callable
 import json
 import sys
 import os
@@ -169,9 +170,79 @@ def _invalidate_downstream(from_tool: str):
             _result_provenance[downstream] = None
 
 
+def _clear_result_state():
+    for key in _result_cache:
+        _result_cache[key] = None
+    for key in _result_provenance:
+        _result_provenance[key] = None
+
+
+def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple | None:
+    if sim_result is None:
+        return None
+    if isinstance(sim_result, schemas.SimPathsResult):
+        verif_root = sim_result.verif_root
+        case_name = sim_result.case_name
+        compile_logs = [entry.model_dump() for entry in sim_result.compile_logs]
+    else:
+        verif_root = sim_result.get("verif_root")
+        case_name = sim_result.get("case_name")
+        compile_logs = list(sim_result.get("compile_logs", []))
+
+    compile_log = None
+    for entry in compile_logs:
+        if entry.get("phase") == "elaborate":
+            compile_log = entry
+            break
+    if compile_log is None and compile_logs:
+        compile_log = compile_logs[0]
+    if compile_log is None:
+        compile_sig = None
+    else:
+        compile_sig = (
+            os.path.realpath(compile_log.get("path", "")) if compile_log.get("path") else None,
+            compile_log.get("size"),
+            compile_log.get("mtime"),
+        )
+    return verif_root, case_name, compile_sig
+
+
+def _resolve_session_simulator(args: dict) -> str:
+    explicit = args.get("simulator")
+    if explicit and explicit != "auto":
+        return explicit
+    sim_result = _result_cache.get("get_sim_paths")
+    if sim_result is not None and getattr(sim_result, "simulator", None):
+        return sim_result.simulator
+    requested_compile_log = args.get("compile_log")
+    hierarchy_provenance = _result_provenance.get("build_tb_hierarchy")
+    if (
+        hierarchy_provenance
+        and hierarchy_provenance.get("simulator")
+        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+    ):
+        return hierarchy_provenance["simulator"]
+    hierarchy_result = _result_cache.get("build_tb_hierarchy")
+    if (
+        hierarchy_result is not None
+        and hierarchy_result.project.get("simulator")
+        and hierarchy_provenance is not None
+        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+    ):
+        return hierarchy_result.project["simulator"]
+    return "auto"
+
+
 def _update_session_state(tool_name: str, args: dict, result: dict):
-    _invalidate_downstream(tool_name)
     if tool_name == "get_sim_paths":
+        previous_identity = _session_identity(_result_cache.get("get_sim_paths"))
+        new_identity = _session_identity(result)
+        if previous_identity is not None and previous_identity != new_identity:
+            _session_state["get_sim_paths"] = None
+            _session_state["build_tb_hierarchy"] = None
+            _clear_result_state()
+        else:
+            _invalidate_downstream(tool_name)
         compile_log = None
         for entry in result.get("compile_logs", []):
             if entry.get("phase") == "elaborate":
@@ -188,19 +259,17 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             "compile_log": compile_log,
         }
     elif tool_name == "build_tb_hierarchy":
+        _invalidate_downstream(tool_name)
         _session_state["build_tb_hierarchy"] = {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator", "auto"),
+            "simulator": args.get("simulator") or result.get("project", {}).get("simulator", "auto"),
         }
 
 
 def reset_session_state():
     _session_state["get_sim_paths"] = None
     _session_state["build_tb_hierarchy"] = None
-    for key in _result_cache:
-        _result_cache[key] = None
-    for key in _result_provenance:
-        _result_provenance[key] = None
+    _clear_result_state()
 
 
 SERVER_INSTRUCTIONS = """
@@ -240,8 +309,8 @@ Waveform debug workflow:
    - When parse_sim_log returns auto_diff, it contains a diff against the previous
      parse of the same log. Use it to verify which failures were resolved or
      introduced by the latest code change. Do not ignore resolved/introduced counts.
-   - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="compact".
-   - Default detail_level is "compact" which limits failure_events per group for manageable output.
+   - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="full".
+   - Default detail_level is "summary" to keep MCP responses below harness budget.
 
 4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
@@ -650,7 +719,8 @@ async def list_tools():
             name="recommend_failure_debug_next_steps",
             description=(
                 "Choose the highest-priority failure to investigate from the current log, waveform, and optional hierarchy, "
-                "then recommend signals, instances, and suspected failure class."
+                "then recommend signals, instances, and suspected failure class. "
+                "Also suggests a diff_sim_failure_results call to use on the next run."
             ),
             inputSchema={
                 "type": "object",
@@ -700,6 +770,10 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                    },
                     "top_hint": {"type": "string"},
                     "recursive": {
                         "type": "boolean",
@@ -729,6 +803,10 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "time_ps": {"type": "integer"},
                     "compile_log": {"type": "string"},
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                    },
                     "top_hint": {"type": "string"},
                     "max_depth": {
                         "type": "integer",
@@ -775,9 +853,10 @@ async def _dispatch(name: str, args: dict):
         return _handle_parse_sim_log(args)
 
     elif name == "diff_sim_failure_results":
+        simulator = _resolve_session_simulator(args)
         result = SimLogParser(
             args["base_log_path"],
-            args["simulator"],
+            simulator,
         ).diff_against(args["new_log_path"])
         return schemas.DiffResult.model_validate(result)
 
@@ -854,16 +933,17 @@ async def _dispatch(name: str, args: dict):
         return schemas.WaveformSummaryResult.model_validate(result)
 
     elif name == "build_tb_hierarchy":
+        simulator = _resolve_session_simulator(args)
+        resolved_args = {**args, "simulator": simulator}
         result = build_hierarchy(
             parse_compile_log(
                 args["compile_log"],
-                args.get("simulator", "auto"),
+                simulator,
             )
         )
-        _update_session_state(name, args, result)
+        _update_session_state(name, resolved_args, result)
         scan_call = None
         compile_log = args.get("compile_log")
-        simulator = args.get("simulator", "auto")
         if _get_compatible_scan_cache(compile_log, simulator) is None:
             scan_call = _build_scan_required_next_call(compile_log, simulator)
         result["required_next_call"] = scan_call
@@ -879,28 +959,38 @@ async def _dispatch(name: str, args: dict):
             }
         validated = schemas.BuildTbHierarchyResult.model_validate(result)
         _result_cache["build_tb_hierarchy"] = validated
-        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, args, validated)
+        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, resolved_args, validated)
         return validated
 
     elif name == "scan_structural_risks":
+        simulator = _resolve_session_simulator(args)
+        resolved_args = {**args, "simulator": simulator}
         result = scan_structural_risks(
             compile_log=args["compile_log"],
-            simulator=args.get("simulator", "auto"),
+            simulator=simulator,
             scan_scope=args.get("scan_scope", "scope1"),
             categories=args.get("categories"),
         )
-        validated = schemas.ScanStructuralRisksResult.model_validate(result)
+        validated = _enforce_output_budget(
+            schemas.ScanStructuralRisksResult.model_validate(result),
+            [
+                _shrink_scan_structural_risks_stage1,
+                _shrink_scan_structural_risks_stage2,
+                _shrink_scan_structural_risks_terminal,
+            ],
+        )
         _invalidate_downstream("scan_structural_risks")
         _result_cache["scan_structural_risks"] = validated
-        _result_provenance["scan_structural_risks"] = _build_result_provenance(name, args, validated)
+        _result_provenance["scan_structural_risks"] = _build_result_provenance(name, resolved_args, validated)
         return validated
 
     elif name == "analyze_failures":
+        simulator = _resolve_session_simulator(args)
         request_context = _build_recommend_request_context(args)
         result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
-            simulator=args["simulator"],
+            simulator=simulator,
         ).analyze(
             signal_paths=args["signal_paths"],
             group_index=args.get("group_index", 0),
@@ -913,13 +1003,21 @@ async def _dispatch(name: str, args: dict):
                 "step0": "scan_structural_risks has not been run, so this analysis does not include structural risk correlation.",
                 **original_guide,
             }
-        return schemas.AnalyzeFailuresResult.model_validate(result)
+        return _enforce_output_budget(
+            schemas.AnalyzeFailuresResult.model_validate(result),
+            [
+                _shrink_analyze_failures_stage1,
+                _shrink_analyze_failures_stage2,
+                _shrink_analyze_failures_terminal,
+            ],
+        )
 
     elif name == "analyze_failure_event":
+        simulator = _resolve_session_simulator(args)
         result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
-            simulator=args["simulator"],
+            simulator=simulator,
         ).analyze_failure_event(
             failure_event=args["failure_event"],
             wave_path=args["wave_path"],
@@ -929,13 +1027,15 @@ async def _dispatch(name: str, args: dict):
         return schemas.AnalyzeFailureEventResult.model_validate(result)
 
     elif name == "recommend_failure_debug_next_steps":
+        simulator = _resolve_session_simulator(args)
+        resolved_args = {**args, "simulator": simulator}
         request_context = _build_recommend_request_context(args)
         scan_cache = _get_compatible_recommend_scan_cache(request_context)
         parse_cache = _get_compatible_recommend_parse_cache(request_context)
         result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
-            simulator=args["simulator"],
+            simulator=simulator,
         ).recommend_debug_next_steps(
             wave_path=args["wave_path"],
             compile_log=args.get("compile_log"),
@@ -965,13 +1065,14 @@ async def _dispatch(name: str, args: dict):
             result["required_next_call"] = None
         validated = schemas.RecommendNextStepsResult.model_validate(result)
         _result_cache["recommend_failure_debug_next_steps"] = validated
-        _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, args, validated)
+        _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, resolved_args, validated)
         return validated
 
     elif name == "get_diagnostic_snapshot":
         return _handle_diagnostic_snapshot(args)
 
     elif name == "explain_signal_driver":
+        simulator = _resolve_session_simulator(args)
         result = explain_signal_driver(
             signal_path=args["signal_path"],
             wave_path=args["wave_path"],
@@ -979,10 +1080,12 @@ async def _dispatch(name: str, args: dict):
             top_hint=args.get("top_hint"),
             recursive=args.get("recursive", False),
             max_depth=args.get("max_depth", 10),
+            simulator=simulator,
         )
         return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "trace_x_source":
+        simulator = _resolve_session_simulator(args)
         result = trace_x_source(
             wave_path=args["wave_path"],
             signal_path=args["signal_path"],
@@ -991,6 +1094,7 @@ async def _dispatch(name: str, args: dict):
             parser=_get_parser(args["wave_path"]),
             top_hint=args.get("top_hint"),
             max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
+            simulator=simulator,
         )
         return schemas.TraceXSourceResult.model_validate(result)
 
@@ -1097,7 +1201,7 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
     return {
         "log_path": args.get("log_path"),
         "wave_path": args.get("wave_path"),
-        "simulator": args.get("simulator") or sim_state.get("simulator"),
+        "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
         "compile_log": args.get("compile_log") or hier_state.get("compile_log") or sim_state.get("compile_log"),
     }
 
@@ -1192,12 +1296,12 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
     if tool_name == "build_tb_hierarchy":
         return {
             "compile_log": args.get("compile_log"),
-            "simulator": result.project.get("simulator"),
+            "simulator": args.get("simulator") or result.project.get("simulator") or "auto",
         }
     if tool_name == "scan_structural_risks":
         return {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator", "auto"),
+            "simulator": _resolve_session_simulator(args),
         }
     if tool_name == "recommend_failure_debug_next_steps":
         log_path = args.get("log_path")
@@ -1213,7 +1317,7 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
         return {
             "log_path": log_path,
             "wave_path": args.get("wave_path"),
-            "simulator": args.get("simulator"),
+            "simulator": _resolve_session_simulator(args),
             "compile_log": args.get("compile_log"),
             "log_mtime": log_mtime,
             "log_size": log_size,
@@ -1506,11 +1610,289 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     )
 
 
+def _enforce_output_budget(
+    model: schemas.TruncatableResult,
+    shrink_stages: list[Callable[[schemas.TruncatableResult], schemas.TruncatableResult]],
+) -> schemas.TruncatableResult:
+    payload = model.model_dump_json(exclude_none=True)
+    model.payload_bytes = len(payload)
+    if model.payload_bytes <= schemas.TOKEN_BUDGET_SOFT_LIMIT:
+        return model
+
+    current = model
+    for shrink in shrink_stages:
+        current = shrink(current)
+        current.auto_downgraded = True
+        payload = current.model_dump_json(exclude_none=True)
+        current.payload_bytes = len(payload)
+        if current.payload_bytes <= schemas.TOKEN_BUDGET_SOFT_LIMIT:
+            return current
+    return current
+
+
+def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ParseSimLogResult)
+    groups = []
+    for group in model.groups[:3]:
+        payload = group.model_dump()
+        payload["sample_message"] = payload["sample_message"][:40]
+        groups.append(payload)
+    return schemas.ParseSimLogResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "groups": groups,
+            "max_groups": min(model.max_groups, len(groups)),
+            "detail_level": "summary",
+            "detail_hint": (
+                "Call parse_sim_log with detail_level=\"full\" and max_groups=<n> "
+                "for a targeted follow-up."
+            ),
+            "failure_events": [],
+            "failure_events_returned": 0,
+            "failure_events_truncated": model.failure_events_total > 0,
+            "candidate_previous_logs": [],
+            "first_group_context": None,
+            "auto_diff": None,
+        }
+    )
+
+
+def _shrink_parse_sim_log_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ParseSimLogResult)
+    groups = []
+    if model.groups:
+        payload = model.groups[0].model_dump()
+        payload["sample_message"] = payload["sample_message"][:24]
+        groups.append(payload)
+    return schemas.ParseSimLogResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "groups": groups,
+            "max_groups": min(model.max_groups, len(groups)),
+            "detail_level": "summary",
+            "detail_hint": "Call get_error_context or rerun parse_sim_log for a specific group.",
+            "candidate_previous_logs": [],
+            "first_group_context": None,
+            "parser_capabilities": [],
+            "auto_diff": None,
+        }
+    )
+
+
+def _shrink_parse_sim_log_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ParseSimLogResult)
+    return schemas.ParseSimLogResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "groups": [],
+            "max_groups": 0,
+            "detail_level": "summary",
+            "detail_hint": "Response truncated to fit budget. Re-run for one target group.",
+            "failure_events": [],
+            "failure_events_returned": 0,
+            "failure_events_truncated": model.failure_events_total > 0,
+            "candidate_previous_logs": [],
+            "parser_capabilities": [],
+            "first_group_context": None,
+            "auto_diff": None,
+        }
+    )
+
+
+def _trim_group_like_payload(group: dict | None, sample_limit: int) -> dict | None:
+    if not isinstance(group, dict):
+        return None
+    trimmed = dict(group)
+    sample_message = trimmed.get("sample_message")
+    if isinstance(sample_message, str):
+        trimmed["sample_message"] = sample_message[:sample_limit]
+    return trimmed
+
+
+def _trim_focused_event(event: dict | None, message_limit: int = 96) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    allowed_keys = [
+        "event_id",
+        "group_signature",
+        "time_ps",
+        "source_file",
+        "source_line",
+        "instance_path",
+        "mechanism",
+        "log_phase",
+        "time_parse_status",
+        "value_repr",
+        "message",
+    ]
+    trimmed = {key: event[key] for key in allowed_keys if key in event}
+    if isinstance(trimmed.get("message"), str):
+        trimmed["message"] = trimmed["message"][:message_limit]
+    return trimmed
+
+
+def _trim_analyze_summary(summary: dict, group_limit: int, sample_limit: int) -> dict:
+    trimmed = dict(summary)
+    groups = trimmed.get("groups")
+    if isinstance(groups, list):
+        trimmed["groups"] = [
+            _trim_group_like_payload(group, sample_limit)
+            for group in groups[:group_limit]
+            if isinstance(group, dict)
+        ]
+    return trimmed
+
+
+def _summarize_wave_context(wave_context: dict | None, signal_limit: int, transition_limit: int) -> dict | None:
+    if not isinstance(wave_context, dict):
+        return None
+    trimmed = {
+        key: value
+        for key, value in wave_context.items()
+        if key != "signals"
+    }
+    signals = wave_context.get("signals")
+    if not isinstance(signals, dict):
+        return trimmed
+    trimmed_signals: dict[str, dict] = {}
+    for signal_name, signal_payload in list(signals.items())[:signal_limit]:
+        if not isinstance(signal_payload, dict):
+            continue
+        entry = dict(signal_payload)
+        transitions = entry.get("transitions")
+        if isinstance(transitions, list):
+            entry["transitions"] = transitions[:transition_limit]
+        trimmed_signals[signal_name] = entry
+    trimmed["signals"] = trimmed_signals
+    return trimmed
+
+
+def _shrink_analyze_failures_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.AnalyzeFailuresResult)
+    summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=80)
+    wave_context = _summarize_wave_context(model.wave_context, signal_limit=1, transition_limit=4)
+    log_context = model.log_context
+    if isinstance(log_context, dict) and isinstance(log_context.get("context"), str):
+        log_context = {
+            **log_context,
+            "context": log_context["context"][:400],
+        }
+    return schemas.AnalyzeFailuresResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_hint": (
+                "Narrow signal_paths or inspect a single failure group to get the full waveform payload."
+            ),
+            "summary": summary,
+            "focused_group": _trim_group_like_payload(model.focused_group, 80),
+            "focused_event": _trim_focused_event(model.focused_event, 96),
+            "log_context": log_context,
+            "wave_context": wave_context,
+            "signals_queried": (model.signals_queried or [])[:2],
+        }
+    )
+
+
+def _shrink_analyze_failures_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.AnalyzeFailuresResult)
+    summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=32)
+    return schemas.AnalyzeFailuresResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_hint": "Response truncated. Re-run analyze_failures for one group and fewer signals.",
+            "summary": summary,
+            "focused_group": _trim_group_like_payload(model.focused_group, 32),
+            "focused_event": _trim_focused_event(model.focused_event, 48),
+            "log_context": None,
+            "wave_context": None,
+            "signals_queried": (model.signals_queried or [])[:1],
+            "analysis_guide": {
+                "step1": "Re-run analyze_failures with a single target signal for full context.",
+            },
+        }
+    )
+
+
+def _shrink_analyze_failures_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.AnalyzeFailuresResult)
+    summary = {
+        "runtime_total_errors": model.summary.get("runtime_total_errors"),
+        "total_groups": model.summary.get("total_groups"),
+        "truncated": True,
+    }
+    return schemas.AnalyzeFailuresResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_level": "summary",
+            "detail_hint": "Response truncated to fit budget. Re-run analyze_failures for one group.",
+            "summary": summary,
+            "focused_group": None,
+            "focused_event": None,
+            "log_context": None,
+            "wave_context": None,
+            "signals_queried": [],
+            "analysis_guide": {
+                "step1": "Re-run analyze_failures with one group_index and one signal_path.",
+            },
+        }
+    )
+
+
+def _truncate_risk_payload(risk: schemas.StructuralRisk, detail_limit: int, evidence_limit: int) -> dict:
+    payload = risk.model_dump()
+    payload["detail"] = payload["detail"][:detail_limit]
+    payload["evidence"] = payload["evidence"][:evidence_limit]
+    return payload
+
+
+def _shrink_scan_structural_risks_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ScanStructuralRisksResult)
+    risks = [_truncate_risk_payload(risk, detail_limit=120, evidence_limit=2) for risk in model.risks[:10]]
+    return schemas.ScanStructuralRisksResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_hint": "Re-run scan_structural_risks with narrower categories if you need the full risk list.",
+            "risks": risks,
+            "total_risks": model.total_risks,
+            "skipped_files": [],
+        }
+    )
+
+
+def _shrink_scan_structural_risks_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ScanStructuralRisksResult)
+    risks = [_truncate_risk_payload(risk, detail_limit=64, evidence_limit=0) for risk in model.risks[:3]]
+    return schemas.ScanStructuralRisksResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_hint": "Response truncated. Re-run scan_structural_risks with narrower categories.",
+            "risks": risks,
+            "categories_scanned": model.categories_scanned[:3],
+            "skipped_files": [],
+        }
+    )
+
+
+def _shrink_scan_structural_risks_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+    assert isinstance(model, schemas.ScanStructuralRisksResult)
+    return schemas.ScanStructuralRisksResult.model_validate(
+        {
+            **model.model_dump(exclude_none=True),
+            "detail_level": "summary",
+            "detail_hint": "Response truncated to fit budget. Re-run scan_structural_risks with one category.",
+            "risks": [],
+            "categories_scanned": model.categories_scanned[:3],
+            "skipped_files": [],
+        }
+    )
+
+
 def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     prev_provenance = _result_provenance.get("parse_sim_log")
+    simulator = _resolve_session_simulator(args)
     log_mtime = os.path.getmtime(args["log_path"])
     log_size = os.path.getsize(args["log_path"])
-    parser = SimLogParser(args["log_path"], args["simulator"])
+    parser = SimLogParser(args["log_path"], simulator)
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
     max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
@@ -1524,9 +1906,12 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     all_events = parser.parse_failure_events()
 
     if detail_level == "summary":
-        total = summary["runtime_total_errors"]
+        total = len(all_events)
         returned_events = []
-        summary["detail_hint"] = "use detail_level='compact' or get_error_context(group_index=N) for details"
+        summary["detail_hint"] = (
+            'Call parse_sim_log with detail_level="full" and max_groups=<n> '
+            "for a specific follow-up."
+        )
     else:
         scoped_events = [
             event for event in all_events
@@ -1557,6 +1942,7 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
                 first_group_context = None
 
     summary["detail_level"] = detail_level
+    summary["auto_downgraded"] = False
     summary["failure_events"] = returned_events
     summary["failure_events_total"] = total
     summary["failure_events_returned"] = len(returned_events)
@@ -1573,13 +1959,13 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             problem_hints.has_x,
             problem_hints.has_z,
         )
-    validated = schemas.ParseSimLogResult.model_validate(summary)
+
     auto_diff = None
     if (
         prev_provenance is not None
         and isinstance(prev_provenance.get("all_failure_events"), list)
-        and prev_provenance.get("simulator") == validated.simulator
-        and _same_realpath(prev_provenance.get("log_path"), validated.log_file)
+        and prev_provenance.get("simulator") == simulator
+        and _same_realpath(prev_provenance.get("log_path"), args["log_path"])
         and (
             prev_provenance.get("log_mtime") != log_mtime
             or prev_provenance.get("log_size") != log_size
@@ -1589,12 +1975,16 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             prev_provenance["all_failure_events"],
             all_events,
         )
-        validated = schemas.ParseSimLogResult.model_validate(
-            {
-                **validated.model_dump(exclude_none=True),
-                "auto_diff": auto_diff,
-            }
-        )
+    summary["auto_diff"] = auto_diff
+
+    validated = _enforce_output_budget(
+        schemas.ParseSimLogResult.model_validate(summary),
+        [
+            _shrink_parse_sim_log_stage1,
+            _shrink_parse_sim_log_stage2,
+            _shrink_parse_sim_log_terminal,
+        ],
+    )
     _invalidate_downstream("parse_sim_log")
     _result_cache["parse_sim_log"] = validated
     _result_provenance["parse_sim_log"] = {

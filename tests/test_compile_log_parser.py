@@ -42,6 +42,10 @@ class TestDetectSimulator:
         finally:
             os.unlink(path)
 
+    def test_detect_vcs_banner_buried_past_line_20(self):
+        fixture = Path(__file__).parent / "fixtures" / "uvm_demo_cc18_comp_head.log"
+        assert detect_simulator(str(fixture)) == "vcs"
+
 
 class TestParseCompileLog:
     def test_parse_vcs_compile_log(self):
@@ -95,4 +99,3 @@ file: {root / 'tb' / 'top_tb.sv'}
             assert result["top_modules"] == ["top_tb"]
         finally:
             tmp.cleanup()
-

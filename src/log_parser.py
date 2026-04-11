@@ -70,6 +70,7 @@ _TIME_PATTERNS = (
 SCHEMA_VERSION = "2.0"
 CONTRACT_VERSION = "1.3"
 FAILURE_EVENTS_SCHEMA_VERSION = "1.0"
+_PHASE_BUCKETS = 4
 
 _NON_RUNTIME_DIAGNOSTIC_TOKENS = (
     "xmvlog",
@@ -883,8 +884,10 @@ def _build_summary(
     )
     total_groups = len(group_list)
     truncated = total_groups > max_groups
+    sampling_strategy = "time_order"
     if truncated:
-        group_list = group_list[:max_groups]
+        group_list = _sample_groups_phase_stratified(group_list, max_groups)
+        sampling_strategy = "phase_stratified"
     for group_index, item in enumerate(group_list):
         item["group_index"] = group_index
 
@@ -907,8 +910,89 @@ def _build_summary(
         "max_groups": max_groups,
         "first_error_line": first_error_line,
         "groups": group_list,
+        "sampling_strategy": sampling_strategy,
         **_find_previous_log_hints(log_path),
     }
+
+
+def _sample_groups_phase_stratified(
+    groups: list[dict[str, Any]],
+    max_groups: int,
+) -> list[dict[str, Any]]:
+    if len(groups) <= max_groups:
+        return groups
+    if max_groups <= 0:
+        return []
+
+    phase_buckets = _bucket_groups_by_time_phase(groups)
+    quota_per_phase = max(1, max_groups // max(1, len(phase_buckets)))
+    selected_ids: set[int] = set()
+    selected_signatures: set[str] = set()
+    selected: list[dict[str, Any]] = []
+
+    for phase_groups in phase_buckets:
+        phase_count = 0
+        for group in phase_groups:
+            if len(selected) >= max_groups or phase_count >= quota_per_phase:
+                break
+            gid = id(group)
+            signature = group["signature"]
+            if gid in selected_ids or signature in selected_signatures:
+                continue
+            selected.append(group)
+            selected_ids.add(gid)
+            selected_signatures.add(signature)
+            phase_count += 1
+
+    phase_index = 0
+    while len(selected) < max_groups and phase_buckets:
+        phase_groups = phase_buckets[phase_index % len(phase_buckets)]
+        added = False
+        for group in phase_groups:
+            gid = id(group)
+            if gid in selected_ids:
+                continue
+            selected.append(group)
+            selected_ids.add(gid)
+            selected_signatures.add(group["signature"])
+            added = True
+            break
+        if not added:
+            if all(id(group) in selected_ids for group in phase_groups):
+                if all(all(id(group) in selected_ids for group in bucket) for bucket in phase_buckets):
+                    break
+        phase_index += 1
+
+    return sorted(
+        selected[:max_groups],
+        key=lambda item: (
+            item["first_time_ps"] if item["first_time_ps"] is not None else float("inf"),
+            item["first_line"],
+            item["signature"],
+        ),
+    )
+
+
+def _bucket_groups_by_time_phase(groups: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    known_times = [group["first_time_ps"] for group in groups if group.get("first_time_ps") is not None]
+    if not known_times:
+        return [groups]
+    start = min(known_times)
+    end = max(group.get("last_time_ps") or group.get("first_time_ps") or start for group in groups)
+    if end <= start:
+        return [groups]
+
+    span = end - start
+    phase_width = max(1, span // _PHASE_BUCKETS)
+    buckets: list[list[dict[str, Any]]] = [[] for _ in range(_PHASE_BUCKETS)]
+    for group in groups:
+        time_ps = group.get("first_time_ps")
+        if time_ps is None:
+            buckets[-1].append(group)
+            continue
+        phase = min(_PHASE_BUCKETS - 1, max(0, (time_ps - start) // phase_width))
+        buckets[int(phase)].append(group)
+    return [bucket for bucket in buckets if bucket]
 
 
 def _find_previous_log_hints(log_path: str) -> dict[str, Any]:

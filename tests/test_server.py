@@ -452,6 +452,7 @@ class TestDispatchParseSimLog:
                     "log_path": log_path,
                     "simulator": "vcs",
                     "max_groups": 2,
+                    "detail_level": "full",
                 },
             )
 
@@ -463,7 +464,7 @@ class TestDispatchParseSimLog:
             assert len(result["groups"]) == 2
             assert result["groups"][0]["group_index"] == 0
             assert len(result["failure_events"]) == 2
-            assert result["detail_level"] == "compact"
+            assert result["detail_level"] == "full"
             assert result["failure_events_total"] == 2
             assert result["failure_events_returned"] == 2
             assert result["failure_events_truncated"] is False
@@ -766,6 +767,7 @@ $enddefinitions $end
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
         assert result["workflow_incomplete"] is True
         assert result["degraded_reason"] == "missing_structural_scan"
+        assert result["next_iteration_hint"]["tool"] == "diff_sim_failure_results"
         assert result["required_next_call"] == {
             "tool": "scan_structural_risks",
             "arguments": {

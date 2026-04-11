@@ -163,3 +163,74 @@ class TestStructuralScanner:
     def test_rejects_unknown_category(self):
         with pytest.raises(ValueError, match="Unknown categories"):
             scan_structural_risks("/tmp/compile.log", "vcs", categories=["not_real"])
+
+    def test_output_port_slice_merge_without_overlap_does_not_report(self, monkeypatch, tmp_path):
+        rtl = tmp_path / "merge_ok.sv"
+        rtl.write_text(
+            """\
+module leaf(output logic [3:0] dout);
+endmodule
+
+module top;
+  logic [7:0] bus;
+  leaf u_a(.dout(bus[3:0]));
+  leaf u_b(.dout(bus[7:4]));
+endmodule
+"""
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["slice_overlap"])
+        assert result["total_risks"] == 0
+
+    def test_full_case_comment_suppresses_incomplete_case(self, monkeypatch, tmp_path):
+        rtl = tmp_path / "full_case_ok.sv"
+        rtl.write_text(
+            """\
+module top(input logic [1:0] sel, output logic y);
+  always_comb begin
+    case (sel) // synopsys full_case
+      2'b00: y = 1'b0;
+      2'b01: y = 1'b1;
+      2'b10: y = 1'b0;
+      2'b11: y = 1'b1;
+    endcase
+  end
+endmodule
+"""
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["incomplete_case"])
+        assert result["total_risks"] == 0
+
+    def test_narrow_condition_whitelist_skips_plain_zero_extend(self, monkeypatch, tmp_path):
+        rtl = tmp_path / "zero_extend_ok.sv"
+        rtl.write_text(
+            """\
+module top(input logic invert, output logic [15:0] value);
+  always_comb begin
+    value = {15'b0, invert};
+  end
+endmodule
+"""
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["narrow_condition_injection"])
+        assert result["total_risks"] == 0

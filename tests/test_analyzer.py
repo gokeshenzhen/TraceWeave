@@ -167,6 +167,9 @@ class TestFailureEventAnalysis:
         assert result["suspected_failure_class"] == "assertion/protocol issue"
         assert result["recommendation_strategy"] == "role_rank_v2_structural"
         assert result["failure_window_center_ps"] == 290000
+        assert result["next_iteration_hint"]["tool"] == "diff_sim_failure_results"
+        assert result["next_iteration_hint"]["suggested_arguments"]["base_log_path"] == log_path
+        assert result["next_iteration_hint"]["suggested_arguments"]["simulator"] == "vcs"
 
     def test_recommend_debug_next_steps_without_top_hint(self, log_path):
         parser = FakeWaveParser()
@@ -207,3 +210,37 @@ class TestFailureEventAnalysis:
         assert result["correlated_structural_risks"][0]["relevance_score"] == 17
         assert "module appears in failure instance path" in result["correlated_structural_risks"][0]["relevance_reasons"]
         assert "slice_overlap correlates with has_x/has_z" in result["correlated_structural_risks"][0]["relevance_reasons"]
+
+    def test_recommend_debug_next_steps_prefers_signal_level_risk_hits(self, log_path):
+        parser = FakeWaveParser()
+        analyzer = WaveformAnalyzer(log_path, parser, "vcs")
+        result = analyzer.recommend_debug_next_steps(
+            wave_path="/tmp/wave.vcd",
+            top_hint="top_tb",
+            structural_risks=[
+                {
+                    "type": "slice_overlap",
+                    "file": "/tmp/crp.v",
+                    "line": 20,
+                    "module": "crp",
+                    "risk_level": "high",
+                    "detail": "Target req[5:0] has slice coverage issues: overlap at bit 5",
+                    "target_signal": "top_tb.dut.req[5:0]",
+                },
+                {
+                    "type": "magic_condition",
+                    "file": "/tmp/helper.sv",
+                    "line": 30,
+                    "module": "monitor",
+                    "risk_level": "low",
+                    "detail": "magic compare",
+                },
+            ],
+            problem_hints={"has_x": True, "has_z": False, "error_pattern": "xprop"},
+        )
+
+        assert result["correlated_structural_risks"][0]["risk_type"] == "slice_overlap"
+        assert any(
+            "signal path intersects risk target" in reason
+            for reason in result["correlated_structural_risks"][0]["relevance_reasons"]
+        )

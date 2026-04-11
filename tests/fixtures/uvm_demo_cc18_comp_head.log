@@ -1,0 +1,57 @@
+
+Warning-[DEBUG_DEP] Option will be deprecated
+  The option '-debug' will be deprecated in a future release.  Please use
+  '-debug_acc+pp+f+dmptf -debug_region+cell+encrypt' instead.
+
+
+Warning-[DEBUG_DEP] Option will be deprecated
+  The option '-debug_pp' will be deprecated in a future release.  Please use
+  '-debug_acc+pp+dmptf -debug_region+cell+encrypt' instead.
+
+
+Warning-[DBGACC_DBG] Multiple debug options being used
+  The debug switches '-debug_access' and '-debug_pp' are being used together.
+  For better performance, consider using only '-debug_access'.
+
+Command: vcs +define+VCS+define+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR -timescale=1ns/1ns \
++libext+.v+.V -lca -full64 -sverilog +v2k +vpi -l /home/robin/Projects/uvm_demo_cc18/tb/../tb/comp.log \
++define+DUMP_FSDB -o /home/robin/Projects/uvm_demo_cc18/tb/../tb/simv -f /home/robin/Projects/uvm_demo_cc18/tb/../dut/filelist.f \
+/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm.sv /tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/dpi/uvm_dpi.cc \
+-CFLAGS -DVCS -debug -debug_pp -debug_access+all
+                         Chronologic VCS (TM)
+       Version T-2022.06-SP2_Full64 -- Fri Apr 10 13:36:04 2026
+
+                    Copyright (c) 1991 - 2022 Synopsys, Inc.
+   This software and the associated documentation are proprietary to Synopsys,
+ Inc. This software may only be used in accordance with the terms and conditions
+ of a written license agreement with Synopsys, Inc. All other use, reproduction,
+   or distribution of this software is strictly prohibited.  Licensed Products
+     communicate with Synopsys servers for the purpose of providing software
+    updates, detecting software piracy and verifying that customers are using
+    Licensed Products in conformity with the applicable License Key for such
+  Licensed Products. Synopsys will use information gathered in connection with
+    this process to deliver software updates and pursue software pirates and
+                                   infringers.
+
+ Inclusivity & Diversity - Visit SolvNetPlus to read the "Synopsys Statement on
+            Inclusivity and Diversity" (Refer to article 000036315 at
+                        https://solvnetplus.synopsys.com)
+
+
+Warning-[LCA_FEATURES_ENABLED] Usage warning
+  LCA features enabled by '-lca' argument on the command line.  For more
+  information regarding list of LCA features please refer to Chapter "LCA
+  features" in the VCS Release Notes
+
+Parsing design file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_pkg.sv'
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/macros/uvm_version_defines.svh'.
+Back to file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/macros/snps_macros.svp'.
+Back to file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/macros/uvm_message_defines.svh'.
+Back to file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/macros/uvm_phase_defines.svh'.
+Back to file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.
+Parsing included file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/macros/uvm_object_defines.svh'.
+Back to file '/tools/synopsys/vcs/T-2022.06-SP2/etc/uvm/src/uvm_macros.svh'.

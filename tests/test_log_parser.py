@@ -481,6 +481,43 @@ class TestGroupTruncation:
         assert result["truncated"] is True
         assert result["max_groups"] == 5
         assert len(result["groups"]) == 5
+        assert result["sampling_strategy"] == "phase_stratified"
+
+    def test_phase_stratified_sampling_covers_signature_families_and_time_quadrants(self):
+        lines = ["Booting simulation"]
+        families = [
+            ("family_a", 500_000, 825_000),
+            ("family_b", 33_500_000, 825_000),
+            ("family_c", 66_500_000, 825_000),
+        ]
+        for family, start_ns, step_ns in families:
+            for idx in range(40):
+                time_ns = start_ns + idx * step_ns
+                lines.append(f"{family} ERROR unique issue {idx} @ {time_ns} ns")
+
+        log_path = _write_log("\n".join(lines) + "\n")
+        try:
+            result = SimLogParser(log_path, "vcs").parse(max_groups=30)
+        finally:
+            os.unlink(log_path)
+
+        assert result["sampling_strategy"] == "phase_stratified"
+        assert len(result["groups"]) == 30
+
+        returned_families = {
+            family
+            for family, _, _ in families
+            if any(family in group["signature"] for group in result["groups"])
+        }
+        assert returned_families == {family for family, _, _ in families}
+
+        quadrant_span_ps = 25_000_000_000
+        quadrants = {
+            min(3, (group["first_time_ps"] or 0) // quadrant_span_ps)
+            for group in result["groups"]
+            if group["first_time_ps"] is not None
+        }
+        assert quadrants == {0, 1, 2, 3}
 
     def test_extracts_phase2_runtime_fields(self):
         log_path = _write_log(
