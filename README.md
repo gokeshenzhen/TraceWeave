@@ -46,7 +46,7 @@ TraceWeave/
 ├── custom_patterns.yaml      # User-extensible log patterns
 ├── fsdb_wrapper.cpp          # Native FSDB wrapper source
 ├── build_wrapper.sh          # Builds libfsdb_wrapper.so
-├── scripts/                  # Utility scripts such as link_verdi_runtime.sh
+├── scripts/                  # setup_fsdb.sh / verify_fsdb.sh
 ├── tests/                    # Unit and integration tests
 └── src/
     ├── path_discovery.py
@@ -85,23 +85,21 @@ For FSDB support, one of these runtime sources must be available:
 
 If neither is available, TraceWeave still works, but FSDB parsing is disabled and the workflow should prefer `.vcd` waveforms.
 
-Prepare the repo-local runtime:
+Enable FSDB support (links the Verdi runtime into the repo and builds
+`libfsdb_wrapper.so` in one step):
 
 ```bash
+# Example only — replace with your site's Verdi install path
 export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
-bash scripts/link_verdi_runtime.sh
+bash scripts/setup_fsdb.sh
 ```
 
-Verify the runtime can be loaded:
+Verify the runtime and wrapper load correctly. This script does **not**
+require `$VERDI_HOME` and is safe to run on any host that already has the
+repo-local artefacts:
 
 ```bash
-python3 -c "
-import ctypes
-d = 'third_party/verdi_runtime/linux64'
-ctypes.CDLL(d + '/libnsys.so', ctypes.RTLD_GLOBAL)
-ctypes.CDLL(d + '/libnffr.so')
-print('FSDB runtime load OK')
-"
+bash scripts/verify_fsdb.sh
 ```
 
 ## Client Setup
