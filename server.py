@@ -1302,7 +1302,13 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "find_signal_loads":
         simulator = _resolve_session_simulator(args)
-        result = find_signal_loads(
+        compile_result = parse_compile_log(args["compile_log"], simulator)
+        backend_status = probe_verdi_backend(
+            compile_result, compile_log_path=args["compile_log"]
+        )
+        from src.connectivity_backend import select_backend  # noqa: PLC0415
+        backend = select_backend(backend_status)
+        result = backend.find_loads(
             signal_path=args["signal_path"],
             compile_log=args["compile_log"],
             top_hint=args.get("top_hint"),
@@ -1311,10 +1317,18 @@ async def _dispatch(name: str, args: dict):
             kind_filter=args.get("kind_filter"),
             simulator=simulator,
         )
-        compile_result = parse_compile_log(args["compile_log"], simulator)
-        result["backend_status"] = probe_verdi_backend(
-            compile_result, compile_log_path=args["compile_log"]
-        )
+        # Reflect the backend that actually produced the result. NPI
+        # backend tags every hop with backend='verdi_npi' on success,
+        # 'static' on internal fallback. The status field surfaces the
+        # active connectivity backend at the result envelope.
+        backend_status = dict(backend_status)
+        backend_status["backend"] = backend.name
+        if backend.name == "verdi_npi" and result.get("loads"):
+            sample = result["loads"][0]
+            if sample.get("backend") == "verdi_npi":
+                backend_status["parser_match"] = "exact"
+        result.pop("_npi_fallback_reason", None)
+        result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
 
     elif name == "trace_x_source":

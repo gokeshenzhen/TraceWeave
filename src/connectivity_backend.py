@@ -102,11 +102,19 @@ class StaticConnectivityBackend:
 def select_backend(backend_status: dict[str, Any]) -> ConnectivityBackend:
     """Pick the active backend based on probe output.
 
-    Today only StaticConnectivityBackend exists, so this always returns
-    Static. The seam is here so session 3 can plug VerdiNpiBackend in
-    without touching the MCP dispatch layer.
+    If a usable KDB is present, return a VerdiNpiBackend wrapping a
+    Static fallback. The wrapped backend handles its own fallback on
+    NPI failures (import error, license unavailable, load_design
+    rejection, query exception) so the dispatch layer never needs to
+    distinguish.
+
+    If no KDB is detected, the Static backend is returned directly —
+    starting NPI without a design to load would just consume a license
+    for nothing.
     """
-    # NOTE: VerdiNpiBackend will be selected here when:
-    #   backend_status['kdb_flow'] != 'none'
-    #   and (npi import succeeds, license available)
+    if backend_status.get("kdb_flow", "none") != "none" and backend_status.get("kdb_path"):
+        # Imported lazily so callers without verdi never trigger the
+        # pynpi import path (and the import itself may itself fail).
+        from .verdi_npi_backend import VerdiNpiBackend  # noqa: PLC0415
+        return VerdiNpiBackend(StaticConnectivityBackend())
     return StaticConnectivityBackend()

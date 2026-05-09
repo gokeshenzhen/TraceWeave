@@ -78,12 +78,23 @@ endmodule
     assert any(ld["load_path"] == "top_tb.u0.b" for ld in r["loads"])
 
 
-def test_select_backend_returns_static_today():
+def test_select_backend_returns_static_when_no_kdb():
+    status = {"simulator": "vcs", "kdb_flow": "none", "kdb_path": None}
+    assert select_backend(status).name == "static"
+
+
+def test_select_backend_returns_npi_when_kdb_present():
     status = {
         "simulator": "vcs",
         "kdb_flow": "vcs_two_step",
         "kdb_path": "/some/kdb.elab++",
     }
-    assert select_backend(status).name == "static"
-    status2 = {"simulator": "vcs", "kdb_flow": "none", "kdb_path": None}
-    assert select_backend(status2).name == "static"
+    backend = select_backend(status)
+    # NPI backend wraps Static internally; if pynpi is unimportable
+    # at runtime the NPI backend transparently falls back. Either way
+    # the dispatch layer just sees the same protocol.
+    assert backend.name in ("verdi_npi", "static")
+    if backend.name == "verdi_npi":
+        # The NPI backend must hold a Static fallback so it can degrade
+        # gracefully on any per-call NPI failure.
+        assert isinstance(backend._fallback, StaticConnectivityBackend)

@@ -7,6 +7,11 @@ dist/
 build/
 *.so
 third_party/verdi_runtime/
+npiLog/
+novasLog/
+verdiLog/
+novas.conf
+novas.rc
 docs/*
 !docs/architecture.md
 .vscode/
