@@ -114,6 +114,44 @@ endmodule
     assert "always" in sens[0]["expr"]
 
 
+def test_top_selection_picks_matching_signal_root(monkeypatch, tmp_path):
+    """Compile logs may list multiple top modules (UVM helpers + real
+    testbench). Resolution must pick the top whose name matches the
+    signal_path root, not blindly take ``top_modules[0]``."""
+
+    rtl = tmp_path / "m.sv"
+    rtl.write_text(
+        """\
+module uvm_recording_helper;
+endmodule
+
+module dut_top;
+  child u0();
+endmodule
+
+module child;
+  logic a, b;
+  assign b = a;
+endmodule
+"""
+    )
+
+    def fake_parse_compile_log(log_path, simulator="auto"):
+        return {
+            "top_modules": ["uvm_recording_helper", "dut_top"],
+            "files": {
+                "user": [
+                    {"path": str(rtl), "type": "module", "category": "rtl"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
+    r = find_signal_loads(signal_path="dut_top.u0.a", compile_log="x")
+    assert r["resolved_module"] == "child"
+    assert any(ld["load_path"] == "dut_top.u0.b" for ld in r["loads"])
+
+
 def test_signal_path_too_short(monkeypatch, tmp_path):
     rtl = tmp_path / "m.sv"
     rtl.write_text("module top_tb; endmodule\n")

@@ -67,7 +67,9 @@ def find_signal_loads(
         # Reserved; static path is shallow only.
         max_depth = 1
 
-    module_index, top_module = _build_module_index(compile_log, top_hint, simulator)
+    module_index, top_module = _build_module_index(
+        compile_log, top_hint, simulator, signal_path=signal_path,
+    )
     resolved = _resolve_instance_module(signal_path, top_module, module_index)
     rtl_name = signal_path.split(".")[-1]
     base = {

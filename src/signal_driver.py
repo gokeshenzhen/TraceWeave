@@ -55,7 +55,9 @@ def explain_signal_driver(
     max_depth: int = 10,
     simulator: str = 'auto',
 ) -> dict[str, Any]:
-    module_index, top_module = _build_module_index(compile_log, top_hint, simulator)
+    module_index, top_module = _build_module_index(
+        compile_log, top_hint, simulator, signal_path=signal_path,
+    )
     if recursive:
         return _explain_recursive(signal_path, wave_path, top_module, module_index, max_depth)
     return _explain_single(signal_path, wave_path, top_module, module_index)
@@ -65,6 +67,7 @@ def _build_module_index(
     compile_log: str,
     top_hint: str | None = None,
     simulator: str = 'auto',
+    signal_path: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str]:
     compile_result = parse_compile_log(compile_log, simulator)
     file_entries = compile_result.get("files", {}).get("user", [])
@@ -74,8 +77,37 @@ def _build_module_index(
         for scan in scans
         for module_name in scan["modules"]
     }
-    top_module = top_hint or (compile_result.get("top_modules") or [""])[0]
+    top_module = _select_top_module(compile_result, top_hint, signal_path)
     return module_index, top_module
+
+
+def _select_top_module(
+    compile_result: dict[str, Any],
+    top_hint: str | None,
+    signal_path: str | None,
+) -> str:
+    """Pick the right top module for resolving ``signal_path``.
+
+    Compile logs frequently list multiple top modules (e.g. UVM recording
+    helpers + the real DUT testbench). Picking ``top_modules[0]``
+    blindly fails whenever the signal lives under a non-first top.
+
+    Selection order:
+        1. explicit ``top_hint`` from the caller
+        2. signal_path's first segment, if it matches any reported top
+        3. signal_path's first segment, if it matches any compiled
+           module (the SV source declares it — likely a real top even
+           if the compile log did not flag it)
+        4. first reported top
+    """
+    if top_hint:
+        return top_hint
+    tops = compile_result.get("top_modules") or []
+    if signal_path:
+        first_seg = signal_path.split(".", 1)[0]
+        if first_seg in tops:
+            return first_seg
+    return tops[0] if tops else ""
 
 
 def _explain_single(
