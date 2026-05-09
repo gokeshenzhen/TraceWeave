@@ -522,6 +522,118 @@ fsdb_get_multi_signals_around_time(
     return success_count;
 }
 
+/*
+ * fsdb_batch_window_transitions
+ *
+ * Single-pass time-based traversal over the union of N signals.
+ * Output format (one transition per line, time-sorted):
+ *
+ *   <time_ps>\t<full_path>\t<value>\n
+ *
+ * Header lines (one per resolved signal, before the transition stream):
+ *
+ *   @SIGNAL\t<full_path>\t<bit_size>\n
+ *
+ * Errors for unresolved paths:
+ *
+ *   @ERROR\t<path>\tsignal_not_found\n
+ *
+ * Returns the number of transitions written (>=0) on success, or -1 on
+ * argument error. Truncation is signalled by stopping at buf_size and
+ * returning the count emitted so far; caller decides if it needs to
+ * widen the window.
+ */
+int
+fsdb_batch_window_transitions(
+    void *handle,
+    const char **signal_paths,
+    int signal_count,
+    unsigned long long start_ps,
+    unsigned long long end_ps,
+    char *out_buf,
+    int buf_size
+)
+{
+    if (!handle || !signal_paths || signal_count < 0 || !out_buf || buf_size <= 0) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    out_buf[0] = '\0';
+    int pos = 0;
+    bool truncated = false;
+    int emitted = 0;
+
+    std::vector<fsdbVarIdcode> idcodes;
+    idcodes.reserve(signal_count);
+    /* idcode → SigInfo* for value formatting during walk */
+    std::map<fsdbVarIdcode, SigInfo*> id_to_info;
+
+    for (int i = 0; i < signal_count; i++) {
+        const char *path = signal_paths[i];
+        if (!path) continue;
+        auto it = ctx->path_to_sig.find(std::string(path));
+        if (it == ctx->path_to_sig.end()) {
+            std::string err = std::string("@ERROR\t") + path + "\tsignal_not_found\n";
+            _AppendText(out_buf, buf_size, pos, err, truncated);
+            if (truncated) return emitted;
+            continue;
+        }
+        SigInfo *sig = &it->second;
+        idcodes.push_back(sig->idcode);
+        id_to_info[sig->idcode] = sig;
+        ctx->obj->ffrAddToSignalList(sig->idcode);
+
+        std::string header = std::string("@SIGNAL\t") + sig->full_path + "\t" +
+                             std::to_string(sig->bit_size) + "\n";
+        _AppendText(out_buf, buf_size, pos, header, truncated);
+        if (truncated) return emitted;
+    }
+
+    if (idcodes.empty()) return emitted;
+
+    ctx->obj->ffrLoadSignals();
+
+    ffrTimeBasedVCTrvsHdl thdl =
+        ctx->obj->ffrCreateTimeBasedVCTrvsHdl((uint_T)idcodes.size(), idcodes.data());
+    if (!thdl) {
+        ctx->obj->ffrUnloadSignals();
+        std::string err = "@ERROR\t*\tcreate_time_based_handle_failed\n";
+        _AppendText(out_buf, buf_size, pos, err, truncated);
+        return emitted;
+    }
+
+    /*
+     * Time-based handle has no GotoXTag; we walk from the beginning
+     * via ffrGotoNextVC and skip transitions strictly before start_ps.
+     */
+    while (FSDB_RC_SUCCESS == thdl->ffrGotoNextVC()) {
+        fsdbVarIdcode idc;
+        fsdbXTag      xtag;
+        byte_T       *vc_ptr = NULL;
+        fsdbSeqNum    seq;
+        if (FSDB_RC_SUCCESS != thdl->ffrGetVarIdcodeXTagVCSeqNum(&idc, &xtag, &vc_ptr, &seq)) {
+            continue;
+        }
+        if (!vc_ptr) continue;
+
+        fsdbTag64 *tag64 = (fsdbTag64*)&xtag;
+        unsigned long long t_ps = ((unsigned long long)tag64->H << 32) | tag64->L;
+        if (t_ps < start_ps) continue;
+        if (t_ps > end_ps) break;
+
+        auto it = id_to_info.find(idc);
+        if (it == id_to_info.end()) continue;
+        SigInfo *sig = it->second;
+
+        std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
+        std::string line = std::to_string(t_ps) + "\t" + sig->full_path + "\t" + value + "\n";
+        if (!_AppendText(out_buf, buf_size, pos, line, truncated)) break;
+        emitted++;
+    }
+
+    thdl->ffrFree();
+    ctx->obj->ffrUnloadSignals();
+    return emitted;
+}
+
 /* ── 获取仿真结束时间（ps）─────────────────────────────────────── */
 unsigned long long
 fsdb_get_end_time(void *handle)

@@ -122,6 +122,7 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         lines = f.readlines()
 
     command_text = "".join(lines[:40])
+    compile_command = _extract_vcs_command(lines)
     incdirs = [
         _normalize_path(item, os.path.dirname(log_path))
         for item in re.findall(r"\+incdir\+([^\s\\]+)", command_text)
@@ -199,7 +200,33 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         "include_tree": include_tree,
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
+        "compile_command": compile_command,
     }
+
+
+def _extract_vcs_command(lines: list[str]) -> str | None:
+    """Return the verbatim `vcs ...` invocation line(s) from a compile log.
+
+    VCS prepends `Command: <invocation>` to the log, possibly with shell
+    line continuations (trailing backslash). Returns the joined command
+    with newlines collapsed, or None if not found.
+    """
+    for idx, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped.startswith("Command:"):
+            continue
+        body = stripped[len("Command:"):].strip()
+        parts = [body.rstrip(" \\")]
+        i = idx
+        while body.endswith("\\"):
+            i += 1
+            if i >= len(lines):
+                break
+            cont = lines[i].rstrip("\n")
+            parts.append(cont.rstrip(" \\").lstrip())
+            body = cont
+        return " ".join(p for p in parts if p)
+    return None
 
 
 def parse_xcelium_compile_log(log_path: str) -> dict:
@@ -278,7 +305,30 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         "include_tree": include_tree,
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
+        "compile_command": _extract_xcelium_command(lines),
     }
+
+
+def _extract_xcelium_command(lines: list[str]) -> str | None:
+    """Return the verbatim `xrun ...` invocation, joining continuation lines."""
+    for idx, line in enumerate(lines):
+        if line.strip() == "xrun":
+            parts = ["xrun"]
+            i = idx + 1
+            while i < len(lines):
+                cont = lines[i].rstrip("\n")
+                stripped = cont.strip()
+                if not stripped:
+                    break
+                if stripped.endswith(":") and " " not in stripped:
+                    break
+                parts.append(stripped.rstrip(" \\"))
+                if not cont.rstrip().endswith("\\") and not stripped.startswith(("-", "+")):
+                    if any(stripped.endswith(ext) for ext in (".sv", ".svh", ".v", ".vh", ".f")):
+                        break
+                i += 1
+            return " ".join(parts) if len(parts) > 1 else "xrun"
+    return None
 
 
 def parse_compile_log(log_path: str, simulator: str = "auto") -> dict:

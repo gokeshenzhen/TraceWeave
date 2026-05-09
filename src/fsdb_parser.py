@@ -97,6 +97,16 @@ def _setup(lib):
         ctypes.c_char_p, ctypes.c_int,
     ]
 
+    # int fsdb_batch_window_transitions(
+    #     void*, const char**, int, uint64, uint64, char*, int)
+    lib.fsdb_batch_window_transitions.restype = ctypes.c_int
+    lib.fsdb_batch_window_transitions.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_char_p), ctypes.c_int,
+        ctypes.c_uint64, ctypes.c_uint64,
+        ctypes.c_char_p, ctypes.c_int,
+    ]
+
     # unsigned long long fsdb_get_end_time(void*)
     lib.fsdb_get_end_time.restype  = ctypes.c_uint64
     lib.fsdb_get_end_time.argtypes = [ctypes.c_void_p]

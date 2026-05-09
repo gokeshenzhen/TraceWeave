@@ -48,6 +48,7 @@ from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
 from src.signal_load import find_signal_loads
+from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
 from src.cycle_query import (
@@ -1310,18 +1311,10 @@ async def _dispatch(name: str, args: dict):
             kind_filter=args.get("kind_filter"),
             simulator=simulator,
         )
-        result["backend_status"] = {
-            "simulator": simulator if simulator in ("vcs", "xcelium") else "unknown",
-            "backend": "static",
-            "parser_match": "approximate",
-            "kdb_path": None,
-            "kdb_flow": "none",
-            "kdb_hint": (
-                "Static backend is shallow_only. Verdi NPI backend (planned) "
-                "will give exact, cross-hierarchy fanout. See "
-                "docs/design_verdi_backend_integration.md §10 for KDB setup."
-            ),
-        }
+        compile_result = parse_compile_log(args["compile_log"], simulator)
+        result["backend_status"] = probe_verdi_backend(
+            compile_result, compile_log_path=args["compile_log"]
+        )
         return schemas.FindSignalLoadsResult.model_validate(result)
 
     elif name == "trace_x_source":
