@@ -111,17 +111,41 @@ class VerdiNpiBackend:
         max_depth: int = 10,
         simulator: str = "auto",
     ) -> dict[str, Any]:
-        # Driver-side NPI integration deferred to a follow-up session;
-        # the path-normalization rules differ subtly from the load side.
-        return self._fallback.find_driver(
-            signal_path,
-            wave_path,
-            compile_log,
-            top_hint=top_hint,
-            recursive=recursive,
-            max_depth=max_depth,
-            simulator=simulator,
-        )
+        # Recursive trace walks through synthesized cells to upstream
+        # nets — significantly more involved than the single-hop case.
+        # The static walker handles this well and is exercised by
+        # explain_signal_driver tests; defer NPI multi-hop to a later
+        # iteration if the need arises.
+        if recursive:
+            return self._fallback.find_driver(
+                signal_path, wave_path, compile_log,
+                top_hint=top_hint, recursive=True, max_depth=max_depth,
+                simulator=simulator,
+            )
+        try:
+            compile_result = parse_compile_log(compile_log, simulator)
+            kdb_path = self._kdb_path_from(compile_result, compile_log)
+            top = top_hint or self._top_from(compile_result)
+            if not kdb_path or not top:
+                return self._fallback.find_driver(
+                    signal_path, wave_path, compile_log,
+                    top_hint=top_hint, recursive=False, max_depth=max_depth,
+                    simulator=simulator,
+                )
+            if not self._ensure_loaded(kdb_path, top):
+                return self._fallback.find_driver(
+                    signal_path, wave_path, compile_log,
+                    top_hint=top_hint, recursive=False, max_depth=max_depth,
+                    simulator=simulator,
+                )
+            return self._npi_find_driver(signal_path, wave_path, top)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
+            return self._fallback.find_driver(
+                signal_path, wave_path, compile_log,
+                top_hint=top_hint, recursive=False, max_depth=max_depth,
+                simulator=simulator,
+            )
 
     def find_loads(
         self,
@@ -258,6 +282,116 @@ class VerdiNpiBackend:
             result["stopped_at"] = "no_npi_loads"
         return result
 
+    def _npi_find_driver(
+        self,
+        signal_path: str,
+        wave_path: str,
+        top: str,
+    ) -> dict[str, Any]:
+        _, netlist = self._npi_modules  # type: ignore[misc]
+        rtl_name = signal_path.split(".")[-1]
+        instance_path = signal_path.rsplit(".", 1)[0] if "." in signal_path else top
+        base = {
+            "signal_path": signal_path,
+            "wave_path": wave_path,
+            "resolved_rtl_name": rtl_name,
+            "resolved_module": top,
+            "resolved_instance_path": instance_path,
+            "driver_status": "unsupported",
+            "driver_kind": None,
+            "source_file": None,
+            "source_line": None,
+            "expression_summary": None,
+            "upstream_signals": [],
+            "instance_port_connections": None,
+            "confidence": "exact",
+            "unsupported_reason": None,
+            "stopped_at": None,
+            "recursive": False,
+            "driver_chain": None,
+            "chain_summary": None,
+            "backend": "verdi_npi",
+        }
+
+        net = self._resolve_net(netlist, signal_path)
+        if net is None:
+            base["driver_status"] = "unsupported"
+            base["unsupported_reason"] = "signal_path_unresolved_in_npi"
+            base["stopped_at"] = "signal_path_unresolved_in_npi"
+            return base
+
+        try:
+            drivers = net.driver_list() or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("net.driver_list crashed for %s: %s", signal_path, exc)
+            base["driver_status"] = "unsupported"
+            base["unsupported_reason"] = "npi_driver_list_failed"
+            base["stopped_at"] = "npi_driver_list_failed"
+            return base
+
+        if not drivers:
+            base["driver_status"] = "unsupported"
+            base["unsupported_reason"] = "no_npi_drivers"
+            base["stopped_at"] = "no_npi_drivers"
+            return base
+
+        formatted = [d for d in (self._format_driver(h) for h in drivers) if d is not None]
+        if not formatted:
+            base["driver_status"] = "unsupported"
+            base["unsupported_reason"] = "all_drivers_unformattable"
+            return base
+
+        head = formatted[0]
+        base.update({
+            "driver_status": "resolved",
+            "driver_kind": head["driver_kind"],
+            "source_file": head["source_file"],
+            "source_line": head["source_line"],
+            "expression_summary": head["expression_summary"],
+        })
+        if len(formatted) > 1:
+            # Multi-driven net (rare but real): expose all candidates as
+            # depth-0 chain entries so the caller can see the conflict.
+            base["driver_chain"] = [
+                {
+                    "depth": 0,
+                    "signal_path": signal_path,
+                    "resolved_module": top,
+                    "resolved_instance_path": instance_path,
+                    "driver_kind": entry["driver_kind"],
+                    "source_file": entry["source_file"],
+                    "source_line": entry["source_line"],
+                    "expression_summary": entry["expression_summary"],
+                    "upstream_signals": [],
+                    "instance_port_connections": None,
+                    "branch_candidates": None,
+                    "stopped_at": None,
+                    "backend": "verdi_npi",
+                    "backend_confidence": "exact",
+                }
+                for entry in formatted
+            ]
+            base["chain_summary"] = (
+                f"{len(formatted)} drivers reported by NPI (multi-driven net)"
+            )
+        return base
+
+    def _format_driver(self, hdl: Any) -> dict[str, Any] | None:
+        try:
+            raw = hdl.full_name() if hasattr(hdl, "full_name") else None
+        except Exception:
+            return None
+        if not raw:
+            return None
+        kind = _classify_driver_kind(raw)
+        line = _line_from_synthesized(raw)
+        return {
+            "driver_kind": kind,
+            "source_file": None,  # NPI src_info often empty for synthesized cells
+            "source_line": line,
+            "expression_summary": _driver_summary(raw, kind),
+        }
+
     def _format_load(self, hdl: Any, include_expr: bool) -> dict[str, Any] | None:
         try:
             raw = hdl.full_name() if hasattr(hdl, "full_name") else None
@@ -367,6 +501,45 @@ def _line_from_synthesized(npi_path: str) -> int | None:
         if tok.isdigit():
             return int(tok)
     return None
+
+
+def _classify_driver_kind(npi_path: str) -> str:
+    """Map a synthesized driver PinHdl to one of the existing driver_kind
+    enum values used by Static.
+
+    Synthesized cell tag is the segment immediately before the final
+    `.<port>`. Common cell types observed in cc20:
+      Init  → ``initial`` block (initial-value driver) → driver_kind=initial
+      Reg   → ``always_ff`` register → driver_kind=always_ff
+      Mux / Or / And / Buf → combinational logic → driver_kind=always_comb
+      Assignment → continuous ``assign`` → driver_kind=assign
+    Falls back to ``unknown`` for cell types we have not seen.
+    """
+    if ":" not in npi_path:
+        # Non-synthesized: top-level decl-net or instance port
+        return "instance_port"
+    last_segment = npi_path.rsplit(":", 1)[-1]
+    cell = last_segment.split(".", 1)[0]
+    cell_lower = cell.lower()
+    if cell_lower == "init":
+        return "initial"
+    if cell_lower in ("reg", "ff", "dff"):
+        return "always_ff"
+    if cell_lower == "assignment":
+        return "assign"
+    if cell_lower in ("mux", "or", "and", "xor", "not", "buf", "notredu",
+                      "andredu", "orredu", "selop", "sigtap", "sigop"):
+        return "always_comb"
+    return "unknown"
+
+
+def _driver_summary(raw: str, kind: str) -> str:
+    """Build a short human-readable summary for a driver PinHdl."""
+    line = _line_from_synthesized(raw)
+    line_part = f" at line {line}" if line is not None else ""
+    if kind == "unknown":
+        return f"NPI driver {raw}{line_part}"
+    return f"{kind} driver via {raw.rsplit(':', 1)[-1]}{line_part}"
 
 
 def _classify_load_kind(npi_path: str, hdl_type: str | None) -> str:

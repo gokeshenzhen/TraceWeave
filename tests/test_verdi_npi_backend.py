@@ -8,7 +8,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
+    _classify_driver_kind,
     _classify_load_kind,
+    _driver_summary,
     _line_from_synthesized,
     _scope_from_synthesized,
 )
@@ -68,11 +70,15 @@ class _MockPin:
 
 
 class _MockNet:
-    def __init__(self, loads):
-        self._loads = loads
+    def __init__(self, loads=None, drivers=None):
+        self._loads = loads or []
+        self._drivers = drivers or []
 
     def load_list(self):
         return self._loads
+
+    def driver_list(self):
+        return self._drivers
 
 
 class _MockNetlist:
@@ -319,6 +325,243 @@ def test_real_npi_returns_more_loads_than_static_for_clk():
     assert "top_tb.input_if.clk" in npi_paths
     assert "top_tb.output_if.clk" in npi_paths
     assert len(npi_paths) > len(static_paths)
+
+
+# ---------------------------------------------------------------------------
+# Driver-side classifier helpers
+# ---------------------------------------------------------------------------
+
+
+def test_classify_driver_kind_initial():
+    assert _classify_driver_kind(
+        "top_tb.top_tb(@1):Init0#Init0:53:58:Init.OH_clk"
+    ) == "initial"
+
+
+def test_classify_driver_kind_always_ff():
+    assert _classify_driver_kind(
+        "top_tb.my_dut.dut:Always10#Always1:33:45:Reg.ROH_invert"
+    ) == "always_ff"
+
+
+def test_classify_driver_kind_combinational():
+    assert _classify_driver_kind(
+        "top_tb.dut:Always0#Always0:18:31:Mux.OH_y"
+    ) == "always_comb"
+
+
+def test_classify_driver_kind_assignment():
+    assert _classify_driver_kind(
+        "top_tb.dut:Cont0#Cont0:42:42:Assignment.OH_z"
+    ) == "assign"
+
+
+def test_classify_driver_kind_unknown_falls_through():
+    assert _classify_driver_kind(
+        "top_tb.dut:Strange0#Weird0:1:1:Mystery.OH_x"
+    ) == "unknown"
+
+
+def test_classify_driver_kind_instance_port_when_no_synth():
+    assert _classify_driver_kind("top_tb.b_if.clk") == "instance_port"
+
+
+def test_driver_summary_includes_line():
+    summary = _driver_summary(
+        "top_tb.top_tb(@1):Init0#Init0:53:58:Init.OH_clk", "initial"
+    )
+    assert "line 53" in summary
+    assert "initial driver" in summary
+
+
+# ---------------------------------------------------------------------------
+# Mocked NPI driver path
+# ---------------------------------------------------------------------------
+
+
+def test_driver_recursive_falls_through_to_static(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch)
+    # We do not need a useful net for this — recursive must skip NPI entirely.
+    r = backend.find_driver(
+        signal_path="top_tb.x",
+        wave_path="dummy.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    # Static recursive path uses ExplainDriverResult shape with recursive=True.
+    assert r["recursive"] is True
+    # backend defaulted to static via _strip_chain_hop / _strip_internal_fields.
+    assert r.get("backend", "static") == "static"
+
+
+def test_driver_single_hop_npi_resolves_initial_kind(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    init_pin = _MockPin(
+        "top_tb.top_tb(@1):Init0#Init0:53:58:Init.OH_clk"
+    )
+    net = _MockNet(drivers=[init_pin])
+    netlist_obj = _MockNetlist({"top_tb.clk": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.clk",
+        wave_path="dummy.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_status"] == "resolved"
+    assert r["driver_kind"] == "initial"
+    assert r["source_line"] == 53
+    assert "initial driver" in r["expression_summary"]
+    assert r["recursive"] is False
+    assert r["driver_chain"] is None  # single driver — no chain
+
+
+def test_driver_multi_driven_net_lists_chain(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    pins = [
+        _MockPin("top_tb.dut:Always0#Always0:18:31:Reg.ROH_v"),
+        _MockPin("top_tb.dut:Always7#Always1:33:45:Reg.ROH_v"),
+    ]
+    net = _MockNet(drivers=pins)
+    netlist_obj = _MockNetlist({"top_tb.dut.v": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.dut.v",
+        wave_path="x.fsdb",
+        compile_log=log,
+        simulator="vcs",
+    )
+    assert r["driver_chain"] is not None
+    assert len(r["driver_chain"]) == 2
+    assert all(h["backend"] == "verdi_npi" for h in r["driver_chain"])
+    assert "multi-driven" in r["chain_summary"]
+
+
+def test_driver_no_drivers_marks_stopped(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(drivers=[])  # no drivers
+    netlist_obj = _MockNetlist({"top_tb.float": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.float",
+        wave_path="x.fsdb",
+        compile_log=log,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "unsupported"
+    assert r["stopped_at"] == "no_npi_drivers"
+    assert r["backend"] == "verdi_npi"
+
+
+def test_driver_unresolved_signal_falls_through(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    netlist_obj = _MockNetlist({})  # nothing
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.ghost",
+        wave_path="x.fsdb",
+        compile_log=log,
+        simulator="vcs",
+    )
+    assert r["stopped_at"] == "signal_path_unresolved_in_npi"
+
+
+def test_driver_list_exception_marks_failed(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    class _BoomNet:
+        def driver_list(self):
+            raise RuntimeError("boom")
+    netlist_obj = _MockNetlist({"top_tb.x": _BoomNet()})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.x",
+        wave_path="x.fsdb",
+        compile_log=log,
+        simulator="vcs",
+    )
+    assert r["stopped_at"] == "npi_driver_list_failed"
+
+
+# ---------------------------------------------------------------------------
+# Real-verdi driver integration
+# ---------------------------------------------------------------------------
+
+
+@requires_verdi
+def test_real_npi_driver_resolves_clk_initial_block():
+    from src.connectivity_backend import select_backend
+    from src.verdi_backend import probe_verdi_backend
+    from src.compile_log_parser import parse_compile_log
+
+    cr = parse_compile_log(_CC20_LOG, "vcs")
+    status = probe_verdi_backend(cr, _CC20_LOG)
+    backend = select_backend(status)
+    r = backend.find_driver(
+        signal_path="top_tb.clk",
+        wave_path="x.fsdb",
+        compile_log=_CC20_LOG,
+        simulator="vcs",
+    )
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_status"] == "resolved"
+    assert r["driver_kind"] == "initial"
+    assert r["source_line"] == 53
+
+
+@requires_verdi
+def test_real_npi_driver_invert_recognised_as_register():
+    from src.connectivity_backend import select_backend
+    from src.verdi_backend import probe_verdi_backend
+    from src.compile_log_parser import parse_compile_log
+
+    cr = parse_compile_log(_CC20_LOG, "vcs")
+    status = probe_verdi_backend(cr, _CC20_LOG)
+    backend = select_backend(status)
+    r = backend.find_driver(
+        signal_path="top_tb.my_dut.invert",
+        wave_path="x.fsdb",
+        compile_log=_CC20_LOG,
+        simulator="vcs",
+    )
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_kind"] == "always_ff"
+    assert r["source_line"] is not None
+
+
+@requires_verdi
+def test_real_npi_driver_recursive_falls_back_to_static():
+    from src.connectivity_backend import select_backend
+    from src.verdi_backend import probe_verdi_backend
+    from src.compile_log_parser import parse_compile_log
+
+    cr = parse_compile_log(_CC20_LOG, "vcs")
+    status = probe_verdi_backend(cr, _CC20_LOG)
+    backend = select_backend(status)
+    r = backend.find_driver(
+        signal_path="top_tb.my_dut.invert",
+        wave_path="x.fsdb",
+        compile_log=_CC20_LOG,
+        simulator="vcs",
+        recursive=True,
+        max_depth=4,
+    )
+    # Recursive path goes through Static, which stamps backend=static.
+    assert r["recursive"] is True
+    assert r.get("backend") == "static"
 
 
 @requires_verdi

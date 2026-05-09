@@ -217,6 +217,28 @@ def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple
     return verif_root, case_name, compile_sig
 
 
+def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
+    """Probe Verdi backend status, tolerating missing/unparseable logs.
+
+    Connectivity tools may be invoked with mocked compile_log paths
+    (the underlying backend uses a monkey-patched parse_compile_log).
+    The dispatch-level probe must not raise on the real path being
+    absent — degrade to a Static-only status.
+    """
+    try:
+        compile_result = parse_compile_log(compile_log, simulator)
+        return probe_verdi_backend(compile_result, compile_log_path=compile_log)
+    except Exception:
+        return {
+            "simulator": simulator if simulator in ("vcs", "xcelium") else "unknown",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": None,
+            "kdb_flow": "none",
+            "kdb_hint": None,
+        }
+
+
 def _resolve_session_simulator(args: dict) -> str:
     explicit = args.get("simulator")
     if explicit and explicit != "auto":
@@ -1289,7 +1311,10 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "explain_signal_driver":
         simulator = _resolve_session_simulator(args)
-        result = explain_signal_driver(
+        backend_status = _safe_probe_backend(args["compile_log"], simulator)
+        from src.connectivity_backend import select_backend  # noqa: PLC0415
+        backend = select_backend(backend_status)
+        result = backend.find_driver(
             signal_path=args["signal_path"],
             wave_path=args["wave_path"],
             compile_log=args["compile_log"],
@@ -1298,14 +1323,17 @@ async def _dispatch(name: str, args: dict):
             max_depth=args.get("max_depth", 10),
             simulator=simulator,
         )
+        backend_status = dict(backend_status)
+        backend_status["backend"] = backend.name
+        if backend.name == "verdi_npi" and result.get("backend") == "verdi_npi":
+            backend_status["parser_match"] = "exact"
+        result.setdefault("backend", "static")
+        result["backend_status"] = backend_status
         return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "find_signal_loads":
         simulator = _resolve_session_simulator(args)
-        compile_result = parse_compile_log(args["compile_log"], simulator)
-        backend_status = probe_verdi_backend(
-            compile_result, compile_log_path=args["compile_log"]
-        )
+        backend_status = _safe_probe_backend(args["compile_log"], simulator)
         from src.connectivity_backend import select_backend  # noqa: PLC0415
         backend = select_backend(backend_status)
         result = backend.find_loads(

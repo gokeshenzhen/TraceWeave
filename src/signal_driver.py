@@ -139,6 +139,7 @@ def _explain_recursive(
         "recursive": True,
         "driver_chain": [_strip_chain_hop(hop) for hop in chain],
         "chain_summary": _build_chain_summary(chain),
+        "backend": "static",
     }
     return result
 
@@ -605,7 +606,9 @@ def _build_chain_summary(chain: list[dict[str, Any]]) -> str:
 
 
 def _strip_internal_fields(hop: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in hop.items() if not key.startswith("_")}
+    out = {key: value for key, value in hop.items() if not key.startswith("_")}
+    out.setdefault("backend", "static")
+    return out
 
 
 def _strip_chain_hop(hop: dict[str, Any]) -> dict[str, Any]:
@@ -622,8 +625,13 @@ def _strip_chain_hop(hop: dict[str, Any]) -> dict[str, Any]:
         "instance_port_connections",
         "branch_candidates",
         "stopped_at",
+        "backend",
+        "backend_confidence",
     }
-    return {key: value for key, value in hop.items() if key in allowed}
+    out = {key: value for key, value in hop.items() if key in allowed}
+    out.setdefault("backend", "static")
+    out.setdefault("backend_confidence", "approximate")
+    return out
 
 
 def _single_hop_stop_reason(result: dict[str, Any]) -> str | None:

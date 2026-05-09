@@ -383,6 +383,8 @@ class DriverChainHop(SchemaModel):
     instance_port_connections: list[dict[str, Any]] | None = None
     branch_candidates: list[str] | None = None
     stopped_at: str | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    backend_confidence: Literal["exact", "approximate", "unverified"] = "approximate"
 
 
 class ExplainDriverResult(SchemaModel):
@@ -404,6 +406,8 @@ class ExplainDriverResult(SchemaModel):
     recursive: bool = False
     driver_chain: list[DriverChainHop] | None = None
     chain_summary: str | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    backend_status: BackendStatus | None = None
 
 
 ExplainSignalDriverResult = ExplainDriverResult
