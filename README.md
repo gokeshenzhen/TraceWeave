@@ -55,9 +55,14 @@ TraceWeave/
     ├── vcd_parser.py
     ├── fsdb_parser.py
     ├── fsdb_signal_index.py
+    ├── waveform_batch.py         # FSDB+VCD time-window batch reader
     ├── log_parser.py
     ├── analyzer.py
     ├── signal_driver.py
+    ├── signal_load.py            # Load/fanout finder, Static + NPI
+    ├── connectivity_backend.py   # ConnectivityBackend protocol + select_backend
+    ├── verdi_backend.py          # KDB / license probe + kdb_hint generator
+    ├── verdi_npi_backend.py      # NPI-backed driver/load resolution
     ├── structural_scanner.py
     ├── x_trace.py
     ├── cycle_query.py
@@ -113,7 +118,11 @@ If the client supports server instructions, it can follow the built-in workflow 
 
 ### Claude Code
 
-Add this to `~/.claude.json`:
+Add this to `~/.claude.json`. The simplest setup omits the `env` block
+entirely — the spawned MCP server inherits Claude Code's environment,
+which already has `VERDI_HOME` / `SNPSLMD_LICENSE_FILE` / etc. from
+your shell startup files. Override only when you need a different
+toolchain than your interactive shell uses.
 
 ```json
 {
@@ -228,7 +237,10 @@ Important workflow rules:
 - `analyze_failure_event`: Rank likely instances, source files, and signals for a specific `failure_event`
 - `recommend_failure_debug_next_steps`: Return the default next debug target
 - `explain_signal_driver`: Trace a waveform signal back to likely RTL driver logic
+- `find_signal_loads`: List the consumers (fanout) of a signal — module-input ports, RHS uses, always-block sensitivity
 - `trace_x_source`: Trace X/Z propagation upstream
+
+Both `explain_signal_driver` and `find_signal_loads` automatically engage a Verdi NPI backend when a KDB is detected (Static fallback otherwise — transparent to callers). The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint` when KDB is missing.
 
 ## Testing
 
