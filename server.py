@@ -47,6 +47,7 @@ from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy
 from src.signal_driver import explain_signal_driver
+from src.signal_load import find_signal_loads
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
 from src.cycle_query import (
@@ -95,6 +96,7 @@ _PREREQUISITES: dict[str, list[str]] = {
     "analyze_failures": ["get_sim_paths", "build_tb_hierarchy"],
     "analyze_failure_event": ["get_sim_paths", "build_tb_hierarchy"],
     "explain_signal_driver": ["build_tb_hierarchy"],
+    "find_signal_loads": ["build_tb_hierarchy"],
     "trace_x_source": ["build_tb_hierarchy"],
 }
 
@@ -953,6 +955,50 @@ async def list_tools():
         ),
 
         Tool(
+            name="find_signal_loads",
+            description=(
+                "List places that consume (load) a signal: child instance input ports, "
+                "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
+                "Static backend is shallow_only — connections via interface positional "
+                "args, generate blocks, bind, or cross-hierarchy fanout from output ports "
+                "are not covered and will be reflected in stopped_at. Each load is marked "
+                "confidence='approximate'; a Verdi NPI backend covering these gaps is "
+                "planned (see docs/design_verdi_backend_integration.md)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "signal_path": {"type": "string"},
+                    "compile_log": {"type": "string"},
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                    },
+                    "top_hint": {"type": "string"},
+                    "max_depth": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Reserved for future transitive walks; static backend always behaves as 1.",
+                    },
+                    "include_expr": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include the surrounding expression for each load.",
+                    },
+                    "kind_filter": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["module_input", "rhs_expr", "always_sensitivity"],
+                        },
+                        "description": "Restrict result to a subset of load kinds.",
+                    },
+                },
+                "required": ["signal_path", "compile_log"],
+            },
+        ),
+
+        Tool(
             name="trace_x_source",
             description=(
                 "When a signal shows X/Z at a target time, trace its propagation chain through upstream driver logic. "
@@ -1252,6 +1298,31 @@ async def _dispatch(name: str, args: dict):
             simulator=simulator,
         )
         return schemas.ExplainDriverResult.model_validate(result)
+
+    elif name == "find_signal_loads":
+        simulator = _resolve_session_simulator(args)
+        result = find_signal_loads(
+            signal_path=args["signal_path"],
+            compile_log=args["compile_log"],
+            top_hint=args.get("top_hint"),
+            max_depth=args.get("max_depth", 1),
+            include_expr=args.get("include_expr", True),
+            kind_filter=args.get("kind_filter"),
+            simulator=simulator,
+        )
+        result["backend_status"] = {
+            "simulator": simulator if simulator in ("vcs", "xcelium") else "unknown",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": None,
+            "kdb_flow": "none",
+            "kdb_hint": (
+                "Static backend is shallow_only. Verdi NPI backend (planned) "
+                "will give exact, cross-hierarchy fanout. See "
+                "docs/design_verdi_backend_integration.md §10 for KDB setup."
+            ),
+        }
+        return schemas.FindSignalLoadsResult.model_validate(result)
 
     elif name == "trace_x_source":
         simulator = _resolve_session_simulator(args)

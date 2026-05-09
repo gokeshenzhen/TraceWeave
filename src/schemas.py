@@ -409,6 +409,40 @@ class ExplainDriverResult(SchemaModel):
 ExplainSignalDriverResult = ExplainDriverResult
 
 
+class BackendStatus(SchemaModel):
+    simulator: Literal["vcs", "xcelium", "unknown"] = "unknown"
+    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    parser_match: Literal["exact", "approximate"] = "approximate"
+    kdb_path: str | None = None
+    kdb_flow: Literal[
+        "vcs_two_step", "vcs_three_step", "vericom_standalone",
+        "vericom_import_from_file", "none",
+    ] = "none"
+    kdb_hint: str | None = None
+
+
+class LoadHop(SchemaModel):
+    load_path: str
+    kind: Literal["module_input", "rhs_expr", "always_sensitivity"]
+    expr: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    confidence: Literal["exact", "approximate", "unverified"] = "approximate"
+
+
+class FindSignalLoadsResult(SchemaModel):
+    signal_path: str
+    resolved_rtl_name: str
+    resolved_module: str | None = None
+    resolved_instance_path: str | None = None
+    loads: list[LoadHop] = Field(default_factory=list)
+    completeness: Literal["exact", "approximate", "shallow_only"] = "shallow_only"
+    stopped_at: str | None = None
+    unsupported_reason: str | None = None
+    backend_status: BackendStatus = Field(default_factory=BackendStatus)
+
+
 class TraceChainNode(SchemaModel):
     depth: int
     signal_path: str
