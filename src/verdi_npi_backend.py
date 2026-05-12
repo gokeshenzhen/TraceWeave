@@ -335,6 +335,189 @@ class VerdiNpiBackend:
                 include_expr, kind_filter, simulator, f"exception: {exc}"
             )
 
+    def find_path(
+        self,
+        from_signal: str,
+        to_signal: str,
+        compile_log: str,
+        *,
+        top_hint: str | None = None,
+        expand_assigns: bool = False,
+        simulator: str = "auto",
+    ) -> dict[str, Any]:
+        try:
+            compile_result = parse_compile_log(compile_log, simulator)
+            kdb_path = self._kdb_path_from(compile_result, compile_log)
+            top = top_hint or self._top_from(compile_result)
+            if not kdb_path or not top:
+                return self._path_fallback(
+                    from_signal, to_signal, expand_assigns,
+                    reason="kdb_or_top_missing",
+                )
+            if not self._ensure_loaded(kdb_path, top):
+                return self._path_fallback(
+                    from_signal, to_signal, expand_assigns,
+                    reason="npi_load_failed",
+                )
+            return self._npi_find_path(
+                from_signal, to_signal, expand_assigns=expand_assigns,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("VerdiNpiBackend.find_path failed: %s", exc)
+            return self._path_fallback(
+                from_signal, to_signal, expand_assigns,
+                reason=f"exception: {exc}",
+            )
+
+    def _path_fallback(
+        self,
+        from_signal: str,
+        to_signal: str,
+        expand_assigns: bool,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Delegate to the static backend (which always returns
+        static_backend_no_path_api) and tag the NPI-level reason so the
+        dispatch layer can surface it through backend_status."""
+        result = self._fallback.find_path(
+            from_signal,
+            to_signal,
+            compile_log="",  # static backend does not consult it
+            expand_assigns=expand_assigns,
+        )
+        result.setdefault("_npi_fallback_reason", reason)
+        return result
+
+    def _npi_find_path(
+        self,
+        from_signal: str,
+        to_signal: str,
+        *,
+        expand_assigns: bool,
+    ) -> dict[str, Any]:
+        _, netlist = self._npi_modules  # type: ignore[misc]
+        base: dict[str, Any] = {
+            "from_signal": from_signal,
+            "to_signal": to_signal,
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "expand_assigns": expand_assigns,
+            "unsupported_reason": None,
+        }
+
+        from_hdl = self._resolve_net(netlist, from_signal)
+        if from_hdl is None:
+            base["unsupported_reason"] = "from_not_found"
+            return base
+        to_hdl = self._resolve_net(netlist, to_signal)
+        if to_hdl is None:
+            base["unsupported_reason"] = "to_not_found"
+            return base
+
+        # Same-net is structurally valid: the user asked about a path
+        # between two names that resolve to the same elaborated net
+        # (e.g. via get_actual_net alias). Surface it as a one-hop
+        # "found" with hops=0 so the caller does not have to special-case.
+        if from_hdl == to_hdl:
+            base["found"] = True
+            base["path"] = [self._format_path_hop(from_hdl, 0, is_endpoint=True)]
+            return base
+
+        try:
+            with _silence_native_stdio():
+                hdl_list = netlist.sig_to_sig_conn_list(
+                    from_hdl, to_hdl, assign_cell=expand_assigns,
+                ) or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("sig_to_sig_conn_list failed: %s", exc)
+            base["unsupported_reason"] = "npi_call_failed"
+            base["_npi_call_error"] = str(exc)
+            return base
+
+        if not hdl_list:
+            base["unsupported_reason"] = "not_connected"
+            return base
+
+        last_idx = len(hdl_list) - 1
+        base["path"] = [
+            self._format_path_hop(
+                h, idx, is_endpoint=(idx == 0 or idx == last_idx),
+            )
+            for idx, h in enumerate(hdl_list)
+        ]
+        base["found"] = True
+        base["hops"] = max(0, len(hdl_list) - 1)
+        return base
+
+    def _format_path_hop(
+        self,
+        net_hdl: Any,
+        index: int,
+        *,
+        is_endpoint: bool,
+    ) -> dict[str, Any]:
+        try:
+            net_path = net_hdl.full_name() if hasattr(net_hdl, "full_name") else None
+        except Exception:  # noqa: BLE001
+            net_path = None
+        scope_inst = _scope_inst_of(net_hdl)
+        scope_path: str | None = None
+        if scope_inst is not None:
+            try:
+                scope_path = (
+                    scope_inst.full_name()
+                    if hasattr(scope_inst, "full_name") else None
+                )
+            except Exception:  # noqa: BLE001
+                scope_path = None
+        file_val, line_val = _inst_src_info(scope_inst)
+        return {
+            "index": index,
+            "net_path": net_path or "",
+            "scope_inst": scope_path,
+            "source_file": file_val,
+            "source_line": line_val,
+            "is_endpoint": is_endpoint,
+        }
+
+    def collect_instance_src_map(
+        self,
+        compile_log: str,
+        simulator: str = "auto",
+    ) -> dict[str, tuple[str | None, int | None]]:
+        """Walk the elaborated netlist; return ``full_path -> (file, line)``.
+
+        Used by ``build_tb_hierarchy`` to upgrade compile-log-derived
+        source info with NPI's elaborated truth. Returns an empty dict
+        on any failure path so the caller can keep going without
+        annotation. Never raises.
+        """
+        try:
+            compile_result = parse_compile_log(compile_log, simulator)
+            kdb_path = self._kdb_path_from(compile_result, compile_log)
+            top = self._top_from(compile_result)
+            if not kdb_path or not top:
+                return {}
+            if not self._ensure_loaded(kdb_path, top):
+                return {}
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("collect_instance_src_map setup failed: %s", exc)
+            return {}
+
+        _, netlist = self._npi_modules  # type: ignore[misc]
+        out: dict[str, tuple[str | None, int | None]] = {}
+        try:
+            with _silence_native_stdio():
+                top_list = netlist.get_top_inst_list() or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("get_top_inst_list failed: %s", exc)
+            return {}
+        for inst in top_list:
+            _walk_inst_src(inst, out)
+        return out
+
     # ── lifecycle ─────────────────────────────────────────────────────
 
     def _ensure_loaded(self, kdb_path: str, top: str) -> bool:
@@ -593,6 +776,7 @@ class VerdiNpiBackend:
                     "driver_kind": entry["driver_kind"],
                     "source_file": entry["source_file"],
                     "source_line": entry["source_line"],
+                    "source_info_origin": entry.get("source_info_origin"),
                     "expression_summary": entry["expression_summary"],
                     "upstream_signals": [],
                     "instance_port_connections": None,
@@ -711,15 +895,19 @@ class VerdiNpiBackend:
             return None
         kind = _classify_fan_in_kind(raw, t)
         scope = _scope_from_synthesized(raw)
-        line = _line_from_synthesized(raw)
+        inst_file, inst_line = _inst_src_info(_scope_inst_of(hdl))
+        line = inst_line if inst_line is not None else _line_from_synthesized(raw)
+        file_val = inst_file
+        origin = "npi" if (file_val is not None or line is not None) else None
         return {
             "depth": 1,
             "signal_path": scope,
             "resolved_module": _module_of(hdl),
             "resolved_instance_path": scope,
             "driver_kind": kind,
-            "source_file": None,
+            "source_file": file_val,
             "source_line": line,
+            "source_info_origin": origin,
             "expression_summary": _fan_in_summary(raw, kind),
             "upstream_signals": [],
             "instance_port_connections": None,
@@ -737,11 +925,15 @@ class VerdiNpiBackend:
         if not raw:
             return None
         kind = _classify_driver_kind(raw)
-        line = _line_from_synthesized(raw)
+        inst_file, inst_line = _inst_src_info(_scope_inst_of(hdl))
+        line = inst_line if inst_line is not None else _line_from_synthesized(raw)
         return {
             "driver_kind": kind,
-            "source_file": None,  # NPI src_info often empty for synthesized cells
+            "source_file": inst_file,
             "source_line": line,
+            "source_info_origin": (
+                "npi" if (inst_file is not None or line is not None) else None
+            ),
             "expression_summary": _driver_summary(raw, kind),
         }
 
@@ -755,18 +947,29 @@ class VerdiNpiBackend:
             return None
         scope = _scope_from_synthesized(raw)
         kind = _classify_load_kind(raw, t)
+        # Pin-level src_info first (closest to the actual load site);
+        # fall back to the enclosing instance's src_info when NPI did
+        # not record anything for synthesized pins. Synthesized names
+        # still provide a usable line as a last resort.
         src = _safe_src_info(hdl)
-        line = src.get("line")
-        if line is None:
-            line = _line_from_synthesized(raw)
+        file_val = src.get("file")
+        line_val = src.get("line")
+        if file_val is None or line_val is None:
+            inst_file, inst_line = _inst_src_info(_scope_inst_of(hdl))
+            if file_val is None:
+                file_val = inst_file
+            if line_val is None:
+                line_val = inst_line
+        if line_val is None:
+            line_val = _line_from_synthesized(raw)
+        origin = "npi" if (file_val is not None or line_val is not None) else None
         return {
             "load_path": scope,
             "kind": kind,
             "expr": raw if include_expr else None,
-            # NPI does not currently surface a file path for synthesized
-            # constructs; line is recoverable from the synthesized name.
-            "source_file": src.get("file"),
-            "source_line": line,
+            "source_file": file_val,
+            "source_line": line_val,
+            "source_info_origin": origin,
             "backend": "verdi_npi",
             "confidence": "exact",
             # ``_npi_raw`` is for dedup only — stripped before schema
@@ -949,6 +1152,89 @@ def _classify_load_kind(npi_path: str, hdl_type: str | None) -> str:
     if ":" in npi_path:
         return "rhs_expr"
     return "module_input"
+
+
+def _walk_inst_src(
+    inst: Any,
+    accumulator: dict[str, tuple[str | None, int | None]],
+    _depth: int = 0,
+) -> None:
+    """Recursively populate ``full_name() -> (file, line)`` for an instance tree.
+
+    Bounded by design size. Skips silently on any per-node failure so a
+    pathological instance never breaks the whole annotation pass.
+    """
+    if inst is None:
+        return
+    # Guard runaway hierarchies (synthesized loops should not happen but
+    # libNPI has surprised us before).
+    if _depth > 256:
+        return
+    try:
+        path = inst.full_name() if hasattr(inst, "full_name") else None
+    except Exception:  # noqa: BLE001
+        path = None
+    if path:
+        file_val, line_val = _inst_src_info(inst)
+        if file_val is not None or line_val is not None:
+            accumulator[path] = (file_val, line_val)
+    try:
+        children = inst.inst_list() if hasattr(inst, "inst_list") else []
+    except Exception:  # noqa: BLE001
+        children = []
+    for child in children or []:
+        _walk_inst_src(child, accumulator, _depth + 1)
+
+
+def _scope_inst_of(hdl: Any) -> Any:
+    """Defensive ``hdl.scope_inst()``. Returns None on any failure."""
+    if hdl is None or not hasattr(hdl, "scope_inst"):
+        return None
+    try:
+        return hdl.scope_inst()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _inst_src_info(inst_hdl: Any) -> tuple[str | None, int | None]:
+    """Best-effort ``(file, begin_line)`` from an ``InstHdl``.
+
+    NPI exposes elaborated-instance source info via ``file()`` and
+    ``begin_line_no()``; some backends populate ``src_info()`` instead.
+    We try the explicit accessors first because their semantics are
+    unambiguous, then fall back to ``_safe_src_info`` for the
+    dict/tuple-shaped variant. Never raises; returns ``(None, None)``
+    when NPI did not record source info for this instance (common for
+    library cells and synthesized helpers).
+    """
+    if inst_hdl is None:
+        return (None, None)
+
+    file_val: str | None = None
+    line_val: int | None = None
+
+    if hasattr(inst_hdl, "file"):
+        try:
+            raw = inst_hdl.file()
+            if raw:
+                file_val = str(raw)
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(inst_hdl, "begin_line_no"):
+        try:
+            raw = inst_hdl.begin_line_no()
+            if raw is not None:
+                line_val = int(raw)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if file_val is not None or line_val is not None:
+        return (file_val, line_val)
+
+    src = _safe_src_info(inst_hdl)
+    fallback_file = src.get("file") if isinstance(src, dict) else None
+    fallback_line = src.get("line") if isinstance(src, dict) else None
+    return (fallback_file, fallback_line)
 
 
 def _safe_src_info(hdl: Any) -> dict[str, Any]:

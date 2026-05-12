@@ -3,10 +3,12 @@ verdi_backend.py
 Detection of Verdi runtime / KDB artefacts. Pure detection — no NPI
 calls, no verdi process spawn, no license consumption.
 
-The module produces a BackendStatus-shape dict consumed by tools that
-expose a backend_status field (find_signal_loads today; explain_signal_driver
-in a future session). Detection follows docs/design_verdi_backend_integration.md
-§10.2:
+The module produces a BackendStatus-shape dict surfaced in the result
+envelope of every connectivity tool (``find_signal_loads``,
+``explain_signal_driver``, ``trace_signal_path``) and consumed
+internally by ``build_tb_hierarchy`` to decide whether to overlay
+NPI-elaborated ``file:line`` onto the compile-log-derived nodes.
+Detection rules:
 
     VCS:
       1. <case_dir>/simv.daidir/kdb.elab++  → vcs_two_step

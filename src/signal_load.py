@@ -118,8 +118,10 @@ def find_signal_loads(
     base["loads"] = _dedup_loads(raw_loads)
     if not base["loads"]:
         # Either signal truly has no static loads, or static path is blind
-        # (interface / generate / bind). Surface a hint so the caller
-        # knows to try the NPI backend once available.
+        # (interface / generate / bind). The dispatch layer surfaces
+        # backend_status so the caller can see whether NPI was even
+        # active; when it was Static-only, retry with a Verdi KDB
+        # (run build_kdb for Xcelium flows) to engage NPI fan-out.
         base["stopped_at"] = "no_static_load_found"
     return base
 
@@ -165,6 +167,7 @@ def _find_instance_input_loads(
                     "expr": f".{port_name}({expr})" if include_expr else None,
                     "source_file": scan["path"],
                     "source_line": _line_of_offset(source, inst_match.start()),
+                    "source_info_origin": "compile_log",
                     "backend": "static",
                     "confidence": "approximate",
                 }
@@ -199,6 +202,7 @@ def _find_local_rhs_loads(
                 "expr": f"assign {lhs} = {_compact_expr(rhs)}" if include_expr else None,
                 "source_file": scan["path"],
                 "source_line": _line_of_offset(source, m.start()),
+                "source_info_origin": "compile_log",
                 "backend": "static",
                 "confidence": "approximate",
             }
@@ -224,6 +228,7 @@ def _find_local_rhs_loads(
                     "expr": f"{lhs} {op} {_compact_expr(rhs)}" if include_expr else None,
                     "source_file": scan["path"],
                     "source_line": line,
+                    "source_info_origin": "compile_log",
                     "backend": "static",
                     "confidence": "approximate",
                 }
@@ -255,6 +260,7 @@ def _find_sensitivity_loads(
                 "expr": f"always @({_compact_expr(sens)})" if include_expr else None,
                 "source_file": scan["path"],
                 "source_line": line,
+                "source_info_origin": "compile_log",
                 "backend": "static",
                 "confidence": "approximate",
             }

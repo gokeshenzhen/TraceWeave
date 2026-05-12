@@ -1,15 +1,18 @@
 """
 connectivity_backend.py
-Backend abstraction for driver / load (connectivity) queries.
+Backend abstraction for driver / load / path (connectivity) queries.
 
-Today only the Static backend is wired. Session 3 will introduce a
-VerdiNpiBackend that consumes the same protocol so the MCP-tool layer
-does not need to change shape when the new backend lands.
+Two backends are wired: ``StaticConnectivityBackend`` (pure-Python
+source-regex, always available) and ``VerdiNpiBackend`` (NPI-backed,
+selected when a Verdi KDB is detected). They share one Protocol so the
+MCP-tool dispatch layer never needs to branch on backend.
 
 Design intent: backend selection happens at the dispatch site (server.py)
 based on probe_verdi_backend status — not inside individual scanners.
-StaticBackend is pure-Python source-regex; VerdiNpiBackend will hold a
-loaded NPI design and a path-normalization layer.
+The NPI backend wraps Static internally and degrades to it on any
+per-call failure for driver/load queries; ``find_path`` is NPI-only and
+returns a structured ``static_backend_no_path_api`` when no KDB is
+present (no honest source-regex equivalent exists).
 """
 
 from __future__ import annotations
@@ -47,6 +50,17 @@ class ConnectivityBackend(Protocol):
         max_depth: int = 1,
         include_expr: bool = True,
         kind_filter: list[str] | None = None,
+        simulator: str = "auto",
+    ) -> dict[str, Any]: ...
+
+    def find_path(
+        self,
+        from_signal: str,
+        to_signal: str,
+        compile_log: str,
+        *,
+        top_hint: str | None = None,
+        expand_assigns: bool = False,
         simulator: str = "auto",
     ) -> dict[str, Any]: ...
 
@@ -97,6 +111,31 @@ class StaticConnectivityBackend:
             kind_filter=kind_filter,
             simulator=simulator,
         )
+
+    def find_path(
+        self,
+        from_signal: str,
+        to_signal: str,
+        compile_log: str,
+        *,
+        top_hint: str | None = None,
+        expand_assigns: bool = False,
+        simulator: str = "auto",
+    ) -> dict[str, Any]:
+        # No honest static equivalent: ``sig_to_sig_conn_list`` walks
+        # the elaborated netlist across assigns / interface bindings /
+        # generates, which source-regex cannot reproduce reliably.
+        # Returning a structured unsupported response lets the caller
+        # fall back to explain_signal_driver + find_signal_loads.
+        return {
+            "from_signal": from_signal,
+            "to_signal": to_signal,
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "expand_assigns": expand_assigns,
+            "unsupported_reason": "static_backend_no_path_api",
+        }
 
 
 def select_backend(backend_status: dict[str, Any]) -> ConnectivityBackend:

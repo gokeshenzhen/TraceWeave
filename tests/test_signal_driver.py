@@ -149,6 +149,12 @@ endmodule
     assert [hop["driver_kind"] for hop in result["driver_chain"]] == ["assign", "assign"]
     assert result["driver_chain"][1]["branch_candidates"] == ["a", "b"]
     assert "ambiguous_rhs_not_traced" in result["driver_chain"][1]["expression_summary"]
+    # B1: static chain hops tag their provenance so callers can tell them
+    # apart from NPI-annotated hops without reading the backend field.
+    for hop in result["driver_chain"]:
+        if hop.get("source_file") is not None:
+            assert hop["source_info_origin"] == "compile_log"
+            assert hop["backend"] == "static"
     schemas.ExplainDriverResult.model_validate(result)
 
 

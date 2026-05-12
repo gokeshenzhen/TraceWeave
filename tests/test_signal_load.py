@@ -277,3 +277,31 @@ endmodule
     assert model.completeness == "shallow_only"
     assert model.loads
     assert model.backend_status.backend == "static"
+
+
+def test_static_loads_tagged_compile_log_origin(monkeypatch, tmp_path):
+    """Every static-backend load with a source_file must declare its
+    provenance as compile_log. Tests one entry from each scanner path."""
+    rtl = tmp_path / "m.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  m u0(.in(sig));
+  reg sig;
+endmodule
+
+module m(input in);
+  logic c;
+  assign c = in;
+  always @(in) c <= in;
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+    r = find_signal_loads(signal_path="top_tb.sig", compile_log="x")
+    assert r["loads"], "expected at least one static load"
+    for ld in r["loads"]:
+        assert ld["backend"] == "static"
+        # Static path always has source_file set from scan["path"].
+        assert ld["source_file"] is not None
+        assert ld["source_info_origin"] == "compile_log"

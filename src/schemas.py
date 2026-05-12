@@ -378,6 +378,7 @@ class DriverChainHop(SchemaModel):
     driver_kind: str | None = None
     source_file: str | None = None
     source_line: int | None = None
+    source_info_origin: Literal["compile_log", "npi"] | None = None
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
@@ -433,6 +434,7 @@ class LoadHop(SchemaModel):
     expr: str | None = None
     source_file: str | None = None
     source_line: int | None = None
+    source_info_origin: Literal["compile_log", "npi"] | None = None
     backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
     confidence: Literal["exact", "approximate", "unverified"] = "approximate"
 
@@ -446,6 +448,39 @@ class FindSignalLoadsResult(SchemaModel):
     completeness: Literal["exact", "approximate", "shallow_only"] = "shallow_only"
     stopped_at: str | None = None
     unsupported_reason: str | None = None
+    backend_status: BackendStatus = Field(default_factory=BackendStatus)
+
+
+class SignalPathHop(SchemaModel):
+    index: int
+    net_path: str
+    scope_inst: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+    is_endpoint: bool = False
+
+
+_TRACE_SIGNAL_PATH_DIRECTION_NOTE = (
+    "Connectivity only — not a temporal driver relation. "
+    "Use explain_signal_driver for driver direction."
+)
+
+
+class TraceSignalPathResult(SchemaModel):
+    from_signal: str
+    to_signal: str
+    found: bool
+    hops: int = 0
+    path: list[SignalPathHop] = Field(default_factory=list)
+    expand_assigns: bool = False
+    direction_note: str = _TRACE_SIGNAL_PATH_DIRECTION_NOTE
+    unsupported_reason: Literal[
+        "from_not_found",
+        "to_not_found",
+        "not_connected",
+        "static_backend_no_path_api",
+        "npi_call_failed",
+    ] | None = None
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 

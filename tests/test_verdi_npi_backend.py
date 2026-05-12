@@ -11,8 +11,10 @@ from src.verdi_npi_backend import (
     _classify_driver_kind,
     _classify_load_kind,
     _driver_summary,
+    _inst_src_info,
     _line_from_synthesized,
     _scope_from_synthesized,
+    _scope_inst_of,
 )
 
 
@@ -768,3 +770,193 @@ def test_real_npi_normalizes_synthesized_paths_for_invert():
         # Synthesized loads should produce a parsed source_line.
         if ":" in ld["expr"]:
             assert ld["source_line"] is not None
+
+
+# ---------------------------------------------------------------------------
+# B1: _inst_src_info helper + source_info_origin tagging
+# ---------------------------------------------------------------------------
+
+
+class _MockInst:
+    """Mimics InstHdl with optional file()/begin_line_no() accessors."""
+
+    def __init__(self, file_val=None, line_val=None, src_info_val=None,
+                 file_raises=False, line_raises=False):
+        self._file = file_val
+        self._line = line_val
+        self._src_info = src_info_val
+        self._file_raises = file_raises
+        self._line_raises = line_raises
+
+    def file(self):
+        if self._file_raises:
+            raise RuntimeError("boom")
+        return self._file
+
+    def begin_line_no(self):
+        if self._line_raises:
+            raise RuntimeError("boom")
+        return self._line
+
+    def src_info(self):
+        return self._src_info
+
+
+def test_inst_src_info_returns_none_for_none():
+    assert _inst_src_info(None) == (None, None)
+
+
+def test_inst_src_info_prefers_file_and_begin_line_no():
+    inst = _MockInst(file_val="/proj/rtl/dut.sv", line_val=42)
+    assert _inst_src_info(inst) == ("/proj/rtl/dut.sv", 42)
+
+
+def test_inst_src_info_swallows_accessor_exceptions():
+    inst = _MockInst(file_raises=True, line_raises=True)
+    assert _inst_src_info(inst) == (None, None)
+
+
+def test_inst_src_info_falls_back_to_src_info_tuple():
+    # No file()/begin_line_no() attrs at all — only src_info().
+    class _OldStyleInst:
+        def src_info(self):
+            return ("/legacy/path.sv", 7, 9)
+    assert _inst_src_info(_OldStyleInst()) == ("/legacy/path.sv", 7)
+
+
+def test_inst_src_info_treats_empty_file_string_as_none():
+    inst = _MockInst(file_val="", line_val=None)
+    assert _inst_src_info(inst) == (None, None)
+
+
+class _PinWithInst:
+    """Pin handle that also exposes scope_inst()."""
+
+    def __init__(self, name, t="npiNlInstPort", inst=None, pin_src_info=None):
+        self._name = name
+        self._t = t
+        self._inst = inst
+        self._pin_src = pin_src_info or {}
+
+    def full_name(self):
+        return self._name
+
+    def type(self):
+        return self._t
+
+    def src_info(self):
+        return self._pin_src
+
+    def scope_inst(self):
+        return self._inst
+
+
+def test_scope_inst_of_returns_none_when_attr_missing():
+    class _Bare:
+        pass
+    assert _scope_inst_of(_Bare()) is None
+
+
+def test_format_load_picks_up_npi_src_info_from_enclosing_inst(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    inst = _MockInst(file_val="/proj/rtl/dut.sv", line_val=88)
+    pin = _PinWithInst(
+        "top_tb.my_dut.dut:Always0#Always0:18:31:Mux.CH_invert",
+        inst=inst,
+    )
+    netlist_obj = _MockNetlist({"top_tb.clk": _MockNet([pin])})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_loads(
+        signal_path="top_tb.clk", compile_log=log, simulator="vcs"
+    )
+    assert len(r["loads"]) == 1
+    ld = r["loads"][0]
+    # NPI's enclosing-inst src_info wins over the synthesized-name line
+    # fallback: the inst hdl is the authoritative source of file:line
+    # for the elaborated load site, whereas the synth-name line is just
+    # parsed text. Both come from NPI, so origin is "npi".
+    assert ld["source_file"] == "/proj/rtl/dut.sv"
+    assert ld["source_line"] == 88
+    assert ld["source_info_origin"] == "npi"
+
+
+def test_format_load_origin_none_when_no_src_info(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    # Plain pin with no inst, no src_info, AND a non-synthesized name so
+    # _line_from_synthesized returns None too — every fallback empty.
+    pin = _PinWithInst("top_tb.b_if.clk", inst=None)
+    netlist_obj = _MockNetlist({"top_tb.clk": _MockNet([pin])})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_loads(
+        signal_path="top_tb.clk", compile_log=log, simulator="vcs"
+    )
+    ld = r["loads"][0]
+    assert ld["source_file"] is None
+    assert ld["source_line"] is None
+    assert ld["source_info_origin"] is None
+
+
+def test_format_fan_in_pin_carries_npi_origin_for_driver_chain(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    inst = _MockInst(file_val="/proj/rtl/m.sv", line_val=120)
+    reg_pin = _PinWithInst(
+        "top_tb.dut:Always0#Always0:18:31:Reg.ROH_v",
+        inst=inst,
+    )
+    self_port = _MockPin("top_tb.dut.v", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[reg_pin])
+    netlist_obj = _MockNetlist({"top_tb.dut.v": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.dut.v",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    chain = r["driver_chain"]
+    assert chain is not None
+    # depth-0 is the queried net; depth-1 is the Reg fan-in boundary point.
+    hop = chain[1]
+    assert hop["source_file"] == "/proj/rtl/m.sv"
+    # Inst's begin_line_no() wins over the synth-name line (18).
+    assert hop["source_line"] == 120
+    assert hop["source_info_origin"] == "npi"
+
+
+def test_format_driver_multi_driven_chain_carries_npi_origin(monkeypatch, tmp_path):
+    """When NPI returns multiple drivers (multi-driven net), the synthesized
+    depth-0 chain entries must include source_info_origin from each driver."""
+    log = _make_compile_log(tmp_path)
+    inst_a = _MockInst(file_val="/p/a.sv", line_val=10)
+    inst_b = _MockInst(file_val="/p/b.sv", line_val=20)
+    d1 = _PinWithInst(
+        "top_tb.dut:Always0#Always0:10:11:Mux.OH_y", inst=inst_a,
+    )
+    d2 = _PinWithInst(
+        "top_tb.dut:Always1#Always1:20:21:Or.OH_y", inst=inst_b,
+    )
+    # No fan-in available so the single-hop multi-driver path runs.
+    net = _MockNet(drivers=[d1, d2])
+    netlist_obj = _MockNetlist({"top_tb.dut.y": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.dut.y",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["driver_chain"] is not None
+    origins = [h["source_info_origin"] for h in r["driver_chain"]]
+    assert origins == ["npi", "npi"]
+    files = sorted(h["source_file"] for h in r["driver_chain"])
+    assert files == ["/p/a.sv", "/p/b.sv"]

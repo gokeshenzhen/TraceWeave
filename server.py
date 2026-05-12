@@ -98,6 +98,7 @@ _PREREQUISITES: dict[str, list[str]] = {
     "analyze_failure_event": ["get_sim_paths", "build_tb_hierarchy"],
     "explain_signal_driver": ["build_tb_hierarchy"],
     "find_signal_loads": ["build_tb_hierarchy"],
+    "trace_signal_path": ["build_tb_hierarchy"],
     "trace_x_source": ["build_tb_hierarchy"],
 }
 
@@ -949,7 +950,12 @@ async def list_tools():
             description=(
                 "Trace a waveform signal path back to the most likely RTL driver. "
                 "Supports direct assigns, simple always blocks, and module output ports. "
-                "Set recursive=true to walk multiple hops upstream across instance boundaries."
+                "Set recursive=true to walk multiple hops upstream across instance boundaries. "
+                "When a Verdi KDB is detected, an NPI backend transparently engages and walks "
+                "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
+                "the static source-regex backend cannot reach; otherwise the static backend "
+                "runs. Each driver_chain hop carries source_info_origin ('compile_log' or 'npi') "
+                "so consumers can tell which provenance produced its file:line."
             ),
             inputSchema={
                 "type": "object",
@@ -982,11 +988,12 @@ async def list_tools():
             description=(
                 "List places that consume (load) a signal: child instance input ports, "
                 "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
-                "Static backend is shallow_only — connections via interface positional "
-                "args, generate blocks, bind, or cross-hierarchy fanout from output ports "
-                "are not covered and will be reflected in stopped_at. Each load is marked "
-                "confidence='approximate'; a Verdi NPI backend covering these gaps is "
-                "planned (see docs/design_verdi_backend_integration.md)."
+                "When a Verdi KDB is detected, an NPI backend transparently engages and "
+                "resolves the cross-hierarchy / interface-positional / generate-block cases "
+                "that the static source-regex backend cannot reach; otherwise the static "
+                "backend runs (shallow_only) and surfaces gaps in stopped_at. Each load "
+                "carries source_info_origin ('compile_log' or 'npi') so consumers can tell "
+                "which provenance produced its file:line."
             ),
             inputSchema={
                 "type": "object",
@@ -1001,7 +1008,11 @@ async def list_tools():
                     "max_depth": {
                         "type": "integer",
                         "default": 1,
-                        "description": "Reserved for future transitive walks; static backend always behaves as 1.",
+                        "description": (
+                            "Reserved for future transitive walks. Static backend "
+                            "always behaves as 1; NPI backend's fan-out walk is "
+                            "depth-bounded internally regardless of this argument."
+                        ),
                     },
                     "include_expr": {
                         "type": "boolean",
@@ -1018,6 +1029,44 @@ async def list_tools():
                     },
                 },
                 "required": ["signal_path", "compile_log"],
+            },
+        ),
+
+        Tool(
+            name="trace_signal_path",
+            description=(
+                "Find a connectivity path between two signals in the elaborated "
+                "netlist (NPI-only). Returns one connected chain of nets walking "
+                "across assigns, interface bindings, and instance boundaries. "
+                "This is connectivity, NOT temporal driver direction — use "
+                "explain_signal_driver for driver semantics. Without a Verdi KDB "
+                "this tool returns unsupported_reason='static_backend_no_path_api' "
+                "because source-regex cannot reproduce sig_to_sig_conn_list "
+                "honestly; in that case fall back to explain_signal_driver + "
+                "find_signal_loads."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "from_signal": {"type": "string"},
+                    "to_signal": {"type": "string"},
+                    "compile_log": {"type": "string"},
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Optional — auto-injected from get_sim_paths.",
+                    },
+                    "top_hint": {"type": "string"},
+                    "expand_assigns": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "When true, NPI treats `assign` as a separate cell, "
+                            "yielding longer paths with explicit assign hops. "
+                            "Useful when debugging RTL aliases."
+                        ),
+                    },
+                },
+                "required": ["from_signal", "to_signal", "compile_log"],
             },
         ),
 
@@ -1212,7 +1261,8 @@ async def _dispatch(name: str, args: dict):
             parse_compile_log(
                 args["compile_log"],
                 simulator,
-            )
+            ),
+            compile_log_path=args["compile_log"],
         )
         _update_session_state(name, resolved_args, result)
         scan_call = None
@@ -1402,6 +1452,37 @@ async def _dispatch(name: str, args: dict):
         result.pop("_npi_fallback_reason", None)
         result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
+
+    elif name == "trace_signal_path":
+        simulator = _resolve_session_simulator(args)
+        backend_status = _safe_probe_backend(args["compile_log"], simulator)
+        from src.connectivity_backend import select_backend  # noqa: PLC0415
+        backend = select_backend(backend_status)
+        result = backend.find_path(
+            from_signal=args["from_signal"],
+            to_signal=args["to_signal"],
+            compile_log=args["compile_log"],
+            top_hint=args.get("top_hint"),
+            expand_assigns=args.get("expand_assigns", False),
+            simulator=simulator,
+        )
+        backend_status = dict(backend_status)
+        backend_status["backend"] = backend.name
+        fallback_reason = result.get("_npi_fallback_reason")
+        # Static returning static_backend_no_path_api is the expected
+        # answer when NPI is unavailable, not a fallback. Only treat
+        # _npi_fallback_reason (set by VerdiNpiBackend internals) as a
+        # true fallback.
+        actual_backend = "static" if fallback_reason else backend.name
+        backend_status["actual_backend"] = actual_backend
+        if fallback_reason:
+            backend_status["fallback_reason"] = fallback_reason
+        if actual_backend == "verdi_npi":
+            backend_status["parser_match"] = "exact"
+        result.pop("_npi_fallback_reason", None)
+        result.pop("_npi_call_error", None)
+        result["backend_status"] = backend_status
+        return schemas.TraceSignalPathResult.model_validate(result)
 
     elif name == "build_kdb":
         from src.kdb_builder import build_kdb as _build_kdb

@@ -652,6 +652,7 @@ def _strip_chain_hop(hop: dict[str, Any]) -> dict[str, Any]:
         "driver_kind",
         "source_file",
         "source_line",
+        "source_info_origin",
         "expression_summary",
         "upstream_signals",
         "instance_port_connections",
@@ -663,6 +664,11 @@ def _strip_chain_hop(hop: dict[str, Any]) -> dict[str, Any]:
     out = {key: value for key, value in hop.items() if key in allowed}
     out.setdefault("backend", "static")
     out.setdefault("backend_confidence", "approximate")
+    # Static chain hops always derive file:line from compile_log-scanned
+    # SV sources; tag them so downstream consumers can distinguish from
+    # NPI-annotated hops without re-checking the backend field.
+    if out.get("backend") == "static" and out.get("source_file") is not None:
+        out.setdefault("source_info_origin", "compile_log")
     return out
 
 

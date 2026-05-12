@@ -105,6 +105,36 @@ Step 7: Deep dive (on demand, based on step 6 findings)
    │           simulator is Xcelium and no KDB exists yet, get_diagnostic_snapshot
    │           lists `build_kdb` in `missing_steps` — call that first.
    │
+   ├─ find_signal_loads(signal_path, compile_log, kind_filter?, include_expr?)
+   │    When: Symmetric to explain_signal_driver — list the consumers (fanout)
+   │          of a signal: child instance input ports, RHS in assigns /
+   │          procedural assignments, always-block sensitivity lists.
+   │    Output: loads[].{load_path, kind, source_file, source_line, expr}
+   │    Notes: Static backend is shallow_only and cannot follow interface
+   │           positional bindings or cross-hierarchy fanout — those are
+   │           surfaced via stopped_at. NPI backend (when a Verdi KDB is
+   │           present) walks the elaborated netlist and resolves both.
+   │           Each load carries source_info_origin = "compile_log" or "npi".
+   │
+   ├─ trace_x_source(signal_path, wave_path, compile_log, time_ps, max_depth?)
+   │    When: A signal is X/Z at the failure time and the agent wants to
+   │          trace propagation back to the root cause net.
+   │    Output: propagation_chain[], root_cause, trace_status, analysis_guide
+   │    Notes: Combines waveform reads (per-hop value at time_ps) with
+   │           source-level driver analysis. Uses fan-in via NPI when KDB
+   │           is available; otherwise source-regex.
+   │
+   ├─ trace_signal_path(from_signal, to_signal, compile_log, expand_assigns?)
+   │    When: Need a connected chain of nets between two signals (e.g. "how does
+   │          an input port reach the failing assertion?"). NPI-only — without
+   │          a KDB this returns unsupported_reason="static_backend_no_path_api"
+   │          and you should fall back to explain_signal_driver + find_signal_loads.
+   │    Output: path[], hops, found, direction_note
+   │    Notes: This is connectivity (any direction), NOT temporal driver direction.
+   │           Use explain_signal_driver for "what drives X temporally". Set
+   │           expand_assigns=true when you want explicit assign hops surfaced
+   │           instead of collapsed.
+   │
    ├─ build_kdb(compile_log, top_hint?, force_rebuild?)
    │    When: Xcelium (xrun) flow and `backend_status.kdb_path` is null,
    │          or you want to refresh a cached KDB after source changes
@@ -165,7 +195,8 @@ get_sim_paths ──→ build_tb_hierarchy ──→ parse_sim_log ──→ rec
 | `group_index` | Agent decision from `parse_sim_log → groups` | `analyze_failures` |
 | `line` | `parse_sim_log → groups[].first_line` | `get_error_context` |
 | `center_time_ps` | `parse_sim_log → failure_events[].time_ps` or `groups[].first_time_ps` | `get_signals_around_time` |
-| `signal_path` | `search_signals → results[].path` or waveform observation | `explain_signal_driver` |
+| `signal_path` | `search_signals → results[].path` or waveform observation | `explain_signal_driver`, `find_signal_loads`, `trace_x_source` |
+| `from_signal` / `to_signal` | `search_signals → results[].path` (endpoints chosen by agent) | `trace_signal_path` |
 
 ## Iterative Debug Pattern
 

@@ -173,3 +173,185 @@ Top Level Modules:
             assert "if" not in top
         finally:
             tmp.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# B2: source provenance on component_tree nodes
+# ---------------------------------------------------------------------------
+
+
+class TestB2NodeProvenance:
+    """Each compile-log-derived node carries source_file/origin so callers
+    can later distinguish from NPI-annotated nodes without inspecting the
+    backend separately."""
+
+    def test_compile_log_baseline_tags_every_node(self):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "tb" / "top_tb.sv"
+            _write(
+                top_path,
+                """
+module dut;
+  inner inner_i();
+endmodule
+module inner; endmodule
+module top_tb;
+  dut dut_i();
+endmodule
+""",
+            )
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{top_path}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            hierarchy = build_hierarchy(parse_compile_log(str(log), "vcs"))
+            top = hierarchy["component_tree"]["top_tb"]
+            assert top["dut_i"]["source_info_origin"] == "compile_log"
+            assert top["dut_i"]["source_file"] == str(top_path)
+            # source_line stays None in the baseline — NPI is what
+            # provides instance-level lines.
+            assert top["dut_i"]["source_line"] is None
+            # Recursive descent: the grandchild inherits provenance too.
+            inner = top["dut_i"]["children"]["inner_i"]
+            assert inner["source_info_origin"] == "compile_log"
+        finally:
+            tmp.cleanup()
+
+    def test_npi_annotation_overwrites_source_file_and_line(self, monkeypatch):
+        """When a KDB exists and NPI returns a (file, line) for a node's
+        full instance path, the annotation pass overwrites both fields
+        and flips origin to "npi"."""
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "tb" / "top_tb.sv"
+            _write(top_path, "module dut; endmodule\nmodule top_tb;\n  dut dut_i();\nendmodule\n")
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{top_path}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            # Force KDB discovery: probe key only needs kdb_flow != "none".
+            monkeypatch.setattr(
+                "src.verdi_backend.probe_verdi_backend",
+                lambda compile_result, compile_log_path=None: {
+                    "kdb_flow": "vcs_two_step",
+                    "kdb_path": "/fake/kdb",
+                    "actual_backend": "verdi_npi",
+                    "backend": "verdi_npi",
+                    "simulator": "vcs",
+                },
+            )
+
+            class _FakeNpiBackend:
+                name = "verdi_npi"
+
+                def collect_instance_src_map(self, compile_log, simulator):
+                    return {"top_tb.dut_i": ("/elaborated/dut.sv", 137)}
+
+            monkeypatch.setattr(
+                "src.connectivity_backend.select_backend",
+                lambda status: _FakeNpiBackend(),
+            )
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                compile_log_path=str(log),
+            )
+            node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+            assert node["source_file"] == "/elaborated/dut.sv"
+            assert node["source_line"] == 137
+            assert node["source_info_origin"] == "npi"
+        finally:
+            tmp.cleanup()
+
+    def test_npi_failure_leaves_compile_log_baseline_intact(self, monkeypatch):
+        """If the NPI walk raises, every node must keep its compile_log
+        origin — annotation is strictly additive."""
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "tb" / "top_tb.sv"
+            _write(top_path, "module dut; endmodule\nmodule top_tb;\n  dut dut_i();\nendmodule\n")
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{top_path}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            monkeypatch.setattr(
+                "src.verdi_backend.probe_verdi_backend",
+                lambda compile_result, compile_log_path=None: {
+                    "kdb_flow": "vcs_two_step",
+                    "kdb_path": "/fake/kdb",
+                    "actual_backend": "verdi_npi",
+                    "backend": "verdi_npi",
+                    "simulator": "vcs",
+                },
+            )
+
+            class _ExplodingBackend:
+                name = "verdi_npi"
+
+                def collect_instance_src_map(self, compile_log, simulator):
+                    raise RuntimeError("npi broke")
+
+            monkeypatch.setattr(
+                "src.connectivity_backend.select_backend",
+                lambda status: _ExplodingBackend(),
+            )
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                compile_log_path=str(log),
+            )
+            node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+            assert node["source_info_origin"] == "compile_log"
+            assert node["source_file"] == str(top_path)
+            assert node["source_line"] is None
+        finally:
+            tmp.cleanup()
+
+    def test_no_kdb_skips_npi_pass(self, monkeypatch):
+        """When kdb_flow is 'none', select_backend is not even called."""
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "tb" / "top_tb.sv"
+            _write(top_path, "module dut; endmodule\nmodule top_tb;\n  dut dut_i();\nendmodule\n")
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{top_path}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            monkeypatch.setattr(
+                "src.verdi_backend.probe_verdi_backend",
+                lambda compile_result, compile_log_path=None: {"kdb_flow": "none"},
+            )
+            called = {"n": 0}
+
+            def _boom(status):
+                called["n"] += 1
+                raise AssertionError("select_backend must not be invoked when no KDB")
+
+            monkeypatch.setattr("src.connectivity_backend.select_backend", _boom)
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                compile_log_path=str(log),
+            )
+            assert called["n"] == 0
+            node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+            assert node["source_info_origin"] == "compile_log"
+        finally:
+            tmp.cleanup()

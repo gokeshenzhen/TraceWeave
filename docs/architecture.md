@@ -70,11 +70,16 @@ Verification
   tool. `signal_driver` traces back to drivers; `signal_load` finds the
   consumers (fanout) of a signal.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
-  `find_driver` and `find_loads` methods. `select_backend()` returns
-  `VerdiNpiBackend` when a Verdi KDB is available, otherwise the static
-  source-regex backend. The NPI backend wraps Static internally, so any
-  per-call NPI failure (license unavailable, KDB stale, query exception)
-  silently degrades — the dispatch layer sees one protocol regardless.
+  `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
+  returns `VerdiNpiBackend` when a Verdi KDB is available, otherwise the
+  static source-regex backend. The NPI backend wraps Static internally, so
+  any per-call NPI failure (license unavailable, KDB stale, query exception)
+  silently degrades for driver/load queries — the dispatch layer sees one
+  protocol regardless. `find_path` is NPI-only: Static returns
+  `unsupported_reason="static_backend_no_path_api"` rather than approximating
+  with regex, since `sig_to_sig_conn_list` walks the elaborated netlist
+  across assigns / interfaces / generates that source-regex cannot follow
+  reliably.
 - `src/verdi_backend.py` is a pure-detection probe: it locates KDB at
   `simv.daidir/kdb.elab++` (VCS two-step) or via `synopsys_sim.setup` work-lib
   mappings (three-step / vericom standalone) and emits a per-simulator
@@ -85,7 +90,13 @@ Verification
   `kdb_path`, and re-issues `npisys.load_design` to switch cases within one
   session. Synthesized PinHdl paths (`scope:Construct#Op:line:line:Cell.Port`)
   are normalized to FSDB-visible scopes; raw form is preserved in `expr` for
-  diagnostics.
+  diagnostics. Additional NPI-only capabilities: `find_path` wraps
+  `sig_to_sig_conn_list` for the `trace_signal_path` MCP tool, and
+  `collect_instance_src_map` walks `netlist.get_top_inst_list()` recursively
+  to overlay elaborated `file:line` onto compile-log-derived hierarchy
+  nodes; `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
+  `source_info_origin` field (`"compile_log"` vs `"npi"`) so consumers can
+  tell which provenance produced each `file:line`.
 - `src/structural_scanner.py` and `src/x_trace.py` are first-class extended
   analysis capabilities and should not be treated as optional side scripts.
 - `src/schemas.py` and `src/problem_hints.py` are support layers for structured
@@ -109,7 +120,7 @@ select_backend(probe_status)
 ├── KDB present  → VerdiNpiBackend(fallback=Static)
 └── KDB absent   → Static directly  (don't start NPI just to burn a license)
 
-VerdiNpiBackend.find_driver / find_loads
+VerdiNpiBackend.find_driver / find_loads / find_path
 ├── parse_compile_log fails / no kdb_path / no top   → fall back to Static
 ├── _ensure_loaded fails (pynpi import, npisys.init, load_design rc != 1)
 │                                                    → fall back to Static

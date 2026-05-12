@@ -117,6 +117,11 @@ def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str])
     result = module_to_scan.get(module_name)
     if not result:
         return tree
+    # Baseline provenance comes from the compile_log file list (the parent
+    # module is declared in result["path"]). B2's NPI pass may later
+    # overwrite ``source_file`` / ``source_line`` with elaborated-netlist
+    # truth and flip ``source_info_origin`` to "npi".
+    parent_path = result.get("path") or None
     for item in result["module_instances"]:
         child_scan = module_to_scan.get(item["module_name"])
         child_src = child_scan["name"] if child_scan else ""
@@ -125,6 +130,9 @@ def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str])
             "class": item["module_name"],
             "src": child_src,
             "role": _classify_node(item["module_name"], item["instance_name"]),
+            "source_file": parent_path,
+            "source_line": None,
+            "source_info_origin": "compile_log" if parent_path else None,
         }
         descendants = _add_module_children(item["module_name"], module_to_scan, seen)
         if descendants:
@@ -192,7 +200,7 @@ def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
     return component_tree
 
 
-def build_hierarchy(compile_result: dict) -> dict:
+def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -> dict:
     file_entries = compile_result.get("files", {}).get("user", [])
     scan_results, scan_by_path, source_text_cache = _scan_user_files(file_entries)
     grouped_files = _group_files_by_category(file_entries, scan_by_path)
@@ -209,6 +217,20 @@ def build_hierarchy(compile_result: dict) -> dict:
             "bound_in": interface_bindings.get(interface_name, ""),
         })
 
+    component_tree = build_component_tree(scan_results, top_module) if top_module else {}
+
+    # B2 enrichment: when a Verdi KDB is available, walk the elaborated
+    # netlist and overwrite each component_tree node's source info with
+    # NPI's truth. Failures here must never break the compile-log
+    # baseline; ``_npi_annotate_component_tree`` swallows everything.
+    if compile_log_path and top_module and component_tree:
+        _npi_annotate_component_tree(
+            component_tree=component_tree,
+            top_module=top_module,
+            compile_result=compile_result,
+            compile_log_path=compile_log_path,
+        )
+
     return {
         "project": {
             "top_module": top_module,
@@ -216,11 +238,84 @@ def build_hierarchy(compile_result: dict) -> dict:
             "simulator": compile_result.get("simulator", "unknown"),
         },
         "files": dict(grouped_files),
-        "component_tree": build_component_tree(scan_results, top_module) if top_module else {},
+        "component_tree": component_tree,
         "class_hierarchy": build_class_hierarchy(scan_results),
         "interfaces": interfaces,
         "compile_result": compile_result,
     }
+
+
+def _npi_annotate_component_tree(
+    component_tree: dict,
+    top_module: str,
+    compile_result: dict,
+    compile_log_path: str,
+) -> None:
+    """Overlay NPI-derived file:line onto an already-built component_tree.
+
+    Guarded against every known failure mode (missing VERDI_HOME, no KDB,
+    pynpi unimportable, design load failure, individual node walk
+    failure). Mutates ``component_tree`` in place; never raises.
+    """
+    try:
+        from .connectivity_backend import select_backend  # noqa: PLC0415
+        from .verdi_backend import probe_verdi_backend  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        backend_status = probe_verdi_backend(
+            compile_result, compile_log_path=compile_log_path
+        )
+    except Exception:  # noqa: BLE001
+        return
+    if backend_status.get("kdb_flow", "none") == "none":
+        return
+    try:
+        backend = select_backend(backend_status)
+    except Exception:  # noqa: BLE001
+        return
+    if getattr(backend, "name", None) != "verdi_npi":
+        return
+    collector = getattr(backend, "collect_instance_src_map", None)
+    if collector is None:
+        return
+    simulator = compile_result.get("simulator") or "auto"
+    try:
+        inst_map = collector(compile_log_path, simulator)
+    except Exception:  # noqa: BLE001
+        return
+    if not inst_map:
+        return
+
+    # component_tree shape: {top: {inst_name: node, ...}} where each node
+    # may contain "children": {inst_name: node, ...}. Top-module key is
+    # not a node and has no annotation to apply.
+    children = component_tree.get(top_module)
+    if isinstance(children, dict):
+        _overlay_npi_on_subtree(children, top_module, inst_map)
+
+
+def _overlay_npi_on_subtree(
+    children: dict,
+    parent_path: str,
+    inst_map: dict,
+) -> None:
+    for inst_name, node in children.items():
+        if not isinstance(node, dict):
+            continue
+        full_path = f"{parent_path}.{inst_name}"
+        npi_entry = inst_map.get(full_path)
+        if npi_entry is not None:
+            file_val, line_val = npi_entry
+            if file_val is not None:
+                node["source_file"] = file_val
+            if line_val is not None:
+                node["source_line"] = line_val
+            if file_val is not None or line_val is not None:
+                node["source_info_origin"] = "npi"
+        sub = node.get("children")
+        if isinstance(sub, dict):
+            _overlay_npi_on_subtree(sub, full_path, inst_map)
 
 
 def _scan_user_files(file_entries: list[dict]) -> tuple[list[dict], dict[str, dict], dict[str, str]]:
