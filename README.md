@@ -117,11 +117,9 @@ If the client supports server instructions, it can follow the built-in workflow 
 
 ### Claude Code
 
-Add this to `~/.claude.json`. The simplest setup omits the `env` block
-entirely — the spawned MCP server inherits Claude Code's environment,
-which already has `VERDI_HOME` / `SNPSLMD_LICENSE_FILE` / etc. from
-your shell startup files. Override only when you need a different
-toolchain than your interactive shell uses.
+Neither Claude Code nor Codex inherits your interactive shell env into the spawned MCP stdio server, so list every variable the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the one most often missed; without it NPI silently falls back to Static and `trace_signal_path` returns `found: false`).
+
+Add this to `~/.claude.json`:
 
 ```json
 {
@@ -130,50 +128,42 @@ toolchain than your interactive shell uses.
       "command": "python3.11",
       "args": ["/home/robin/Projects/mcp/TraceWeave/server.py"],
       "env": {
-        "VERDI_HOME": "/tools/synopsys/verdi/O-2018.09-SP2-11",
-        "VCS_HOME": "/tools/synopsys/vcs/O-2018.09-SP2-11",
-        "XLM_ROOT": "/tools/cadence/XCELIUM1803",
-        "PATH": "/tools/synopsys/verdi/O-2018.09-SP2-11/bin:/tools/synopsys/vcs/O-2018.09-SP2-11/bin:/tools/cadence/XCELIUM1803/tools/bin:/usr/local/bin:/usr/bin:/bin"
+        "VERDI_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
+        "NOVAS_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
+        "VCS_HOME": "/tools/synopsys/vcs/V-2023.12-SP2",
+        "XLM_ROOT": "/tools/cadence/XCELIUM2603",
+        "CDS_INST_DIR": "/tools/cadence/XCELIUM2603",
+        "LD_LIBRARY_PATH": "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
+        "PATH": "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
       }
     }
   }
 }
 ```
 
-Environment variables must be set explicitly in the config. Claude Code does not automatically source your shell profile.
-
-Verify the connection:
-
-```bash
-claude mcp list
-# Should show TraceWeave (connected)
-```
+Verify with `claude mcp list` (should show `TraceWeave (connected)`).
 
 ### Codex
 
-Add this to `~/.codex/config.toml`:
+Same idea as Claude Code — list everything explicitly. Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
 args = ["/home/robin/Projects/mcp/TraceWeave/server.py"]
 cwd = "/home/robin/Projects/mcp/TraceWeave"
-
-[mcp_servers.TraceWeave.env]
-VERDI_HOME = "/tools/synopsys/verdi/O-2018.09-SP2-11"
-VCS_HOME   = "/tools/synopsys/vcs/O-2018.09-SP2-11"
-XLM_ROOT   = "/tools/cadence/XCELIUM1803"
-PATH       = "/tools/synopsys/verdi/O-2018.09-SP2-11/bin:/tools/synopsys/vcs/O-2018.09-SP2-11/bin:/tools/cadence/XCELIUM1803/tools/bin:/usr/local/bin:/usr/bin:/bin"
+env = {
+  VERDI_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
+  NOVAS_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
+  VCS_HOME        = "/tools/synopsys/vcs/V-2023.12-SP2",
+  XLM_ROOT        = "/tools/cadence/XCELIUM2603",
+  CDS_INST_DIR    = "/tools/cadence/XCELIUM2603",
+  LD_LIBRARY_PATH = "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
+  PATH            = "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+}
 ```
 
-If the file already contains other configuration, append this block instead of overwriting it.
-
-Verify the connection:
-
-```bash
-codex mcp list
-# Should show TraceWeave with Status: enabled
-```
+Substitute your own tool versions. Restart the client (close and reopen the session) after editing; MCP servers are spawned once at startup. Verify with `codex mcp list`, then call `trace_signal_path` once and check `backend_status.actual_backend == verdi_npi`.
 
 ### Functional Verification
 
