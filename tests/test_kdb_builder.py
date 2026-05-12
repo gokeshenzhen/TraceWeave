@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import kdb_builder
 from src.kdb_builder import (
+    _write_build_script,
     _extract_build_inputs,
     _extract_plus_args,
     _needs_uvm,
@@ -258,6 +259,21 @@ def test_build_kdb_happy_path(tmp_path, monkeypatch):
     assert phases == ["vericom", "elabcom"]
     state = json.loads((Path(result["cache_dir"]) / "state.json").read_text())
     assert state["status"] == "ok"
+
+
+def test_write_build_script_uses_utf8_for_non_ascii_comments(tmp_path):
+    inputs = {
+        "top": "tb_top",
+        "files": [],
+        "defines": [],
+        "incdirs": [],
+        "needs_uvm": False,
+        "hash": "abc123",
+    }
+
+    path = _write_build_script(tmp_path, verdi_home="/tools/verdi", inputs=inputs)
+
+    assert "\u2014" in path.read_text(encoding="utf-8")
 
 
 def test_build_kdb_cache_hit(tmp_path, monkeypatch):

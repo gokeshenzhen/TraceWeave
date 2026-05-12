@@ -157,7 +157,7 @@ def build_kdb(
                 "timestamp": _now_iso(),
                 "inputs": _serialisable_inputs(inputs),
             }
-            (tmp_dir / "state.json").write_text(json.dumps(state, indent=2))
+            (tmp_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
             # Keep the failing tmp dir for inspection — rename to a
             # ``.failed-<hash>`` sibling so the next build can still
             # start clean.
@@ -193,7 +193,8 @@ def build_kdb(
                     "inputs": _serialisable_inputs(inputs),
                 },
                 indent=2,
-            )
+            ),
+            encoding="utf-8",
         )
 
         if cache_dir.exists():
@@ -402,7 +403,7 @@ def _run_phase(
     log_path: Path,
     timeout_sec: int,
 ) -> None:
-    with open(log_path, "w") as logf:
+    with open(log_path, "w", encoding="utf-8", errors="replace") as logf:
         logf.write(f"# TraceWeave {phase} invocation\n")
         logf.write(f"# CWD: {cwd}\n")
         logf.write(f"# CMD: {' '.join(_shquote(p) for p in cmd)}\n")
@@ -426,7 +427,7 @@ def _run_phase(
 
 def _tail(log_path: Path, lines: int = 25) -> str:
     try:
-        with open(log_path) as f:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
             buf = f.readlines()
     except OSError:
         return ""
@@ -489,7 +490,7 @@ def _write_build_script(
     lines.append("")
 
     path = cache_dir / "build.sh"
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path
 
@@ -506,7 +507,7 @@ def _cache_valid(cache_dir: Path, kdb_path: Path) -> bool:
     if not state_path.is_file():
         return False
     try:
-        state = json.loads(state_path.read_text())
+        state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
     return state.get("status") == "ok"
