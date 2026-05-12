@@ -63,6 +63,7 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend protocol + select_backend
     ├── verdi_backend.py          # KDB / license probe + kdb_hint generator
     ├── verdi_npi_backend.py      # NPI-backed driver/load resolution
+    ├── kdb_builder.py            # Auto-build Verdi KDB (vericom + elabcom) for Xcelium flows
     ├── structural_scanner.py
     ├── x_trace.py
     ├── cycle_query.py
@@ -237,8 +238,11 @@ Important workflow rules:
 - `explain_signal_driver`: Trace a waveform signal back to likely RTL driver logic
 - `find_signal_loads`: List the consumers (fanout) of a signal — module-input ports, RHS uses, always-block sensitivity
 - `trace_x_source`: Trace X/Z propagation upstream
+- `build_kdb`: Auto-build a Verdi KDB from the parsed compile log (vericom + elabcom). Use when the simulator is Xcelium (xrun) and the NPI backend reports no KDB. Output is cached under `TRACEWEAVE_CACHE_DIR` (default `~/.cache/traceweave/kdb/<hash>/`); cache hits skip re-running Verdi. A runnable `build.sh` is written next to the KDB for inspection or manual reproduction. Requires `VERDI_HOME` with `bin/vericom` and `bin/elabcom`.
 
-Both `explain_signal_driver` and `find_signal_loads` automatically engage a Verdi NPI backend when a KDB is detected (Static fallback otherwise — transparent to callers). The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint` when KDB is missing.
+Both `explain_signal_driver` and `find_signal_loads` automatically engage a Verdi NPI backend when a KDB is detected (Static fallback otherwise — transparent to callers). NPI is the deep / accurate path: it walks the elaborated netlist with `fan_in_reg_list`, so it can cross instance port boundaries that Static source-regex cannot. The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint`.
+
+For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` — the hint surfaces the exact command. For Xcelium flows there is no native KDB; `get_diagnostic_snapshot` will list `build_kdb` in `missing_steps` so the LLM agent can produce one on demand. Set `TRACEWEAVE_AUTO_KDB=0` to opt out of the auto-build suggestion.
 
 ## Testing
 

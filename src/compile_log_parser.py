@@ -310,7 +310,15 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
 
 
 def _extract_xcelium_command(lines: list[str]) -> str | None:
-    """Return the verbatim `xrun ...` invocation, joining continuation lines."""
+    """Return the verbatim `xrun ...` invocation, joining continuation lines.
+
+    xrun logs emit each argument on its own indented line. Sources and
+    flags interleave freely — ``-incdir`` paths and additional source
+    files commonly appear *after* the first source file — so we keep
+    reading until a blank line or an obvious section header (line
+    ending with ':'), not until the first source extension. This
+    preserves all include paths and source files regardless of order.
+    """
     for idx, line in enumerate(lines):
         if line.strip() == "xrun":
             parts = ["xrun"]
@@ -323,9 +331,6 @@ def _extract_xcelium_command(lines: list[str]) -> str | None:
                 if stripped.endswith(":") and " " not in stripped:
                     break
                 parts.append(stripped.rstrip(" \\"))
-                if not cont.rstrip().endswith("\\") and not stripped.startswith(("-", "+")):
-                    if any(stripped.endswith(ext) for ext in (".sv", ".svh", ".v", ".vh", ".f")):
-                        break
                 i += 1
             return " ".join(parts) if len(parts) > 1 else "xrun"
     return None

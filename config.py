@@ -89,6 +89,46 @@ MAX_UVM_CONTINUATION_LINES = 200
 # Log files larger than this skip multi-line aggregation (bytes)
 MAX_LOG_FILE_SIZE_FOR_MULTILINE = 500 * 1024 * 1024  # 500 MB
 
+# ═══════════════════════════════════════════════════════════════════
+# Auto-KDB build (vericom + elabcom) for Xcelium flows
+# ═══════════════════════════════════════════════════════════════════
+#
+# When the user runs Xcelium (xrun) there is no Verdi KDB by default, so
+# the NPI backend cannot answer driver/load queries. TraceWeave can run
+# `vericom -kdb` + `elabcom -elab kdb` itself, using the file list and
+# defines parsed from the compile log, and cache the resulting KDB in a
+# project-agnostic cache directory.
+
+# Default on. Set TRACEWEAVE_AUTO_KDB=0 (or "false") to disable.
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
+
+# Cache root for TraceWeave-managed artifacts (generated KDBs, build
+# scripts, build logs). Honour XDG_CACHE_HOME / TRACEWEAVE_CACHE_DIR
+# before defaulting to ~/.cache/traceweave so no environment is
+# hardcoded.
+def _default_cache_root() -> Path:
+    explicit = os.environ.get("TRACEWEAVE_CACHE_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "traceweave"
+    return Path.home() / ".cache" / "traceweave"
+
+
+TRACEWEAVE_CACHE_ROOT = _default_cache_root()
+KDB_CACHE_SUBDIR = "kdb"
+
+# Subprocess timeout (seconds) for vericom + elabcom each.
+KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"))
+
 
 def get_fsdb_runtime_info() -> dict:
     local_dir = LOCAL_FSDB_RUNTIME_DIR

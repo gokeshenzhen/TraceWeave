@@ -30,6 +30,7 @@ Connectivity backends (driver/load resolution)
   src/connectivity_backend.py     # protocol + Static + select_backend
   src/verdi_npi_backend.py        # Verdi NPI backend, lazy, license-tolerant
   src/verdi_backend.py            # KDB / license probe, kdb_hint generator
+  src/kdb_builder.py              # Auto-build Verdi KDB (vericom + elabcom) for Xcelium
 
 Waveform backends
   src/vcd_parser.py
@@ -138,6 +139,77 @@ VerdiNpiBackend.find_driver / find_loads
   — driven by the query, not by project-specific config — so the bound is
   correct across designs without hardcoding any top name.
 - For Xcelium / `xrun` flows there is no KDB by default. NPI requires a
-  separate `vericom -kdb` pass over the same sources; without that,
-  `select_backend()` returns Static directly and the kdb_hint surfaces
-  the exact `vericom -kdb` command to run.
+  separate `vericom -kdb` + `elabcom -elab kdb` pass over the same
+  sources. When `AUTO_KDB_BUILD` is on (default), TraceWeave's
+  `build_kdb` MCP tool will run those two commands for the user; the
+  Static fallback is only used while no KDB exists yet.
+
+## Auto-KDB build for Xcelium (`build_kdb` tool)
+
+When the active simulator is Xcelium and the KDB probe finds nothing,
+the diagnostic snapshot lists `build_kdb` in `missing_steps`. Calling
+`build_kdb(compile_log=...)` runs vericom + elabcom against the file
+list, defines, and include paths parsed out of the compile log, and
+caches the resulting KDB under a project-agnostic cache root.
+
+```text
+build_kdb(compile_log)
+├── parse_compile_log → top, files, defines, incdirs, UVM flag
+├── hash = sha256(top + sorted(files + mtimes) + sorted(defines)
+│                 + sorted(incdirs) + uvm_bit)
+├── cache_dir = $TRACEWEAVE_CACHE_DIR/kdb/<hash>/
+├── if cache_dir/state.json says ok → return cached, no Verdi spawn
+└── else build in $TRACEWEAVE_CACHE_DIR/kdb/.tmp-<hash>-<pid>/
+    ├── write build.sh (regenerated every rebuild; runnable standalone)
+    ├── vericom -sv -kdb [-ntb_opts uvm] [+define+...] [+incdir+...]
+    │           <files in compile order> -top <top>
+    │   → vericom.log
+    ├── elabcom -lib work.lib++ -elab kdb -top <top>
+    │   → elabcom.log
+    ├── on success: rename tmp → cache_dir (atomic, replaces stale entry)
+    └── on failure: rename tmp → .failed-<hash>/ (preserved for inspection;
+                      existing cache_dir untouched)
+```
+
+Cache layout under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`:
+
+| File / dir | Purpose |
+|---|---|
+| `kdb.elab++/` | Elaborated KDB. NPI's `-simflow -dbdir` target. |
+| `work.lib++/` | vericom source-lib output. |
+| `build.sh` | Runnable reproducer; written every build. Lets users see/run the exact vericom+elabcom commands TraceWeave invoked. |
+| `vericom.log` | stdout+stderr of vericom phase. |
+| `elabcom.log` | stdout+stderr of elabcom phase. |
+| `state.json` | Inputs hash, status (`ok`/`failed`), timestamps. |
+
+The probe picks up these cached KDBs automatically (`kdb_flow:
+"traceweave_cached"`), so the same find_driver / find_loads call that
+falls back to Static today starts answering through NPI after one
+`build_kdb` invocation. User-managed KDBs (`simv.daidir/kdb.elab++` or
+`vericom`-built `*.lib++` in the user's work dir) still win the probe
+order — TraceWeave's cache is the fallback, never the override.
+
+Cross-environment generality:
+
+- All inputs (top, files, defines, incdirs) come from the generic
+  `compile_result` shape, not from any project-specific paths.
+- Include-path syntax `+incdir+<path>` (VCS) **and** `-incdir <path>`
+  (xrun) are both extracted.
+- UVM detection is heuristic: `-ntb_opts uvm`, `-uvm`,
+  `+define+UVM*`, or any source path containing `uvm`. Any one
+  signal triggers `-ntb_opts uvm` for vericom.
+- Top-module selection prefers names not matching
+  `uvm_custom_install*` (Synopsys recorder shims), falling back to
+  the first listed top.
+- `VERDI_HOME` provides tool paths; no hardcoded install prefixes.
+- Cache root honours `TRACEWEAVE_CACHE_DIR`, then `XDG_CACHE_HOME`,
+  then `~/.cache/traceweave/`.
+
+`AUTO_KDB_BUILD` defaults to True. Set `TRACEWEAVE_AUTO_KDB=0` (or
+`false`/`no`/`off`) to disable the snapshot suggestion. The
+`build_kdb` MCP tool itself is always callable.
+
+VCS flows are not auto-built. Recompiling with `-kdb=only` is a
+one-line change to the existing compile command and reuses the VCS
+license token, so the verdi_backend hint surfaces that command
+verbatim instead of suggesting `build_kdb`.

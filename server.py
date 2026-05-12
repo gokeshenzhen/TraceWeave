@@ -1022,6 +1022,41 @@ async def list_tools():
         ),
 
         Tool(
+            name="build_kdb",
+            description=(
+                "Auto-build a Verdi KDB from a parsed compile log using vericom + elabcom. "
+                "Use this when the simulator is Xcelium (xrun) and the NPI backend reports no KDB, "
+                "or to force-refresh a stale cached KDB. Output is cached under TRACEWEAVE_CACHE_DIR "
+                "(default ~/.cache/traceweave/kdb/<hash>/); cache hits reuse the previous KDB without "
+                "re-invoking Verdi. A runnable build.sh is written next to the KDB for inspection or "
+                "reproduction. Requires VERDI_HOME with bin/vericom and bin/elabcom."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Absolute path to the compile/elaborate log to drive the build from.",
+                    },
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Optional — auto-detected from the log when omitted.",
+                    },
+                    "top_hint": {
+                        "type": "string",
+                        "description": "Override the top module. Defaults to the first non-recorder top in compile_result.",
+                    },
+                    "force_rebuild": {
+                        "type": "boolean",
+                        "description": "Rebuild even if the cache key matches an existing KDB. Default: false.",
+                        "default": False,
+                    },
+                },
+                "required": ["compile_log"],
+            },
+        ),
+
+        Tool(
             name="trace_x_source",
             description=(
                 "When a signal shows X/Z at a target time, trace its propagation chain through upstream driver logic. "
@@ -1358,6 +1393,23 @@ async def _dispatch(name: str, args: dict):
         result.pop("_npi_fallback_reason", None)
         result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
+
+    elif name == "build_kdb":
+        from src.kdb_builder import build_kdb as _build_kdb
+        simulator = _resolve_session_simulator(args)
+        compile_log = args["compile_log"]
+        cr = parse_compile_log(compile_log, simulator)
+        result = _build_kdb(
+            cr,
+            top_hint=args.get("top_hint"),
+            force_rebuild=bool(args.get("force_rebuild", False)),
+        )
+        # If the build succeeded (or cache-hit), wipe the verdi probe
+        # cache so the next get_sim_paths / find_driver call picks up
+        # the new KDB path.
+        if result.get("status") in ("rebuilt", "cached"):
+            _result_cache.pop("get_sim_paths", None)
+        return result
 
     elif name == "trace_x_source":
         simulator = _resolve_session_simulator(args)
@@ -1715,6 +1767,36 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "arguments": suggested["arguments"],
             "reason": "Path discovery has not run yet, so simulation artifacts cannot be located.",
         })
+
+    # Suggest build_kdb when the active simulator is Xcelium and the
+    # probe positively confirms there is no KDB. We deliberately do
+    # *not* surface this when the compile log fails to parse — that
+    # signals a degraded probe, not a missing KDB.
+    try:
+        from config import AUTO_KDB_BUILD  # noqa: PLC0415
+    except Exception:
+        AUTO_KDB_BUILD = False
+    if AUTO_KDB_BUILD and sim_result is not None and getattr(sim_result, "simulator", None) == "xcelium":
+        cl_entries = getattr(sim_result, "compile_logs", []) or []
+        compile_log_path = cl_entries[0].path if cl_entries else None
+        if compile_log_path:
+            try:
+                _cr = parse_compile_log(compile_log_path, "xcelium")
+                _probe = probe_verdi_backend(_cr, compile_log_path=compile_log_path)
+                _probe_ok = True
+            except Exception:
+                _probe_ok = False
+                _probe = {}
+            if _probe_ok and not _probe.get("kdb_path"):
+                missing_steps.append({
+                    "tool": "build_kdb",
+                    "arguments": {"compile_log": compile_log_path},
+                    "reason": (
+                        "Xcelium flow has no Verdi KDB yet; running build_kdb "
+                        "produces one so the NPI backend can answer cross-hierarchy "
+                        "driver/load queries."
+                    ),
+                })
 
     hier_result = _result_cache.get("build_tb_hierarchy")
     if hier_result is not None:

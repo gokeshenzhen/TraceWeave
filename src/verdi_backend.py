@@ -61,6 +61,15 @@ def probe_verdi_backend(
         if kdb_path is None:
             kdb_path, kdb_flow = _probe_vericom_kdb(case_dir)
 
+    # TraceWeave-managed cache: if the user has previously run the
+    # ``build_kdb`` tool, a cached elaborated KDB lives under
+    # ``$TRACEWEAVE_CACHE/kdb/<hash>/kdb.elab++``. Pick it up so NPI
+    # finds it transparently on subsequent driver/load queries.
+    if kdb_path is None:
+        cached = _probe_traceweave_cached_kdb(compile_result, compile_log_path)
+        if cached:
+            kdb_path, kdb_flow = cached, "traceweave_cached"
+
     verdi_home = os.environ.get("VERDI_HOME")
     license_env = (
         os.environ.get("SNPSLMD_LICENSE_FILE")
@@ -142,6 +151,38 @@ def _probe_vericom_kdb(case_dir: str | None) -> tuple[str | None, str]:
         if candidate:
             return candidate, "vericom_standalone"
     return None, "none"
+
+
+def _probe_traceweave_cached_kdb(
+    compile_result: dict[str, Any],
+    compile_log_path: str | None,
+) -> str | None:
+    """Check whether the ``build_kdb`` tool has already produced a KDB
+    matching the current compile inputs. Returns the kdb.elab++ path on
+    cache hit, else None. Imports lazily to keep verdi_backend free of
+    a dependency on kdb_builder."""
+    try:
+        # Lazy imports — verdi_backend is intentionally light.
+        from src.kdb_builder import _extract_build_inputs  # noqa: PLC0415
+        from config import (  # noqa: PLC0415
+            KDB_CACHE_SUBDIR,
+            TRACEWEAVE_CACHE_ROOT,
+        )
+    except Exception:
+        return None
+    try:
+        inputs = _extract_build_inputs(compile_result, top_hint=None)
+    except Exception:
+        return None
+    if "error" in inputs:
+        return None
+    candidate = (
+        TRACEWEAVE_CACHE_ROOT
+        / KDB_CACHE_SUBDIR
+        / inputs["hash"]
+        / _KDB_DIRNAME
+    )
+    return str(candidate) if candidate.is_dir() else None
 
 
 def _find_elab_kdb_under(directory: str) -> str | None:
@@ -238,6 +279,13 @@ def _build_kdb_hint(
         )
 
     if simulator == "xcelium":
+        from config import AUTO_KDB_BUILD  # noqa: PLC0415
+        if AUTO_KDB_BUILD:
+            return (
+                "xrun does not generate Verdi KDB. Call the `build_kdb` tool to "
+                "auto-generate one from this compile log (vericom + elabcom, "
+                "cached under TRACEWEAVE_CACHE_DIR)." + env_prefix
+            )
         files_hint = "<source files>"
         user = (compile_result.get("files") or {}).get("user") or []
         rtl_files = [f["path"] for f in user if f.get("category") in (None, "rtl")]
@@ -247,7 +295,7 @@ def _build_kdb_hint(
         return (
             f"xrun does not generate Verdi KDB. Run vericom standalone over the "
             f"same sources to build a KDB:\n  vericom -kdb {files_hint}{top_hint}\n"
-            f"Note: vericom is a different parser from xrun; results are approximate."
+            f"Or set TRACEWEAVE_AUTO_KDB=1 to enable the `build_kdb` MCP tool."
             + env_prefix
         )
 

@@ -100,6 +100,20 @@ Step 7: Deep dive (on demand, based on step 6 findings)
    ├─ explain_signal_driver(signal_path, wave_path, compile_log, top_hint?)
    │    When: Waveform shows a suspicious signal and the agent needs the likely RTL driver
    │    Output: driver_status, driver_kind, source_file, source_line, expression_summary
+   │    Notes: For deeper / cross-hierarchy traces a Verdi KDB enables the NPI
+   │           backend, which can cross instance port boundaries. If the
+   │           simulator is Xcelium and no KDB exists yet, get_diagnostic_snapshot
+   │           lists `build_kdb` in `missing_steps` — call that first.
+   │
+   ├─ build_kdb(compile_log, top_hint?, force_rebuild?)
+   │    When: Xcelium (xrun) flow and `backend_status.kdb_path` is null,
+   │          or you want to refresh a cached KDB after source changes
+   │    Output: status (rebuilt / cached / failed), kdb_path, cache_dir,
+   │            build_script_path (runnable build.sh), vericom_log, elabcom_log
+   │    Notes: Cache lives under $TRACEWEAVE_CACHE_DIR/kdb/<hash>/. After a
+   │           successful build, subsequent driver/load queries automatically
+   │           route through NPI via the cached KDB. VCS users get a cheaper
+   │           path: recompile with `-kdb=only` (suggested by kdb_hint).
    │
    ├─ get_signal_transitions(wave_path, signal_path, start_ps, end_ps)
    │    When: analyze_failures' pre_window_transitions is not enough,

@@ -34,12 +34,13 @@ For any new session, read these files first to build the project map:
 15. `src/connectivity_backend.py`
 16. `src/verdi_backend.py`
 17. `src/verdi_npi_backend.py`
-18. `src/waveform_batch.py`
-19. `src/structural_scanner.py`
-20. `src/x_trace.py`
-21. `src/cycle_query.py`
-22. `src/schemas.py`
-23. `src/problem_hints.py`
+18. `src/kdb_builder.py`
+19. `src/waveform_batch.py`
+20. `src/structural_scanner.py`
+21. `src/x_trace.py`
+22. `src/cycle_query.py`
+23. `src/schemas.py`
+24. `src/problem_hints.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -61,6 +62,7 @@ If the task involves behavior validation or regression checks, also read:
 - `tests/test_connectivity_backend.py`
 - `tests/test_verdi_backend.py`
 - `tests/test_verdi_npi_backend.py`
+- `tests/test_kdb_builder.py`
 - `tests/test_waveform_batch.py`
 - `tests/test_structural_scanner.py`
 - `tests/test_x_trace.py`
@@ -80,7 +82,8 @@ If the task involves behavior validation or regression checks, also read:
 - `src/signal_load.py` resolves load/fanout for a signal — the symmetric counterpart to `signal_driver`.
 - `src/connectivity_backend.py` defines the `ConnectivityBackend` protocol; `select_backend()` returns the Verdi NPI backend when a KDB is found, otherwise Static. NPI failures degrade transparently; the dispatch layer never sees verdi-specific exceptions.
 - `src/verdi_backend.py` probes for Verdi KDB / license environment; emits per-simulator `kdb_hint` when KDB is missing.
-- `src/verdi_npi_backend.py` is the NPI-backed implementation of `find_driver` / `find_loads`; lazily loads `pynpi` from `$VERDI_HOME` and caches loaded designs across calls.
+- `src/verdi_npi_backend.py` is the NPI-backed implementation of `find_driver` / `find_loads`; lazily loads `pynpi` from `$VERDI_HOME` and caches loaded designs across calls. Uses `NetHdl.fan_in_reg_list` to walk the elaborated netlist across instance boundaries — this is why NPI can resolve drivers that Static source-regex cannot reach.
+- `src/kdb_builder.py` provides the `build_kdb` MCP tool: when a Verdi KDB is missing (typical for Xcelium / `xrun` flows), it runs `vericom -kdb` + `elabcom -elab kdb` against the file list parsed from the compile log, caches the result under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`, and writes a runnable `build.sh` reproducer. The probe in `verdi_backend.py` picks up the cache transparently as `kdb_flow: "traceweave_cached"`. Default-on; opt out with `TRACEWEAVE_AUTO_KDB=0`.
 - `src/waveform_batch.py` exposes `WaveformBatchReader` for time-window multi-signal reads, with FSDB and VCD implementations sharing one shape.
 - `src/structural_scanner.py` and `src/x_trace.py` are first-class analysis capabilities.
 - `src/cycle_query.py` provides cycle-aligned signal sampling.

@@ -61,7 +61,13 @@ def test_vcs_kdb_missing_recommends_kdb_only(tmp_path):
     assert "vcs +define+FOO -sverilog top.sv" in status["kdb_hint"]
 
 
-def test_xcelium_recommends_vericom(tmp_path):
+def test_xcelium_recommends_build_kdb_when_auto_enabled(tmp_path, monkeypatch):
+    """When AUTO_KDB_BUILD is on (default), the Xcelium hint points at
+    the build_kdb tool instead of dumping the raw vericom command."""
+    monkeypatch.setattr("src.verdi_backend.os.environ", {**os.environ})
+    import config
+    monkeypatch.setattr(config, "AUTO_KDB_BUILD", True, raising=False)
+
     case_dir = tmp_path
     log = case_dir / "xrun.log"
     log.write_text("dummy\n")
@@ -74,6 +80,24 @@ def test_xcelium_recommends_vericom(tmp_path):
     status = probe_verdi_backend(cr, str(log))
     assert status["kdb_flow"] == "none"
     assert status["simulator"] == "xcelium"
+    assert "build_kdb" in status["kdb_hint"]
+
+
+def test_xcelium_recommends_manual_vericom_when_auto_disabled(tmp_path, monkeypatch):
+    """With AUTO_KDB_BUILD off, fall back to the explicit vericom command hint."""
+    import config
+    monkeypatch.setattr(config, "AUTO_KDB_BUILD", False, raising=False)
+
+    case_dir = tmp_path
+    log = case_dir / "xrun.log"
+    log.write_text("dummy\n")
+    src = case_dir / "top.sv"
+    src.write_text("module top; endmodule\n")
+    cr = _make_compile_result(
+        "xcelium",
+        files=[{"path": str(src), "type": "module", "category": "rtl"}],
+    )
+    status = probe_verdi_backend(cr, str(log))
     assert "vericom -kdb" in status["kdb_hint"]
     assert str(src) in status["kdb_hint"]
     assert "-top top_tb" in status["kdb_hint"]
