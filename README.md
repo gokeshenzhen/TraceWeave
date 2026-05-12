@@ -133,6 +133,9 @@ Add this to `~/.claude.json`:
         "VCS_HOME": "/tools/synopsys/vcs/V-2023.12-SP2",
         "XLM_ROOT": "/tools/cadence/XCELIUM2603",
         "CDS_INST_DIR": "/tools/cadence/XCELIUM2603",
+        "SNPSLMD_LICENSE_FILE": "27000@synopsys-license.example.com",
+        "LM_LICENSE_FILE": "5280@license-server.example.com",
+        "CDS_LICENSE_FILE": "5280@cadence-license.example.com",
         "LD_LIBRARY_PATH": "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
         "PATH": "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
       }
@@ -141,7 +144,12 @@ Add this to `~/.claude.json`:
 }
 ```
 
-Verify with `claude mcp list` (should show `TraceWeave (connected)`).
+Verify the connection:
+
+```bash
+claude mcp list
+# Should show TraceWeave (connected)
+```
 
 ### Codex
 
@@ -158,12 +166,20 @@ env = {
   VCS_HOME        = "/tools/synopsys/vcs/V-2023.12-SP2",
   XLM_ROOT        = "/tools/cadence/XCELIUM2603",
   CDS_INST_DIR    = "/tools/cadence/XCELIUM2603",
+  SNPSLMD_LICENSE_FILE = "27000@synopsys-license.example.com",
+  LM_LICENSE_FILE     = "28000@license-server.example.com",
+  CDS_LICENSE_FILE    = "28000@cadence-license.example.com",
   LD_LIBRARY_PATH = "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
   PATH            = "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 }
 ```
 
-Substitute your own tool versions. Restart the client (close and reopen the session) after editing; MCP servers are spawned once at startup. Verify with `codex mcp list`, then call `trace_signal_path` once and check `backend_status.actual_backend == verdi_npi`.
+Verify the connection:
+
+```bash
+codex mcp list
+# Should show TraceWeave with Status: enabled
+```
 
 ### Functional Verification
 
