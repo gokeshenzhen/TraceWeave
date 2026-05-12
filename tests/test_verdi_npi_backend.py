@@ -31,6 +31,10 @@ def test_scope_passes_through_non_synthesized():
     assert _scope_from_synthesized("top_tb.b_if.clk") == "top_tb.b_if.clk"
 
 
+def test_scope_passes_through_bit_range_colon():
+    assert _scope_from_synthesized("top_tb.parent.count[4:0]") == "top_tb.parent.count[4:0]"
+
+
 def test_line_from_synthesized_extracts_first_int():
     assert _line_from_synthesized(
         "top_tb.my_dut.dut:Always7#Always1:33:45:Mux.IH_invert"
@@ -82,11 +86,21 @@ class _MockPin:
 
 
 class _MockNet:
-    def __init__(self, loads=None, drivers=None, fan_in=None, fan_in_exc=None):
+    def __init__(
+        self,
+        loads=None,
+        drivers=None,
+        fan_in=None,
+        fan_in_exc=None,
+        fan_out=None,
+        fan_out_exc=None,
+    ):
         self._loads = loads or []
         self._drivers = drivers or []
         self._fan_in = fan_in
         self._fan_in_exc = fan_in_exc
+        self._fan_out = fan_out
+        self._fan_out_exc = fan_out_exc
 
     def load_list(self):
         return self._loads
@@ -99,6 +113,12 @@ class _MockNet:
         if self._fan_in_exc is not None:
             raise self._fan_in_exc
         return list(self._fan_in or [])
+
+    def fan_out_reg_list(self, stop_at_pin=False, report_primary_port=False,
+                         top_scope_name=None):
+        if self._fan_out_exc is not None:
+            raise self._fan_out_exc
+        return list(self._fan_out or [])
 
 
 class _MockNetlist:
@@ -207,6 +227,33 @@ def test_backend_dedup_keeps_distinct_synthesized_loads(monkeypatch, tmp_path):
     )
     r = backend.find_loads(signal_path="top_tb.dut.a", compile_log=log, simulator="vcs")
     assert len(r["loads"]) == 2
+
+
+def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[],
+        fan_out=[
+            _MockPin("top_tb.parent.child:Always2#Always0:44:51:Reg.D_count[4:0]"),
+            _MockPin("top_tb.parent.count[4:0]", t="npiNlPort"),
+        ],
+    )
+    netlist_obj = _MockNetlist({"top_tb.parent.child.count": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_loads(
+        signal_path="top_tb.parent.child.count",
+        compile_log=log,
+        simulator="vcs",
+    )
+    assert r["completeness"] == "exact"
+    assert r["stopped_at"] is None
+    assert {ld["load_path"] for ld in r["loads"]} == {
+        "top_tb.parent.child",
+        "top_tb.parent.count[4:0]",
+    }
+    assert all(ld["backend"] == "verdi_npi" for ld in r["loads"])
 
 
 def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):

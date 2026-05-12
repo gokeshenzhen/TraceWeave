@@ -420,7 +420,7 @@ class BackendStatus(SchemaModel):
     kdb_path: str | None = None
     kdb_flow: Literal[
         "vcs_two_step", "vcs_three_step", "vericom_standalone",
-        "vericom_import_from_file", "none",
+        "vericom_import_from_file", "traceweave_cached", "none",
     ] = "none"
     kdb_hint: str | None = None
 

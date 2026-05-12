@@ -135,6 +135,7 @@ def _silence_native_stdio():
 # upstream regs; we surface a representative subset so the result stays
 # legible without truncating silently for typical signals.
 _FAN_IN_MAX_BRANCHES = 32
+_FAN_OUT_MAX_BRANCHES = 64
 
 
 def _module_of(hdl: Any) -> str | None:
@@ -429,10 +430,60 @@ class VerdiNpiBackend:
             if keep is not None and entry["kind"] not in keep:
                 continue
             loads.append(entry)
+
+        fan_out_loads = self._fan_out_loads(
+            net,
+            signal_path,
+            top,
+            include_expr=include_expr,
+            max_branches=_FAN_OUT_MAX_BRANCHES,
+        )
+        if fan_out_loads is not None:
+            for entry in fan_out_loads:
+                if keep is not None and entry["kind"] not in keep:
+                    continue
+                loads.append(entry)
+
         result["loads"] = _dedup(loads)
-        if not loads:
+        if not result["loads"]:
             result["stopped_at"] = "no_npi_loads"
         return result
+
+    def _fan_out_loads(
+        self,
+        net: Any,
+        signal_path: str,
+        top: str,
+        *,
+        include_expr: bool,
+        max_branches: int,
+    ) -> list[dict[str, Any]] | None:
+        """Walk fan-out cone with NPI and format boundary/register loads.
+
+        ``load_list`` reports direct loads only. For module output ports,
+        the useful consumers often live across the parent boundary; Verdi's
+        ``fan_out_reg_list`` is the matching cone traversal API.
+        """
+        if not hasattr(net, "fan_out_reg_list"):
+            return None
+        bound = signal_path.split(".", 1)[0] if "." in signal_path else top
+        try:
+            with _silence_native_stdio():
+                pins = net.fan_out_reg_list(
+                    stop_at_pin=True,
+                    report_primary_port=True,
+                    top_scope_name=bound,
+                ) or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("net.fan_out_reg_list failed for %s: %s", signal_path, exc)
+            return None
+
+        loads: list[dict[str, Any]] = []
+        for pin in pins[:max_branches]:
+            entry = self._format_load(pin, include_expr=include_expr)
+            if entry is not None:
+                loads.append(entry)
+        return loads
 
     def _npi_find_driver(
         self,
@@ -782,7 +833,8 @@ def _scope_from_synthesized(npi_path: str) -> str:
     Synthesized PinHdl names are `<scope>:<construct>...:<cell>.<port>`
     where `<scope>` is the FSDB-visible module instance path.
     """
-    return npi_path.split(":", 1)[0]
+    idx = _first_colon_outside_brackets(npi_path)
+    return npi_path[:idx] if idx is not None else npi_path
 
 
 def _line_from_synthesized(npi_path: str) -> int | None:
@@ -792,12 +844,24 @@ def _line_from_synthesized(npi_path: str) -> int | None:
     The two integer fields after the construct identifier are start and
     end line; we surface start line only.
     """
-    if ":" not in npi_path:
+    if _first_colon_outside_brackets(npi_path) is None:
         return None
     parts = npi_path.split(":")
     for tok in parts:
         if tok.isdigit():
             return int(tok)
+    return None
+
+
+def _first_colon_outside_brackets(text: str) -> int | None:
+    depth = 0
+    for idx, ch in enumerate(text):
+        if ch == "[":
+            depth += 1
+        elif ch == "]" and depth > 0:
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            return idx
     return None
 
 
