@@ -16,11 +16,14 @@ Design:
 
 from __future__ import annotations
 
+import atexit
+import contextlib
 import ctypes
 import logging
 import os
 import re
 import sys
+import tempfile
 from typing import Any
 
 from .compile_log_parser import parse_compile_log
@@ -37,6 +40,95 @@ _LOG = logging.getLogger(__name__)
 # unit tests that swap in a mock npisys do not leak init-state into
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
+_BANNER_SILENCER_INSTALLED = False
+
+
+def _install_shutdown_banner_silencer() -> None:
+    """Hook Python's atexit so Verdi's C-level atexit cannot leak its
+    license banner onto fd=1 / fd=2 at process shutdown.
+
+    Verdi's libNPI registers its banner via C's ``atexit()``, which
+    runs *after* Python's atexit handlers (Python flushes its own
+    cleanup first, then libc handlers fire). By dup'ing fd=1 / fd=2
+    onto ``/dev/null`` during our Python atexit handler, the
+    subsequent C-level banner write lands on the null device. This is
+    the only point in the lifetime where we can shut Verdi up: the
+    banner is emitted unconditionally on first init/load_design as a
+    pending atexit task, not synchronously during the call.
+
+    Installing the hook is idempotent — call multiple times safely.
+    """
+    global _BANNER_SILENCER_INSTALLED
+    if _BANNER_SILENCER_INSTALLED:
+        return
+
+    def _silence_at_shutdown() -> None:
+        # Flush any pending Python output *before* swapping fds so the
+        # user's last print() / logger output is not lost. After the
+        # dup2, the only writers are Verdi's banner and the libc
+        # atexit chain, which is exactly what we want to silence.
+        try:
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+        except OSError:
+            return
+        try:
+            os.dup2(devnull, 1)
+            os.dup2(devnull, 2)
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(devnull)
+            except OSError:
+                pass
+
+    atexit.register(_silence_at_shutdown)
+    _BANNER_SILENCER_INSTALLED = True
+
+
+@contextlib.contextmanager
+def _silence_native_stdio():
+    """Redirect fd 1 / fd 2 to a temp file for the duration of an NPI call.
+
+    The Verdi NPI runtime writes a license / version banner straight to
+    fd=1 the first time ``npisys.init`` or ``load_design`` runs. When
+    TraceWeave runs under stdio-based MCP that fd is the JSON-RPC
+    channel — any non-JSON byte breaks the protocol and the host
+    reports ``Transport closed``. We dup the original fds, swap in a
+    temp file, then restore on exit (even on exception).
+
+    Under pytest's default ``fd`` capture mode our dup2 fights with
+    pytest's own fd capture and corrupts the captured output stream.
+    Skip the swap when pytest is driving so unit tests stay clean —
+    the mocked tests never invoke real native code anyway, so there
+    is nothing to silence in that environment.
+    """
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        yield None
+        return
+    saved_out = os.dup(1)
+    saved_err = os.dup(2)
+    sink = tempfile.TemporaryFile(prefix="traceweave_npi_", suffix=".log")
+    try:
+        os.dup2(sink.fileno(), 1)
+        os.dup2(sink.fileno(), 2)
+        try:
+            yield sink
+        finally:
+            os.dup2(saved_out, 1)
+            os.dup2(saved_err, 2)
+    finally:
+        os.close(saved_out)
+        os.close(saved_err)
+        sink.close()
 
 # Cap how many fan-in boundary points we materialise into a chain. A
 # combinational cone of a wide bus can legitimately produce dozens of
@@ -106,6 +198,20 @@ def _import_pynpi() -> tuple[Any, Any] | None:
         return None
     if pynpi_dir not in sys.path:
         sys.path.insert(0, pynpi_dir)
+
+    # Pre-load librt before libNPI: Synopsys's libNPI.so references
+    # `shm_unlink` from librt but does not list it as a DT_NEEDED, so
+    # dlopen on glibc 2.34+ (where shm_unlink lives in librt.so.1, not
+    # libc) raises ``undefined symbol`` at load time. Preloading librt
+    # with RTLD_GLOBAL makes the symbol visible to subsequent dlopens
+    # of libNPI and the SWIG `_npisys.so` extension. Without this the
+    # MCP server segfaults the first time pynpi is imported.
+    for librt_name in ("librt.so.1", "librt.so"):
+        try:
+            ctypes.CDLL(librt_name, ctypes.RTLD_GLOBAL)
+            break
+        except OSError:
+            continue
 
     # Pre-load NPI shared libs with RTLD_GLOBAL so the SWIG-wrapped
     # `_*.so` extensions resolve their dependencies even when the user
@@ -239,29 +345,35 @@ class VerdiNpiBackend:
         npisys, _ = self._npi_modules
         try:
             npisys_id = id(npisys)
-            if npisys_id not in _NPI_INITIALIZED_IDS:
-                # init may return 0 if NPI was already initialised by
-                # someone else in this process; trust load_design to
-                # surface real failures.
-                npisys.init(["traceweave_npi"])
-                _NPI_INITIALIZED_IDS.add(npisys_id)
+            with _silence_native_stdio():
+                if npisys_id not in _NPI_INITIALIZED_IDS:
+                    # init may return 0 if NPI was already initialised by
+                    # someone else in this process; trust load_design to
+                    # surface real failures.
+                    npisys.init(["traceweave_npi"])
+                    _NPI_INITIALIZED_IDS.add(npisys_id)
+                    # Verdi registers a C atexit() that prints its
+                    # license banner during process shutdown. Install
+                    # our Python atexit hook *after* init so our
+                    # fd-redirect runs before Verdi's banner write.
+                    _install_shutdown_banner_silencer()
 
-            old_kdb, old_top = self._loaded_kdb, self._loaded_top
-            rc = npisys.load_design([
-                "traceweave_npi",
-                "-simflow", "-dbdir", kdb_path,
-                "-top", top,
-            ])
-            if rc != 1:
-                # Failed load wipes the previously loaded case in NPI.
-                # Best-effort restore so subsequent calls can still hit cache.
-                if old_kdb and old_top:
-                    npisys.load_design([
-                        "traceweave_npi",
-                        "-simflow", "-dbdir", old_kdb,
-                        "-top", old_top,
-                    ])
-                return False
+                old_kdb, old_top = self._loaded_kdb, self._loaded_top
+                rc = npisys.load_design([
+                    "traceweave_npi",
+                    "-simflow", "-dbdir", kdb_path,
+                    "-top", top,
+                ])
+                if rc != 1:
+                    # Failed load wipes the previously loaded case in NPI.
+                    # Best-effort restore so subsequent calls can still hit cache.
+                    if old_kdb and old_top:
+                        npisys.load_design([
+                            "traceweave_npi",
+                            "-simflow", "-dbdir", old_kdb,
+                            "-top", old_top,
+                        ])
+                    return False
             self._state = "ready"
             self._loaded_kdb = kdb_path
             self._loaded_top = top
@@ -301,7 +413,8 @@ class VerdiNpiBackend:
             return result
 
         try:
-            raw_loads = net.load_list() or []
+            with _silence_native_stdio():
+                raw_loads = net.load_list() or []
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.load_list crashed for %s: %s", signal_path, exc)
             result["stopped_at"] = "npi_load_list_failed"
@@ -366,7 +479,8 @@ class VerdiNpiBackend:
             return base
 
         try:
-            drivers = net.driver_list() or []
+            with _silence_native_stdio():
+                drivers = net.driver_list() or []
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.driver_list crashed for %s: %s", signal_path, exc)
             base["driver_status"] = "unsupported"
@@ -459,11 +573,12 @@ class VerdiNpiBackend:
         # for single-segment signal paths.
         bound = signal_path.split(".", 1)[0] if "." in signal_path else top
         try:
-            pins = net.fan_in_reg_list(
-                stop_at_pin=True,
-                report_primary_port=True,
-                top_scope_name=bound,
-            ) or []
+            with _silence_native_stdio():
+                pins = net.fan_in_reg_list(
+                    stop_at_pin=True,
+                    report_primary_port=True,
+                    top_scope_name=bound,
+                ) or []
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.fan_in_reg_list failed for %s: %s", signal_path, exc)
             return None
@@ -604,14 +719,16 @@ class VerdiNpiBackend:
 
     def _resolve_net(self, netlist: Any, signal_path: str) -> Any:
         try:
-            net = netlist.get_net(signal_path)
+            with _silence_native_stdio():
+                net = netlist.get_net(signal_path)
             if net is not None:
                 return net
         except Exception:
             pass
         if "[" in signal_path:
             try:
-                return netlist.get_actual_net(signal_path)
+                with _silence_native_stdio():
+                    return netlist.get_actual_net(signal_path)
             except Exception:
                 return None
         return None
