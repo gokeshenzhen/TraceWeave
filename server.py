@@ -1360,9 +1360,13 @@ async def _dispatch(name: str, args: dict):
         )
         backend_status = dict(backend_status)
         backend_status["backend"] = backend.name
+        backend_status["actual_backend"] = result.get("backend", "static")
+        if result.get("_npi_fallback_reason"):
+            backend_status["fallback_reason"] = result["_npi_fallback_reason"]
         if backend.name == "verdi_npi" and result.get("backend") == "verdi_npi":
             backend_status["parser_match"] = "exact"
         result.setdefault("backend", "static")
+        result.pop("_npi_fallback_reason", None)
         result["backend_status"] = backend_status
         return schemas.ExplainDriverResult.model_validate(result)
 
@@ -1386,6 +1390,13 @@ async def _dispatch(name: str, args: dict):
         # active connectivity backend at the result envelope.
         backend_status = dict(backend_status)
         backend_status["backend"] = backend.name
+        fallback_reason = result.get("_npi_fallback_reason")
+        actual_backend = "static" if fallback_reason else backend.name
+        if result.get("loads"):
+            actual_backend = result["loads"][0].get("backend", actual_backend)
+        backend_status["actual_backend"] = actual_backend
+        if fallback_reason:
+            backend_status["fallback_reason"] = fallback_reason
         if backend.name == "verdi_npi" and result.get("loads"):
             sample = result["loads"][0]
             if sample.get("backend") == "verdi_npi":

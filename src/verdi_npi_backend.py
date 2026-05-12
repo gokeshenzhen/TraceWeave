@@ -271,27 +271,33 @@ class VerdiNpiBackend:
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:
-                return self._fallback.find_driver(
+                result = self._fallback.find_driver(
                     signal_path, wave_path, compile_log,
                     top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                     simulator=simulator,
                 )
+                result.setdefault("_npi_fallback_reason", "kdb_or_top_missing")
+                return result
             if not self._ensure_loaded(kdb_path, top):
-                return self._fallback.find_driver(
+                result = self._fallback.find_driver(
                     signal_path, wave_path, compile_log,
                     top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                     simulator=simulator,
                 )
+                result.setdefault("_npi_fallback_reason", "npi_load_failed")
+                return result
             return self._npi_find_driver(
                 signal_path, wave_path, top, recursive=recursive,
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
-            return self._fallback.find_driver(
+            result = self._fallback.find_driver(
                 signal_path, wave_path, compile_log,
                 top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                 simulator=simulator,
             )
+            result.setdefault("_npi_fallback_reason", f"exception: {exc}")
+            return result
 
     def find_loads(
         self,

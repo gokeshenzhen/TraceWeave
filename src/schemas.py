@@ -416,6 +416,8 @@ ExplainSignalDriverResult = ExplainDriverResult
 class BackendStatus(SchemaModel):
     simulator: Literal["vcs", "xcelium", "unknown"] = "unknown"
     backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    actual_backend: Literal["static", "verdi_npi", "verdi_tcl"] | None = None
+    fallback_reason: str | None = None
     parser_match: Literal["exact", "approximate"] = "approximate"
     kdb_path: str | None = None
     kdb_flow: Literal[
