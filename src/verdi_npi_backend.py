@@ -19,6 +19,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import re
 import sys
 from typing import Any
 
@@ -36,6 +37,53 @@ _LOG = logging.getLogger(__name__)
 # unit tests that swap in a mock npisys do not leak init-state into
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
+
+# Cap how many fan-in boundary points we materialise into a chain. A
+# combinational cone of a wide bus can legitimately produce dozens of
+# upstream regs; we surface a representative subset so the result stays
+# legible without truncating silently for typical signals.
+_FAN_IN_MAX_BRANCHES = 32
+
+
+def _module_of(hdl: Any) -> str | None:
+    """Best-effort lookup of the module *definition* name owning an NPI handle.
+
+    Walks ``hdl.scope_inst().def_name()`` defensively — NPI handles can
+    miss any of those steps depending on the construct. Returns None
+    when the chain is unavailable; callers should fall through to other
+    sources (e.g. the queried net's parent scope) rather than guess.
+    """
+    if hdl is None:
+        return None
+    try:
+        scope = hdl.scope_inst() if hasattr(hdl, "scope_inst") else None
+    except Exception:
+        return None
+    if scope is None:
+        return None
+    try:
+        name = scope.def_name() if hasattr(scope, "def_name") else None
+    except Exception:
+        return None
+    return name or None
+
+
+def _is_boundary_driver(hdl: Any) -> bool:
+    """True when an NPI driver pin is a raw hierarchy port, not a real driver.
+
+    NPI returns a port handle for module inputs because the design net
+    itself has no in-scope driver — the value crosses an instance
+    boundary. Such pins have no synthesized cell tag (no ``:`` in their
+    full name). For these we prefer fan_in_reg_list, which walks through
+    the boundary.
+    """
+    try:
+        raw = hdl.full_name() if hasattr(hdl, "full_name") else None
+    except Exception:
+        return False
+    if not raw:
+        return False
+    return ":" not in raw
 
 
 def _import_pynpi() -> tuple[Any, Any] | None:
@@ -111,17 +159,6 @@ class VerdiNpiBackend:
         max_depth: int = 10,
         simulator: str = "auto",
     ) -> dict[str, Any]:
-        # Recursive trace walks through synthesized cells to upstream
-        # nets — significantly more involved than the single-hop case.
-        # The static walker handles this well and is exercised by
-        # explain_signal_driver tests; defer NPI multi-hop to a later
-        # iteration if the need arises.
-        if recursive:
-            return self._fallback.find_driver(
-                signal_path, wave_path, compile_log,
-                top_hint=top_hint, recursive=True, max_depth=max_depth,
-                simulator=simulator,
-            )
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -129,21 +166,23 @@ class VerdiNpiBackend:
             if not kdb_path or not top:
                 return self._fallback.find_driver(
                     signal_path, wave_path, compile_log,
-                    top_hint=top_hint, recursive=False, max_depth=max_depth,
+                    top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                     simulator=simulator,
                 )
             if not self._ensure_loaded(kdb_path, top):
                 return self._fallback.find_driver(
                     signal_path, wave_path, compile_log,
-                    top_hint=top_hint, recursive=False, max_depth=max_depth,
+                    top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                     simulator=simulator,
                 )
-            return self._npi_find_driver(signal_path, wave_path, top)
+            return self._npi_find_driver(
+                signal_path, wave_path, top, recursive=recursive,
+            )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
             return self._fallback.find_driver(
                 signal_path, wave_path, compile_log,
-                top_hint=top_hint, recursive=False, max_depth=max_depth,
+                top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                 simulator=simulator,
             )
 
@@ -287,15 +326,22 @@ class VerdiNpiBackend:
         signal_path: str,
         wave_path: str,
         top: str,
+        *,
+        recursive: bool = False,
     ) -> dict[str, Any]:
         _, netlist = self._npi_modules  # type: ignore[misc]
         rtl_name = signal_path.split(".")[-1]
         instance_path = signal_path.rsplit(".", 1)[0] if "." in signal_path else top
+        net = self._resolve_net(netlist, signal_path)
+        # Prefer NPI's own scope_inst().def_name() for the module name —
+        # ``top`` is only a last-resort placeholder when the net is
+        # unresolvable.
+        resolved_module = _module_of(net) or top
         base = {
             "signal_path": signal_path,
             "wave_path": wave_path,
             "resolved_rtl_name": rtl_name,
-            "resolved_module": top,
+            "resolved_module": resolved_module,
             "resolved_instance_path": instance_path,
             "driver_status": "unsupported",
             "driver_kind": None,
@@ -307,13 +353,12 @@ class VerdiNpiBackend:
             "confidence": "exact",
             "unsupported_reason": None,
             "stopped_at": None,
-            "recursive": False,
+            "recursive": recursive,
             "driver_chain": None,
             "chain_summary": None,
             "backend": "verdi_npi",
         }
 
-        net = self._resolve_net(netlist, signal_path)
         if net is None:
             base["driver_status"] = "unsupported"
             base["unsupported_reason"] = "signal_path_unresolved_in_npi"
@@ -334,6 +379,22 @@ class VerdiNpiBackend:
             base["unsupported_reason"] = "no_npi_drivers"
             base["stopped_at"] = "no_npi_drivers"
             return base
+
+        # Detect "boundary-only" drivers: every reported driver is a raw
+        # hierarchy port (no synthesized cell tag — i.e. no ':' in name).
+        # These are NPI's way of saying "the net is a module port; the
+        # real driver lives across the boundary". For both recursive and
+        # non-recursive callers, walking through with fan_in_reg_list is
+        # strictly more useful than reporting the port-as-self.
+        boundary_only = all(_is_boundary_driver(d) for d in drivers)
+        if recursive or boundary_only:
+            chain = self._fan_in_chain(
+                net, signal_path, top, max_branches=_FAN_IN_MAX_BRANCHES,
+            )
+            if chain is not None:
+                return self._apply_chain(base, chain, signal_path, recursive)
+            # fan_in unavailable / failed — fall through to single-hop
+            # formatting so we surface *something* instead of crashing.
 
         formatted = [d for d in (self._format_driver(h) for h in drivers) if d is not None]
         if not formatted:
@@ -375,6 +436,126 @@ class VerdiNpiBackend:
                 f"{len(formatted)} drivers reported by NPI (multi-driven net)"
             )
         return base
+
+    def _fan_in_chain(
+        self,
+        net: Any,
+        signal_path: str,
+        top: str,
+        *,
+        max_branches: int,
+    ) -> list[dict[str, Any]] | None:
+        """Walk fan-in cone with NPI; return a list of formatted hops.
+
+        Returns None if fan_in_reg_list isn't available on this net or
+        raised — caller can then fall back to single-hop formatting.
+        Returns [] if fan_in succeeded but reported no boundary points.
+        """
+        if not hasattr(net, "fan_in_reg_list"):
+            return None
+        # Bound the traversal at the signal's own top-level scope so
+        # fan-in does not wander into unrelated design hierarchies.
+        # Falling back to the loaded ``top`` keeps behaviour sensible
+        # for single-segment signal paths.
+        bound = signal_path.split(".", 1)[0] if "." in signal_path else top
+        try:
+            pins = net.fan_in_reg_list(
+                stop_at_pin=True,
+                report_primary_port=True,
+                top_scope_name=bound,
+            ) or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("net.fan_in_reg_list failed for %s: %s", signal_path, exc)
+            return None
+        hops: list[dict[str, Any]] = []
+        for pin in pins[:max_branches]:
+            entry = self._format_fan_in_pin(pin)
+            if entry is not None:
+                hops.append(entry)
+        return hops
+
+    @staticmethod
+    def _apply_chain(
+        base: dict[str, Any],
+        hops: list[dict[str, Any]],
+        signal_path: str,
+        recursive: bool,
+    ) -> dict[str, Any]:
+        if not hops:
+            base["driver_status"] = "unsupported"
+            base["unsupported_reason"] = "no_npi_fan_in"
+            base["stopped_at"] = "no_npi_fan_in"
+            return base
+        head = hops[0]
+        base.update({
+            "driver_status": "resolved",
+            "driver_kind": head["driver_kind"],
+            "source_file": head["source_file"],
+            "source_line": head["source_line"],
+            "expression_summary": head["expression_summary"],
+        })
+        if recursive:
+            # depth-0 entry represents the queried net itself; fan-in
+            # boundary points are depth-1 branches. We deliberately do
+            # not synthesise depth-2+ entries: fan_in_reg_list already
+            # collapses the entire combinational cone into a single
+            # boundary set, so deeper synthetic depth would be noise.
+            chain: list[dict[str, Any]] = [{
+                "depth": 0,
+                "signal_path": signal_path,
+                "resolved_module": None,
+                "resolved_instance_path": signal_path.rsplit(".", 1)[0]
+                    if "." in signal_path else None,
+                "driver_kind": None,
+                "source_file": None,
+                "source_line": None,
+                "expression_summary": f"queried net {signal_path}",
+                "upstream_signals": [],
+                "instance_port_connections": None,
+                "branch_candidates": None,
+                "stopped_at": None,
+                "backend": "verdi_npi",
+                "backend_confidence": "exact",
+            }]
+            chain.extend({**hop, "depth": 1} for hop in hops)
+            base["driver_chain"] = chain
+            base["chain_summary"] = (
+                f"NPI fan-in: queried -> {len(hops)} boundary point(s)"
+            )
+        elif len(hops) > 1:
+            base["driver_chain"] = hops
+            base["chain_summary"] = (
+                f"{len(hops)} fan-in points reported by NPI"
+            )
+        return base
+
+    def _format_fan_in_pin(self, hdl: Any) -> dict[str, Any] | None:
+        try:
+            raw = hdl.full_name() if hasattr(hdl, "full_name") else None
+            t = hdl.type() if hasattr(hdl, "type") else None
+        except Exception:
+            return None
+        if not raw:
+            return None
+        kind = _classify_fan_in_kind(raw, t)
+        scope = _scope_from_synthesized(raw)
+        line = _line_from_synthesized(raw)
+        return {
+            "depth": 1,
+            "signal_path": scope,
+            "resolved_module": _module_of(hdl),
+            "resolved_instance_path": scope,
+            "driver_kind": kind,
+            "source_file": None,
+            "source_line": line,
+            "expression_summary": _fan_in_summary(raw, kind),
+            "upstream_signals": [],
+            "instance_port_connections": None,
+            "branch_candidates": None,
+            "stopped_at": None,
+            "backend": "verdi_npi",
+            "backend_confidence": "exact",
+        }
 
     def _format_driver(self, hdl: Any) -> dict[str, Any] | None:
         try:
@@ -518,7 +699,11 @@ def _classify_driver_kind(npi_path: str) -> str:
     if ":" not in npi_path:
         # Non-synthesized: top-level decl-net or instance port
         return "instance_port"
-    last_segment = npi_path.rsplit(":", 1)[-1]
+    # Bit-range suffixes like ``[4:0]`` contain a ':' that would steal
+    # the rsplit and leave us with garbage ("0]"). Strip the trailing
+    # range/index before extracting the cell name.
+    stripped = re.sub(r"\[[^\]]*\]$", "", npi_path)
+    last_segment = stripped.rsplit(":", 1)[-1]
     cell = last_segment.split(".", 1)[0]
     cell_lower = cell.lower()
     if cell_lower == "init":
@@ -540,6 +725,29 @@ def _driver_summary(raw: str, kind: str) -> str:
     if kind == "unknown":
         return f"NPI driver {raw}{line_part}"
     return f"{kind} driver via {raw.rsplit(':', 1)[-1]}{line_part}"
+
+
+def _classify_fan_in_kind(npi_path: str, hdl_type: str | None) -> str:
+    """Classify a pin returned by ``fan_in_reg_list``.
+
+    fan_in collapses combinational logic and stops at registers or
+    primary ports — so the answer is always one of:
+      - a synthesized cell pin (Reg / Init / Assignment / Mux-family)
+      - a top-level port handle (``npiNlPort``) when the fan-in walked
+        out to a primary input boundary
+    """
+    if ":" not in npi_path:
+        # No synthesized tag → fan-in terminated at a primary port.
+        if hdl_type == "npiNlPort":
+            return "primary_input_port"
+        return "instance_port"
+    return _classify_driver_kind(npi_path)
+
+
+def _fan_in_summary(raw: str, kind: str) -> str:
+    if kind == "primary_input_port":
+        return f"fan-in stops at primary port {raw}"
+    return _driver_summary(raw, kind)
 
 
 def _classify_load_kind(npi_path: str, hdl_type: str | None) -> str:

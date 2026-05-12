@@ -69,7 +69,9 @@ def probe_verdi_backend(
 
     if kdb_path is not None:
         kdb_hint = (
-            f"Verdi KDB found at {kdb_path}; backend ready once NPI integration lands."
+            f"Verdi KDB found at {kdb_path}; NPI backend active — preferred for "
+            f"cross-hierarchy driver/load tracing (uses fan-in on the elaborated "
+            f"netlist). Static source-trace serves as fallback when NPI cannot load."
         )
     else:
         kdb_hint = _build_kdb_hint(simulator, compile_result, verdi_home, license_env)
@@ -118,18 +120,51 @@ def _probe_vcs_kdb(case_dir: str | None) -> tuple[str | None, str]:
 
 
 def _probe_vericom_kdb(case_dir: str | None) -> tuple[str | None, str]:
+    """Prefer an *elaborated* KDB (``kdb.elab++``) over source-only
+    ``*.lib++``. NPI's ``-simflow -dbdir`` needs the elaborated DB to
+    answer driver/load queries; passing a plain ``work.lib++`` loads
+    without error but every ``get_net`` resolves to None.
+    """
     if case_dir is None:
         return None, "none"
     setup_path = os.path.join(case_dir, _SETUP_FILENAME)
     work_dir = _read_synopsys_sim_setup(setup_path, case_dir)
-    if work_dir:
-        candidate = _find_libpp_under(work_dir)
+    for root in (work_dir, case_dir):
+        if not root:
+            continue
+        elab = _find_elab_kdb_under(root)
+        if elab:
+            return elab, "vericom_standalone"
+    for root in (work_dir, case_dir):
+        if not root:
+            continue
+        candidate = _find_libpp_under(root)
         if candidate:
             return candidate, "vericom_standalone"
-    candidate = _find_libpp_under(case_dir)
-    if candidate:
-        return candidate, "vericom_standalone"
     return None, "none"
+
+
+def _find_elab_kdb_under(directory: str) -> str | None:
+    """Locate an ``kdb.elab++`` directory under ``directory``.
+
+    Checks the directory itself and one level of children so flows
+    that emit the elab DB next to (or inside) the case dir are both
+    picked up.
+    """
+    if not os.path.isdir(directory):
+        return None
+    direct = os.path.join(directory, _KDB_DIRNAME)
+    if os.path.isdir(direct):
+        return direct
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return None
+    for entry in entries:
+        nested = os.path.join(directory, entry, _KDB_DIRNAME)
+        if os.path.isdir(nested):
+            return nested
+    return None
 
 
 def _read_synopsys_sim_setup(path: str, case_dir: str) -> str | None:

@@ -41,6 +41,18 @@ def test_line_from_synthesized_returns_none_for_non_synth():
     assert _line_from_synthesized("top_tb.b_if.clk") is None
 
 
+def test_classify_driver_kind_handles_bit_slice_suffix():
+    """Regression: a trailing ``[4:0]`` bit-range used to steal rsplit
+    and leave classifier returning "unknown" for a perfectly normal Reg."""
+    from src.verdi_npi_backend import _classify_driver_kind
+    assert _classify_driver_kind(
+        "uart_tb_top.DUV1.rx_channel.rx_fifo.uart_fifo:Always11#Always0:20:52:Reg.ROH_count[4:0]"
+    ) == "always_ff"
+    assert _classify_driver_kind(
+        "x.dut:Always0#Always0:18:31:Mux.CH_invert[3:0]"
+    ) == "always_comb"
+
+
 def test_classify_load_kind_module_input_vs_rhs():
     assert _classify_load_kind("top_tb.b_if.clk", "npiNlInstPort") == "module_input"
     assert _classify_load_kind(
@@ -70,15 +82,23 @@ class _MockPin:
 
 
 class _MockNet:
-    def __init__(self, loads=None, drivers=None):
+    def __init__(self, loads=None, drivers=None, fan_in=None, fan_in_exc=None):
         self._loads = loads or []
         self._drivers = drivers or []
+        self._fan_in = fan_in
+        self._fan_in_exc = fan_in_exc
 
     def load_list(self):
         return self._loads
 
     def driver_list(self):
         return self._drivers
+
+    def fan_in_reg_list(self, stop_at_pin=False, report_primary_port=False,
+                        top_scope_name=None):
+        if self._fan_in_exc is not None:
+            raise self._fan_in_exc
+        return list(self._fan_in or [])
 
 
 class _MockNetlist:
@@ -379,21 +399,130 @@ def test_driver_summary_includes_line():
 # ---------------------------------------------------------------------------
 
 
-def test_driver_recursive_falls_through_to_static(monkeypatch, tmp_path):
+def test_driver_recursive_uses_npi_fan_in_when_available(monkeypatch, tmp_path):
     log = _make_compile_log(tmp_path)
-    backend, _, _ = _make_backend_with_mock_npi(monkeypatch)
-    # We do not need a useful net for this — recursive must skip NPI entirely.
+    reg_pin = _MockPin(
+        "top_tb.dut:Always0#Always0:18:31:Reg.ROH_v"
+    )
+    # Net has a "self-port" driver but fan_in walks through it to a reg.
+    self_port = _MockPin("top_tb.dut.v", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[reg_pin])
+    netlist_obj = _MockNetlist({"top_tb.dut.v": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
     r = backend.find_driver(
-        signal_path="top_tb.x",
-        wave_path="dummy.fsdb",
+        signal_path="top_tb.dut.v",
+        wave_path="x.fsdb",
         compile_log=log,
         recursive=True,
         simulator="vcs",
     )
-    # Static recursive path uses ExplainDriverResult shape with recursive=True.
     assert r["recursive"] is True
-    # backend defaulted to static via _strip_chain_hop / _strip_internal_fields.
-    assert r.get("backend", "static") == "static"
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_kind"] == "always_ff"
+    # Chain: depth-0 = queried, depth-1 = the Reg boundary point.
+    assert r["driver_chain"] is not None
+    assert [h["depth"] for h in r["driver_chain"]] == [0, 1]
+    assert r["driver_chain"][1]["driver_kind"] == "always_ff"
+    assert r["driver_chain"][1]["source_line"] == 18
+
+
+def test_driver_non_recursive_walks_through_port_boundary(monkeypatch, tmp_path):
+    """When driver_list returns only the net's own hierarchy port (no synth
+    tag), fan_in_reg_list is the meaningful single-hop answer."""
+    log = _make_compile_log(tmp_path)
+    reg_pin = _MockPin(
+        "top_tb.parent.child:Always1#Always0:40:55:Reg.ROH_q"
+    )
+    self_port = _MockPin("top_tb.parent.child.q", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[reg_pin])
+    netlist_obj = _MockNetlist({"top_tb.parent.child.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.parent.child.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_kind"] == "always_ff"
+    assert r["source_line"] == 40
+    # Non-recursive single-driver case: no chain emitted.
+    assert r["driver_chain"] is None
+
+
+def test_driver_recursive_terminates_at_primary_port(monkeypatch, tmp_path):
+    """fan_in can end at a primary input port (npiNlPort, no synth tag)."""
+    log = _make_compile_log(tmp_path)
+    primary = _MockPin("top_tb.clk", t="npiNlPort")
+    self_port = _MockPin("top_tb.dut.s", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[primary])
+    netlist_obj = _MockNetlist({"top_tb.dut.s": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.dut.s",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    assert r["driver_kind"] == "primary_input_port"
+    assert r["driver_chain"][1]["driver_kind"] == "primary_input_port"
+
+
+def test_driver_recursive_fan_in_failure_falls_through_to_single_hop(monkeypatch, tmp_path):
+    """If fan_in_reg_list raises, formatter falls back to single-hop driver_list."""
+    log = _make_compile_log(tmp_path)
+    init_pin = _MockPin(
+        "top_tb.top_tb(@1):Init0#Init0:53:58:Init.OH_clk"
+    )
+    net = _MockNet(drivers=[init_pin], fan_in_exc=RuntimeError("boom"))
+    netlist_obj = _MockNetlist({"top_tb.clk": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.clk",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    # fan_in failed, but driver_list had a real synth-tagged driver.
+    assert r["backend"] == "verdi_npi"
+    assert r["driver_kind"] == "initial"
+
+
+def test_driver_recursive_multi_fan_in_branches(monkeypatch, tmp_path):
+    """Combinational cone with multiple register inputs surfaces all as branches."""
+    log = _make_compile_log(tmp_path)
+    a = _MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_a")
+    b = _MockPin("top_tb.dut:Always1#Always0:25:35:Reg.ROH_b")
+    self_port = _MockPin("top_tb.dut.sum", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[a, b])
+    netlist_obj = _MockNetlist({"top_tb.dut.sum": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    r = backend.find_driver(
+        signal_path="top_tb.dut.sum",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    assert r["recursive"] is True
+    # 1 queried + 2 boundary points.
+    assert len(r["driver_chain"]) == 3
+    lines = sorted(h["source_line"] for h in r["driver_chain"] if h["source_line"])
+    assert lines == [10, 25]
+    assert "2 boundary point" in r["chain_summary"]
 
 
 def test_driver_single_hop_npi_resolves_initial_kind(monkeypatch, tmp_path):
@@ -543,7 +672,7 @@ def test_real_npi_driver_invert_recognised_as_register():
 
 
 @requires_verdi
-def test_real_npi_driver_recursive_falls_back_to_static():
+def test_real_npi_driver_recursive_uses_fan_in():
     from src.connectivity_backend import select_backend
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
@@ -559,9 +688,12 @@ def test_real_npi_driver_recursive_falls_back_to_static():
         recursive=True,
         max_depth=4,
     )
-    # Recursive path goes through Static, which stamps backend=static.
     assert r["recursive"] is True
-    assert r.get("backend") == "static"
+    assert r["backend"] == "verdi_npi"
+    # Chain has at least the queried depth=0 plus one fan-in boundary point.
+    assert r["driver_chain"] is not None
+    assert r["driver_chain"][0]["depth"] == 0
+    assert any(h["depth"] == 1 for h in r["driver_chain"])
 
 
 @requires_verdi
