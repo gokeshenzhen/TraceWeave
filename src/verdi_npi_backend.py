@@ -812,8 +812,8 @@ class VerdiNpiBackend:
             kind_filter=kind_filter,
             simulator=simulator,
         )
-        # Tag the reason so the dispatch layer can surface it through
-        # backend_status if desired (not surfaced today; informational).
+        # Tag the reason; the dispatch layer surfaces it through
+        # backend_status.fallback_reason / actual_backend.
         result.setdefault("_npi_fallback_reason", reason)
         return result
 

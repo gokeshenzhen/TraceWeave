@@ -104,7 +104,10 @@ def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    return raw.strip().lower() not in ("0", "false", "no", "off", "")
+    val = raw.strip().lower()
+    if val == "":
+        return default
+    return val not in ("0", "false", "no", "off")
 
 
 AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
