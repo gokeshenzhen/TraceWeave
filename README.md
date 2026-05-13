@@ -19,6 +19,12 @@
 
 TraceWeave 的特色：有 Verdi license 时启用 KDB/NPI 获得更精确的跨层级 driver/load/connectivity 分析；没有 license 时也可用内置 Static 后端、日志解析、VCD/FSDB 波形读取继续定位问题；支持 driver 回溯、load/fanout 查找、指定时刻取值、指定周期数采样、任意信号窗口查询、轻量化 X/Z trace、结构风险扫描、失败分组对比，并给 MCP 客户端输出结构化的下一步调试建议。
 
+<p align="center">
+  <img src="assets/onepage.png" alt="TraceWeave workflow overview" width="900">
+</p>
+
+<p align="center"><sub>Workflow illustration; timing and speedup depend on project scale and waveform availability.</sub></p>
+
 TraceWeave is a workflow-oriented debug server rather than a loose collection of parsers. It combines:
 
 - An MCP server with session state, workflow gates, and recommended tool ordering
