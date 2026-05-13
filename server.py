@@ -639,6 +639,12 @@ async def list_tools():
             description=(
                 "Search for signals in a waveform file (FSDB/VCD) and return full hierarchical paths. "
                 "Use this when the client knows a leaf signal name but not the full path. "
+                "Each result also carries `direction` (input/output/inout/implicit/...) and `var_type` "
+                "(wire/reg/integer/real/parameter/memory/...), so callers can filter by port direction "
+                "or language type within a scope by combining a hierarchical keyword with these fields — "
+                "no separate listing tool is needed. "
+                "Note: VCD format does not encode port direction; `direction` is always null for VCD waves, "
+                "while `var_type` is populated. FSDB populates both. "
                 "FSDB search uses a scope-tree index and does not read value changes, so it scales well to large files. "
                 "FSDB support depends on fsdb_runtime.enabled returned by get_sim_paths."
             ),

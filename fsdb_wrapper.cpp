@@ -36,6 +36,8 @@ struct SigInfo {
     fsdbVarIdcode idcode;
     uint_T        bit_size;
     uint_T        bytes_per_bit;
+    uint_T        direction;   /* fsdbVarDir: 0=IMPLICIT 1=INPUT 2=OUTPUT 3=INOUT 4=BUFFER 5=LINKAGE */
+    uint_T        var_type;    /* fsdbVarType: 2=PARAMETER 3=REAL 4=REG 15=WIRE 17=MEMORY ... */
     std::string   full_path;   /* top_tb.dut.s_bits */
 };
 
@@ -84,6 +86,8 @@ _TreeCB(fsdbTreeCBType cb_type, void *client_data, void *tree_cb_data)
                              ? (v->lbitnum - v->rbitnum + 1)
                              : (v->rbitnum - v->lbitnum + 1);
         info.bytes_per_bit = v->bytes_per_bit;
+        info.direction     = (uint_T)v->direction;
+        info.var_type      = (uint_T)v->type;
         info.full_path     = full_path;
 
         ctx->path_to_sig[full_path] = info;
@@ -235,7 +239,9 @@ fsdb_close(void *handle)
 
 /* ── 搜索信号（关键字匹配，结果写入 out_buf，换行分隔）────────────
  * 返回匹配数量，out_buf 内容格式：
- *   <full_path>\t<bit_size>\n
+ *   <full_path>\t<bit_size>\t<direction>\t<var_type>\n
+ *   direction: fsdbVarDir (0=IMPLICIT 1=INPUT 2=OUTPUT 3=INOUT 4=BUFFER 5=LINKAGE)
+ *   var_type:  fsdbVarType (2=PARAMETER 3=REAL 4=REG 15=WIRE 17=MEMORY ...)
  * ---------------------------------------------------------------- */
 int
 fsdb_search_signals(void *handle, const char *keyword,
@@ -256,8 +262,11 @@ fsdb_search_signals(void *handle, const char *keyword,
         if (lpath.find(kw) == std::string::npos) continue;
 
         char line[512];
-        snprintf(line, sizeof(line), "%s\t%u\n",
-                 kv.first.c_str(), kv.second.bit_size);
+        snprintf(line, sizeof(line), "%s\t%u\t%u\t%u\n",
+                 kv.first.c_str(),
+                 kv.second.bit_size,
+                 kv.second.direction,
+                 kv.second.var_type);
         int len = strlen(line);
         if (pos + len + 1 >= buf_size) break;
         memcpy(out_buf + pos, line, len);

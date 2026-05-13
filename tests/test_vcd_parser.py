@@ -83,6 +83,39 @@ $enddefinitions $end
     assert result["results"][0]["path"] == "top_tb.dut.req"
 
 
+def test_search_signals_exposes_var_type_and_null_direction(tmp_path: Path):
+    """VCD $var carries language type (wire/reg/...) but never carries port
+    direction. search_signals should surface var_type and leave direction None
+    so clients can detect the limitation without parsing the file format."""
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(
+        """\
+$timescale 1ns $end
+$scope module dut $end
+$var wire 1 ! clk $end
+$var reg  8 " state $end
+$var real 1 # vdd $end
+$var integer 32 $ counter $end
+$var parameter 16 % WIDTH $end
+$upscope $end
+$enddefinitions $end
+#0
+"""
+    )
+
+    parser = VCDParser(str(wave))
+    result = parser.search_signals("dut.")
+
+    by_name = {item["path"].split(".")[-1]: item for item in result["results"]}
+    assert by_name["clk"]["var_type"] == "wire"
+    assert by_name["state"]["var_type"] == "reg"
+    assert by_name["vdd"]["var_type"] == "real"
+    assert by_name["counter"]["var_type"] == "integer"
+    assert by_name["WIDTH"]["var_type"] == "parameter"
+    # VCD has no port direction; every entry must expose this explicitly.
+    assert all(item["direction"] is None for item in result["results"])
+
+
 def test_summary_uses_transition_end_time_fallback(tmp_path: Path):
     wave = tmp_path / "wave.vcd"
     wave.write_text(VCD_SAMPLE)

@@ -17,6 +17,21 @@ from config import (
 # Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
 
+# fsdbVarDir (fsdbShr.h)
+_FSDB_VAR_DIR = {
+    0: "implicit", 1: "input", 2: "output", 3: "inout",
+    4: "buffer", 5: "linkage",
+}
+
+# fsdbVarType (fsdbShr.h) — only the values commonly seen in HDL FSDBs.
+_FSDB_VAR_TYPE = {
+    0: "event", 1: "integer", 2: "parameter", 3: "real", 4: "reg",
+    5: "supply0", 6: "supply1", 7: "time",
+    8: "tri", 9: "triand", 10: "trior", 11: "trireg",
+    12: "tri0", 13: "tri1", 14: "wand", 15: "wire", 16: "wor",
+    17: "memory",
+}
+
 
 def _load_wrapper():
     so_path = os.path.abspath(_WRAPPER_SO)
@@ -269,11 +284,27 @@ class FSDBParser:
             if "\t" not in line:
                 continue
             parts = line.split("\t")
-            results.append({
+            item = {
                 "path":  parts[0],
                 "name":  parts[0].split(".")[-1],
                 "width": int(parts[1]) if len(parts) > 1 else 0,
-            })
+                "direction": None,
+                "var_type":  None,
+            }
+            # Direction and var_type are appended by wrapper (>=v2). Older .so
+            # builds only emit 2 columns; in that case the fields stay None so
+            # the response shape stays stable across wrapper versions.
+            if len(parts) >= 4:
+                try:
+                    dir_code = int(parts[2])
+                    type_code = int(parts[3])
+                    item["direction"] = _FSDB_VAR_DIR.get(dir_code, "unknown")
+                    item["direction_code"] = dir_code
+                    item["var_type"] = _FSDB_VAR_TYPE.get(type_code, "unknown")
+                    item["var_type_code"] = type_code
+                except ValueError:
+                    pass
+            results.append(item)
         results.sort(key=lambda item: (-_signal_rank(item["path"], keyword.lower()), item["path"]))
         results = results[:max_results]
         return {

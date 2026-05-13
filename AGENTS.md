@@ -95,3 +95,13 @@ If the task involves behavior validation or regression checks, also read:
 ## Working Rule
 
 Before making non-trivial changes, build a quick mental model from the files above instead of editing from local assumptions.
+
+## Documentation Rule
+
+When a behavior change requires doc updates, **only touch documents tracked in
+git**. Run `git ls-files | grep -E '\.md$'` to see the canonical doc set
+(currently `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/architecture.md`,
+`docs/workflow.md`). Untracked files under `docs/` are local drafts, RFCs, and
+session notes — do not edit them as part of code changes and do not create new
+ones unless the user explicitly asks. This applies to every agent working in
+this repository (Claude, Codex, others).

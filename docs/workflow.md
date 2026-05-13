@@ -65,8 +65,13 @@ Step 4: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
 ▼
 Step 5: search_signals(wave_path, keyword)
 │  Confirm full hierarchical paths for signals relevant to the error.
-│  Returns: list of matching signal paths with bit widths
-│  Note: `.fsdb` wave paths are usable only when fsdb_runtime.enabled is true
+│  Returns: matching signals with bit width, `direction`, and `var_type`.
+│    - `direction`: input/output/inout/implicit (FSDB only). VCD always null.
+│    - `var_type` : wire/reg/integer/real/parameter/memory/...
+│    Clients filter ports/nets/variables in a scope by combining a hierarchical
+│    keyword (the scope prefix) with these fields, instead of a dedicated tool.
+│  Note: `.fsdb` wave paths are usable only when fsdb_runtime.enabled is true.
+│        Port-direction filtering requires FSDB — VCD cannot encode direction.
 │
 │  How the agent picks keywords:
 │  - From step 2's component_tree: module instance names → signal names

@@ -233,7 +233,7 @@ Important workflow rules:
 
 ### Waveform Analysis
 
-- `search_signals`: Resolve full hierarchical signal paths
+- `search_signals`: Resolve full hierarchical signal paths. Each result also carries `direction` (`input`/`output`/`inout`/`implicit`/`null`) and `var_type` (`wire`/`reg`/`integer`/`real`/`parameter`/…), so clients can filter ports/nets/variables in a chosen scope without a separate tool. **FSDB** populates both fields; **VCD** populates only `var_type` and returns `direction: null` (the VCD format does not encode port direction)
 - `get_signal_at_time`: Query a signal value at a specific timestamp
 - `get_signal_transitions`: Retrieve transitions for a signal over time
 - `get_signals_around_time`: Retrieve context around a failure timestamp

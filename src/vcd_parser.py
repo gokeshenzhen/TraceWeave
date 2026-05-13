@@ -100,12 +100,20 @@ class VCDParser:
         }
 
     def search_signals(self, keyword: str, max_results: int = 100) -> dict:
-        """Search signals in a VCD using the in-memory path index."""
+        """Search signals in a VCD using the in-memory path index.
+
+        Each result carries `var_type` (wire/reg/integer/real/parameter/...) when
+        the source `$var` declaration provided one. VCD format does not carry
+        port direction, so `direction` is always None for VCD waveforms — clients
+        that need input/output/inout filtering must use FSDB.
+        """
         self._ensure_parsed()
         kw = keyword.lower()
         matched = [
             {"path": p, "name": p.split(".")[-1],
-             "width": self._signals[s]["width"]}
+             "width": self._signals[s]["width"],
+             "direction": None,
+             "var_type": self._signals[s].get("var_type") or None}
             for p, s in self._path_to_sym.items()
             if kw in p.lower()
         ]
@@ -166,12 +174,15 @@ class VCDParser:
                     scope_stack.pop()
                 i += 2
             elif tok == "$var":
-                # $var wire 8 # data [7:0] $end
+                # $var <var_type> <size> <id> <reference> $end
+                # var_type is the language-level type (wire/reg/integer/real/parameter/...).
+                # VCD has no port direction, so direction stays None at higher layers.
+                var_type = tokens[i + 1] if i + 1 < len(tokens) else ""
                 width  = int(tokens[i + 2]) if tokens[i + 2].isdigit() else 1
                 symbol = tokens[i + 3]
                 name   = tokens[i + 4]
                 full   = ".".join(scope_stack + [name])
-                self._signals[symbol]     = {"path": full, "width": width}
+                self._signals[symbol]     = {"path": full, "width": width, "var_type": var_type}
                 self._path_to_sym[full]   = symbol
                 self._transitions[symbol] = []
                 i += 6
