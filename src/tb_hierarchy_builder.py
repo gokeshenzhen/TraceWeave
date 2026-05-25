@@ -242,6 +242,12 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
         "class_hierarchy": build_class_hierarchy(scan_results),
         "interfaces": interfaces,
         "compile_result": compile_result,
+        # Internal: kept on the full result so slim-payload helpers can
+        # derive per-file metadata (e.g. uvm_file_count) without re-reading
+        # source. Stripped from the LLM-facing slim payload in
+        # build_slim_payload(). Underscore prefix marks it not part of the
+        # public schema.
+        "_scan_results": scan_results,
     }
 
 
@@ -389,3 +395,267 @@ def _bind_interfaces_by_reference(
             continue
         if re.search(rf"\b{re.escape(interface_name)}\b", source_text):
             interface_bindings.setdefault(interface_name, scan_result["name"])
+
+
+# ---------------------------------------------------------------------------
+# Slim payload helpers (phase 2)
+#
+# build_hierarchy() still returns the full result dict. The helpers below
+# derive the LLM-facing slim payload from that full result plus a handle
+# string produced by src/hierarchy_handles.compute_handle(). They are pure
+# functions over the full_result; the server layer (phase 3) is responsible
+# for wiring them in and for caching/serving the full result via handles.
+# ---------------------------------------------------------------------------
+
+
+_UVM_IMPORT_RE = re.compile(r"\bimport\s+uvm_pkg\s*::", re.IGNORECASE)
+_UVM_EXTENDS_RE = re.compile(r"\bextends\s+uvm_\w+", re.IGNORECASE)
+# Skeleton depth must stay small; raising this risks pulling token usage
+# back toward the bloated payload we are trying to escape.
+_DEFAULT_SKELETON_DEPTH = 2
+
+
+def _is_uvm_scan(scan: dict) -> bool:
+    """Return True if a scan result indicates UVM content.
+
+    Two signals, either is sufficient:
+    - source_text imports uvm_pkg
+    - any class extends a uvm_* base class
+    """
+    text = scan.get("source_text", "") or ""
+    if _UVM_IMPORT_RE.search(text):
+        return True
+    if _UVM_EXTENDS_RE.search(text):
+        return True
+    for parent in scan.get("class_extends", {}).values():
+        if parent and parent.lower().startswith("uvm_"):
+            return True
+    return False
+
+
+def _walk_component_tree(component_tree: dict):
+    """Yield every (inst_name, node_dict) pair in the component_tree.
+
+    The tree shape is irregular: the top-level value for the root module is
+    a children-dict, not a node. We treat each (key, value) where value is a
+    dict-with-children as a node. Synthetic top-level entries (the root
+    module name and the optional "uvm_test_top" anchor) are walked as
+    container dicts whose entries are real nodes.
+    """
+    for top_key, top_val in component_tree.items():
+        if not isinstance(top_val, dict):
+            continue
+        # top_val is a children-dict (inst_name -> node)
+        for inst_name, node in top_val.items():
+            if not isinstance(node, dict):
+                continue
+            yield inst_name, node
+            sub = node.get("children")
+            if isinstance(sub, dict):
+                yield from _walk_children(sub)
+
+
+def _walk_children(children: dict):
+    for inst_name, node in children.items():
+        if not isinstance(node, dict):
+            continue
+        yield inst_name, node
+        sub = node.get("children")
+        if isinstance(sub, dict):
+            yield from _walk_children(sub)
+
+
+def _tree_depth(component_tree: dict) -> int:
+    """Maximum depth of the component_tree. Root counts as 1."""
+    if not component_tree:
+        return 0
+
+    def _depth_of_children(children: dict) -> int:
+        if not children:
+            return 0
+        best = 0
+        for node in children.values():
+            if not isinstance(node, dict):
+                continue
+            sub = node.get("children")
+            d = 1 + (_depth_of_children(sub) if isinstance(sub, dict) else 0)
+            if d > best:
+                best = d
+        return best
+
+    overall = 0
+    for top_val in component_tree.values():
+        if isinstance(top_val, dict):
+            d = 1 + _depth_of_children(top_val)
+            if d > overall:
+                overall = d
+    return overall
+
+
+def compute_stats(full_result: dict) -> dict:
+    """Return the `stats` block of the slim payload.
+
+    Counts are derived from the full hierarchy result. `_scan_results` (set
+    by build_hierarchy) is consulted for uvm_file_count; if absent the
+    counter falls back to 0 rather than re-reading source files.
+    """
+    compile_result = full_result.get("compile_result", {}) or {}
+    user_files = (compile_result.get("files", {}) or {}).get("user", []) or []
+    file_count = len(user_files)
+
+    component_tree = full_result.get("component_tree", {}) or {}
+    nodes = list(_walk_component_tree(component_tree))
+    instance_count = len(nodes)
+    module_count = len({
+        node.get("class") for _, node in nodes if node.get("class")
+    })
+
+    interfaces = full_result.get("interfaces", []) or []
+    class_hierarchy = full_result.get("class_hierarchy", []) or []
+
+    scan_results = full_result.get("_scan_results") or []
+    uvm_file_count = sum(1 for scan in scan_results if _is_uvm_scan(scan))
+
+    return {
+        "file_count": file_count,
+        "module_count": module_count,
+        "instance_count": instance_count,
+        "tree_depth": _tree_depth(component_tree),
+        "class_count": len(class_hierarchy),
+        "interface_count": len(interfaces),
+        "uvm_file_count": uvm_file_count,
+    }
+
+
+def _skeleton_node(
+    inst_name: str,
+    node: dict,
+    depth_remaining: int,
+) -> dict:
+    children = node.get("children") if isinstance(node, dict) else None
+    child_count = len(children) if isinstance(children, dict) else 0
+    skel = {
+        "inst": inst_name,
+        "module": node.get("class", "") if isinstance(node, dict) else "",
+        "source_file": node.get("source_file") or "" if isinstance(node, dict) else "",
+        "source_line": node.get("source_line") or 0 if isinstance(node, dict) else 0,
+        "child_count": child_count,
+        "truncated": False,
+        "children": [],
+    }
+    if child_count == 0 or depth_remaining <= 0:
+        skel["truncated"] = child_count > 0 and depth_remaining <= 0
+        return skel
+    for cname, cnode in children.items():
+        skel["children"].append(_skeleton_node(cname, cnode, depth_remaining - 1))
+    return skel
+
+
+def extract_tree_skeleton(
+    component_tree: dict,
+    top_module: str,
+    depth: int = _DEFAULT_SKELETON_DEPTH,
+) -> dict:
+    """Truncated view of component_tree starting from the top module.
+
+    Returns a single root node with up to ``depth`` levels of descendants.
+    Each node carries `child_count` so the LLM can decide whether the
+    truncated branch is worth expanding via get_tb_subtree.
+    """
+    if not component_tree or not top_module:
+        return {}
+
+    top_children = component_tree.get(top_module)
+    if not isinstance(top_children, dict):
+        return {}
+
+    child_count = len(top_children)
+    root = {
+        "inst": top_module,
+        "module": top_module,
+        "source_file": "",
+        "source_line": 0,
+        "child_count": child_count,
+        "truncated": False,
+        "children": [],
+    }
+    if depth <= 0:
+        root["truncated"] = child_count > 0
+        return root
+    for inst_name, node in top_children.items():
+        root["children"].append(_skeleton_node(inst_name, node, depth - 1))
+    return root
+
+
+def detect_ambiguous_basenames(file_entries: list[dict]) -> list[dict]:
+    """Find files whose basename collides across multiple paths.
+
+    The compile_log records exactly which path was linked into this run, so
+    when several `xxx.v` (e.g. xxx_v1.v plus an unrelated xxx.v in a vendor
+    dir, or rtl/foo.sv vs syn/foo.sv) show up we surface them as a warning
+    block in the slim payload. The "picked" path is whichever copy the
+    compile_log enumerated; downstream tools should treat it as ground
+    truth and prompt the LLM to verify intent.
+    """
+    by_basename: dict[str, list[str]] = defaultdict(list)
+    for entry in file_entries or []:
+        path = entry.get("path")
+        if not path:
+            continue
+        by_basename[os.path.basename(path)].append(path)
+
+    out: list[dict] = []
+    for basename, paths in sorted(by_basename.items()):
+        if len(paths) < 2:
+            continue
+        out.append({
+            "basename": basename,
+            "paths": paths,
+            "picked": paths[0],
+        })
+    return out
+
+
+# Names of handle tools advertised in the slim payload. Kept here (next to
+# the slim builder) so it tracks tool renames; server.py will register the
+# actual MCP tools in phase 4.
+HANDLE_TOOL_NAMES: dict[str, str] = {
+    "subtree": "get_tb_subtree",
+    "lookup_files": "lookup_tb_files",
+    "find_instance": "find_tb_instance",
+    "file_detail": "get_tb_file_detail",
+    "class_hierarchy": "get_tb_class_hierarchy",
+    "dump_section": "dump_tb_section",
+}
+
+
+
+def build_slim_payload(
+    full_result: dict,
+    handle: str,
+    kdb_hint: dict | None = None,
+) -> dict:
+    """Project a full hierarchy result into the LLM-facing slim payload.
+
+    The full result remains the authoritative source served via handles;
+    this builder only chooses what crosses the wire.
+    """
+    project = full_result.get("project", {}) or {}
+    compile_result = full_result.get("compile_result", {}) or {}
+    user_files = (compile_result.get("files", {}) or {}).get("user", []) or []
+    top_module = project.get("top_module", "")
+
+    return {
+        "hierarchy_handle": handle,
+        "project": dict(project),
+        "compile_command": compile_result.get("compile_command", "") or "",
+        "stats": compute_stats(full_result),
+        "tree_skeleton": extract_tree_skeleton(
+            full_result.get("component_tree", {}) or {},
+            top_module,
+        ),
+        "interfaces": list(full_result.get("interfaces", []) or []),
+        "ambiguous_basenames": detect_ambiguous_basenames(user_files),
+        "kdb_hint": kdb_hint,
+        "handle_tools": dict(HANDLE_TOOL_NAMES),
+    }
