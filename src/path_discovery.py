@@ -254,8 +254,9 @@ def _build_discovery_result(
             "compile_log": target_log["path"],
             "simulator": simulator or "auto",
             "reason": "Must be called before reading any RTL/TB source files. "
-                      "Returns the ONLY files compiled in this session — "
-                      "use this file list to scope all subsequent source reads.",
+                      "Returns a slim payload with a hierarchy_handle; "
+                      "verify any file path via lookup_tb_files / get_tb_file_detail "
+                      "before reading source.",
         }
 
     return result

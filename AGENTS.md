@@ -41,6 +41,8 @@ For any new session, read these files first to build the project map:
 22. `src/cycle_query.py`
 23. `src/schemas.py`
 24. `src/problem_hints.py`
+25. `src/hierarchy_handles.py`
+26. `src/handle_tools.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -89,6 +91,8 @@ If the task involves behavior validation or regression checks, also read:
 - `src/cycle_query.py` provides cycle-aligned signal sampling.
 - `src/schemas.py` is the single source of truth for tool output contracts.
 - `src/problem_hints.py` provides lightweight failure symptom annotations.
+- `src/hierarchy_handles.py` owns the in-process `HandleStore` and content-addressed handle derivation. `build_tb_hierarchy` returns a slim payload + `hierarchy_handle`; the full hierarchy is registered here and resolved by the handle tools. Handles are not persisted — server restart drops them.
+- `src/handle_tools.py` implements `get_tb_subtree`, `lookup_tb_files`, `find_tb_instance`, `get_tb_file_detail`, `get_tb_class_hierarchy`, `dump_tb_section` as pure functions over a resolved full hierarchy dict. `lookup_tb_files` requires at least one filter; `get_tb_file_detail` returns `did_you_mean` basename suggestions when the path is not in the compile set (multi-version safety net).
 - `src/fsdb_parser.py` and `fsdb_wrapper.cpp` define the Python/native FSDB boundary.
 - `config.py` centralizes environment-sensitive paths and behavior constants.
 

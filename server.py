@@ -343,8 +343,24 @@ Waveform debug workflow:
    Both independently parse the same compile_log — call them in parallel.
    - build_tb_hierarchy: builds testbench hierarchy for source-aware analysis.
      Use the elaborate-phase compile_log and simulator from step 1.
-     The returned file list represents the ONLY files compiled in this session.
-     Use this file list to scope all subsequent source reads — do NOT use find/grep to scan directories for source files.
+     Returns a slim payload (project, stats, tree_skeleton truncated to depth 2,
+     interfaces, ambiguous_basenames, hierarchy_handle). The full file list,
+     full component_tree, class hierarchy, and raw compile_result are NOT in
+     the response — fetch them on demand via the handle tools listed in
+     handle_tools. Pass the returned hierarchy_handle to every handle tool.
+     * If ambiguous_basenames is non-empty, the compile_log contains multiple
+       files sharing a basename (e.g. xxx_v1.v vs xxx_v2.v). Before reading
+       any of them, call lookup_tb_files(basename=...) to confirm which
+       path was actually compiled in this session.
+     * Before reading an RTL/TB source file, call get_tb_file_detail(path=...)
+       (or lookup_tb_files with a filter) to verify the path is in the
+       compile set. Do NOT find/grep to scan directories for source files.
+     * Use get_tb_subtree(root="top.x.y", depth=N) to drill into the
+       hierarchy instead of asking for the whole tree.
+     * Use find_tb_instance(path=... or module=...) to jump directly to a
+       failing instance.
+     * dump_tb_section is a heavy escape hatch — prefer the targeted tools
+       above.
    - scan_structural_risks: detects static structural risks (slice_overlap, multi_drive, etc.).
      Use the same compile_log and simulator. Do not wait for parse_sim_log results.
      Structural risks that overlap with failing signal paths are high-priority root cause candidates.
@@ -365,7 +381,10 @@ Waveform debug workflow:
 
 5. Call search_signals to confirm full hierarchical signal paths when needed.
    - Derive keywords from build_tb_hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
-   - When reading RTL source, only read files listed in build_tb_hierarchy results.
+   - When reading RTL source, verify the path is in the compile set first —
+     call get_tb_file_detail(path=...) or lookup_tb_files(...) with the
+     hierarchy_handle returned in step 2. The compile_log is the single
+     source of truth for which file version was actually compiled.
 
 6. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
    - Follow analysis_guide in the result.
@@ -833,8 +852,10 @@ async def list_tools():
         Tool(
             name="build_tb_hierarchy",
             description=(
-                "Extract user files from a compile or elaborate log, scan source files, and build the full testbench hierarchy. "
-                "Returns top module, file grouping, component tree, class hierarchy, and interfaces."
+                "Parse the compile/elaborate log, scan source files, and cache the full testbench hierarchy server-side. "
+                "Returns a SLIM payload: project, stats, tree_skeleton (depth 2), interfaces, ambiguous_basenames, "
+                "and hierarchy_handle. Use the handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
+                "get_tb_file_detail / get_tb_class_hierarchy / dump_tb_section to access the full data on demand."
             ),
             inputSchema={
                 "type": "object",

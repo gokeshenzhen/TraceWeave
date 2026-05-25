@@ -78,7 +78,9 @@ TraceWeave/
     ├── x_trace.py
     ├── cycle_query.py
     ├── schemas.py
-    └── problem_hints.py
+    ├── problem_hints.py
+    ├── hierarchy_handles.py      # HandleStore + content-addressed handle for build_tb_hierarchy
+    └── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
 ```
 
 ## Installation
@@ -228,8 +230,19 @@ Important workflow rules:
 ### Paths and Hierarchy
 
 - `get_sim_paths`: Discover compile logs, sim logs, waveforms, simulator, and cases
-- `build_tb_hierarchy`: Build testbench hierarchy, source grouping, and interface metadata
+- `build_tb_hierarchy`: Build testbench hierarchy server-side; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `hierarchy_handle`). Full data is reachable via the handle tools below.
 - `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns
+
+### Hierarchy Handle Tools
+
+All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or unknown handle they return `{"error": "handle_expired"}`; re-run `build_tb_hierarchy` to refresh.
+
+- `get_tb_subtree(handle, root="", depth=1, max_nodes=500)`: Slice the component_tree starting at a dotted instance path.
+- `lookup_tb_files(handle, ...)`: Query the compiled file set by objective scan facts (`basename`, `name_contains`, `path_contains`, `has_module`, `contains_uvm`, `file_type`). At least one filter is required. Use `basename=...` to disambiguate multi-version files reported in `ambiguous_basenames`.
+- `find_tb_instance(handle, path=... | module=...)`: Locate an instance by exact path or all instances of a module.
+- `get_tb_file_detail(handle, path)`: Return symbols defined in a single compiled file. Unknown paths return `file_not_in_compile_set` with basename-similar `did_you_mean` suggestions — verify file membership before any RTL read.
+- `get_tb_class_hierarchy(handle, root_class?, depth=-1)`: UVM/SV class inheritance tree built from compile-set scans.
+- `dump_tb_section(handle, section)`: Escape hatch for the full raw `compile_result`, `include_tree`, `filelist_tree`, `interfaces`, `files_full`, `component_tree_full`, or `class_hierarchy_full`. Prefer the targeted tools above.
 
 ### Log Analysis
 

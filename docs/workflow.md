@@ -28,14 +28,30 @@ Step 1: get_sim_paths(verif_root, case_name?)
 ▼
 Step 2: build_tb_hierarchy(compile_log, simulator)
 │  Build project-level understanding BEFORE analyzing errors.
-│  Returns: top_module, component_tree, class_hierarchy, interfaces
+│  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
+│    - project: top_module, source_root, simulator
+│    - stats: file_count, module_count, instance_count, tree_depth,
+│             class_count, interface_count, uvm_file_count
+│    - tree_skeleton: component_tree truncated to depth 2 with `child_count`
+│      and `truncated` flags on each node
+│    - interfaces: full list (small)
+│    - ambiguous_basenames: collisions like xxx_v1.v vs xxx_v2.v — when
+│      non-empty, MUST disambiguate with `lookup_tb_files(basename=...)`
+│    - hierarchy_handle: pass to every handle tool
+│    - handle_tools: name map of the six handle tools
 │
-│  What the agent learns:
-│  - Module instantiation hierarchy (DUT structure)
-│  - UVM component tree (test → env → agent → driver/monitor)
-│  - Class inheritance chains
-│  - Interface definitions and bindings
-│  - Source file locations for each component
+│  What the agent does next, on demand (via handle tools):
+│  - Drill into a branch     → get_tb_subtree(handle, root="top.x.y", depth=N)
+│  - Find a specific file    → lookup_tb_files(handle, basename=...) or
+│                              path_contains=... / has_module=... / contains_uvm=...
+│  - Locate an instance      → find_tb_instance(handle, path=...) or module=...
+│  - Read a file's symbols   → get_tb_file_detail(handle, path=...)
+│  - UVM class tree          → get_tb_class_hierarchy(handle, root_class=...)
+│  - Raw section (heavy)     → dump_tb_section(handle, section=...)
+│
+│  Before reading any RTL source file, call get_tb_file_detail(path=...) or
+│  lookup_tb_files(...) first. The compile_log is the only source of truth
+│  for which file version was compiled in this session.
 │
 ▼
 Step 3: parse_sim_log(log_path, simulator)
@@ -47,7 +63,8 @@ Step 3: parse_sim_log(log_path, simulator)
 │  - Identify the earliest and most frequent error groups
 │  - Prefer `failure_events[0].time_ps` as the waveform time anchor when present
 │  - Cross-reference error signatures with step 2's hierarchy
-│    (e.g., UVM_ERROR [SCOREBOARD_MISMATCH] → locate scoreboard in component_tree)
+│    (e.g., UVM_ERROR [SCOREBOARD_MISMATCH] → find_tb_instance(module="scoreboard")
+│     or get_tb_subtree drilling from tree_skeleton)
 │  - Decide which group to investigate first (usually group_index=0)
 │  - If previous_log_detected == true, consider diff_sim_failure_results early
 │
@@ -74,9 +91,9 @@ Step 5: search_signals(wave_path, keyword)
 │        Port-direction filtering requires FSDB — VCD cannot encode direction.
 │
 │  How the agent picks keywords:
-│  - From step 2's component_tree: module instance names → signal names
+│  - From step 2's tree_skeleton or get_tb_subtree: module instance names → signal names
 │  - From step 3's error message: signal names mentioned in assertions or checkers
-│  - From RTL source code: read the relevant module file (path from step 2)
+│  - From RTL source code: verify path via get_tb_file_detail first, then read
 │
 │  May need multiple calls with different keywords.
 │

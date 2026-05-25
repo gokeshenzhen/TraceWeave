@@ -101,12 +101,69 @@ Verification
   analysis capabilities and should not be treated as optional side scripts.
 - `src/schemas.py` and `src/problem_hints.py` are support layers for structured
   output contracts and lightweight analysis annotations.
+- `src/hierarchy_handles.py` owns the in-process `HandleStore` and
+  content-addressed handle derivation for the slim `build_tb_hierarchy`
+  payload. `src/handle_tools.py` implements the six handle tools
+  (get_tb_subtree, lookup_tb_files, find_tb_instance, get_tb_file_detail,
+  get_tb_class_hierarchy, dump_tb_section) as pure functions over a
+  resolved full hierarchy dict.
 - `src/fsdb_parser.py` is the Python/native boundary and resolves FSDB runtime
   from repo-local links first, then `VERDI_HOME`.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single
   chronological walk; the VCD path is pure Python.
+
+## Handle-based Hierarchy Access
+
+`build_tb_hierarchy` generates a full hierarchy result server-side (project
+metadata, grouped file list, complete `component_tree`, `class_hierarchy`,
+raw `compile_result`, per-file scan results) but returns only a **slim
+payload** to the LLM: project, stats, depth-2 `tree_skeleton`, interfaces,
+`ambiguous_basenames`, and a content-addressed `hierarchy_handle`. The
+full result is registered in an in-process `HandleStore`
+(`src/hierarchy_handles.py`) keyed by the handle.
+
+Six handle tools (`src/handle_tools.py`) resolve a handle and return
+targeted slices:
+
+| Tool | Returns |
+|---|---|
+| `get_tb_subtree` | Slice of `component_tree` rooted at a dotted instance path |
+| `lookup_tb_files` | Compiled-file query by objective scan facts (basename, file_type, contains_uvm, has_module, ...) |
+| `find_tb_instance` | Instance lookup by exact path or by module name |
+| `get_tb_file_detail` | Symbols defined in a single compiled file |
+| `get_tb_class_hierarchy` | UVM/SV class inheritance tree |
+| `dump_tb_section` | Raw section escape hatch (`compile_result`, `include_tree`, ...) |
+
+Handle format: `tbh_<sha8>` derived from absolute compile_log path,
+simulator, and compile_log mtime. Recompilation changes mtime and
+therefore the handle, automatically invalidating prior references.
+
+Lifecycle:
+
+- Handles live only in-process (no persistence). Server restart drops every
+  handle.
+- `_invalidate_downstream("build_tb_hierarchy")` and `_clear_result_state()`
+  both call `_handle_store.invalidate()`, so cache invalidation is symmetric.
+- Unknown handles return `HandleErrorResult{error: "handle_expired"}` with
+  HTTP 200 so the LLM can read and react.
+
+Why this shape:
+
+- The file list is still served (`lookup_tb_files`), because only the
+  compile log is the source of truth for which version of `xxx.v` was
+  actually built. Hiding it would break multi-version disambiguation.
+- The tree is no longer returned in full; the depth-2 skeleton gives the
+  LLM a navigable starting point and `child_count` tells it where to
+  drill.
+- Downstream Python tools (`analyzer`, `signal_driver`, etc.) re-parse the
+  compile log via `parse_compile_log`; they do not consume the LLM-facing
+  payload, so shrinking it does not break them.
+
+The legacy full-fat payload remains accessible behind
+`TRACEWEAVE_LEGACY_HIERARCHY_PAYLOAD=1` as a one-release migration safety
+net, validated against `BuildTbHierarchyResultLegacy`.
 
 ## Connectivity Backend Cooperation (NPI vs Static)
 
