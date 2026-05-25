@@ -107,6 +107,12 @@ _PREREQUISITES: dict[str, list[str]] = {
     "find_signal_loads": ["build_tb_hierarchy"],
     "trace_signal_path": ["build_tb_hierarchy"],
     "trace_x_source": ["build_tb_hierarchy"],
+    "get_tb_subtree": ["build_tb_hierarchy"],
+    "lookup_tb_files": ["build_tb_hierarchy"],
+    "find_tb_instance": ["build_tb_hierarchy"],
+    "get_tb_file_detail": ["build_tb_hierarchy"],
+    "get_tb_class_hierarchy": ["build_tb_hierarchy"],
+    "dump_tb_section": ["build_tb_hierarchy"],
 }
 
 _PREREQUISITE_REASONS: dict[str, str] = {
@@ -1148,6 +1154,132 @@ async def list_tools():
                 "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
             },
         ),
+
+        # ── Hierarchy handle tools (phase 4) ────────────────────────────
+        # All six share the same access pattern: resolve `handle` via the
+        # in-process HandleStore (registered by build_tb_hierarchy), then
+        # return a typed slice or a HandleErrorResult.
+
+        Tool(
+            name="get_tb_subtree",
+            description=(
+                "Return a slice of the component_tree starting at `root` (dotted instance path) "
+                "with up to `depth` levels. Use after build_tb_hierarchy to drill into a branch "
+                "without pulling the whole tree into context."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "description": "hierarchy_handle from build_tb_hierarchy"},
+                    "root": {"type": "string", "default": "",
+                              "description": "dotted instance path (e.g. 'top.u_cpu'); empty = top module"},
+                    "depth": {"type": "integer", "default": 1,
+                              "description": "-1 = unbounded; otherwise number of levels to include"},
+                    "max_nodes": {"type": "integer", "default": 500,
+                                  "description": "hard cap on emitted nodes"},
+                },
+                "required": ["handle"],
+            },
+        ),
+
+        Tool(
+            name="lookup_tb_files",
+            description=(
+                "Query the compiled file set by objective scan facts. At least one filter is "
+                "required. Use this to disambiguate multi-version files (basename collisions "
+                "are also reported via build_tb_hierarchy.ambiguous_basenames)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string"},
+                    "basename": {"type": "string", "description": "exact basename match"},
+                    "name_contains": {"type": "string"},
+                    "path_contains": {"type": "string"},
+                    "has_module": {"type": "string", "description": "file defines this module"},
+                    "contains_uvm": {"type": "boolean",
+                                      "description": "scan saw `import uvm_pkg::` or `extends uvm_*`"},
+                    "file_type": {"type": "string",
+                                  "description": "module | interface | package | class | program (from SV scan)"},
+                    "limit": {"type": "integer", "default": 50},
+                },
+                "required": ["handle"],
+            },
+        ),
+
+        Tool(
+            name="find_tb_instance",
+            description=(
+                "Locate instance(s) in the component_tree by exact path OR by module name. "
+                "`path` and `module` are mutually exclusive."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string"},
+                    "path": {"type": "string", "description": "exact dotted instance path"},
+                    "module": {"type": "string", "description": "module name; returns all instances"},
+                    "limit": {"type": "integer", "default": 100},
+                },
+                "required": ["handle"],
+            },
+        ),
+
+        Tool(
+            name="get_tb_file_detail",
+            description=(
+                "Return symbols (modules/classes/interfaces) defined in a single compiled file. "
+                "If the path is not in the compile set, error includes basename-similar suggestions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string"},
+                    "path": {"type": "string"},
+                },
+                "required": ["handle", "path"],
+            },
+        ),
+
+        Tool(
+            name="get_tb_class_hierarchy",
+            description=(
+                "Return UVM/class inheritance tree built from compiled-source scan results. "
+                "Use `root_class` to start from a specific class; empty = all roots."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string"},
+                    "root_class": {"type": "string"},
+                    "depth": {"type": "integer", "default": -1},
+                },
+                "required": ["handle"],
+            },
+        ),
+
+        Tool(
+            name="dump_tb_section",
+            description=(
+                "Escape hatch: return a named raw section of the full hierarchy result. "
+                "Prefer targeted handle tools — this is intentionally heavy."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string"},
+                    "section": {
+                        "type": "string",
+                        "enum": [
+                            "compile_result", "include_tree", "filelist_tree",
+                            "interfaces", "files_full",
+                            "component_tree_full", "class_hierarchy_full",
+                        ],
+                    },
+                },
+                "required": ["handle", "section"],
+            },
+        ),
     ]
 
 
@@ -1553,8 +1685,82 @@ async def _dispatch(name: str, args: dict):
         )
         return schemas.TraceXSourceResult.model_validate(result)
 
+    elif name in {
+        "get_tb_subtree", "lookup_tb_files", "find_tb_instance",
+        "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section",
+    }:
+        return _dispatch_handle_tool(name, args)
+
     else:
         raise ValueError(f"Unknown tool: {name}")
+
+
+def _dispatch_handle_tool(name: str, args: dict):
+    from src import handle_tools
+
+    handle = args.get("handle") or ""
+    full = _handle_store.resolve(handle)
+    if full is None:
+        return schemas.HandleErrorResult.model_validate({
+            "error": "handle_expired",
+            "hint": "the handle is unknown to this server — re-run build_tb_hierarchy",
+            "current_handle": None,
+        })
+
+    if name == "get_tb_subtree":
+        raw = handle_tools.get_tb_subtree(
+            full, handle,
+            root=args.get("root", ""),
+            depth=args.get("depth", 1),
+            max_nodes=args.get("max_nodes", 500),
+        )
+        return _wrap_handle_result(raw, schemas.GetTbSubtreeResult)
+
+    if name == "lookup_tb_files":
+        raw = handle_tools.lookup_tb_files(
+            full, handle,
+            basename=args.get("basename"),
+            name_contains=args.get("name_contains"),
+            path_contains=args.get("path_contains"),
+            has_module=args.get("has_module"),
+            contains_uvm=args.get("contains_uvm"),
+            file_type=args.get("file_type"),
+            limit=args.get("limit", 50),
+        )
+        return _wrap_handle_result(raw, schemas.LookupTbFilesResult)
+
+    if name == "find_tb_instance":
+        raw = handle_tools.find_tb_instance(
+            full, handle,
+            path=args.get("path"),
+            module=args.get("module"),
+            limit=args.get("limit", 100),
+        )
+        return _wrap_handle_result(raw, schemas.FindTbInstanceResult)
+
+    if name == "get_tb_file_detail":
+        raw = handle_tools.get_tb_file_detail(full, handle, path=args["path"])
+        return _wrap_handle_result(raw, schemas.GetTbFileDetailResult)
+
+    if name == "get_tb_class_hierarchy":
+        raw = handle_tools.get_tb_class_hierarchy(
+            full, handle,
+            root_class=args.get("root_class"),
+            depth=args.get("depth", -1),
+        )
+        return _wrap_handle_result(raw, schemas.GetTbClassHierarchyResult)
+
+    if name == "dump_tb_section":
+        raw = handle_tools.dump_tb_section(full, handle, section=args["section"])
+        return _wrap_handle_result(raw, schemas.DumpTbSectionResult)
+
+    raise ValueError(f"unhandled handle tool: {name}")
+
+
+def _wrap_handle_result(raw: dict, result_schema):
+    if "error" in raw:
+        return schemas.HandleErrorResult.model_validate(raw)
+    return result_schema.model_validate(raw)
 
 
 def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) -> list[dict]:
