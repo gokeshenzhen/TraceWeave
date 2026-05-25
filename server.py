@@ -43,6 +43,7 @@ from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
+from src.hierarchy_handles import HandleStore, compute_handle
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy
@@ -81,6 +82,12 @@ _result_provenance: dict[str, dict | None] = {
     "scan_structural_risks": None,
     "recommend_failure_debug_next_steps": None,
 }
+
+# Holds the full build_tb_hierarchy payload keyed by content-addressed handle.
+# The slim LLM-facing payload references this via `hierarchy_handle`; handle
+# tools resolve through this store. Lifetime is tied to build_tb_hierarchy's
+# cache entry — see _invalidate_downstream / _clear_result_state.
+_handle_store = HandleStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
     "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "recommend_failure_debug_next_steps"],
@@ -179,6 +186,8 @@ def _invalidate_downstream(from_tool: str):
             _result_cache[downstream] = None
         if downstream in _result_provenance:
             _result_provenance[downstream] = None
+        if downstream == "build_tb_hierarchy":
+            _handle_store.invalidate()
 
 
 def _clear_result_state():
@@ -186,6 +195,7 @@ def _clear_result_state():
         _result_cache[key] = None
     for key in _result_provenance:
         _result_provenance[key] = None
+    _handle_store.invalidate()
 
 
 def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple | None:
