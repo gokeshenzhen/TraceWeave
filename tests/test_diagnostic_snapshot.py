@@ -68,30 +68,41 @@ def _make_sim_paths_result() -> schemas.SimPathsResult:
 
 def _make_hierarchy_result() -> schemas.BuildTbHierarchyResult:
     return schemas.BuildTbHierarchyResult.model_validate({
+        "hierarchy_handle": "tbh_deadbeef",
         "project": {"top_module": "top_tb", "source_root": "/tmp/src", "simulator": "xcelium"},
-        "files": {
-            "rtl": [{"name": "dut.sv", "path": "/tmp/src/dut.sv", "type": "module"}],
-            "tb": [{"name": "top_tb.sv", "path": "/tmp/src/top_tb.sv", "type": "module"}],
+        "compile_command": "vcs -f files.f",
+        "stats": {
+            "file_count": 2,
+            "module_count": 2,
+            "instance_count": 2,
+            "tree_depth": 2,
+            "class_count": 0,
+            "interface_count": 1,
+            "uvm_file_count": 0,
         },
-        "component_tree": {
-            "top_tb": {
-                "type": "module",
-                "class": "top_tb",
-                "src": "top_tb.sv",
-                "role": "tb",
-                "children": {
-                    "dut": {
-                        "type": "module",
-                        "class": "dut",
-                        "src": "dut.sv",
-                        "role": "dut",
-                    }
-                },
-            }
+        "tree_skeleton": {
+            "inst": "top_tb",
+            "module": "top_tb",
+            "source_file": "",
+            "source_line": 0,
+            "child_count": 1,
+            "truncated": False,
+            "children": [
+                {
+                    "inst": "dut",
+                    "module": "dut",
+                    "source_file": "/tmp/src/dut.sv",
+                    "source_line": 0,
+                    "child_count": 0,
+                    "truncated": False,
+                    "children": [],
+                }
+            ],
         },
-        "class_hierarchy": [],
         "interfaces": [{"name": "bus_if", "src": "bus_if.sv", "bound_in": "top_tb"}],
-        "compile_result": {},
+        "ambiguous_basenames": [],
+        "kdb_hint": None,
+        "handle_tools": {},
     })
 
 

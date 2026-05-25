@@ -92,6 +92,33 @@ class SimPathsResult(SchemaModel):
 
 
 class BuildTbHierarchyResult(SchemaModel):
+    """Slim LLM-facing payload for build_tb_hierarchy.
+
+    Full hierarchy data (files list, complete component_tree, class
+    hierarchy, raw compile_result) is held server-side and accessed via
+    ``hierarchy_handle`` through the handle tools (get_tb_subtree,
+    lookup_tb_files, find_tb_instance, get_tb_file_detail,
+    get_tb_class_hierarchy, dump_tb_section).
+    """
+
+    hierarchy_handle: str = ""
+    project: dict[str, Any] = Field(default_factory=dict)
+    compile_command: str = ""
+    stats: dict[str, int] = Field(default_factory=dict)
+    tree_skeleton: dict[str, Any] = Field(default_factory=dict)
+    interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    ambiguous_basenames: list[dict[str, Any]] = Field(default_factory=list)
+    kdb_hint: dict[str, Any] | None = None
+    handle_tools: dict[str, str] = Field(default_factory=dict)
+    required_next_call: dict[str, Any] | None = None
+    suggested_next: dict[str, Any] | None = None
+
+
+class BuildTbHierarchyResultLegacy(SchemaModel):
+    """Pre-slim hierarchy payload, kept behind the
+    ``TRACEWEAVE_LEGACY_HIERARCHY_PAYLOAD=1`` env-var escape hatch as a
+    one-release migration safety net. Slated for removal."""
+
     project: dict[str, Any] = Field(default_factory=dict)
     files: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     component_tree: dict[str, Any] = Field(default_factory=dict)
@@ -100,6 +127,106 @@ class BuildTbHierarchyResult(SchemaModel):
     compile_result: dict[str, Any] = Field(default_factory=dict)
     required_next_call: dict[str, Any] | None = None
     suggested_next: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Handle-based hierarchy access (phase 3 schemas)
+#
+# Each handle tool follows the same protocol: take ``handle`` as the first
+# argument; resolve it against the server's HandleStore; return either a
+# typed result or a ``HandleErrorResult`` describing why resolution failed
+# (handle_expired / file_not_in_compile_set / filter_required).
+# ---------------------------------------------------------------------------
+
+
+class HandleErrorResult(SchemaModel):
+    error: str
+    hint: str | None = None
+    current_handle: str | None = None
+    did_you_mean: list[str] = Field(default_factory=list)
+
+
+class TbNode(SchemaModel):
+    inst: str
+    module: str = ""
+    source_file: str = ""
+    source_line: int = 0
+    child_count: int = 0
+    truncated: bool = False
+    children: list["TbNode"] = Field(default_factory=list)
+
+
+class GetTbSubtreeResult(SchemaModel):
+    handle: str
+    root: str
+    node: TbNode
+    truncated: bool = False
+    total_descendants: int = 0
+
+
+class TbFileMatch(SchemaModel):
+    path: str
+    file_type: str = ""
+    modules: list[str] = Field(default_factory=list)
+    classes: list[str] = Field(default_factory=list)
+    has_uvm_import: bool = False
+
+
+class LookupTbFilesResult(SchemaModel):
+    handle: str
+    matches: list[TbFileMatch] = Field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+
+
+class TbInstanceHit(SchemaModel):
+    path: str
+    module: str = ""
+    parent: str = ""
+    source_file: str = ""
+    source_line: int = 0
+
+
+class FindTbInstanceResult(SchemaModel):
+    handle: str
+    hits: list[TbInstanceHit] = Field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+
+
+class TbSymbol(SchemaModel):
+    name: str
+    kind: Literal["module", "class", "interface", "package", "program"]
+    line: int = 0
+
+
+class GetTbFileDetailResult(SchemaModel):
+    handle: str
+    path: str
+    file_type: str = ""
+    symbols: list[TbSymbol] = Field(default_factory=list)
+    includes: list[str] = Field(default_factory=list)
+    has_uvm_import: bool = False
+
+
+class TbClassNode(SchemaModel):
+    name: str
+    source_file: str = ""
+    source_line: int = 0
+    children: list["TbClassNode"] = Field(default_factory=list)
+
+
+class GetTbClassHierarchyResult(SchemaModel):
+    handle: str
+    roots: list[TbClassNode] = Field(default_factory=list)
+    total: int = 0
+
+
+class DumpTbSectionResult(SchemaModel):
+    handle: str
+    section: str
+    data: Any = None
+    warning: str = ""
 
 
 class StructuralRisk(SchemaModel):

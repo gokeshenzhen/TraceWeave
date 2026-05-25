@@ -46,7 +46,7 @@ from src.compile_log_parser import parse_compile_log
 from src.hierarchy_handles import HandleStore, compute_handle
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
-from src.tb_hierarchy_builder import build_hierarchy
+from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
 from src.signal_driver import explain_signal_driver
 from src.signal_load import find_signal_loads
 from src.verdi_backend import probe_verdi_backend
@@ -1273,22 +1273,21 @@ async def _dispatch(name: str, args: dict):
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
-        result = build_hierarchy(
+        compile_log = args["compile_log"]
+        full_result = build_hierarchy(
             parse_compile_log(
-                args["compile_log"],
+                compile_log,
                 simulator,
             ),
-            compile_log_path=args["compile_log"],
+            compile_log_path=compile_log,
         )
-        _update_session_state(name, resolved_args, result)
+        _update_session_state(name, resolved_args, full_result)
         scan_call = None
-        compile_log = args.get("compile_log")
         if _get_compatible_scan_cache(compile_log, simulator) is None:
             scan_call = _build_scan_required_next_call(compile_log, simulator)
-        result["required_next_call"] = scan_call
-        result["suggested_next"] = None
+        suggested = None
         if scan_call is not None:
-            result["suggested_next"] = {
+            suggested = {
                 **scan_call,
                 "reason": (
                     "scan_structural_risks independently parses the same compile_log "
@@ -1296,7 +1295,30 @@ async def _dispatch(name: str, args: dict):
                     "Results feed into recommend_failure_debug_next_steps."
                 ),
             }
-        validated = schemas.BuildTbHierarchyResult.model_validate(result)
+
+        # Legacy escape hatch: temporary migration safety net. Remove once
+        # the slim payload is proven across real cases.
+        if os.environ.get("TRACEWEAVE_LEGACY_HIERARCHY_PAYLOAD") == "1":
+            legacy = dict(full_result)
+            legacy.pop("_scan_results", None)
+            legacy["required_next_call"] = scan_call
+            legacy["suggested_next"] = suggested
+            validated = schemas.BuildTbHierarchyResultLegacy.model_validate(legacy)
+            _result_cache["build_tb_hierarchy"] = validated
+            _result_provenance["build_tb_hierarchy"] = _build_result_provenance(
+                name, resolved_args, validated
+            )
+            return validated
+
+        # Slim path. Register full result against a content-addressed
+        # handle so handle tools (phase 4) can resolve later. The slim
+        # payload is what crosses the wire to the LLM.
+        handle = compute_handle(compile_log, simulator)
+        _handle_store.register(handle, full_result)
+        slim = build_slim_payload(full_result, handle, kdb_hint=None)
+        slim["required_next_call"] = scan_call
+        slim["suggested_next"] = suggested
+        validated = schemas.BuildTbHierarchyResult.model_validate(slim)
         _result_cache["build_tb_hierarchy"] = validated
         _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, resolved_args, validated)
         return validated
@@ -1563,12 +1585,13 @@ def _extract_sim_paths_summary(result: schemas.SimPathsResult) -> dict:
 
 
 def _extract_hierarchy_summary(result: schemas.BuildTbHierarchyResult) -> dict:
+    stats = getattr(result, "stats", {}) or {}
     return {
         "top_module": result.project.get("top_module"),
-        "rtl_file_count": len(result.files.get("rtl", [])),
-        "tb_file_count": len(result.files.get("tb", [])),
-        "interface_count": len(result.interfaces),
-        "component_tree_depth": _tree_depth(result.component_tree),
+        "file_count": stats.get("file_count", 0),
+        "uvm_file_count": stats.get("uvm_file_count", 0),
+        "interface_count": stats.get("interface_count", len(result.interfaces)),
+        "component_tree_depth": stats.get("tree_depth", 0),
     }
 
 
@@ -1610,22 +1633,6 @@ def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict
         "signal_count": len(result.recommended_signals),
         "instance_count": len(result.recommended_instances),
     }
-
-
-def _tree_depth(tree: dict, _current: int = 0) -> int:
-    if not tree:
-        return _current
-
-    depths = []
-    for payload in tree.values():
-        children = payload.get("children", {})
-        if isinstance(children, dict) and children:
-            depths.append(_tree_depth(children, _current + 1))
-        elif isinstance(children, list) and children:
-            depths.append(max(_tree_depth(child, _current + 1) for child in children))
-        else:
-            depths.append(_current + 1)
-    return max(depths, default=_current)
 
 
 def _build_recommend_request_context(args: dict) -> dict[str, str | None]:

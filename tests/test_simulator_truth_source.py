@@ -40,12 +40,9 @@ async def test_dispatch_build_only_session_uses_build_hierarchy_provenance_for_e
     server._session_state["build_tb_hierarchy"] = {"compile_log": str(compile_log), "simulator": "xcelium"}
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
+            "hierarchy_handle": "tbh_aaaaaaaa",
             "project": {"top_module": "top_tb", "simulator": "vcs"},
-            "files": {},
-            "component_tree": {},
-            "class_hierarchy": [],
             "interfaces": [],
-            "compile_result": {},
         }
     )
     server._result_provenance["build_tb_hierarchy"] = {
@@ -105,12 +102,9 @@ async def test_build_only_session_stale_compile_log_falls_back_to_auto_for_expla
     server._session_state["build_tb_hierarchy"] = {"compile_log": str(old_compile_log), "simulator": "xcelium"}
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
+            "hierarchy_handle": "tbh_aaaaaaaa",
             "project": {"top_module": "top_tb", "simulator": "vcs"},
-            "files": {},
-            "component_tree": {},
-            "class_hierarchy": [],
             "interfaces": [],
-            "compile_result": {},
         }
     )
     server._result_provenance["build_tb_hierarchy"] = {
@@ -258,12 +252,9 @@ async def test_trace_x_source_build_only_session_uses_build_hierarchy_provenance
     server._session_state["build_tb_hierarchy"] = {"compile_log": str(compile_log), "simulator": "xcelium"}
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
+            "hierarchy_handle": "tbh_aaaaaaaa",
             "project": {"top_module": "top_tb", "simulator": "vcs"},
-            "files": {},
-            "component_tree": {},
-            "class_hierarchy": [],
             "interfaces": [],
-            "compile_result": {},
         }
     )
     server._result_provenance["build_tb_hierarchy"] = {
@@ -316,12 +307,9 @@ async def test_trace_x_source_build_only_stale_compile_log_falls_back_to_auto(mo
     server._session_state["build_tb_hierarchy"] = {"compile_log": str(old_compile_log), "simulator": "xcelium"}
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
+            "hierarchy_handle": "tbh_aaaaaaaa",
             "project": {"top_module": "top_tb", "simulator": "vcs"},
-            "files": {},
-            "component_tree": {},
-            "class_hierarchy": [],
             "interfaces": [],
-            "compile_result": {},
         }
     )
     server._result_provenance["build_tb_hierarchy"] = {
@@ -418,12 +406,9 @@ async def test_get_sim_paths_resets_downstream_cache_when_session_identity_chang
 
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
+            "hierarchy_handle": "tbh_bbbbbbbb",
             "project": {"top_module": "top_tb", "simulator": "xcelium"},
-            "files": {},
-            "component_tree": {},
-            "class_hierarchy": [],
             "interfaces": [],
-            "compile_result": {},
         }
     )
 
