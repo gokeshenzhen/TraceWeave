@@ -629,6 +629,24 @@ HANDLE_TOOL_NAMES: dict[str, str] = {
 }
 
 
+# Cap on compile_command bytes in the slim payload. Xcelium `xrun
+# -elaborate` lines routinely run 30+ KB after macro expansion; the LLM
+# only needs the head for flow identification (simulator, top flags). The
+# full command is still available via dump_tb_section(section="compile_result").
+_COMPILE_COMMAND_BUDGET = 1024
+
+
+def _trim_compile_command(cmd: str) -> str:
+    if not cmd:
+        return ""
+    if len(cmd) <= _COMPILE_COMMAND_BUDGET:
+        return cmd
+    head = cmd[:_COMPILE_COMMAND_BUDGET]
+    return (
+        f"{head}\n…[truncated; {len(cmd) - _COMPILE_COMMAND_BUDGET} more bytes; "
+        f"use dump_tb_section(section=\"compile_result\") for the full command]"
+    )
+
 
 def build_slim_payload(
     full_result: dict,
@@ -648,7 +666,9 @@ def build_slim_payload(
     return {
         "hierarchy_handle": handle,
         "project": dict(project),
-        "compile_command": compile_result.get("compile_command", "") or "",
+        "compile_command": _trim_compile_command(
+            compile_result.get("compile_command", "") or ""
+        ),
         "stats": compute_stats(full_result),
         "tree_skeleton": extract_tree_skeleton(
             full_result.get("component_tree", {}) or {},
