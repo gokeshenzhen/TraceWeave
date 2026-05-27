@@ -24,7 +24,7 @@
 What sets TraceWeave apart: when a Verdi license is available it engages KDB/NPI for accurate cross-hierarchy driver / load / connectivity analysis; without a license it still locates issues via the built-in Static backend, log parsing, and VCD/FSDB waveform reads. It supports driver backtracking, load/fanout lookup, value-at-time queries, cycle-aligned sampling, arbitrary signal-window queries, lightweight X/Z tracing, structural risk scanning, and failure-group diffing — and emits structured next-step debug recommendations for MCP clients.
 
 <p align="center">
-  <img src="assets/onepage.png" alt="TraceWeave workflow overview" width="900">
+  <img src="assets/onepage-en.png" alt="TraceWeave workflow overview" width="900">
 </p>
 
 <p align="center"><sub>Workflow illustration; timing and speedup depend on project scale and waveform availability.</sub></p>
