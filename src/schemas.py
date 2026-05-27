@@ -291,6 +291,8 @@ class ParseSimLogResult(TruncatableResult):
     first_group_context: ErrorContextResult | None = None
     problem_hints: ProblemHints | None = None
     auto_diff: DiffResult | None = None
+    log_snapshot_id: str | None = None
+    previous_log_snapshot_id: str | None = None
 
 
 class ErrorContextResult(SchemaModel):
@@ -333,6 +335,11 @@ class PersistentEventDetail(SchemaModel):
 
 
 class DiffResult(SchemaModel):
+    base_log_file: str | None = None
+    new_log_file: str | None = None
+    base_snapshot_id: str | None = None
+    new_snapshot_id: str | None = None
+    diff_source: Literal["paths", "snapshots", "mixed", "auto_previous_snapshot"] | None = None
     base_summary: DiffEventSummary
     new_summary: DiffEventSummary
     problem_hints_comparison: DiffProblemHintsComparison | None = None

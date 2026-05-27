@@ -250,8 +250,8 @@ All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or 
 
 ### Log Analysis
 
-- `parse_sim_log`: Parse and normalize runtime failures into grouped summaries and `failure_events`
-- `diff_sim_failure_results`: Compare two simulation runs
+- `parse_sim_log`: Parse and normalize runtime failures into grouped summaries and `failure_events`; also returns `log_snapshot_id` so same-path reruns can be compared after the simulator overwrites the log.
+- `diff_sim_failure_results`: Compare two simulation runs by paths or by `base_snapshot_id` / `new_snapshot_id`. If only `new_log_path` is supplied after an earlier `parse_sim_log` of the same path, TraceWeave uses the previous parsed snapshot as the baseline.
 - `get_error_context`: Extract raw log context around a specific line
 
 ### Waveform Analysis

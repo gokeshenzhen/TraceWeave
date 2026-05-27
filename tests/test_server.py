@@ -289,6 +289,9 @@ class TestDispatchParseSimLog:
                 },
             )
 
+            assert first.log_snapshot_id is not None
+            assert second.log_snapshot_id is not None
+            assert second.previous_log_snapshot_id == first.log_snapshot_id
             assert second["auto_diff"]["base_summary"]["total_events"] == 1
             assert second["auto_diff"]["new_summary"]["total_events"] == 1
             assert len(second["auto_diff"]["resolved_events"]) == 1
@@ -437,6 +440,123 @@ class TestDispatchParseSimLog:
             assert second["auto_diff"]["new_summary"]["total_events"] == 2
             assert len(second["auto_diff"]["resolved_events"]) == 2
             assert len(second["auto_diff"]["persistent_events"]) == 2
+        finally:
+            log_path.unlink()
+
+    async def test_diff_same_overwritten_log_uses_previous_snapshot(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = Path(handle.name)
+
+        try:
+            first = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            stat = log_path.stat()
+            log_path.write_text("module_b ERROR unique issue b @ 2 ns\n")
+            os.utime(log_path, (stat.st_atime, stat.st_mtime + 1))
+
+            result = await server._dispatch(
+                "diff_sim_failure_results",
+                {
+                    "new_log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result["diff_source"] == "auto_previous_snapshot"
+            assert result["base_snapshot_id"] == first.log_snapshot_id
+            assert result["new_snapshot_id"] is not None
+            assert len(result["resolved_events"]) == 1
+            assert len(result["new_events"]) == 1
+        finally:
+            log_path.unlink()
+
+    async def test_diff_same_overwritten_log_preserves_baseline_when_stat_signature_matches(self):
+        _prefill_get_sim_paths_state()
+        before_text = "module_a ERROR same length a @ 1 ns\n"
+        after_text = "module_b ERROR same length b @ 2 ns\n"
+        assert len(before_text) == len(after_text)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(before_text)
+            log_path = Path(handle.name)
+
+        try:
+            first = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            stat = log_path.stat()
+            log_path.write_text(after_text)
+            os.utime(log_path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+            result = await server._dispatch(
+                "diff_sim_failure_results",
+                {
+                    "new_log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result["diff_source"] == "auto_previous_snapshot"
+            assert result["base_snapshot_id"] == first.log_snapshot_id
+            assert result["new_snapshot_id"] != first.log_snapshot_id
+            assert result["base_summary"]["groups"] == {"ERROR: module_a ERROR same length a @ 1 ns": 1}
+            assert result["new_summary"]["groups"] == {"ERROR: module_b ERROR same length b @ 2 ns": 1}
+        finally:
+            log_path.unlink()
+
+    async def test_diff_can_compare_explicit_snapshot_ids_after_same_path_rerun(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("module_a ERROR unique issue a @ 1 ns\n")
+            log_path = Path(handle.name)
+
+        try:
+            first = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            stat = log_path.stat()
+            log_path.write_text("module_b ERROR unique issue b @ 2 ns\n")
+            os.utime(log_path, (stat.st_atime, stat.st_mtime + 1))
+
+            second = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": str(log_path),
+                    "simulator": "vcs",
+                },
+            )
+
+            result = await server._dispatch(
+                "diff_sim_failure_results",
+                {
+                    "base_snapshot_id": first.log_snapshot_id,
+                    "new_snapshot_id": second.log_snapshot_id,
+                    "simulator": "vcs",
+                },
+            )
+
+            assert result["diff_source"] == "snapshots"
+            assert result["base_snapshot_id"] == first.log_snapshot_id
+            assert result["new_snapshot_id"] == second.log_snapshot_id
+            assert len(result["resolved_events"]) == 1
+            assert len(result["new_events"]) == 1
         finally:
             log_path.unlink()
 

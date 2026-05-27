@@ -61,7 +61,8 @@ Verification
 ## Notes
 
 - `server.py` is both the composition root and the workflow gate; tool ordering,
-  prerequisite enforcement, and session-compatible cache reuse live there.
+  prerequisite enforcement, session-compatible cache reuse, and in-process
+  parsed-log snapshots for same-path simulation reruns live there.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.

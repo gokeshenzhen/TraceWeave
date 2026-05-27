@@ -168,7 +168,9 @@ class TestFailureEventAnalysis:
         assert result["recommendation_strategy"] == "role_rank_v2_structural"
         assert result["failure_window_center_ps"] == 290000
         assert result["next_iteration_hint"]["tool"] == "diff_sim_failure_results"
+        assert "new_log_path" in result["next_iteration_hint"]["when_to_call"]
         assert result["next_iteration_hint"]["suggested_arguments"]["base_log_path"] == log_path
+        assert result["next_iteration_hint"]["suggested_arguments"]["new_log_path"] == log_path
         assert result["next_iteration_hint"]["suggested_arguments"]["simulator"] == "vcs"
 
     def test_recommend_debug_next_steps_without_top_hint(self, log_path):

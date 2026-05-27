@@ -13,6 +13,7 @@ This server provides waveform-debug workflow tools, including:
 
 import asyncio
 from collections.abc import Callable
+import hashlib
 import json
 import sys
 import os
@@ -82,6 +83,12 @@ _result_provenance: dict[str, dict | None] = {
     "scan_structural_risks": None,
     "recommend_failure_debug_next_steps": None,
 }
+
+# In-process snapshots of parsed log failure events. These preserve the
+# baseline across common rerun flows where the simulator overwrites the same
+# run.log path before the LLM asks for an explicit diff.
+_log_snapshots: dict[str, dict] = {}
+_log_snapshot_history: dict[tuple[str, str], list[str]] = {}
 
 # Holds the full build_tb_hierarchy payload keyed by content-addressed handle.
 # The slim LLM-facing payload references this via `hierarchy_handle`; handle
@@ -201,6 +208,8 @@ def _clear_result_state():
         _result_cache[key] = None
     for key in _result_provenance:
         _result_provenance[key] = None
+    _log_snapshots.clear()
+    _log_snapshot_history.clear()
     _handle_store.invalidate()
 
 
@@ -280,6 +289,165 @@ def _resolve_session_simulator(args: dict) -> str:
     ):
         return hierarchy_result.project["simulator"]
     return "auto"
+
+
+def _log_stat_info(log_path: str) -> dict:
+    stat_result = os.stat(log_path)
+    return {
+        "realpath": os.path.realpath(log_path),
+        "mtime": stat_result.st_mtime,
+        "mtime_ns": stat_result.st_mtime_ns,
+        "size": stat_result.st_size,
+    }
+
+
+def _log_snapshot_id(
+    log_path: str,
+    simulator: str,
+    stat_info: dict,
+    all_failure_events: list[dict],
+) -> str:
+    events_material = json.dumps(all_failure_events, sort_keys=True, default=str)
+    events_digest = hashlib.sha256(events_material.encode("utf-8")).hexdigest()[:16]
+    material = "|".join(
+        [
+            stat_info["realpath"],
+            simulator,
+            events_digest,
+        ]
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
+    return f"log_{digest}"
+
+
+def _capture_log_snapshot(
+    log_path: str,
+    simulator: str,
+    all_failure_events: list[dict],
+    stat_info: dict | None = None,
+) -> str:
+    stat_info = stat_info or _log_stat_info(log_path)
+    snapshot_id = _log_snapshot_id(log_path, simulator, stat_info, all_failure_events)
+    entry = {
+        "snapshot_id": snapshot_id,
+        "log_path": log_path,
+        "realpath": stat_info["realpath"],
+        "simulator": simulator,
+        "all_failure_events": list(all_failure_events),
+        "log_mtime": stat_info["mtime"],
+        "log_mtime_ns": stat_info["mtime_ns"],
+        "log_size": stat_info["size"],
+    }
+    _log_snapshots[snapshot_id] = entry
+    key = (entry["realpath"], simulator)
+    history = _log_snapshot_history.setdefault(key, [])
+    if snapshot_id not in history:
+        history.append(snapshot_id)
+    return snapshot_id
+
+
+def _find_previous_log_snapshot(
+    log_path: str,
+    simulator: str,
+    exclude_snapshot_id: str | None = None,
+) -> dict | None:
+    realpath = os.path.realpath(log_path)
+    history = _log_snapshot_history.get((realpath, simulator), [])
+    for snapshot_id in reversed(history):
+        if snapshot_id == exclude_snapshot_id:
+            continue
+        snapshot = _log_snapshots.get(snapshot_id)
+        if snapshot is None:
+            continue
+        return snapshot
+    return None
+
+
+def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict]:
+    snapshot = _log_snapshots.get(snapshot_id)
+    if snapshot is None:
+        raise ValueError(
+            f"log snapshot is not available in this MCP session: {snapshot_id}. "
+            "Re-run parse_sim_log before rerunning simulation to create a baseline snapshot."
+        )
+    if snapshot.get("simulator") != simulator:
+        raise ValueError(
+            f"log snapshot {snapshot_id} was parsed with simulator={snapshot.get('simulator')}, "
+            f"but this diff requested simulator={simulator}."
+        )
+    return list(snapshot["all_failure_events"]), {
+        "source": "snapshot",
+        "snapshot_id": snapshot_id,
+        "log_file": snapshot.get("log_path"),
+    }
+
+
+def _parse_log_events_for_diff(log_path: str, simulator: str) -> tuple[list[dict], dict]:
+    stat_info = _log_stat_info(log_path)
+    events = SimLogParser(log_path, simulator).parse_failure_events()
+    snapshot_id = _capture_log_snapshot(log_path, simulator, events, stat_info)
+    return events, {
+        "source": "path",
+        "snapshot_id": snapshot_id,
+        "log_file": log_path,
+    }
+
+
+def _resolve_base_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
+    if args.get("base_snapshot_id"):
+        return _snapshot_events(args["base_snapshot_id"], simulator)
+
+    base_log_path = args.get("base_log_path")
+    new_log_path = args.get("new_log_path")
+    if base_log_path and new_log_path and os.path.realpath(base_log_path) == os.path.realpath(new_log_path):
+        previous = _find_previous_log_snapshot(new_log_path, simulator)
+        if previous is not None:
+            return list(previous["all_failure_events"]), {
+                "source": "auto_previous_snapshot",
+                "snapshot_id": previous["snapshot_id"],
+                "log_file": previous.get("log_path"),
+            }
+
+    if base_log_path:
+        return _parse_log_events_for_diff(base_log_path, simulator)
+
+    if new_log_path:
+        previous = _find_previous_log_snapshot(new_log_path, simulator)
+        if previous is not None:
+            return list(previous["all_failure_events"]), {
+                "source": "auto_previous_snapshot",
+                "snapshot_id": previous["snapshot_id"],
+                "log_file": previous.get("log_path"),
+            }
+        raise ValueError(
+            "baseline_snapshot_missing: no previous parsed snapshot exists for "
+            f"{new_log_path}. Call parse_sim_log before rerunning simulation so "
+            "TraceWeave can preserve the baseline even if the simulator overwrites the log."
+        )
+
+    raise ValueError("diff_sim_failure_results requires base_snapshot_id or base_log_path, or a new_log_path with a previous parsed snapshot.")
+
+
+def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
+    if args.get("new_snapshot_id"):
+        return _snapshot_events(args["new_snapshot_id"], simulator)
+    if args.get("new_log_path"):
+        return _parse_log_events_for_diff(args["new_log_path"], simulator)
+    if args.get("base_snapshot_id") and not args.get("base_log_path"):
+        parse_cache = _result_provenance.get("parse_sim_log")
+        if parse_cache and parse_cache.get("log_snapshot_id"):
+            return _snapshot_events(parse_cache["log_snapshot_id"], simulator)
+    raise ValueError("diff_sim_failure_results requires new_snapshot_id or new_log_path.")
+
+
+def _diff_source(base_meta: dict, new_meta: dict) -> str:
+    if base_meta.get("source") == "auto_previous_snapshot":
+        return "auto_previous_snapshot"
+    if base_meta.get("source") == "snapshot" and new_meta.get("source") == "snapshot":
+        return "snapshots"
+    if base_meta.get("source") == "path" and new_meta.get("source") == "path":
+        return "paths"
+    return "mixed"
 
 
 def _update_session_state(tool_name: str, args: dict, result: dict):
@@ -374,6 +542,10 @@ Waveform debug workflow:
    - When parse_sim_log returns auto_diff, it contains a diff against the previous
      parse of the same log. Use it to verify which failures were resolved or
      introduced by the latest code change. Do not ignore resolved/introduced counts.
+   - parse_sim_log also returns log_snapshot_id and, for same-path reruns,
+     previous_log_snapshot_id. If the simulator overwrites the same log name
+     between runs, call diff_sim_failure_results with snapshot IDs or with only
+     new_log_path; TraceWeave will use the previous parsed snapshot as baseline.
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="full".
    - Default detail_level is "summary" to keep MCP responses below harness budget.
 
@@ -630,16 +802,21 @@ async def list_tools():
             description=(
                 "Compare normalized failure events from two simulation logs. "
                 "Returns resolved, persistent, and newly introduced failures, plus changes in failure type, "
-                "X/Z presence, first-failure timing, and a convergence summary."
+                "X/Z presence, first-failure timing, and a convergence summary. "
+                "If a simulator overwrites the same log path between runs, pass new_log_path only "
+                "after parse_sim_log has captured the baseline snapshot, or pass snapshot IDs returned "
+                "by parse_sim_log."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "base_log_path": {"type": "string", "description": "Baseline simulation log"},
-                    "new_log_path": {"type": "string", "description": "New simulation log"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "base_log_path": {"type": "string", "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot."},
+                    "new_log_path": {"type": "string", "description": "New simulation log. For same-path reruns, this may be the overwritten log path."},
+                    "base_snapshot_id": {"type": "string", "description": "Baseline log snapshot ID returned by parse_sim_log."},
+                    "new_snapshot_id": {"type": "string", "description": "New log snapshot ID returned by parse_sim_log."},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted."},
                 },
-                "required": ["base_log_path", "new_log_path", "simulator"],
+                "required": [],
             },
         ),
 
@@ -1338,10 +1515,16 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "diff_sim_failure_results":
         simulator = _resolve_session_simulator(args)
-        result = SimLogParser(
-            args["base_log_path"],
-            simulator,
-        ).diff_against(args["new_log_path"])
+        base_events, base_meta = _resolve_base_events_for_diff(args, simulator)
+        new_events, new_meta = _resolve_new_events_for_diff(args, simulator)
+        result = diff_failure_events(base_events, new_events)
+        result.update({
+            "base_log_file": base_meta.get("log_file"),
+            "new_log_file": new_meta.get("log_file"),
+            "base_snapshot_id": base_meta.get("snapshot_id"),
+            "new_snapshot_id": new_meta.get("snapshot_id"),
+            "diff_source": _diff_source(base_meta, new_meta),
+        })
         return schemas.DiffResult.model_validate(result)
 
     elif name == "get_error_context":
@@ -2587,8 +2770,9 @@ def _shrink_scan_structural_risks_terminal(model: schemas.TruncatableResult) -> 
 def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     prev_provenance = _result_provenance.get("parse_sim_log")
     simulator = _resolve_session_simulator(args)
-    log_mtime = os.path.getmtime(args["log_path"])
-    log_size = os.path.getsize(args["log_path"])
+    stat_info = _log_stat_info(args["log_path"])
+    log_mtime = stat_info["mtime"]
+    log_size = stat_info["size"]
     parser = SimLogParser(args["log_path"], simulator)
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
@@ -2601,6 +2785,12 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
 
     allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
     all_events = parser.parse_failure_events()
+    log_snapshot_id = _capture_log_snapshot(args["log_path"], simulator, all_events, stat_info)
+    previous_snapshot = _find_previous_log_snapshot(
+        args["log_path"],
+        simulator,
+        exclude_snapshot_id=log_snapshot_id,
+    )
 
     if detail_level == "summary":
         total = len(all_events)
@@ -2647,6 +2837,10 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     summary["first_group_context"] = first_group_context
     problem_hints = compute_problem_hints(summary, all_events)
     summary["problem_hints"] = problem_hints
+    summary["log_snapshot_id"] = log_snapshot_id
+    summary["previous_log_snapshot_id"] = (
+        previous_snapshot.get("snapshot_id") if previous_snapshot is not None else None
+    )
     grouped_events: dict[str, list[dict]] = {}
     for event in all_events:
         grouped_events.setdefault(event["group_signature"], []).append(event)
@@ -2689,7 +2883,10 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
         "simulator": validated.simulator,
         "all_failure_events": all_events,
         "log_mtime": log_mtime,
+        "log_mtime_ns": stat_info["mtime_ns"],
         "log_size": log_size,
+        "log_snapshot_id": log_snapshot_id,
+        "previous_log_snapshot_id": summary["previous_log_snapshot_id"],
     }
     return validated
 

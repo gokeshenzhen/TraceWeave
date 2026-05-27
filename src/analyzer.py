@@ -204,12 +204,15 @@ class WaveformAnalyzer:
             "next_iteration_hint": {
                 "tool": "diff_sim_failure_results",
                 "when_to_call": (
-                    "After you apply a source change and rerun the simulation, call this tool with "
-                    "the previous log as base_log_path and the new log as new_log_path to see which "
-                    "failures were eliminated and which regressed."
+                    "After you apply a source change and rerun the simulation, call this tool to see "
+                    "which failures were eliminated and which regressed. If the simulator overwrites "
+                    "the same log path, make sure parse_sim_log captured the current log first, then "
+                    "call diff_sim_failure_results with new_log_path pointing at the rerun log. If "
+                    "you keep distinct log files, pass base_log_path and new_log_path explicitly."
                 ),
                 "suggested_arguments": {
                     "base_log_path": self.log_path,
+                    "new_log_path": self.log_path,
                     "simulator": self.simulator,
                 },
             },

@@ -247,8 +247,8 @@ codex mcp list
 
 ### 日志分析
 
-- `parse_sim_log`:解析并归一化运行时失败,输出分组摘要与 `failure_events`
-- `diff_sim_failure_results`:对比两次仿真运行
+- `parse_sim_log`:解析并归一化运行时失败,输出分组摘要与 `failure_events`;同时返回 `log_snapshot_id`,用于仿真器覆盖同名日志后的前后对比。
+- `diff_sim_failure_results`:按路径或 `base_snapshot_id` / `new_snapshot_id` 对比两次仿真运行。若前一次已对同一路径调用过 `parse_sim_log`,后续只传 `new_log_path` 时会自动使用上一轮解析快照作为 baseline。
 - `get_error_context`:抽取指定行号附近的原始日志上下文
 
 ### 波形分析

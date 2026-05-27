@@ -57,7 +57,8 @@ Step 2: build_tb_hierarchy(compile_log, simulator)
 Step 3: parse_sim_log(log_path, simulator)
 │  Get grouped error summary from simulation log.
 │  Returns: groups list, normalized failure_events, time normalization fields,
-│           and rerun hints such as previous_log_detected / candidate_previous_logs
+│           rerun hints such as previous_log_detected / candidate_previous_logs,
+│           and log_snapshot_id for same-path rerun diffing
 │
 │  What the agent does:
 │  - Identify the earliest and most frequent error groups
@@ -67,6 +68,9 @@ Step 3: parse_sim_log(log_path, simulator)
 │     or get_tb_subtree drilling from tree_skeleton)
 │  - Decide which group to investigate first (usually group_index=0)
 │  - If previous_log_detected == true, consider diff_sim_failure_results early
+│  - If the simulator overwrites the same log path on rerun, call
+│    diff_sim_failure_results with snapshot IDs or only new_log_path; the
+│    previous parsed snapshot becomes the baseline
 │
 ▼
 Step 4: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
