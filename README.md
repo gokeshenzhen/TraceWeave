@@ -1,5 +1,9 @@
 # 🐙 TraceWeave
 
+<p align="right">
+  <strong>English</strong> · <a href="README.zh.md">简体中文</a>
+</p>
+
 <p align="center">
   <img src="assets/logo.png" alt="TraceWeave" width="160">
 </p>
