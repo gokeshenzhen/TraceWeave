@@ -19,9 +19,9 @@
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
 </p>
 
-<h2 align="center">波形日志根因分析 MCP，不想再调试，就用 TraceWeave。</h2>
+<h2 align="center">Waveform + log root-cause MCP — stop debugging by hand, use TraceWeave.</h2>
 
-TraceWeave 的特色：有 Verdi license 时启用 KDB/NPI 获得更精确的跨层级 driver/load/connectivity 分析；没有 license 时也可用内置 Static 后端、日志解析、VCD/FSDB 波形读取继续定位问题；支持 driver 回溯、load/fanout 查找、指定时刻取值、指定周期数采样、任意信号窗口查询、轻量化 X/Z trace、结构风险扫描、失败分组对比，并给 MCP 客户端输出结构化的下一步调试建议。
+What sets TraceWeave apart: when a Verdi license is available it engages KDB/NPI for accurate cross-hierarchy driver / load / connectivity analysis; without a license it still locates issues via the built-in Static backend, log parsing, and VCD/FSDB waveform reads. It supports driver backtracking, load/fanout lookup, value-at-time queries, cycle-aligned sampling, arbitrary signal-window queries, lightweight X/Z tracing, structural risk scanning, and failure-group diffing — and emits structured next-step debug recommendations for MCP clients.
 
 <p align="center">
   <img src="assets/onepage.png" alt="TraceWeave workflow overview" width="900">
