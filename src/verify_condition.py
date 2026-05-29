@@ -754,12 +754,26 @@ def inspect_handshake(
     jump straight to where the protocol broke. Reads existing waveforms only —
     does NOT rerun simulation.
     """
-    payload = list(payload or [])
+    payload_in = list(payload or [])
     parser = get_parser(wave_path)
+
+    # Resolve paths first, auto-correcting bus names that need an explicit
+    # [msb:lsb] suffix (common on FSDB: 'top.addr' -> 'top.addr[7:0]'). This
+    # removes the most common footgun where a payload signal silently fails to
+    # resolve and the hold check then looks "clean".
+    clock = _resolve_signal_path(parser, clock)
+    valid = _resolve_signal_path(parser, valid)
+    ready = _resolve_signal_path(parser, ready)
+    payload = [_resolve_signal_path(parser, p) for p in payload_in]
+
     sampled = sample_signals_on_edges(
         parser, clock, [valid, ready, *payload],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
+    signal_errors = sampled.get("signal_errors", {})
+    payload_unresolved = [p for p in payload if p in signal_errors]
+    resolved_payload = [p for p in payload if p not in signal_errors]
+    warnings: list[str] = []
 
     result: dict[str, Any] = {
         "wave_path": wave_path,
@@ -778,18 +792,36 @@ def inspect_handshake(
         "max_stall_begin_ps": None,
         "ready_without_valid_cycles": 0,
         "payload_hold_violations": 0,
+        "payload_hold_checked": False,
+        "payload_unresolved": payload_unresolved,
         "unknown_sample_cycles": 0,
         "findings": [],
         "cursor": None,
         "reason": None,
-        "signal_errors": sampled.get("signal_errors", {}),
+        "warnings": warnings,
+        "signal_errors": signal_errors,
     }
 
     # A missing valid/ready signal makes the whole check meaningless.
     for role, sig in (("valid", valid), ("ready", ready)):
-        if sig in result["signal_errors"]:
-            result["reason"] = f"{role} signal not found: {result['signal_errors'][sig]}"
+        if sig in signal_errors:
+            result["reason"] = f"{role} signal not found: {signal_errors[sig]}"
             return result
+
+    # The payload-hold check only runs on payload signals that actually
+    # resolved. Be LOUD when some did not: a payload_hold_violations of 0 must
+    # never be read as "payload stable" if the signal was simply not found.
+    do_hold_check = check_payload_hold and bool(resolved_payload)
+    result["payload_hold_checked"] = do_hold_check
+    if check_payload_hold and payload_unresolved:
+        warnings.append(
+            "payload-hold check did NOT run for unresolved signal(s): "
+            + ", ".join(payload_unresolved)
+            + " — a payload_hold_violations of 0 does NOT mean these were stable. "
+            "FSDB bus signals usually need an explicit bit range "
+            "(e.g. 'top.addr[7:0]'); pass the full path or a basename that "
+            "resolves to exactly one bus."
+        )
 
     samples = sampled.get("samples", [])
     if not samples:
@@ -844,11 +876,11 @@ def inspect_handshake(
                 in_stall = True
                 stall_begin = s["time_ps"]
                 stall_cycles = 1
-                stall_payload = {p: sig.get(p) for p in payload}
+                stall_payload = {p: sig.get(p) for p in resolved_payload}
             else:
                 stall_cycles += 1
-                if check_payload_hold:
-                    for p in payload:
+                if do_hold_check:
+                    for p in resolved_payload:
                         cur = sig.get(p)
                         prev = stall_payload.get(p)
                         if _hs_known(cur) and _hs_known(prev) and cur != prev:
@@ -879,6 +911,36 @@ def inspect_handshake(
         cursor_name, cursor_note,
     )
     return result
+
+
+def _resolve_signal_path(parser: Any, path: str) -> str:
+    """Return a path the parser can read, auto-correcting a bus name that needs
+    an explicit ``[msb:lsb]`` suffix.
+
+    Tries the path as-is first (cheap width probe). On failure, and only when the
+    path has no bit-range, searches by basename and accepts the match when
+    exactly one signal's path is ``<path>[...]``. Best-effort: any failure leaves
+    the path unchanged so the caller still surfaces it via ``signal_errors``.
+    """
+    if not path:
+        return path
+    try:
+        parser.get_signal_width(path)
+        return path
+    except Exception:
+        pass
+    if "[" in path or not hasattr(parser, "search_signals"):
+        return path
+    basename = path.rsplit(".", 1)[-1]
+    try:
+        results = parser.search_signals(basename).get("results", [])
+    except Exception:
+        return path
+    candidates = [
+        r.get("path", "") for r in results
+        if isinstance(r, dict) and r.get("path", "").startswith(path + "[")
+    ]
+    return candidates[0] if len(candidates) == 1 else path
 
 
 def _hs_truth(value: Any, active_high: bool) -> bool | None:

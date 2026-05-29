@@ -224,6 +224,29 @@ def test_active_low_inverts_polarity(tmp_path: Path):
     assert r["stall_count"] == 0
 
 
+def test_unresolved_payload_is_loud_not_silently_clean(tmp_path: Path):
+    # The A/B footgun: a payload signal that does not resolve must NOT read as
+    # "0 violations / clean". It must be flagged loudly and the hold check
+    # marked as not run, while the stall metrics still compute.
+    cycles = [{"valid": 1, "ready": 1}] + [{"valid": 1, "ready": 0}] * 3 + [{"valid": 1, "ready": 1}]
+    r = _run(tmp_path, "loud.vcd", cycles, payload=["top.nonexistent_bus"], max_wait_cycles=1)
+    assert r["payload_unresolved"] == ["top.nonexistent_bus"]
+    assert r["payload_hold_checked"] is False
+    assert r["payload_hold_violations"] == 0
+    assert any("did NOT run" in w for w in r["warnings"])
+    # stall analysis is unaffected by the unresolved payload
+    assert r["max_stall_cycles"] == 3
+    assert r["reason"] is None  # not a hard failure
+
+
+def test_resolved_payload_marks_hold_checked(tmp_path: Path):
+    cycles = [{"valid": 1, "ready": 1, "addr": 0x10} for _ in range(4)]
+    r = _run(tmp_path, "checked.vcd", cycles, with_addr=True, payload=["top.addr"])
+    assert r["payload_hold_checked"] is True
+    assert r["payload_unresolved"] == []
+    assert r["warnings"] == []
+
+
 def test_explicit_cursor_name(tmp_path: Path):
     cycles = [{"valid": 1, "ready": 1}] + [{"valid": 1, "ready": 0}] * 4 + [{"valid": 1, "ready": 1}]
     store = CursorStore()

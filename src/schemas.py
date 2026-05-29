@@ -760,10 +760,13 @@ class HandshakeInspectResult(SchemaModel):
     max_stall_begin_ps: int | None = None
     ready_without_valid_cycles: int = 0
     payload_hold_violations: int = 0
+    payload_hold_checked: bool = False
+    payload_unresolved: list[str] = Field(default_factory=list)
     unknown_sample_cycles: int = 0
     findings: list[HandshakeFinding] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     signal_errors: dict[str, str] = Field(default_factory=dict)
 
 
