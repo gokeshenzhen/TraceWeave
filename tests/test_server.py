@@ -2055,3 +2055,129 @@ class TestDispatchGetSignalsAroundTimeGuards:
         assert "detection error:" in msg
         assert "RuntimeError: signal index unavailable for clk" in msg
         assert fake.called_with is None
+
+
+# Two signals identical until #20 (20_000 ps), then b stays high while a falls.
+_DIVERGE_VCD = """\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! a $end
+$var wire 1 # b $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+0#
+#10000
+1!
+1#
+#20000
+0!
+1#
+#30000
+0!
+0#
+"""
+
+
+@pytest.mark.anyio
+class TestCursorAndDiffDispatch:
+    """Auto-debug v2: diff_first_divergence registers a cursor that
+    downstream time-taking tools can dereference via '@name'."""
+
+    async def test_diff_registers_cursor_consumed_by_get_signal_at_time(self, tmp_path):
+        wave = tmp_path / "diverge.vcd"
+        wave.write_text(_DIVERGE_VCD)
+
+        diff = await server._dispatch(
+            "diff_first_divergence",
+            {
+                "wave_path_a": str(wave),
+                "signal_a": "top.a",
+                "wave_path_b": str(wave),
+                "signal_b": "top.b",
+            },
+        )
+        assert diff["diverged"] is True
+        assert diff["first_divergence_time_ps"] == 20_000
+        cursor_name = diff["cursor"]["name"]
+
+        # cursor_list surfaces it
+        listed = await server._dispatch("cursor_list", {})
+        assert any(c["name"] == cursor_name for c in listed["cursors"])
+
+        # get_signal_at_time accepts '@cursor' in place of an integer
+        at = await server._dispatch(
+            "get_signal_at_time",
+            {
+                "wave_path": str(wave),
+                "signal_path": "top.a",
+                "time_ps": f"@{cursor_name}",
+            },
+        )
+        assert at["time_ps"] == 20_000
+        assert at["value"]["bin"] == "0"
+
+    async def test_unit_literal_time_input(self, tmp_path):
+        wave = tmp_path / "diverge.vcd"
+        wave.write_text(_DIVERGE_VCD)
+
+        at = await server._dispatch(
+            "get_signal_at_time",
+            {
+                "wave_path": str(wave),
+                "signal_path": "top.b",
+                "time_ps": "20ns",
+            },
+        )
+        assert at["time_ps"] == 20_000
+        assert at["value"]["bin"] == "1"
+
+    async def test_period_dispatch_registers_offbeat_cursor(self, tmp_path):
+        # 1ps timescale; posedges at 10,20,35,45 → off-beat ends at 35.
+        wave = tmp_path / "jitter.vcd"
+        wave.write_text(
+            "$timescale 1ps $end\n"
+            "$scope module top $end\n$var wire 1 ! clk $end\n$upscope $end\n"
+            "$enddefinitions $end\n"
+            "#0\n0!\n#10\n1!\n#13\n0!\n#20\n1!\n#23\n0!\n#35\n1!\n#38\n0!\n#45\n1!\n"
+        )
+        result = await server._dispatch(
+            "period",
+            {"wave_path": str(wave), "signal": "top.clk", "edge": "posedge"},
+        )
+        assert result["period_ps"] == 10
+        assert result["first_off_beat_time_ps"] == 35
+        cursor_name = result["cursor"]["name"]
+
+        # Off-beat cursor is dereferenceable by downstream time inputs.
+        at = await server._dispatch(
+            "get_signal_at_time",
+            {"wave_path": str(wave), "signal_path": "top.clk", "time_ps": f"@{cursor_name}"},
+        )
+        assert at["time_ps"] == 35
+
+    async def test_cursor_set_and_delete_roundtrip(self):
+        created = await server._dispatch(
+            "cursor_set", {"name": "anchor", "time_ps": 5000, "note": "n"}
+        )
+        assert created["cursor"]["name"] == "anchor"
+        assert created["cursor"]["time_ps"] == 5000
+
+        deleted = await server._dispatch("cursor_delete", {"name": "anchor"})
+        assert deleted["deleted"] is True
+        again = await server._dispatch("cursor_delete", {"name": "anchor"})
+        assert again["deleted"] is False
+
+    async def test_unknown_cursor_reference_raises(self, tmp_path):
+        wave = tmp_path / "diverge.vcd"
+        wave.write_text(_DIVERGE_VCD)
+        with pytest.raises(Exception):
+            await server._dispatch(
+                "get_signal_at_time",
+                {
+                    "wave_path": str(wave),
+                    "signal_path": "top.a",
+                    "time_ps": "@nope",
+                },
+            )

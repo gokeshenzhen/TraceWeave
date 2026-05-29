@@ -667,3 +667,104 @@ class ToolErrorResult(SchemaModel):
     error_code: str | None = None
     fsdb_runtime: dict[str, Any] | None = None
     fallback: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Auto-debug v2: cursors + verify primitives
+# See docs/auto-debug-decisions-v2.md
+# ---------------------------------------------------------------------------
+
+
+class CursorRefSchema(SchemaModel):
+    name: str
+    time_ps: int
+    note: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CursorSetResult(SchemaModel):
+    cursor: CursorRefSchema
+
+
+class CursorListResult(SchemaModel):
+    cursors: list[CursorRefSchema] = Field(default_factory=list)
+
+
+class CursorDeleteResult(SchemaModel):
+    name: str
+    deleted: bool
+
+
+class DiffFirstDivergenceResult(SchemaModel):
+    diverged: bool
+    wave_path_a: str
+    wave_path_b: str
+    signal_a: str
+    signal_b: str
+    start_ps: int
+    end_ps: int
+    first_divergence_time_ps: int | None = None
+    value_a: str | None = None
+    value_b: str | None = None
+    cursor: CursorRefSchema | None = None
+    transitions_compared: int = 0
+    missing_a: bool = False
+    missing_b: bool = False
+    note: str | None = None
+
+
+class PeriodResult(SchemaModel):
+    wave_path: str
+    signal: str
+    edge: str
+    start_ps: int
+    end_ps: int
+    period_ps: int | None = None
+    edges_used: int = 0
+    jitter_ps: int = 0
+    off_beat_count: int = 0
+    first_off_beat_time_ps: int | None = None
+    cursor: CursorRefSchema | None = None
+    reason: str | None = None
+
+
+class DistValueCount(SchemaModel):
+    value: str
+    count: int
+
+
+class DistGroupSummary(SchemaModel):
+    n_samples: int = 0
+    distinct: int = 0
+    unreadable: int = 0
+    top_values: list[DistValueCount] = Field(default_factory=list)
+
+
+class DistValueEnrichment(SchemaModel):
+    value: str
+    count_a: int
+    count_b: int
+    freq_a: float
+    freq_b: float
+    delta: float
+
+
+class DistBitDiff(SchemaModel):
+    bit: int
+    p1_a: float | None = None
+    p1_b: float | None = None
+    delta: float | None = None
+    x_frac_a: float = 0.0
+    x_frac_b: float = 0.0
+
+
+class DiffValueDistributionResult(SchemaModel):
+    wave_path: str
+    signal: str
+    width: int = 0
+    group_a: DistGroupSummary = Field(default_factory=DistGroupSummary)
+    group_b: DistGroupSummary | None = None
+    value_enrichment: list[DistValueEnrichment] = Field(default_factory=list)
+    bit_diff: list[DistBitDiff] = Field(default_factory=list)
+    discriminative_bits: list[int] = Field(default_factory=list)
+    note: str | None = None

@@ -44,7 +44,12 @@ from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
+from src.cursor_store import CursorStore
 from src.hierarchy_handles import HandleStore, compute_handle
+from src.timespec import resolve_timespec
+# diff_value_distribution is implemented in src.verify_condition but deliberately
+# not wired up as an MCP tool — see docs/auto-debug-v2-pilot-results.md.
+from src.verify_condition import diff_first_divergence, period
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
@@ -95,6 +100,11 @@ _log_snapshot_history: dict[tuple[str, str], list[str]] = {}
 # tools resolve through this store. Lifetime is tied to build_tb_hierarchy's
 # cache entry — see _invalidate_downstream / _clear_result_state.
 _handle_store = HandleStore()
+
+# Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
+# is process-scoped — same semantics as _handle_store: no persistence,
+# server restart drops every cursor.
+_cursor_store = CursorStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
     "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "recommend_failure_debug_next_steps"],
@@ -211,6 +221,7 @@ def _clear_result_state():
     _log_snapshots.clear()
     _log_snapshot_history.clear()
     _handle_store.invalidate()
+    _cursor_store.clear()
 
 
 def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple | None:
@@ -599,6 +610,16 @@ def _dispose_cached_object(obj: object):
         parser_close()
 
 
+def _resolve_time(spec, *, allow_sentinel: bool = False) -> int:
+    """Resolve a TimeSpec (int ps, '@cursor', or unit literal) to ps.
+
+    Thin adapter binding the shared resolver to this server's cursor
+    store so every time-taking dispatch branch gets cursor + unit
+    support without threading the store through each call site.
+    """
+    return resolve_timespec(spec, _cursor_store, allow_sentinel=allow_sentinel)
+
+
 def _get_parser(wave_path: str):
     """Return a cached parser instance to avoid reparsing VCDs or reopening FSDBs."""
     signature = _get_wave_signature(wave_path)
@@ -741,6 +762,12 @@ def _validate_signals_around_time_args(
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
 
+# Time inputs accept a TimeSpec: an integer (ps), a cursor reference
+# "@<name>", or a unit literal like "12.34ns". See src/timespec.py.
+_TIMESPEC_TYPE = ["integer", "string"]
+_TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c', or a unit literal like '12.34ns'."
+
+
 @app.list_tools()
 async def list_tools():
     return [
@@ -881,7 +908,7 @@ async def list_tools():
                     "wave_path":   {"type": "string"},
                     "signal_path": {"type": "string",
                                     "description": "Full hierarchical path, for example top_tb.dut.s_bits"},
-                    "time_ps":     {"type": "integer", "description": "Query time in ps"},
+                    "time_ps":     {"type": _TIMESPEC_TYPE, "description": "Query time." + _TIMESPEC_HINT},
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
             },
@@ -895,9 +922,9 @@ async def list_tools():
                 "properties": {
                     "wave_path":     {"type": "string"},
                     "signal_path":   {"type": "string"},
-                    "start_time_ps": {"type": "integer", "default": 0},
-                    "end_time_ps":   {"type": "integer", "default": -1,
-                                      "description": "-1 means through the end of simulation"},
+                    "start_time_ps": {"type": _TIMESPEC_TYPE, "default": 0, "description": "Window start." + _TIMESPEC_HINT},
+                    "end_time_ps":   {"type": _TIMESPEC_TYPE, "default": -1,
+                                      "description": "-1 means through the end of simulation." + _TIMESPEC_HINT},
                 },
                 "required": ["wave_path", "signal_path"],
             },
@@ -939,11 +966,11 @@ async def list_tools():
                     "signal_paths":  {"type": "array", "items": {"type": "string"},
                                       "description": "List of full hierarchical signal paths"},
                     "center_time_ps": {
-                        "type": "integer",
+                        "type": _TIMESPEC_TYPE,
                         "description": (
                             "Center time in PICOSECONDS (not ns). Convert sim-log ns "
                             "via *1000. Must be within the waveform duration reported "
-                            "by get_waveform_summary."
+                            "by get_waveform_summary." + _TIMESPEC_HINT
                         ),
                     },
                     "window_ps": {
@@ -1336,7 +1363,7 @@ async def list_tools():
                 "properties": {
                     "wave_path": {"type": "string"},
                     "signal_path": {"type": "string"},
-                    "time_ps": {"type": "integer"},
+                    "time_ps": {"type": _TIMESPEC_TYPE, "description": "Trace start time." + _TIMESPEC_HINT},
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
@@ -1478,6 +1505,112 @@ async def list_tools():
                 "required": ["handle", "section"],
             },
         ),
+
+        Tool(
+            name="cursor_set",
+            description=(
+                "Register a named time anchor (in ps) for the current session. "
+                "Other tools that take a time may reference '@<name>' instead of "
+                "copying ps integers across calls. Cursors are process-scoped "
+                "and dropped on server restart. Names must match [A-Za-z_][A-Za-z0-9_-]*."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Cursor name."},
+                    "time_ps": {"type": "integer", "description": "Anchor time in ps. Must be >= 0."},
+                    "note": {"type": "string", "description": "Optional human-readable note."},
+                },
+                "required": ["name", "time_ps"],
+            },
+        ),
+
+        Tool(
+            name="cursor_list",
+            description="List all cursors registered in the current session, ordered by time.",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+
+        Tool(
+            name="cursor_delete",
+            description="Delete a named cursor. Returns whether the cursor existed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Cursor name to delete."},
+                },
+                "required": ["name"],
+            },
+        ),
+
+        Tool(
+            name="diff_first_divergence",
+            description=(
+                "Find the first time two signals hold unequal values. Works across "
+                "two waveforms (passing run vs failing run) or within one waveform "
+                "between two signals (expected vs actual). Auto-registers a cursor at "
+                "the divergence time so downstream calls can reference it by name. "
+                "Reads existing waveforms only — does NOT rerun simulation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path_a": {"type": "string", "description": "First waveform (FSDB or VCD)."},
+                    "signal_a": {"type": "string", "description": "Full hierarchical signal path in wave_path_a."},
+                    "wave_path_b": {"type": "string", "description": "Second waveform. May equal wave_path_a for within-run diff."},
+                    "signal_b": {"type": "string", "description": "Full hierarchical signal path in wave_path_b."},
+                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Start of comparison window. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "End of comparison window. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated."},
+                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                },
+                "required": ["wave_path_a", "signal_a", "wave_path_b", "signal_b"],
+            },
+        ),
+
+        Tool(
+            name="period",
+            description=(
+                "Estimate a signal's dominant period inside a window and flag the "
+                "first beat that deviates from it. Use for rhythm/throughput "
+                "questions an LLM cannot eyeball from a transition dump: stalled "
+                "clocks, dropped burst beats, backpressure bubbles, irregular "
+                "strobes. The dominant period is the median edge-to-edge interval; "
+                "the first off-beat is auto-registered as a cursor. Reads existing "
+                "waveforms only — does NOT rerun simulation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "signal": {"type": "string", "description": "Full hierarchical signal path."},
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge", "any"],
+                        "description": "Edge to count. 'any' for multi-bit/strobe signals. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "tolerance_frac": {
+                        "type": "number",
+                        "description": "Fraction of the period a beat may deviate before counting as an off-beat. Default 0.05 (5%).",
+                        "default": 0.05,
+                    },
+                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the first off-beat. Defaults to beat_<sha8>."},
+                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                },
+                "required": ["wave_path", "signal"],
+            },
+        ),
+
+        # NOTE: diff_value_distribution is intentionally NOT registered as an
+        # MCP tool. Its blind-A/B pilots (docs/auto-debug-v2-pilot-results.md)
+        # showed no clear benefit over baseline on the common "scoreboard
+        # data-mismatch + readable RTL" flow, so it is kept out of the tool
+        # surface to avoid LLM selection noise. The implementation, schema and
+        # tests are retained in src/verify_condition.py / schemas.py / tests so
+        # it can be re-registered here in one block if a real use-case appears.
     ]
 
 
@@ -1558,21 +1691,21 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "get_signal_at_time":
         result = _get_parser(args["wave_path"]).get_value_at_time(
-            args["signal_path"], args["time_ps"]
+            args["signal_path"], _resolve_time(args["time_ps"]),
         )
         return schemas.SignalAtTimeResult.model_validate(result)
 
     elif name == "get_signal_transitions":
         result = _get_parser(args["wave_path"]).get_transitions(
             args["signal_path"],
-            args.get("start_time_ps", 0),
-            args.get("end_time_ps", -1),
+            _resolve_time(args.get("start_time_ps", 0)),
+            _resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
         )
         return schemas.SignalTransitionsResult.model_validate(result)
 
     elif name == "get_signals_around_time":
         parser = _get_parser(args["wave_path"])
-        center_ps = int(args["center_time_ps"])
+        center_ps = _resolve_time(args["center_time_ps"])
         window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
         signal_paths = args.get("signal_paths") or []
         _validate_signals_around_time_args(
@@ -1880,7 +2013,7 @@ async def _dispatch(name: str, args: dict):
         result = trace_x_source(
             wave_path=args["wave_path"],
             signal_path=args["signal_path"],
-            time_ps=args["time_ps"],
+            time_ps=_resolve_time(args["time_ps"]),
             compile_log=args["compile_log"],
             parser=_get_parser(args["wave_path"]),
             top_hint=args.get("top_hint"),
@@ -1888,6 +2021,56 @@ async def _dispatch(name: str, args: dict):
             simulator=simulator,
         )
         return schemas.TraceXSourceResult.model_validate(result)
+
+    elif name == "cursor_set":
+        ref = _cursor_store.set(
+            args["name"],
+            int(args["time_ps"]),
+            note=args.get("note"),
+        )
+        return schemas.CursorSetResult.model_validate({"cursor": ref.as_dict()})
+
+    elif name == "cursor_list":
+        return schemas.CursorListResult.model_validate({
+            "cursors": [ref.as_dict() for ref in _cursor_store.list()],
+        })
+
+    elif name == "cursor_delete":
+        deleted = _cursor_store.delete(args["name"])
+        return schemas.CursorDeleteResult.model_validate({
+            "name": args["name"],
+            "deleted": deleted,
+        })
+
+    elif name == "diff_first_divergence":
+        result = diff_first_divergence(
+            get_parser=_get_parser,
+            wave_path_a=args["wave_path_a"],
+            signal_a=args["signal_a"],
+            wave_path_b=args["wave_path_b"],
+            signal_b=args["signal_b"],
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            cursor_store=_cursor_store,
+            cursor_name=args.get("cursor_name"),
+            cursor_note=args.get("cursor_note"),
+        )
+        return schemas.DiffFirstDivergenceResult.model_validate(result)
+
+    elif name == "period":
+        result = period(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            signal=args["signal"],
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            edge=args.get("edge", "posedge"),
+            tolerance_frac=args.get("tolerance_frac", 0.05),
+            cursor_store=_cursor_store,
+            cursor_name=args.get("cursor_name"),
+            cursor_note=args.get("cursor_note"),
+        )
+        return schemas.PeriodResult.model_validate(result)
 
     elif name in {
         "get_tb_subtree", "lookup_tb_files", "find_tb_instance",
