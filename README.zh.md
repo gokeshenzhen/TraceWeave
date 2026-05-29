@@ -267,6 +267,8 @@ codex mcp list
 - `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`:命名的、进程内的时间锚。定位到某时刻的工具(如 `diff_first_divergence`、`period`)会自动注册一个游标,后续可用 `@<name>` 引用,免去跨调用复制 ps 时间戳。游标不持久化——server 重启即丢。
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`:两个波形信号首次取值不相等的时刻——可跨两个波形(如 passing vs failing run),也可在同一波形内(两个本应相等的信号,如 lockstep / shadow 寄存器)。在分叉处自动注册游标。要求两侧都是被 dump 的波形信号(它不与软件参考模型比对)。
 - `period(wave_path, signal, edge?, ...)`:测信号边沿的主导周期,并标出第一个偏离该周期的拍(off-beat),自动注册为游标。用于"这个信号本应周期性——节奏第一次在哪里破"(时钟、strobe、定速 valid)。
+- `suggest_handshakes(wave_path, scope?, ...)`:扫描波形,提出可直接使用的 `inspect_handshake` bundle —— 按 scope 与 stem 配对 `*valid`/`*ready`、找到时钟、归组通道 payload 总线。先跑它,就不用手攒 `{clock, valid, ready, payload}`。覆盖 AXI/通用 valid-ready 与 req/ack;不合成 AHB 的 "valid"(需手动传)。
+- `inspect_handshake(wave_path, clock, valid, ready, payload?, ...)`:对时钟化 valid/ready 握手逐拍分类 —— stall 连续段(valid 高、ready 低)、最长/超阈值 stall、背压失衡(ready 高、valid 低),以及给了 `payload` 时的保持违例(transfer 仍在 stall 期间 payload 发生变化)。协议无关:AXI `*valid`/`*ready`、通用 valid-ready 流、credit 接口。AHB 没有字面 valid —— 传 `valid_htrans=<htrans 路径>`(及 `htrans_rule`:`active`=NONSEQ/SEQ,或 `non_idle`)即可派生出 valid(`payload`=haddr/hwrite/hsize,它们在 hready 低时必须保持)。在第一个问题处自动注册游标(保持违例 > 长 stall > 最长 stall)。给出在 scoreboard 日志里不留值规律的协议时序事实。
 
 ### 深入分析
 
@@ -282,6 +284,10 @@ codex mcp list
 当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 会自动启用 Verdi NPI 后端。前两个在 NPI 不可用时透明回退到基于源码正则的 Static 后端;`trace_signal_path` 是 NPI-only,会返回结构化的 `unsupported_reason` 而不是给出近似结果,因为 `sig_to_sig_conn_list` 没有诚实的 Static 等价实现。NPI 是更深、更准确的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越实例端口边界、interface 位置绑定与 assign 链,这些 Static 都跟不过去。当 KDB 存在时,`build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`;`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 标签,便于消费者区分 NPI 标注条目与编译日志衍生条目。结果信封里带一个 `backend_status` 块,包含当前后端、KDB 流程,以及按仿真器给出的 `kdb_hint`。
 
 对 VCS 流程,获取 KDB 的最低成本方式是用 `-kdb=only` 重编 —— hint 会给出完整命令。对 Xcelium 流程没有原生 KDB;`get_diagnostic_snapshot` 会把 `build_kdb` 列在 `missing_steps` 中,LLM agent 可以按需触发。设置 `TRACEWEAVE_AUTO_KDB=0` 可关闭自动构建提示。
+
+### 使用遥测
+
+TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟,以及锚定到每次 `get_sim_paths` case 的 session id。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。默认开启;设置 `TRACEWEAVE_TELEMETRY=0` 可关闭。用 `python scripts/telemetry_report.py` 汇总。
 
 ## 测试
 

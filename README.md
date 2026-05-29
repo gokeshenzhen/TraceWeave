@@ -288,6 +288,10 @@ Time inputs on `get_signal_at_time`, `get_signal_transitions`, `get_signals_arou
 
 For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` — the hint surfaces the exact command. For Xcelium flows there is no native KDB; `get_diagnostic_snapshot` will list `build_kdb` in `missing_steps` so the LLM agent can produce one on demand. Set `TRACEWEAVE_AUTO_KDB=0` to opt out of the auto-build suggestion.
 
+### Usage telemetry
+
+TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, and a session id anchored to each `get_sim_paths` case. It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-on; set `TRACEWEAVE_TELEMETRY=0` to disable. Summarize with `python scripts/telemetry_report.py`.
+
 ## Testing
 
 Run the full test suite from the repo root:
