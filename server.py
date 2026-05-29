@@ -1706,14 +1706,16 @@ async def list_tools():
         # tests are retained in src/verify_condition.py / schemas.py / tests so
         # it can be re-registered here in one block if a real use-case appears.
     ]
-    # A/B harness toggle: hide inspect_handshake from list_tools so a cold
-    # "baseline" session cannot see (or be hinted by) the tool. Enabled by
-    # either TRACEWEAVE_AB_HIDE_HANDSHAKE=1 or the presence of the sentinel
-    # file /tmp/tw_ab_hide_handshake (touch it + reconnect for Arm A, rm it +
-    # reconnect for Arm B). Used only for the T1 blind A/B pilot; off by
+    # A/B harness toggle: hide the WHOLE handshake feature (both
+    # suggest_handshakes and inspect_handshake) from list_tools so a cold
+    # "baseline" session cannot see or be hinted by it. Enabled by either
+    # TRACEWEAVE_AB_HIDE_HANDSHAKE=1 or the presence of the sentinel file
+    # /tmp/tw_ab_hide_handshake (touch it + reconnect for Arm A, rm it +
+    # reconnect for Arm B). Used only for the handshake blind A/B pilots; off by
     # default for normal operation.
     if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists("/tmp/tw_ab_hide_handshake"):
-        return [t for t in _tools if t.name != "inspect_handshake"]
+        hidden = {"inspect_handshake", "suggest_handshakes"}
+        return [t for t in _tools if t.name not in hidden]
     return _tools
 
 
