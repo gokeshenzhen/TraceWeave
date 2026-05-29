@@ -147,10 +147,12 @@ def propose_handshake_bundles(
             "needs": needs,
         })
 
-    # Rank by confidence, then path for stability. (Payload count is NOT a
-    # ranking term — more payload often just means more same-scope noise.)
+    # Rank by confidence, then shallower scope first (a top-level interface net
+    # beats the same channel seen again as a per-instance port), then path for
+    # stability. (Payload count is NOT a ranking term — more payload often just
+    # means more same-scope noise.)
     rank = {"high": 0, "medium": 1, "low": 2}
-    bundles.sort(key=lambda b: (rank[b["confidence"]], b["valid"]))
+    bundles.sort(key=lambda b: (rank[b["confidence"]], b["valid"].count("."), b["valid"]))
     return bundles
 
 

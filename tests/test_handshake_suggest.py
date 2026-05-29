@@ -100,6 +100,20 @@ def test_scope_filter():
     assert bundles[0]["valid"] == "tb.a.valid"
 
 
+def test_ranking_prefers_shallower_scope():
+    # Same channel seen at top level and as a per-instance port: the top-level
+    # interface net should rank first (not be buried behind deeper duplicates).
+    sigs = [
+        _sig("tb.clk"),
+        _sig("tb.u_dut.clk"),
+        _sig("tb.u_dut.valid"), _sig("tb.u_dut.ready"), _sig("tb.u_dut.d[7:0]", 8),
+        _sig("tb.valid"), _sig("tb.ready"), _sig("tb.d[7:0]", 8),
+    ]
+    bundles = propose_handshake_bundles(sigs)
+    assert bundles[0]["valid"] == "tb.valid"            # depth 1 before depth 2
+    assert bundles[1]["valid"] == "tb.u_dut.valid"
+
+
 def test_ranking_prefers_complete_bundles():
     sigs = [
         # complete bundle (clock + payload)
