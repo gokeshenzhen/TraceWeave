@@ -51,7 +51,7 @@ from src.hierarchy_handles import HandleStore, compute_handle
 from src.timespec import resolve_timespec
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool — see docs/auto-debug-v2-pilot-results.md.
-from src.verify_condition import diff_first_divergence, period
+from src.verify_condition import diff_first_divergence, period, inspect_handshake
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
@@ -1609,6 +1609,64 @@ async def list_tools():
             },
         ),
 
+        Tool(
+            name="inspect_handshake",
+            description=(
+                "Classify a clocked valid/ready handshake cycle-by-cycle and report "
+                "protocol facts that leave no value pattern in scoreboard logs: stalls "
+                "(valid high, ready low), the longest/over-threshold stall windows, "
+                "backpressure imbalance (ready high, valid low), and — when payload "
+                "signals are given — payload-hold violations (a payload that changes "
+                "while the transfer is still stalled). Protocol-agnostic: AXI "
+                "*valid/*ready, an AHB pair (ready=hready, valid=a 1-bit 'htrans!=IDLE' "
+                "signal, payload=[htrans,haddr,hwrite,hsize] which must hold while "
+                "hready is low), a generic valid-ready stream, or a credit interface. "
+                "Auto-registers a cursor at the first problem (hold violation > long "
+                "stall > longest stall). Reads existing waveforms only — does NOT rerun "
+                "simulation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
+                    "valid": {"type": "string", "description": "Initiator valid/request signal (1-bit). For AHB, a 'htrans != IDLE' signal."},
+                    "ready": {"type": "string", "description": "Receiver ready/grant signal (1-bit). For AHB, hready."},
+                    "payload": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation.",
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "max_wait_cycles": {
+                        "type": "integer",
+                        "description": "A stall longer than this many cycles becomes a long_stall finding. Default 16.",
+                        "default": 16,
+                    },
+                    "check_payload_hold": {
+                        "type": "boolean",
+                        "description": "Flag payload changes during a stall. Default true (only meaningful when payload is given).",
+                        "default": True,
+                    },
+                    "active_high": {
+                        "type": "boolean",
+                        "description": "valid/ready are active-high. Set false for active-low handshakes. Default true.",
+                        "default": True,
+                    },
+                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. Defaults to hs_<sha8>."},
+                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                },
+                "required": ["wave_path", "clock", "valid", "ready"],
+            },
+        ),
+
         # NOTE: diff_value_distribution is intentionally NOT registered as an
         # MCP tool. Its blind-A/B pilots (docs/auto-debug-v2-pilot-results.md)
         # showed no clear benefit over baseline on the common "scoreboard
@@ -2100,6 +2158,26 @@ async def _dispatch(name: str, args: dict):
             cursor_note=args.get("cursor_note"),
         )
         return schemas.PeriodResult.model_validate(result)
+
+    elif name == "inspect_handshake":
+        result = inspect_handshake(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            clock=args["clock"],
+            valid=args["valid"],
+            ready=args["ready"],
+            payload=args.get("payload"),
+            edge=args.get("edge", "posedge"),
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            max_wait_cycles=args.get("max_wait_cycles", 16),
+            check_payload_hold=args.get("check_payload_hold", True),
+            active_high=args.get("active_high", True),
+            cursor_store=_cursor_store,
+            cursor_name=args.get("cursor_name"),
+            cursor_note=args.get("cursor_note"),
+        )
+        return schemas.HandshakeInspectResult.model_validate(result)
 
     elif name in {
         "get_tb_subtree", "lookup_tb_files", "find_tb_instance",

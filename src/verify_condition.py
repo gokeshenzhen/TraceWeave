@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .cursor_store import CursorRef, CursorStore
+from .cycle_query import sample_signals_on_edges
 
 
 # ---------------------------------------------------------------------------
@@ -694,5 +695,275 @@ def _attach_cursor(
             note=note,
             metadata=metadata,
             seed=f"{wave_path_a}|{signal_a}|{wave_path_b}|{signal_b}",
+        )
+    result["cursor"] = ref.as_dict()
+
+
+# ---------------------------------------------------------------------------
+# inspect_handshake
+# ---------------------------------------------------------------------------
+
+DEFAULT_MAX_WAIT_CYCLES = 16
+DEFAULT_MAX_HANDSHAKE_FINDINGS = 20
+
+
+def inspect_handshake(
+    *,
+    get_parser: Callable[[str], Any],
+    wave_path: str,
+    clock: str,
+    valid: str,
+    ready: str,
+    payload: list[str] | None = None,
+    edge: str = "posedge",
+    start_ps: int = 0,
+    end_ps: int = -1,
+    max_wait_cycles: int = DEFAULT_MAX_WAIT_CYCLES,
+    check_payload_hold: bool = True,
+    active_high: bool = True,
+    max_findings: int = DEFAULT_MAX_HANDSHAKE_FINDINGS,
+    cursor_store: CursorStore | None = None,
+    cursor_name: str | None = None,
+    cursor_note: str | None = None,
+) -> dict[str, Any]:
+    """Classify a valid/ready handshake cycle-by-cycle and surface protocol
+    facts an LLM cannot get from a transition dump or a scoreboard log.
+
+    Protocol-agnostic: works for any clocked ``valid``/``ready`` pair — AXI
+    ``*valid``/``*ready``, an AHB pair (``ready``=hready, ``valid``=a 1-bit
+    "htrans != IDLE" signal), a generic valid-ready stream, or a credit
+    interface. At every sampled clock ``edge`` it classifies:
+
+    - ``valid && ready``  -> transfer
+    - ``valid && !ready`` -> **stall** (consecutive stalls are accumulated;
+      a run longer than ``max_wait_cycles`` becomes a ``long_stall`` finding)
+    - ``ready && !valid``  -> ready_without_valid (backpressure imbalance)
+
+    When ``payload`` signals are given and ``check_payload_hold`` is set, the
+    payload values are latched at the start of each stall; any change while the
+    transfer is still stalled is a ``payload_hold_violation`` (e.g. AHB
+    ``htrans``/``haddr`` must hold steady while ``hready`` is low). This is the
+    highest-value, hardest-to-eyeball check and exactly the class of bug that
+    leaves no value pattern in scoreboard logs.
+
+    ``active_high=False`` inverts the valid/ready polarity. Samples where valid
+    or ready is x/z are counted in ``unknown_sample_cycles`` and do not extend a
+    stall (an honest break rather than guessing across unknown). A cursor is
+    auto-registered at the first finding, prioritising
+    payload_hold_violation > long_stall > longest stall, so downstream calls can
+    jump straight to where the protocol broke. Reads existing waveforms only —
+    does NOT rerun simulation.
+    """
+    payload = list(payload or [])
+    parser = get_parser(wave_path)
+    sampled = sample_signals_on_edges(
+        parser, clock, [valid, ready, *payload],
+        start_ps=start_ps, end_ps=end_ps, edge=edge,
+    )
+
+    result: dict[str, Any] = {
+        "wave_path": wave_path,
+        "clock": clock,
+        "valid": valid,
+        "ready": ready,
+        "payload": payload,
+        "edge": edge,
+        "start_ps": int(start_ps),
+        "end_ps": int(end_ps),
+        "active_high": active_high,
+        "sample_count": len(sampled.get("samples", [])),
+        "transfer_count": 0,
+        "stall_count": 0,
+        "max_stall_cycles": 0,
+        "max_stall_begin_ps": None,
+        "ready_without_valid_cycles": 0,
+        "payload_hold_violations": 0,
+        "unknown_sample_cycles": 0,
+        "findings": [],
+        "cursor": None,
+        "reason": None,
+        "signal_errors": sampled.get("signal_errors", {}),
+    }
+
+    # A missing valid/ready signal makes the whole check meaningless.
+    for role, sig in (("valid", valid), ("ready", ready)):
+        if sig in result["signal_errors"]:
+            result["reason"] = f"{role} signal not found: {result['signal_errors'][sig]}"
+            return result
+
+    samples = sampled.get("samples", [])
+    if not samples:
+        result["reason"] = (
+            f"no {edge} edges of clock {clock!r} in the window — cannot sample a handshake"
+        )
+        return result
+
+    findings: list[dict[str, Any]] = []
+    in_stall = False
+    stall_begin: int | None = None
+    stall_cycles = 0
+    stall_payload: dict[str, Any] = {}
+
+    def _close_stall(end_ps_val: int | None) -> None:
+        nonlocal in_stall, stall_cycles, stall_begin
+        if not in_stall:
+            return
+        if stall_cycles > result["max_stall_cycles"]:
+            result["max_stall_cycles"] = stall_cycles
+            result["max_stall_begin_ps"] = stall_begin
+        if stall_cycles > max_wait_cycles and len(findings) < max_findings:
+            findings.append({
+                "type": "long_stall",
+                "severity": "warning",
+                "begin_ps": stall_begin,
+                "end_ps": end_ps_val,
+                "cycles": stall_cycles,
+            })
+        in_stall = False
+        stall_cycles = 0
+        stall_begin = None
+
+    for s in samples:
+        sig = s["signals"]
+        v = _hs_truth(sig.get(valid), active_high)
+        r = _hs_truth(sig.get(ready), active_high)
+        if v is None or r is None:
+            result["unknown_sample_cycles"] += 1
+            _close_stall(s["time_ps"])
+            continue
+
+        if v and r:
+            result["transfer_count"] += 1
+            _close_stall(s["time_ps"])
+        elif r and not v:
+            result["ready_without_valid_cycles"] += 1
+            _close_stall(s["time_ps"])
+        elif v and not r:
+            result["stall_count"] += 1
+            if not in_stall:
+                in_stall = True
+                stall_begin = s["time_ps"]
+                stall_cycles = 1
+                stall_payload = {p: sig.get(p) for p in payload}
+            else:
+                stall_cycles += 1
+                if check_payload_hold:
+                    for p in payload:
+                        cur = sig.get(p)
+                        prev = stall_payload.get(p)
+                        if _hs_known(cur) and _hs_known(prev) and cur != prev:
+                            result["payload_hold_violations"] += 1
+                            if len(findings) < max_findings:
+                                findings.append({
+                                    "type": "payload_hold_violation",
+                                    "severity": "error",
+                                    "time_ps": s["time_ps"],
+                                    "signal": p,
+                                    "from_value": _hs_repr(prev),
+                                    "to_value": _hs_repr(cur),
+                                    "stall_begin_ps": stall_begin,
+                                })
+                            # Re-latch so only the first change of each beat is
+                            # reported, not every cycle of an ongoing mismatch.
+                            stall_payload[p] = cur
+        else:  # not v and not r — idle
+            _close_stall(s["time_ps"])
+
+    # Flush a stall still open at the window edge.
+    if in_stall:
+        _close_stall(samples[-1]["time_ps"])
+
+    result["findings"] = findings
+    _attach_handshake_cursor(
+        result, cursor_store, findings, wave_path, valid, ready, edge,
+        cursor_name, cursor_note,
+    )
+    return result
+
+
+def _hs_truth(value: Any, active_high: bool) -> bool | None:
+    """Tri-state truth of a 1-bit handshake signal: True / False / None (x/z)."""
+    if not _hs_known(value):
+        return None
+    dec = value.get("dec")
+    if dec is None:
+        return None
+    asserted = dec != 0
+    return asserted if active_high else not asserted
+
+
+def _hs_known(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    bin_str = value.get("bin")
+    if bin_str is not None:
+        return _is_known(bin_str)
+    return value.get("dec") is not None or value.get("hex") is not None
+
+
+def _hs_repr(value: Any) -> str | None:
+    """Compact display string for a sampled value. Uses the parser's native
+    hex form (already ``0x``-prefixed) when present, else binary, else decimal."""
+    if not isinstance(value, dict):
+        return None
+    if value.get("hex") is not None:
+        return str(value["hex"])
+    if value.get("bin") is not None:
+        return f"0b{value['bin']}"
+    if value.get("dec") is not None:
+        return str(value["dec"])
+    return None
+
+
+def _attach_handshake_cursor(
+    result: dict[str, Any],
+    cursor_store: CursorStore | None,
+    findings: list[dict[str, Any]],
+    wave_path: str,
+    valid: str,
+    ready: str,
+    edge: str,
+    cursor_name: str | None,
+    cursor_note: str | None,
+) -> None:
+    if cursor_store is None:
+        return
+    # Anchor priority: payload hold violation > long stall > longest stall.
+    anchor_time: int | None = None
+    anchor_desc = ""
+    for f in findings:
+        if f["type"] == "payload_hold_violation":
+            anchor_time = f["time_ps"]
+            anchor_desc = f"payload hold violation on {f['signal']}"
+            break
+    if anchor_time is None:
+        for f in findings:
+            if f["type"] == "long_stall":
+                anchor_time = f["begin_ps"]
+                anchor_desc = f"long stall ({f['cycles']} cycles)"
+                break
+    if anchor_time is None and result["max_stall_begin_ps"] is not None and result["max_stall_cycles"] > 0:
+        anchor_time = result["max_stall_begin_ps"]
+        anchor_desc = f"longest stall ({result['max_stall_cycles']} cycles)"
+    if anchor_time is None:
+        return
+
+    note = cursor_note or f"{anchor_desc} on {valid}/{ready}"
+    metadata = {
+        "source": "inspect_handshake",
+        "valid": valid,
+        "ready": ready,
+        "edge": edge,
+        "wave_path": wave_path,
+    }
+    if cursor_name:
+        ref = cursor_store.set(cursor_name, anchor_time, note=note, metadata=metadata)
+    else:
+        ref = cursor_store.auto_set(
+            anchor_time,
+            prefix="hs",
+            note=note,
+            metadata=metadata,
+            seed=f"{wave_path}|{valid}|{ready}|{edge}",
         )
     result["cursor"] = ref.as_dict()

@@ -56,24 +56,10 @@ def get_signals_by_cycle(
     if not target_edges:
         return result
 
-    range_start = target_edges[0]
-    range_end = target_edges[-1] + sample_offset_ps + 1
-    sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
-    per_cycle_signals = [dict() for _ in target_edges]
-
-    for signal_path in signal_paths:
-        try:
-            transitions_result = parser.get_transitions(
-                signal_path,
-                start_ps=range_start,
-                end_ps=range_end,
-            )
-            transitions = transitions_result.get("transitions", [])
-            sampled_values = _sample_signal_values(parser, signal_path, transitions, sample_times)
-            for index, value in enumerate(sampled_values):
-                per_cycle_signals[index][signal_path] = value
-        except KeyError as exc:
-            result["signal_errors"][signal_path] = str(exc)
+    per_cycle_signals, signal_errors = _sample_signals_at_edges(
+        parser, signal_paths, target_edges, sample_offset_ps
+    )
+    result["signal_errors"] = signal_errors
 
     result["cycles"] = [
         {
@@ -85,6 +71,89 @@ def get_signals_by_cycle(
         for index, (edge_time, signals) in enumerate(zip(target_edges, per_cycle_signals))
     ]
     return result
+
+
+def sample_signals_on_edges(
+    parser,
+    clock_path: str,
+    signal_paths: list[str],
+    start_ps: int = 0,
+    end_ps: int = -1,
+    edge: str = "posedge",
+    sample_offset_ps: int = 1,
+) -> dict[str, Any]:
+    """Sample ``signal_paths`` on every ``clock_path`` edge inside a *time
+    window* (as opposed to ``get_signals_by_cycle``, which slices by cycle
+    index and caps the count).
+
+    This is the shared clock-sampling substrate for window-scoped relational
+    analysis (e.g. ``verify_condition.inspect_handshake``). Returns one entry
+    per edge in chronological order, each carrying the edge time and the
+    normalized ``{bin,hex,dec}`` value of each signal sampled at
+    ``edge + sample_offset_ps``.
+    """
+    if edge not in {"posedge", "negedge"}:
+        raise ValueError(f"edge must be 'posedge' or 'negedge', got {edge!r}")
+    if sample_offset_ps < 0:
+        raise ValueError("sample_offset_ps must be >= 0")
+
+    clock_result = parser.get_transitions(clock_path, start_ps=start_ps, end_ps=end_ps)
+    _validate_clock_width(parser, clock_path)
+    edge_times = _extract_edge_times(clock_result.get("transitions", []), edge)
+
+    per_edge_signals, signal_errors = _sample_signals_at_edges(
+        parser, signal_paths, edge_times, sample_offset_ps
+    )
+    return {
+        "clock_path": clock_path,
+        "edge": edge,
+        "sample_offset_ps": sample_offset_ps,
+        "clock_period_ps": _compute_clock_period_ps(edge_times),
+        "total_edges_found": len(edge_times),
+        "samples": [
+            {"time_ps": edge_time, "time_ns": edge_time / 1000, "signals": signals}
+            for edge_time, signals in zip(edge_times, per_edge_signals)
+        ],
+        "signal_errors": signal_errors,
+    }
+
+
+def _sample_signals_at_edges(
+    parser,
+    signal_paths: list[str],
+    target_edges: list[int],
+    sample_offset_ps: int,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Sample each signal at ``edge + offset`` for the given edge times.
+
+    Shared by ``get_signals_by_cycle`` and ``sample_signals_on_edges``. A
+    missing signal is recorded in the returned error map rather than aborting
+    the whole sample (multi-signal calls stay best-effort per signal); other
+    backend errors propagate.
+    """
+    per_edge_signals: list[dict[str, Any]] = [dict() for _ in target_edges]
+    signal_errors: dict[str, str] = {}
+    if not target_edges:
+        return per_edge_signals, signal_errors
+
+    range_start = target_edges[0]
+    range_end = target_edges[-1] + sample_offset_ps + 1
+    sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+
+    for signal_path in signal_paths:
+        try:
+            transitions_result = parser.get_transitions(
+                signal_path,
+                start_ps=range_start,
+                end_ps=range_end,
+            )
+            transitions = transitions_result.get("transitions", [])
+            sampled_values = _sample_signal_values(parser, signal_path, transitions, sample_times)
+            for index, value in enumerate(sampled_values):
+                per_edge_signals[index][signal_path] = value
+        except KeyError as exc:
+            signal_errors[signal_path] = str(exc)
+    return per_edge_signals, signal_errors
 
 
 def _validate_clock_width(parser, clock_path: str) -> None:

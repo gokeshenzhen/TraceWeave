@@ -728,6 +728,45 @@ class PeriodResult(SchemaModel):
     reason: str | None = None
 
 
+class HandshakeFinding(SchemaModel):
+    type: str
+    severity: str
+    # long_stall fields
+    begin_ps: int | None = None
+    end_ps: int | None = None
+    cycles: int | None = None
+    # payload_hold_violation fields
+    time_ps: int | None = None
+    signal: str | None = None
+    from_value: str | None = None
+    to_value: str | None = None
+    stall_begin_ps: int | None = None
+
+
+class HandshakeInspectResult(SchemaModel):
+    wave_path: str
+    clock: str
+    valid: str
+    ready: str
+    payload: list[str] = Field(default_factory=list)
+    edge: str
+    start_ps: int
+    end_ps: int
+    active_high: bool = True
+    sample_count: int = 0
+    transfer_count: int = 0
+    stall_count: int = 0
+    max_stall_cycles: int = 0
+    max_stall_begin_ps: int | None = None
+    ready_without_valid_cycles: int = 0
+    payload_hold_violations: int = 0
+    unknown_sample_cycles: int = 0
+    findings: list[HandshakeFinding] = Field(default_factory=list)
+    cursor: CursorRefSchema | None = None
+    reason: str | None = None
+    signal_errors: dict[str, str] = Field(default_factory=dict)
+
+
 class DistValueCount(SchemaModel):
     value: str
     count: int
