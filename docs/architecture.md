@@ -288,3 +288,31 @@ VCS flows are not auto-built. Recompiling with `-kdb=only` is a
 one-line change to the existing compile command and reuses the VCS
 license token, so the verdi_backend hint surfaces that command
 verbatim instead of suggesting `build_kdb`.
+
+## Usage Telemetry (`src/usage_telemetry.py`)
+
+Passive, local-only instrumentation built to answer the auto-debug v2
+retrospective's open question with data rather than guesses: *how often
+are the shipped primitives (cursor / period / diff_first_divergence)
+actually used on real workloads, and in what fraction of debug sessions?*
+
+- `server.call_tool` is the single choke point every tool call passes
+  through. It wraps `_dispatch` in a `finally` that calls
+  `usage_telemetry.record_call(...)`, appending one JSONL line per call to
+  `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`.
+- Each line records: timestamp, `session_id`, `case` (case-dir basename),
+  tool name, **argument keys + a small whitelist of scalar flags** (never
+  argument values or paths — noise + privacy), `ok`/`blocked`, `result_bytes`
+  (a token proxy), and `latency_ms`.
+- **A session = a `get_sim_paths` case.** The get_sim_paths handler calls
+  `note_session(identity)`; a new case identity mints a new `session_id`,
+  re-discovering the same case keeps it. This makes "sessions in which a
+  primitive was used at least once" a meaningful presence metric.
+- Recording is strictly best-effort — every public function swallows its own
+  exceptions so telemetry can never break a tool call.
+- `aggregate(records)` is a pure function (per-tool counts, ok-rate,
+  per-session distributions, tracked-feature presence) backing the offline
+  `scripts/telemetry_report.py` CLI; it is deliberately NOT an MCP tool.
+
+`TELEMETRY_ENABLED` defaults to True. Opt out with `TRACEWEAVE_TELEMETRY=0`
+(or `false`/`no`/`off`). Telemetry is local-only; nothing is sent anywhere.

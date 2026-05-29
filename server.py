@@ -17,6 +17,7 @@ import hashlib
 import json
 import sys
 import os
+import time
 
 # Ensure the TraceWeave repo root is on the Python path.
 sys.path.insert(0, os.path.dirname(__file__))
@@ -45,6 +46,7 @@ from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
 from src.cursor_store import CursorStore
+import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import HandleStore, compute_handle
 from src.timespec import resolve_timespec
 # diff_value_distribution is implemented in src.verify_condition but deliberately
@@ -486,6 +488,9 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             "simulator": result.get("simulator"),
             "compile_log": compile_log,
         }
+        # Anchor a telemetry session to the discovered case identity: a new case
+        # opens a new logical session; re-discovering the same case keeps it.
+        usage_telemetry.note_session(new_identity)
     elif tool_name == "build_tb_hierarchy":
         _invalidate_downstream(tool_name)
         _session_state["build_tb_hierarchy"] = {
@@ -1620,11 +1625,35 @@ async def list_tools():
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
+    start = time.perf_counter()
+    ok = True
+    blocked = False
+    text = ""
     try:
         result = await _dispatch(name, arguments)
-        return [TextContent(type="text", text=_serialize_result(result))]
+        text = _serialize_result(result)
+        ok = not isinstance(result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult))
+        blocked = isinstance(result, schemas.PrerequisiteBlockResult)
+        return [TextContent(type="text", text=text)]
     except Exception as e:
-        return [TextContent(type="text", text=_serialize_result(_format_error(e)))]
+        ok = False
+        text = _serialize_result(_format_error(e))
+        return [TextContent(type="text", text=text)]
+    finally:
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        case = None
+        sim_state = _session_state.get("get_sim_paths")
+        if isinstance(sim_state, dict) and sim_state.get("case_dir"):
+            case = os.path.basename(str(sim_state["case_dir"]).rstrip("/"))
+        usage_telemetry.record_call(
+            name,
+            arguments,
+            result_bytes=len(text.encode("utf-8")),
+            ok=ok,
+            blocked=blocked,
+            latency_ms=latency_ms,
+            case=case,
+        )
 
 
 async def _dispatch(name: str, args: dict):
