@@ -224,6 +224,16 @@ get_sim_paths ──→ build_tb_hierarchy ──→ parse_sim_log ──→ rec
 | `signal_path` | `search_signals → results[].path` or waveform observation | `explain_signal_driver`, `find_signal_loads`, `trace_x_source` |
 | `from_signal` / `to_signal` | `search_signals → results[].path` (endpoints chosen by agent) | `trace_signal_path` |
 
+> Time parameters (`time_ps`, `center_time_ps`, `start_time_ps`, `end_time_ps`) accept a **TimeSpec**: a raw integer (ps), a cursor reference `@<name>`, or a unit literal like `12.34ns`. So a time anchor located by `diff_first_divergence` / `period` (auto-registered as a cursor) can feed downstream `get_signal_*` / `trace_x_source` calls as `@<name>` instead of a copied timestamp.
+
+## Optional Analysis Primitives
+
+These are not part of the default flow above; reach for them when the symptom is timing- or divergence-shaped rather than a logged value mismatch.
+
+- `period(wave_path, signal, edge?)` — when a signal should be periodic (clock, strobe, fixed-rate valid) and the symptom is a cadence/throughput irregularity with no value in the log. Returns the dominant period and the first off-beat (auto-cursor).
+- `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b)` — when two waveform signals should match: cross-run (passing vs failing) or within-run (lockstep / shadow). Returns the first unequal instant (auto-cursor). Needs both sides dumped as waveform signals; does not compare against a software reference model.
+- `cursor_set` / `cursor_list` / `cursor_delete` — manage the named time anchors referenced above.
+
 ## Iterative Debug Pattern
 
 After step 6, the agent may loop:

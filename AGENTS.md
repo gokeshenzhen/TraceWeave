@@ -43,6 +43,9 @@ For any new session, read these files first to build the project map:
 24. `src/problem_hints.py`
 25. `src/hierarchy_handles.py`
 26. `src/handle_tools.py`
+27. `src/cursor_store.py`
+28. `src/timespec.py`
+29. `src/verify_condition.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -94,6 +97,9 @@ If the task involves behavior validation or regression checks, also read:
 - `src/hierarchy_handles.py` owns the in-process `HandleStore` and content-addressed handle derivation. `build_tb_hierarchy` returns a slim payload + `hierarchy_handle`; the full hierarchy is registered here and resolved by the handle tools. Handles are not persisted — server restart drops them.
 - `src/handle_tools.py` implements `get_tb_subtree`, `lookup_tb_files`, `find_tb_instance`, `get_tb_file_detail`, `get_tb_class_hierarchy`, `dump_tb_section` as pure functions over a resolved full hierarchy dict. `lookup_tb_files` requires at least one filter; `get_tb_file_detail` returns `did_you_mean` basename suggestions when the path is not in the compile set (multi-version safety net).
 - `src/fsdb_parser.py` and `fsdb_wrapper.cpp` define the Python/native FSDB boundary.
+- `src/cursor_store.py` owns the in-process `CursorStore` — named, process-scoped time anchors (`cursor_set`/`cursor_list`/`cursor_delete`). Same lifetime semantics as `HandleStore`: not persisted, dropped on restart, no "active cursor" (references are always explicit `@name`).
+- `src/timespec.py` resolves a TimeSpec (raw ps int, `@cursor` ref, or unit literal like `12.34ns`) to picoseconds. `server._resolve_time` wires it into every time-taking tool input (`get_signal_at_time`, `get_signal_transitions`, `get_signals_around_time`, `trace_x_source`, `diff_first_divergence`, `period`). Arithmetic (`@c ± cycle(clk)`) is intentionally NOT implemented yet (reserved for a future Lark grammar).
+- `src/verify_condition.py` holds the auto-debug verification primitives: `diff_first_divergence` (first time two waveform signals differ; cross-run or within-run) and `period` (median edge period + first off-beat), both auto-registering a cursor. It also contains `diff_value_distribution` (multi-sample fail/pass differential), which is implemented and tested but **deliberately not registered as an MCP tool** — blind A/B pilots showed no clear benefit over baseline on the common scoreboard-data-mismatch flow, so it is kept off the tool surface; re-register in `server.py` if a real use-case appears.
 - `config.py` centralizes environment-sensitive paths and behavior constants.
 
 ## Working Rule

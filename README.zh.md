@@ -260,6 +260,14 @@ codex mcp list
 - `get_signals_by_cycle`:按时钟沿逐周期采样信号
 - `get_waveform_summary`:返回波形元数据
 
+### 游标与验证原语
+
+`get_signal_at_time`、`get_signal_transitions`、`get_signals_around_time`、`trace_x_source`、`diff_first_divergence` 的时间入参接受 **TimeSpec**:整数(ps)、游标引用 `@<name>`、或带单位的字面量(如 `12.34ns` / `5us`)。
+
+- `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`:命名的、进程内的时间锚。定位到某时刻的工具(如 `diff_first_divergence`、`period`)会自动注册一个游标,后续可用 `@<name>` 引用,免去跨调用复制 ps 时间戳。游标不持久化——server 重启即丢。
+- `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`:两个波形信号首次取值不相等的时刻——可跨两个波形(如 passing vs failing run),也可在同一波形内(两个本应相等的信号,如 lockstep / shadow 寄存器)。在分叉处自动注册游标。要求两侧都是被 dump 的波形信号(它不与软件参考模型比对)。
+- `period(wave_path, signal, edge?, ...)`:测信号边沿的主导周期,并标出第一个偏离该周期的拍(off-beat),自动注册为游标。用于"这个信号本应周期性——节奏第一次在哪里破"(时钟、strobe、定速 valid)。
+
 ### 深入分析
 
 - `analyze_failures`:聚焦某个分组失败,返回日志与波形上下文

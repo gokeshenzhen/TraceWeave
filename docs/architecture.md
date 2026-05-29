@@ -43,6 +43,12 @@ Extended analysis capabilities
   src/structural_scanner.py
   src/x_trace.py
 
+Auto-debug primitives (cursors + verification)
+  src/cursor_store.py             # named, process-scoped time anchors (cursor_set/list/delete)
+  src/timespec.py                 # resolve @cursor / unit literals (12.34ns) to ps on time inputs
+  src/verify_condition.py         # diff_first_divergence, period (registered);
+                                  # diff_value_distribution (implemented, NOT registered)
+
 Native integration
   libfsdb_wrapper.so
   fsdb_wrapper.cpp
