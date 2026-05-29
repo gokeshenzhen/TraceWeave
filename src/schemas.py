@@ -747,6 +747,7 @@ class HandshakeInspectResult(SchemaModel):
     wave_path: str
     clock: str
     valid: str
+    valid_source: str = "signal"
     ready: str
     payload: list[str] = Field(default_factory=list)
     edge: str

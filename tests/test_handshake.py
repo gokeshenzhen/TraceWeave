@@ -247,6 +247,97 @@ def test_resolved_payload_marks_hold_checked(tmp_path: Path):
     assert r["warnings"] == []
 
 
+# ── AHB-style derived valid (valid_htrans) ────────────────────────────────
+# Cycle i: posedge at 10*i+5, sampled at +1. Sets htrans (2-bit), hready,
+# haddr at cycle start. AHB encodings: IDLE=0, BUSY=1, NONSEQ=2, SEQ=3.
+def _build_ahb_vcd(cycles: list[dict]) -> str:
+    lines = [
+        "$timescale 1ns/1ps",
+        "$scope module top $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 1 % hready $end",
+        "$var wire 2 ( htrans $end",
+        "$var wire 8 & haddr $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    for i, c in enumerate(cycles):
+        lines.append(f"#{10*i}")
+        lines.append("0!")
+        lines.append(f"{int(c['hready'])}%")
+        lines.append(f"b{int(c['htrans']):02b} (")
+        lines.append(f"b{int(c.get('haddr', 0)):08b} &")
+        lines.append(f"#{10*i+5}")
+        lines.append("1!")
+    return "\n".join(lines) + "\n"
+
+
+def _run_ahb(tmp_path, name, cycles, **kwargs):
+    wave = _write(tmp_path, name, _build_ahb_vcd(cycles))
+    return inspect_handshake(
+        get_parser=_parser_factory(), wave_path=wave,
+        clock="top.clk", ready="top.hready", valid_htrans="top.htrans", **kwargs,
+    )
+
+
+def test_ahb_active_rule_classifies_and_finds_hold_violation(tmp_path: Path):
+    # IDLE -> NONSEQ accepted -> SEQ stalled (hready low) with haddr changing
+    # mid-stall (the AHB violation) -> SEQ accepted -> IDLE.
+    cycles = [
+        {"htrans": 2, "hready": 1, "haddr": 0x10},  # NONSEQ, transfer
+        {"htrans": 3, "hready": 0, "haddr": 0x11},  # SEQ, stall begins (latch 0x11)
+        {"htrans": 3, "hready": 0, "haddr": 0x12},  # SEQ, stall, haddr moved -> violation
+        {"htrans": 3, "hready": 1, "haddr": 0x12},  # SEQ, transfer
+        {"htrans": 0, "hready": 1, "haddr": 0x00},  # IDLE -> not valid
+    ]
+    store = CursorStore()
+    r = _run_ahb(tmp_path, "ahb.vcd", cycles, payload=["top.haddr"],
+                 max_wait_cycles=8, cursor_store=store)
+    assert r["valid_source"] == "htrans:active"
+    assert r["transfer_count"] == 2          # the two accepted beats
+    assert r["stall_count"] == 2             # two SEQ-with-hready-low cycles
+    assert r["payload_hold_violations"] == 1
+    viol = [f for f in r["findings"] if f["type"] == "payload_hold_violation"][0]
+    assert viol["signal"] == "top.haddr"
+    assert r["cursor"] is not None
+
+
+def test_ahb_busy_counts_only_under_non_idle(tmp_path: Path):
+    # A BUSY (htrans=1) cycle with hready low: under 'active' it is not a valid
+    # beat (no stall); under 'non_idle' it counts as valid -> a stall.
+    cycles = [
+        {"htrans": 2, "hready": 1, "haddr": 0x20},  # NONSEQ transfer
+        {"htrans": 1, "hready": 0, "haddr": 0x20},  # BUSY, hready low
+        {"htrans": 2, "hready": 1, "haddr": 0x21},  # NONSEQ transfer
+    ]
+    active = _run_ahb(tmp_path, "busy_a.vcd", cycles, max_wait_cycles=8)
+    non_idle = _run_ahb(tmp_path, "busy_n.vcd", cycles, htrans_rule="non_idle", max_wait_cycles=8)
+    assert active["stall_count"] == 0
+    assert non_idle["stall_count"] == 1
+
+
+def test_ahb_missing_htrans_is_loud(tmp_path: Path):
+    cycles = [{"htrans": 2, "hready": 1, "haddr": 0x10}]
+    wave = _write(tmp_path, "ahb_missing.vcd", _build_ahb_vcd(cycles))
+    r = inspect_handshake(
+        get_parser=_parser_factory(), wave_path=wave,
+        clock="top.clk", ready="top.hready", valid_htrans="top.does_not_exist",
+    )
+    assert r["reason"] is not None
+    assert "valid_htrans" in r["reason"]
+
+
+def test_requires_exactly_one_valid_source(tmp_path: Path):
+    cycles = [{"htrans": 2, "hready": 1, "haddr": 0x10}]
+    wave = _write(tmp_path, "ahb_src.vcd", _build_ahb_vcd(cycles))
+    gp = _parser_factory()
+    neither = inspect_handshake(get_parser=gp, wave_path=wave, clock="top.clk", ready="top.hready")
+    both = inspect_handshake(get_parser=gp, wave_path=wave, clock="top.clk", ready="top.hready",
+                             valid="top.hready", valid_htrans="top.htrans")
+    assert neither["reason"] and "valid" in neither["reason"]
+    assert both["reason"] and "not both" in both["reason"]
+
+
 def test_explicit_cursor_name(tmp_path: Path):
     cycles = [{"valid": 1, "ready": 1}] + [{"valid": 1, "ready": 0}] * 4 + [{"valid": 1, "ready": 1}]
     store = CursorStore()

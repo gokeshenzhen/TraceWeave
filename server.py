@@ -1654,7 +1654,14 @@ async def list_tools():
                 "properties": {
                     "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
                     "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "valid": {"type": "string", "description": "Initiator valid/request signal (1-bit). For AHB, a 'htrans != IDLE' signal."},
+                    "valid": {"type": "string", "description": "Initiator valid/request signal (1-bit). Provide this OR valid_htrans."},
+                    "valid_htrans": {"type": "string", "description": "AHB only: path to the htrans signal. A derived valid is computed from it (AHB has no literal valid). Provide this OR valid, not both."},
+                    "htrans_rule": {
+                        "type": "string",
+                        "enum": ["active", "non_idle"],
+                        "description": "How valid_htrans derives valid. 'active' (default) = NONSEQ/SEQ (htrans[1]==1); 'non_idle' = htrans != IDLE (counts BUSY too).",
+                        "default": "active",
+                    },
                     "ready": {"type": "string", "description": "Receiver ready/grant signal (1-bit). For AHB, hready."},
                     "payload": {
                         "type": "array",
@@ -1687,7 +1694,7 @@ async def list_tools():
                     "cursor_name": {"type": "string", "description": "Optional explicit cursor name. Defaults to hs_<sha8>."},
                     "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
                 },
-                "required": ["wave_path", "clock", "valid", "ready"],
+                "required": ["wave_path", "clock", "ready"],
             },
         ),
 
@@ -2206,7 +2213,9 @@ async def _dispatch(name: str, args: dict):
             get_parser=_get_parser,
             wave_path=args["wave_path"],
             clock=args["clock"],
-            valid=args["valid"],
+            valid=args.get("valid"),
+            valid_htrans=args.get("valid_htrans"),
+            htrans_rule=args.get("htrans_rule", "active"),
             ready=args["ready"],
             payload=args.get("payload"),
             edge=args.get("edge", "posedge"),

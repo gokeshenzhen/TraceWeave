@@ -712,8 +712,10 @@ def inspect_handshake(
     get_parser: Callable[[str], Any],
     wave_path: str,
     clock: str,
-    valid: str,
     ready: str,
+    valid: str | None = None,
+    valid_htrans: str | None = None,
+    htrans_rule: str = "active",
     payload: list[str] | None = None,
     edge: str = "posedge",
     start_ps: int = 0,
@@ -757,17 +759,39 @@ def inspect_handshake(
     payload_in = list(payload or [])
     parser = get_parser(wave_path)
 
+    # Determine the valid source. AHB has no literal valid signal — it is
+    # "htrans != IDLE" — so a derived valid can be requested via valid_htrans.
+    # Exactly one of valid / valid_htrans must be given. The rule is explicit
+    # and echoed (valid_source) so a derived valid is never silent.
+    use_htrans = valid_htrans is not None
+    if use_htrans and valid is not None:
+        return _handshake_input_error(
+            wave_path, clock, ready, edge, start_ps, end_ps, active_high,
+            "provide either valid OR valid_htrans, not both",
+        )
+    if not use_htrans and valid is None:
+        return _handshake_input_error(
+            wave_path, clock, ready, edge, start_ps, end_ps, active_high,
+            "provide a valid signal, or valid_htrans for an AHB-style interface",
+        )
+    if use_htrans and htrans_rule not in ("active", "non_idle"):
+        return _handshake_input_error(
+            wave_path, clock, ready, edge, start_ps, end_ps, active_high,
+            f"htrans_rule must be 'active' or 'non_idle', got {htrans_rule!r}",
+        )
+
     # Resolve paths first, auto-correcting bus names that need an explicit
     # [msb:lsb] suffix (common on FSDB: 'top.addr' -> 'top.addr[7:0]'). This
     # removes the most common footgun where a payload signal silently fails to
     # resolve and the hold check then looks "clean".
     clock = _resolve_signal_path(parser, clock)
-    valid = _resolve_signal_path(parser, valid)
     ready = _resolve_signal_path(parser, ready)
+    valid_signal = _resolve_signal_path(parser, valid_htrans if use_htrans else valid)
+    valid_source = f"htrans:{htrans_rule}" if use_htrans else "signal"
     payload = [_resolve_signal_path(parser, p) for p in payload_in]
 
     sampled = sample_signals_on_edges(
-        parser, clock, [valid, ready, *payload],
+        parser, clock, [valid_signal, ready, *payload],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
     signal_errors = sampled.get("signal_errors", {})
@@ -778,7 +802,8 @@ def inspect_handshake(
     result: dict[str, Any] = {
         "wave_path": wave_path,
         "clock": clock,
-        "valid": valid,
+        "valid": valid_signal,
+        "valid_source": valid_source,
         "ready": ready,
         "payload": payload,
         "edge": edge,
@@ -803,7 +828,8 @@ def inspect_handshake(
     }
 
     # A missing valid/ready signal makes the whole check meaningless.
-    for role, sig in (("valid", valid), ("ready", ready)):
+    valid_role = "valid_htrans" if use_htrans else "valid"
+    for role, sig in ((valid_role, valid_signal), ("ready", ready)):
         if sig in signal_errors:
             result["reason"] = f"{role} signal not found: {signal_errors[sig]}"
             return result
@@ -857,7 +883,10 @@ def inspect_handshake(
 
     for s in samples:
         sig = s["signals"]
-        v = _hs_truth(sig.get(valid), active_high)
+        if use_htrans:
+            v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
+        else:
+            v = _hs_truth(sig.get(valid_signal), active_high)
         r = _hs_truth(sig.get(ready), active_high)
         if v is None or r is None:
             result["unknown_sample_cycles"] += 1
@@ -907,10 +936,47 @@ def inspect_handshake(
 
     result["findings"] = findings
     _attach_handshake_cursor(
-        result, cursor_store, findings, wave_path, valid, ready, edge,
+        result, cursor_store, findings, wave_path, valid_signal, ready, edge,
         cursor_name, cursor_note,
     )
     return result
+
+
+def _ahb_valid_truth(value: Any, rule: str) -> bool | None:
+    """Derive an AHB 'valid' from htrans. ``active`` (default) = NONSEQ/SEQ
+    (htrans[1]==1); ``non_idle`` = htrans != IDLE (any non-zero). x/z -> None."""
+    if not _hs_known(value):
+        return None
+    dec = value.get("dec")
+    if dec is None:
+        bin_str = value.get("bin")
+        if bin_str is None:
+            return None
+        try:
+            dec = int(bin_str, 2)
+        except ValueError:
+            return None
+    if rule == "non_idle":
+        return dec != 0
+    return ((dec >> 1) & 1) == 1
+
+
+def _handshake_input_error(
+    wave_path: str, clock: str, ready: str, edge: str,
+    start_ps: int, end_ps: int, active_high: bool, message: str,
+) -> dict[str, Any]:
+    """Minimal, schema-complete result carrying an input-validation reason."""
+    return {
+        "wave_path": wave_path, "clock": clock, "valid": "", "valid_source": "none",
+        "ready": ready, "payload": [], "edge": edge,
+        "start_ps": int(start_ps), "end_ps": int(end_ps), "active_high": active_high,
+        "sample_count": 0, "transfer_count": 0, "stall_count": 0,
+        "max_stall_cycles": 0, "max_stall_begin_ps": None,
+        "ready_without_valid_cycles": 0, "payload_hold_violations": 0,
+        "payload_hold_checked": False, "payload_unresolved": [],
+        "unknown_sample_cycles": 0, "findings": [], "cursor": None,
+        "reason": message, "warnings": [], "signal_errors": {},
+    }
 
 
 def _resolve_signal_path(parser: Any, path: str) -> str:
