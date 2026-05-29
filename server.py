@@ -52,6 +52,7 @@ from src.timespec import resolve_timespec
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool — see docs/auto-debug-v2-pilot-results.md.
 from src.verify_condition import diff_first_divergence, period, inspect_handshake
+from src.handshake_suggest import suggest_handshakes
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
@@ -1610,6 +1611,29 @@ async def list_tools():
         ),
 
         Tool(
+            name="suggest_handshakes",
+            description=(
+                "Scan a waveform and propose ready-to-use inspect_handshake bundles: "
+                "it pairs *valid/*ready signals by scope and stem, finds the clock, and "
+                "groups the channel payload buses (the signals that must hold steady "
+                "during a stall). Use this BEFORE inspect_handshake so you don't have to "
+                "hand-assemble {clock, valid, ready, payload} signal paths. Covers AXI "
+                "*valid/*ready, generic valid/ready, and req/ack. It does NOT synthesise "
+                "an AHB 'valid' (there is no literal valid signal — it is htrans != IDLE); "
+                "for AHB pass valid manually. Reads existing waveforms only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
+                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                },
+                "required": ["wave_path"],
+            },
+        ),
+
+        Tool(
             name="inspect_handshake",
             description=(
                 "Classify a clocked valid/ready handshake cycle-by-cycle and report "
@@ -2167,6 +2191,15 @@ async def _dispatch(name: str, args: dict):
             cursor_note=args.get("cursor_note"),
         )
         return schemas.PeriodResult.model_validate(result)
+
+    elif name == "suggest_handshakes":
+        result = suggest_handshakes(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            scope=args.get("scope"),
+            max_candidates=args.get("max_candidates", 8),
+        )
+        return schemas.SuggestHandshakesResult.model_validate(result)
 
     elif name == "inspect_handshake":
         result = inspect_handshake(

@@ -770,6 +770,25 @@ class HandshakeInspectResult(SchemaModel):
     signal_errors: dict[str, str] = Field(default_factory=dict)
 
 
+class HandshakeBundle(SchemaModel):
+    scope: str
+    clock: str | None = None
+    valid: str
+    ready: str
+    payload: list[str] = Field(default_factory=list)
+    confidence: str
+    rationale: str
+    needs: list[str] = Field(default_factory=list)
+
+
+class SuggestHandshakesResult(SchemaModel):
+    wave_path: str
+    scope: str | None = None
+    candidate_count: int = 0
+    candidates: list[HandshakeBundle] = Field(default_factory=list)
+    reason: str | None = None
+
+
 class DistValueCount(SchemaModel):
     value: str
     count: int
