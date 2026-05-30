@@ -840,6 +840,91 @@ class HandshakeSweepResult(SchemaModel):
     reason: str | None = None
 
 
+class VerifyEvidence(SchemaModel):
+    time_ps: int
+    cycle_index: int
+    signal_values: dict[str, str | None] = Field(default_factory=dict)
+
+
+class WindowVerifyResult(SchemaModel):
+    wave_path: str
+    clock: str
+    edge: str = "posedge"
+    mode: str
+    start_ps: int = 0
+    end_ps: int = -1
+    within_cycles: int | None = None
+    signals: list[str] = Field(default_factory=list)
+    holds: bool = False
+    cycles_evaluated: int = 0
+    unknown_cycles: int = 0
+    antecedent_count: int = 0
+    violation_count: int = 0
+    inconclusive_count: int = 0
+    counterexample: VerifyEvidence | None = None
+    witness: VerifyEvidence | None = None
+    cursor: CursorRefSchema | None = None
+    reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    signal_errors: dict[str, str] = Field(default_factory=dict)
+
+
+class LatencyStats(SchemaModel):
+    min_cycles: int
+    median_cycles: int
+    max_cycles: int
+    mean_cycles: float
+
+
+class TxnRecord(SchemaModel):
+    id: int
+    request_time_ps: int
+    completion_time_ps: int
+    latency_cycles: int
+    latency_ps: int
+    beat_count: int = 1
+    outstanding_at_start: int = 0
+    req_fields: dict[str, str | None] = Field(default_factory=dict)
+    cmp_fields: dict[str, str | None] = Field(default_factory=dict)
+
+
+class TxnEndpoint(SchemaModel):
+    id: int
+    request_time_ps: int | None = None
+    completion_time_ps: int | None = None
+
+
+class TxnReconstructResult(SchemaModel):
+    wave_path: str
+    clock: str
+    edge: str = "posedge"
+    start_ps: int = 0
+    end_ps: int = -1
+    request_count: int = 0
+    completion_count: int = 0
+    matched_count: int = 0
+    outstanding_at_end: int = 0
+    max_outstanding: int = 0
+    max_outstanding_time_ps: int | None = None
+    max_outstanding_per_id: int = 0
+    max_outstanding_id: int | None = None
+    reorder_count: int = 0
+    unknown_id_beats: int = 0
+    timeout_cycles: int | None = None
+    slow_count: int = 0
+    latency: LatencyStats | None = None
+    transactions: list[TxnRecord] = Field(default_factory=list)
+    transactions_truncated: bool = False
+    unmatched_request_count: int = 0
+    unmatched_completion_count: int = 0
+    unmatched_requests: list[TxnEndpoint] = Field(default_factory=list)
+    unmatched_completions: list[TxnEndpoint] = Field(default_factory=list)
+    cursor: CursorRefSchema | None = None
+    reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    signal_errors: dict[str, str] = Field(default_factory=dict)
+
+
 class DistValueCount(SchemaModel):
     value: str
     count: int

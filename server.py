@@ -54,6 +54,8 @@ from src.timespec import resolve_timespec
 from src.verify_condition import diff_first_divergence, period, inspect_handshake
 from src.handshake_suggest import suggest_handshakes
 from src.handshake_sweep import sweep_handshake_anomalies
+from src.window_verify import verify_window
+from src.txn_reconstruct import reconstruct_transactions
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
@@ -1677,6 +1679,96 @@ async def list_tools():
         ),
 
         Tool(
+            name="verify_window",
+            description=(
+                "Evaluate a temporal predicate over a clock window and return a precise "
+                "verdict (holds) plus a concrete witness/counterexample (cycle + sampled "
+                "values). You state the predicate; the tool checks it against the waveform "
+                "over thousands of cycles you cannot read yourself. Templates, not a DSL: "
+                "a term is {signal, op, value} (op: eq/ne/gt/ge/lt/le/is_x/is_known); a "
+                "predicate is a list of terms (implicit AND — run two calls for OR). Modes: "
+                "always(P), never(P), eventually(P), and implication (A |-> B within N "
+                "cycles, the protocol-response template). x/z cycles are reported as "
+                "unknown (never silently passed); an implication whose response window runs "
+                "past end-of-trace is reported inconclusive (never silently failed). Use to "
+                "prove/disprove an RTL inference in one call. Reads existing waveforms only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
+                    "mode": {"type": "string", "enum": ["always", "never", "eventually", "implication"], "description": "Temporal template to evaluate."},
+                    "predicate": {
+                        "type": "array",
+                        "description": "always/never/eventually: list of {signal, op, value} terms, AND-combined.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known"]},
+                                "value": {"type": ["integer", "string"], "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known."},
+                            },
+                            "required": ["signal", "op"],
+                        },
+                    },
+                    "antecedent": {"type": "array", "description": "implication only: the A predicate (list of terms).", "items": {"type": "object"}},
+                    "consequent": {"type": "array", "description": "implication only: the B predicate that must follow A.", "items": {"type": "object"}},
+                    "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A (inclusive). Default 1.", "default": 1},
+                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
+                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
+                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace.", "default": -1},
+                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the witness/counterexample."},
+                    "cursor_note": {"type": "string", "description": "Optional note for the registered cursor."},
+                },
+                "required": ["wave_path", "clock", "mode"],
+            },
+        ),
+
+        Tool(
+            name="reconstruct_transactions",
+            description=(
+                "Reconstruct id-correlated request/response transactions from two "
+                "handshake channels: walk every clock edge, match accepted request beats "
+                "to completion beats by id, and return per-transaction latency plus "
+                "aggregate facts (outstanding curve incl. per-id peak, ordering, "
+                "unmatched=hang signature). One generic core, not a tool per protocol. "
+                "AXI READ: req=AR (req_valid=arvalid, req_ready=arready, req_id=arid), "
+                "cmp=R (cmp_valid=rvalid, cmp_ready=rready, cmp_id=rid, cmp_last=rlast); "
+                "AXI WRITE: req=AW (awvalid/awready/awid), cmp=B (bvalid/bready/bid, no "
+                "cmp_last). Pass req_fields/cmp_fields (e.g. araddr,arlen / rresp) to "
+                "capture payload per txn. Out-of-order completion across ids is supported "
+                "(per-id FIFO); reorder_count is an informational FACT (legal in AXI), "
+                "latency is a distribution not an 'outlier' verdict. Reads waveforms only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "clock": {"type": "string", "description": "Shared 1-bit clock full path (e.g. AXI aclk)."},
+                    "req_valid": {"type": "string", "description": "Request channel valid (e.g. arvalid/awvalid)."},
+                    "req_ready": {"type": "string", "description": "Request channel ready (e.g. arready/awready)."},
+                    "req_id": {"type": "string", "description": "Request id bus (e.g. arid/awid)."},
+                    "req_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional request payload signals to capture per txn (e.g. araddr, arlen, arsize, arburst)."},
+                    "cmp_valid": {"type": "string", "description": "Completion channel valid (e.g. rvalid/bvalid)."},
+                    "cmp_ready": {"type": "string", "description": "Completion channel ready (e.g. rready/bready)."},
+                    "cmp_id": {"type": "string", "description": "Completion id bus (e.g. rid/bid)."},
+                    "cmp_last": {"type": "string", "description": "Optional last-beat signal (e.g. rlast). With it, a multi-beat burst completes one txn on last; without it every completion beat is a txn (e.g. AXI B channel)."},
+                    "cmp_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional completion payload signals to capture per txn (e.g. rresp, bresp)."},
+                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
+                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
+                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace.", "default": -1},
+                    "active_high": {"type": "boolean", "description": "valid/ready/last polarity. Default true.", "default": True},
+                    "timeout_cycles": {"type": "integer", "description": "Optional: count completed txns with latency above this many cycles (slow_count fact)."},
+                    "max_transactions": {"type": "integer", "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.", "default": 256},
+                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name."},
+                    "cursor_note": {"type": "string", "description": "Optional cursor note."},
+                },
+                "required": ["wave_path", "clock", "req_valid", "req_ready", "req_id", "cmp_valid", "cmp_ready", "cmp_id"],
+            },
+        ),
+
+        Tool(
             name="inspect_handshake",
             description=(
                 "Classify a clocked valid/ready handshake cycle-by-cycle and report "
@@ -2288,6 +2380,51 @@ async def _dispatch(name: str, args: dict):
             cursor_note=args.get("cursor_note"),
         )
         return schemas.HandshakeInspectResult.model_validate(result)
+
+    elif name == "verify_window":
+        result = verify_window(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            clock=args["clock"],
+            mode=args["mode"],
+            predicate=args.get("predicate"),
+            antecedent=args.get("antecedent"),
+            consequent=args.get("consequent"),
+            within_cycles=args.get("within_cycles", 1),
+            edge=args.get("edge", "posedge"),
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            cursor_store=_cursor_store,
+            cursor_name=args.get("cursor_name"),
+            cursor_note=args.get("cursor_note"),
+        )
+        return schemas.WindowVerifyResult.model_validate(result)
+
+    elif name == "reconstruct_transactions":
+        result = reconstruct_transactions(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            clock=args["clock"],
+            req_valid=args["req_valid"],
+            req_ready=args["req_ready"],
+            req_id=args["req_id"],
+            req_fields=args.get("req_fields"),
+            cmp_valid=args["cmp_valid"],
+            cmp_ready=args["cmp_ready"],
+            cmp_id=args["cmp_id"],
+            cmp_last=args.get("cmp_last"),
+            cmp_fields=args.get("cmp_fields"),
+            edge=args.get("edge", "posedge"),
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            active_high=args.get("active_high", True),
+            timeout_cycles=args.get("timeout_cycles"),
+            max_transactions=args.get("max_transactions", 256),
+            cursor_store=_cursor_store,
+            cursor_name=args.get("cursor_name"),
+            cursor_note=args.get("cursor_note"),
+        )
+        return schemas.TxnReconstructResult.model_validate(result)
 
     elif name in {
         "get_tb_subtree", "lookup_tb_files", "find_tb_instance",
