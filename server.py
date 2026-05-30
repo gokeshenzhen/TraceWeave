@@ -53,6 +53,7 @@ from src.timespec import resolve_timespec
 # not wired up as an MCP tool — see docs/auto-debug-v2-pilot-results.md.
 from src.verify_condition import diff_first_divergence, period, inspect_handshake
 from src.handshake_suggest import suggest_handshakes
+from src.handshake_sweep import sweep_handshake_anomalies
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
@@ -1649,6 +1650,33 @@ async def list_tools():
         ),
 
         Tool(
+            name="sweep_handshakes",
+            description=(
+                "Whole-design handshake anomaly sweep: discover EVERY valid/ready "
+                "interface and inspect each over the window in one call, returning a "
+                "comparative fact table (per-interface stalls, deadlock signature "
+                "ended_in_stall, payload-hold, backpressure) ordered by a transparent "
+                "mechanical key. Use on opaque global symptoms (timeout/hang) when you "
+                "don't know which of many interfaces misbehaves — it collapses N "
+                "suggest+inspect round-trips into one. Returns FACTS, not a root-cause "
+                "verdict; re-rank as the symptom warrants. Reads existing waveforms only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "scope": {"type": "string", "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut')."},
+                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
+                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.", "default": 0},
+                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.", "default": -1},
+                    "max_wait_cycles": {"type": "integer", "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.", "default": 16},
+                    "max_interfaces": {"type": "integer", "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.", "default": 64},
+                },
+                "required": ["wave_path"],
+            },
+        ),
+
+        Tool(
             name="inspect_handshake",
             description=(
                 "Classify a clocked valid/ready handshake cycle-by-cycle and report "
@@ -1729,7 +1757,7 @@ async def list_tools():
     # reconnect for Arm B). Used only for the handshake blind A/B pilots; off by
     # default for normal operation.
     if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists("/tmp/tw_ab_hide_handshake"):
-        hidden = {"inspect_handshake", "suggest_handshakes"}
+        hidden = {"inspect_handshake", "suggest_handshakes", "sweep_handshakes"}
         return [t for t in _tools if t.name not in hidden]
     return _tools
 
@@ -2224,6 +2252,20 @@ async def _dispatch(name: str, args: dict):
             max_candidates=args.get("max_candidates", 8),
         )
         return schemas.SuggestHandshakesResult.model_validate(result)
+
+    elif name == "sweep_handshakes":
+        result = sweep_handshake_anomalies(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            scope=args.get("scope"),
+            edge=args.get("edge", "posedge"),
+            start_ps=_resolve_time(args.get("start_time_ps", 0)),
+            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+            max_wait_cycles=args.get("max_wait_cycles", 16),
+            max_interfaces=args.get("max_interfaces", 64),
+            cursor_store=_cursor_store,
+        )
+        return schemas.HandshakeSweepResult.model_validate(result)
 
     elif name == "inspect_handshake":
         result = inspect_handshake(

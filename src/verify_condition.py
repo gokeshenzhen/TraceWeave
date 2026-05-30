@@ -815,6 +815,8 @@ def inspect_handshake(
         "stall_count": 0,
         "max_stall_cycles": 0,
         "max_stall_begin_ps": None,
+        "ended_in_stall": False,
+        "final_stall_cycles": 0,
         "ready_without_valid_cycles": 0,
         "payload_hold_violations": 0,
         "payload_hold_checked": False,
@@ -930,8 +932,14 @@ def inspect_handshake(
         else:  # not v and not r — idle
             _close_stall(s["time_ps"])
 
-    # Flush a stall still open at the window edge.
+    # Flush a stall still open at the window edge. A stall that is still open
+    # when the window ends is the deadlock signature: valid asserted, ready
+    # never came, sampled right up to end-of-trace. Surface it as a fact
+    # (ended_in_stall) — NOT as a "deadlock" verdict, since the window may have
+    # simply been cut short. The caller (e.g. the anomaly sweep) decides.
     if in_stall:
+        result["ended_in_stall"] = True
+        result["final_stall_cycles"] = stall_cycles
         _close_stall(samples[-1]["time_ps"])
 
     result["findings"] = findings
@@ -972,6 +980,7 @@ def _handshake_input_error(
         "start_ps": int(start_ps), "end_ps": int(end_ps), "active_high": active_high,
         "sample_count": 0, "transfer_count": 0, "stall_count": 0,
         "max_stall_cycles": 0, "max_stall_begin_ps": None,
+        "ended_in_stall": False, "final_stall_cycles": 0,
         "ready_without_valid_cycles": 0, "payload_hold_violations": 0,
         "payload_hold_checked": False, "payload_unresolved": [],
         "unknown_sample_cycles": 0, "findings": [], "cursor": None,

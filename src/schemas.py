@@ -759,6 +759,11 @@ class HandshakeInspectResult(SchemaModel):
     stall_count: int = 0
     max_stall_cycles: int = 0
     max_stall_begin_ps: int | None = None
+    # ended_in_stall: the window ended with a stall still open (valid asserted,
+    # ready never came) — the deadlock signature. A fact, not a "deadlock"
+    # verdict; the window may simply have been cut short.
+    ended_in_stall: bool = False
+    final_stall_cycles: int = 0
     ready_without_valid_cycles: int = 0
     payload_hold_violations: int = 0
     payload_hold_checked: bool = False
@@ -787,6 +792,51 @@ class SuggestHandshakesResult(SchemaModel):
     scope: str | None = None
     candidate_count: int = 0
     candidates: list[HandshakeBundle] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class SweptInterface(SchemaModel):
+    scope: str
+    clock: str | None = None
+    valid: str
+    ready: str
+    payload: list[str] = Field(default_factory=list)
+    confidence: str | None = None
+    # flags are factual observations, never verdicts
+    flags: list[str] = Field(default_factory=list)
+    sample_count: int = 0
+    transfer_count: int = 0
+    stall_count: int = 0
+    max_stall_cycles: int = 0
+    max_stall_begin_ps: int | None = None
+    ended_in_stall: bool = False
+    final_stall_cycles: int = 0
+    payload_hold_violations: int = 0
+    ready_without_valid_cycles: int = 0
+    unknown_sample_cycles: int = 0
+
+
+class SweptSkip(SchemaModel):
+    scope: str
+    valid: str
+    ready: str
+    reason: str
+
+
+class HandshakeSweepResult(SchemaModel):
+    wave_path: str
+    scope: str | None = None
+    edge: str = "posedge"
+    start_ps: int = 0
+    end_ps: int = -1
+    discovered_count: int = 0
+    interface_count: int = 0
+    flagged_count: int = 0
+    truncated: bool = False
+    interfaces: list[SweptInterface] = Field(default_factory=list)
+    skipped: list[SweptSkip] = Field(default_factory=list)
+    cursor: CursorRefSchema | None = None
+    note: str | None = None
     reason: str | None = None
 
 
