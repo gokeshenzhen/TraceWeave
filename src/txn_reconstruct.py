@@ -37,6 +37,9 @@ from .verify_condition import _hs_repr, _hs_truth, _resolve_signal_path
 
 DEFAULT_MAX_TRANSACTIONS = 256
 _MAX_UNMATCHED_SHOWN = 32
+# Single internal bucket key for no-id (in-order FIFO) mode; txn id is reported
+# as None to the caller, never this sentinel.
+_FIFO_KEY = 0
 
 
 def reconstruct_transactions(
@@ -46,10 +49,10 @@ def reconstruct_transactions(
     clock: str,
     req_valid: str,
     req_ready: str,
-    req_id: str,
+    req_id: str | None = None,
     cmp_valid: str,
     cmp_ready: str,
-    cmp_id: str,
+    cmp_id: str | None = None,
     req_fields: list[str] | None = None,
     cmp_last: str | None = None,
     cmp_fields: list[str] | None = None,
@@ -84,12 +87,26 @@ def reconstruct_transactions(
         result["reason"] = "data channel needs both data_valid and data_ready"
         return result
 
+    # id correlation needs BOTH ids or NEITHER. With neither, requests and
+    # completions are paired in pure FIFO issue order (single in-order stream:
+    # AXI-Lite, APB, any req/resp without an id tag); txn id is reported as null.
+    has_id = req_id is not None and cmp_id is not None
+    if (req_id is not None) ^ (cmp_id is not None):
+        result["reason"] = (
+            "id correlation needs both req_id and cmp_id, or neither "
+            "(neither = in-order FIFO pairing for an unindexed stream)"
+        )
+        return result
+
     # Resolve every signal (auto-correct bus bit-range; loud on miss).
     clock_r = _resolve_signal_path(parser, clock)
     spec = {
-        "req_valid": req_valid, "req_ready": req_ready, "req_id": req_id,
-        "cmp_valid": cmp_valid, "cmp_ready": cmp_ready, "cmp_id": cmp_id,
+        "req_valid": req_valid, "req_ready": req_ready,
+        "cmp_valid": cmp_valid, "cmp_ready": cmp_ready,
     }
+    if has_id:
+        spec["req_id"] = req_id
+        spec["cmp_id"] = cmp_id
     if cmp_last is not None:
         spec["cmp_last"] = cmp_last
     if has_data:
@@ -149,6 +166,7 @@ def reconstruct_transactions(
     cfg = _WalkCfg(
         resolved=resolved,
         active_high=active_high,
+        has_id=has_id,
         has_last="cmp_last" in resolved,
         has_data=has_data,
         has_data_last="data_last" in resolved,
@@ -168,7 +186,7 @@ def reconstruct_transactions(
 
 class _WalkCfg:
     __slots__ = (
-        "resolved", "active_high", "has_last", "has_data", "has_data_last",
+        "resolved", "active_high", "has_id", "has_last", "has_data", "has_data_last",
         "reset_active_low", "capture_beats", "req_fields", "cmp_fields", "data_fields",
     )
 
@@ -181,8 +199,9 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
     """Walk the sampled edges; fill aggregate facts onto ``result`` and return a
     dict of private accumulators (latencies, unmatched lists) for _finalize."""
     r = cfg.resolved
-    rv, rr, rid = r["req_valid"], r["req_ready"], r["req_id"]
-    cv, cr, cid = r["cmp_valid"], r["cmp_ready"], r["cmp_id"]
+    rv, rr = r["req_valid"], r["req_ready"]
+    cv, cr = r["cmp_valid"], r["cmp_ready"]
+    rid, cid = r.get("req_id"), r.get("cmp_id")  # None in no-id (FIFO) mode
     clast = r.get("cmp_last")
     dv, dr_, dlast = r.get("data_valid"), r.get("data_ready"), r.get("data_last")
     rst = r.get("reset")
@@ -243,8 +262,10 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
 
         # --- request accepted -------------------------------------------------
         if _ok(sig.get(rv), cfg.active_high) and _ok(sig.get(rr), cfg.active_high):
-            rid_val = _dec(sig.get(rid))
-            if rid_val is None:
+            # In id mode the bucket key is the decoded id (x/z id = uncorrelatable);
+            # in FIFO mode every accepted beat shares one bucket and reports id=None.
+            rid_val = _dec(sig.get(rid)) if cfg.has_id else _FIFO_KEY
+            if cfg.has_id and rid_val is None:
                 unknown_id_beats += 1
             else:
                 req_count += 1
@@ -252,7 +273,8 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                 per_id_out[rid_val] = per_id_out.get(rid_val, 0) + 1
                 per_id_peak[rid_val] = max(per_id_peak.get(rid_val, 0), per_id_out[rid_val])
                 rec = {
-                    "id": rid_val, "seq": seq, "idx": idx, "time_ps": t,
+                    "id": rid_val if cfg.has_id else None,
+                    "seq": seq, "idx": idx, "time_ps": t,
                     "outstanding_at_start": outstanding,
                     "req_fields": {f: _hs_repr(sig.get(f)) for f in cfg.req_fields},
                     "data_complete": not cfg.has_data,
@@ -282,8 +304,8 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
 
         # --- completion channel beat accepted ---------------------------------
         if _ok(sig.get(cv), cfg.active_high) and _ok(sig.get(cr), cfg.active_high):
-            cid_val = _dec(sig.get(cid))
-            if cid_val is None:
+            cid_val = _dec(sig.get(cid)) if cfg.has_id else _FIFO_KEY
+            if cfg.has_id and cid_val is None:
                 unknown_id_beats += 1
             else:
                 beat_ctr[cid_val] = beat_ctr.get(cid_val, 0) + 1
@@ -306,7 +328,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                         latencies.append(lat)
                         beats = req["data_beat_count"] if cfg.has_data else n_cmp_beats
                         transactions.append({
-                            "id": cid_val,
+                            "id": cid_val if cfg.has_id else None,
                             "request_time_ps": req["time_ps"],
                             "completion_time_ps": t,
                             "latency_cycles": lat,
@@ -320,7 +342,9 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                             "data_beats": req["data_beats_meta"] if cfg.capture_beats else [],
                         })
                     else:
-                        unmatched_completions.append({"id": cid_val, "completion_time_ps": t})
+                        unmatched_completions.append(
+                            {"id": cid_val if cfg.has_id else None, "completion_time_ps": t}
+                        )
 
     unmatched_requests = [
         {"id": rq["id"], "request_time_ps": rq["time_ps"]} for rq in pending_order
@@ -336,8 +360,9 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
         "outstanding_at_end": len(unmatched_requests),
         "max_outstanding": max_out,
         "max_outstanding_time_ps": max_out_time,
-        "max_outstanding_per_id": (max(per_id_peak.values()) if per_id_peak else 0),
-        "max_outstanding_id": (max(per_id_peak, key=per_id_peak.get) if per_id_peak else None),
+        # per-id stats are meaningless without ids; report 0/None in FIFO mode.
+        "max_outstanding_per_id": (max(per_id_peak.values()) if (cfg.has_id and per_id_peak) else 0),
+        "max_outstanding_id": (max(per_id_peak, key=per_id_peak.get) if (cfg.has_id and per_id_peak) else None),
         "reorder_count": reorder,
         "unknown_id_beats": unknown_id_beats,
         "reset_clears": reset_clears,

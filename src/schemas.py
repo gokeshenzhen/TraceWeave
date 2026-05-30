@@ -883,7 +883,7 @@ class TxnBeat(SchemaModel):
 
 
 class TxnRecord(SchemaModel):
-    id: int
+    id: int | None = None  # null in no-id (in-order FIFO) mode
     request_time_ps: int
     completion_time_ps: int
     latency_cycles: int
@@ -898,7 +898,7 @@ class TxnRecord(SchemaModel):
 
 
 class TxnEndpoint(SchemaModel):
-    id: int
+    id: int | None = None  # null in no-id (in-order FIFO) mode
     request_time_ps: int | None = None
     completion_time_ps: int | None = None
 

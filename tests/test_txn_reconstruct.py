@@ -245,3 +245,64 @@ def test_data_channel_needs_both_valid_and_ready(tmp_path):
     )
     schemas.TxnReconstructResult.model_validate(r)
     assert r["reason"] and "data_valid and data_ready" in r["reason"]
+
+
+# --- no-id (in-order FIFO) mode: AXI-Lite / APB / unindexed streams ---------
+
+def _noid(tmp_path, cycles, sig, *, store=None, **kw):
+    wave = _write(tmp_path, cycles, sig)
+    r = reconstruct_transactions(
+        get_parser=lambda _w: VCDParser(wave), wave_path=wave, clock="top.clk",
+        req_valid="top.av", req_ready="top.ar",
+        cmp_valid="top.bv", cmp_ready="top.br",
+        cursor_store=store, **kw,  # NO req_id / cmp_id
+    )
+    schemas.TxnReconstructResult.model_validate(r)
+    return r
+
+
+_LITE = [("!", "clk", 1), ("p", "av", 1), ("q", "ar", 1), ("x", "bv", 1), ("y", "br", 1)]
+
+
+def test_no_id_fifo_pairs_in_order(tmp_path):
+    # 3 requests, 3 completions, paired by issue order; id reported as null.
+    cyc = [
+        {"av": 1, "ar": 1},                 # req0
+        {"av": 1, "ar": 1},                 # req1
+        {"bv": 1, "br": 1},                 # cmp -> req0
+        {"av": 1, "ar": 1},                 # req2
+        {"bv": 1, "br": 1},                 # cmp -> req1
+        {"bv": 1, "br": 1},                 # cmp -> req2
+    ]
+    r = _noid(tmp_path, cyc, _LITE)
+    assert r["request_count"] == 3
+    assert r["matched_count"] == 3
+    assert r["outstanding_at_end"] == 0
+    assert all(tx["id"] is None for tx in r["transactions"])
+    # FIFO: completions pair to requests in issue order, so request times are
+    # non-decreasing down the (completion-ordered) transaction list.
+    req_times = [tx["request_time_ps"] for tx in r["transactions"]]
+    assert req_times == sorted(req_times)
+    assert len(set(req_times)) == 3
+    assert r["unknown_id_beats"] == 0
+    assert r["max_outstanding_per_id"] == 0   # meaningless without ids
+    assert r["max_outstanding_id"] is None
+
+
+def test_no_id_hang_reports_null_id(tmp_path):
+    cyc = [{"av": 1, "ar": 1}, {"av": 1, "ar": 1}, {"bv": 1, "br": 1}]  # 2 req, 1 cmp
+    r = _noid(tmp_path, cyc, _LITE)
+    assert r["matched_count"] == 1
+    assert r["outstanding_at_end"] == 1
+    assert r["unmatched_requests"][0]["id"] is None
+
+
+def test_one_sided_id_is_loud(tmp_path):
+    wave = _write(tmp_path, [{"av": 1}], _LITE)
+    r = reconstruct_transactions(
+        get_parser=lambda _w: VCDParser(wave), wave_path=wave, clock="top.clk",
+        req_valid="top.av", req_ready="top.ar", req_id="top.av",  # only req_id
+        cmp_valid="top.bv", cmp_ready="top.br",
+    )
+    schemas.TxnReconstructResult.model_validate(r)
+    assert r["reason"] and "both req_id and cmp_id, or neither" in r["reason"]
