@@ -8,8 +8,8 @@ ps-precision integers across calls.
 
 Lifetime mirrors ``HandleStore`` (see ``src/hierarchy_handles.py``):
 in-process only, no persistence, server restart drops everything. There
-is **no "active cursor"** — references must be explicit by name. xwave's
-``cursor use`` REPL convenience is intentionally omitted: an AI agent is
+is **no "active cursor"** — references must be explicit by name. A
+"current cursor" REPL convenience is intentionally omitted: an AI agent is
 better served by explicit names than by hidden state.
 
 This module is the storage primitive. TimeSpec arithmetic

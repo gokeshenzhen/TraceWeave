@@ -247,7 +247,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
         sig = s["signals"]
         t = s["time_ps"]
 
-        # --- reset: clear all in-flight state (xwave parity; correctness) ------
+        # --- reset: clear all in-flight state (correctness) -------------------
         if rst is not None:
             if _hs_truth(sig.get(rst), active_high=not cfg.reset_active_low) is True:
                 if pending_order or data_buffer:

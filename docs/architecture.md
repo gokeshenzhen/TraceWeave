@@ -46,8 +46,12 @@ Extended analysis capabilities
 Auto-debug primitives (cursors + verification)
   src/cursor_store.py             # named, process-scoped time anchors (cursor_set/list/delete)
   src/timespec.py                 # resolve @cursor / unit literals (12.34ns) to ps on time inputs
-  src/verify_condition.py         # diff_first_divergence, period (registered);
+  src/verify_condition.py         # diff_first_divergence, period, inspect_handshake (registered);
                                   # diff_value_distribution (implemented, NOT registered)
+  src/window_verify.py            # verify_window: temporal predicate over a clock window
+  src/handshake_suggest.py        # suggest_handshakes: propose inspect_handshake bundles
+  src/handshake_sweep.py          # sweep_handshakes: whole-design handshake anomaly sweep
+  src/txn_reconstruct.py          # reconstruct_transactions: id-correlated transaction layer
 
 Native integration
   libfsdb_wrapper.so
