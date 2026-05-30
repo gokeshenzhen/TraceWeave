@@ -233,6 +233,11 @@ These are not part of the default flow above; reach for them when the symptom is
 - `period(wave_path, signal, edge?)` — when a signal should be periodic (clock, strobe, fixed-rate valid) and the symptom is a cadence/throughput irregularity with no value in the log. Returns the dominant period and the first off-beat (auto-cursor).
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b)` — when two waveform signals should match: cross-run (passing vs failing) or within-run (lockstep / shadow). Returns the first unequal instant (auto-cursor). Needs both sides dumped as waveform signals; does not compare against a software reference model.
 - `cursor_set` / `cursor_list` / `cursor_delete` — manage the named time anchors referenced above.
+- `inspect_handshake(wave_path, clock, valid, ready, payload?)` — cycle-by-cycle classification of a clocked valid/ready handshake: stalls, long-stall windows, backpressure imbalance, and payload-hold violations during a stall. For protocol-timing bugs that leave no value pattern in scoreboard logs. AHB has no literal valid — pass `valid_htrans` instead.
+- `suggest_handshakes(wave_path, scope?)` — scan the waveform and propose ready-to-use `inspect_handshake` bundles (pairs `*valid`/`*ready`, finds the clock, groups payload). Run before `inspect_handshake` so you don't hand-assemble signal paths.
+- `sweep_handshakes(wave_path, scope?)` — whole-design handshake anomaly sweep: discover every valid/ready interface and inspect each in one call, returning a comparative fact table. For opaque global symptoms (timeout/hang) when you don't yet know which interface misbehaves.
+- `verify_window(wave_path, clock, mode, predicate | antecedent+consequent)` — evaluate a temporal predicate (always/never/eventually/implication) over a clock window and return a `holds` verdict plus a concrete witness/counterexample. To prove or disprove an RTL inference in one call.
+- `reconstruct_transactions(wave_path, clock, req_valid, req_ready, cmp_valid, cmp_ready, ...)` — id-correlated request/response transaction layer: per-transaction latency plus outstanding/ordering/unmatched facts. AXI read AR→R, write AW→B (+ optional W-data channel); `req_id`/`cmp_id` optional (omit both for in-order AXI-Lite/APB streams).
 
 ## Iterative Debug Pattern
 

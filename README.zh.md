@@ -103,7 +103,15 @@ TraceWeave/
     ├── schemas.py
     ├── problem_hints.py
     ├── hierarchy_handles.py      # HandleStore + build_tb_hierarchy 的内容寻址 handle
-    └── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
+    ├── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
+    ├── cursor_store.py           # 命名的进程内时间锚(cursor_set/list/delete)
+    ├── timespec.py               # 将 @cursor / 带单位字面量(12.34ns)解析为 ps
+    ├── verify_condition.py       # diff_first_divergence、period、inspect_handshake
+    ├── window_verify.py          # verify_window:时钟窗口上的时序谓词
+    ├── handshake_suggest.py      # suggest_handshakes:提出 inspect_handshake bundle
+    ├── handshake_sweep.py        # sweep_handshakes:全设计握手异常扫描
+    ├── txn_reconstruct.py        # reconstruct_transactions:id 关联的事务层
+    └── usage_telemetry.py        # 仅本地的逐调用使用遥测(可关闭)
 ```
 
 ## 安装

@@ -109,7 +109,15 @@ TraceWeave/
     ├── schemas.py
     ├── problem_hints.py
     ├── hierarchy_handles.py      # HandleStore + content-addressed handle for build_tb_hierarchy
-    └── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
+    ├── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
+    ├── cursor_store.py           # Named, process-scoped time anchors (cursor_set/list/delete)
+    ├── timespec.py               # Resolve @cursor / unit literals (12.34ns) to ps on time inputs
+    ├── verify_condition.py       # diff_first_divergence, period, inspect_handshake
+    ├── window_verify.py          # verify_window: temporal predicate over a clock window
+    ├── handshake_suggest.py      # suggest_handshakes: propose inspect_handshake bundles
+    ├── handshake_sweep.py        # sweep_handshakes: whole-design handshake anomaly sweep
+    ├── txn_reconstruct.py        # reconstruct_transactions: id-correlated transaction layer
+    └── usage_telemetry.py        # Local-only per-call usage telemetry (opt-out)
 ```
 
 ## Installation

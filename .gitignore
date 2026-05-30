@@ -16,4 +16,7 @@ docs/*
 !docs/architecture.md
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 reference/debug_session_report_20260315.md
