@@ -157,3 +157,91 @@ def test_missing_control_signal_is_loud(tmp_path):
     )
     schemas.TxnReconstructResult.model_validate(r)
     assert r["reason"] and "not found" in r["reason"]
+
+
+# --- AXI WRITE channel (AW + W data + B), reset, per-beat capture ----------
+
+_AXI_WR = [("!", "clk", 1), ("R", "rst_n", 1),
+           ("a", "awvalid", 1), ("b", "awready", 1), ("c", "awid", 2),
+           ("d", "wvalid", 1), ("e", "wready", 1), ("f", "wlast", 1),
+           ("g", "wdata", 8), ("h", "wstrb", 2),
+           ("i", "bvalid", 1), ("j", "bready", 1), ("k", "bid", 2)]
+
+
+def _wr(tmp_path, cycles, *, store=None, **kw):
+    wave = _write(tmp_path, cycles, _AXI_WR)
+    r = reconstruct_transactions(
+        get_parser=lambda _w: VCDParser(wave), wave_path=wave, clock="top.clk",
+        req_valid="top.awvalid", req_ready="top.awready", req_id="top.awid",
+        cmp_valid="top.bvalid", cmp_ready="top.bready", cmp_id="top.bid",
+        data_valid="top.wvalid", data_ready="top.wready", data_last="top.wlast",
+        data_fields=["top.wdata", "top.wstrb"],
+        reset="top.rst_n", reset_active_low=True, cursor_store=store, **kw,
+    )
+    schemas.TxnReconstructResult.model_validate(r)
+    return r
+
+
+def test_write_data_channel_reconstructs_burst(tmp_path):
+    cyc = [
+        {"rst_n": 1, "awvalid": 1, "awready": 1, "awid": 1},
+        {"rst_n": 1, "wvalid": 1, "wready": 1, "wlast": 0, "wdata": 0x11, "wstrb": 3},
+        {"rst_n": 1, "wvalid": 1, "wready": 1, "wlast": 1, "wdata": 0x22, "wstrb": 3},
+        {"rst_n": 1, "bvalid": 1, "bready": 1, "bid": 1},
+    ]
+    r = _wr(tmp_path, cyc, capture_beats=True)
+    assert r["matched_count"] == 1
+    tx = r["transactions"][0]
+    assert tx["beat_count"] == 2
+    assert tx["data_complete"] is True
+    assert [b["fields"]["top.wdata"] for b in tx["data_beats"]] == ["0x11", "0x22"]
+
+
+def test_capture_beats_off_by_default(tmp_path):
+    cyc = [
+        {"rst_n": 1, "awvalid": 1, "awready": 1, "awid": 1},
+        {"rst_n": 1, "wvalid": 1, "wready": 1, "wlast": 1, "wdata": 0x33, "wstrb": 3},
+        {"rst_n": 1, "bvalid": 1, "bready": 1, "bid": 1},
+    ]
+    r = _wr(tmp_path, cyc)  # capture_beats not set
+    assert r["transactions"][0]["beat_count"] == 1
+    assert r["transactions"][0]["data_beats"] == []
+
+
+def test_reset_clears_inflight_no_phantom_hang(tmp_path):
+    cyc = [
+        {"rst_n": 1, "awvalid": 1, "awready": 1, "awid": 1},  # AW id1, never completes
+        {"rst_n": 1, "wvalid": 1, "wready": 1, "wlast": 1, "wdata": 0x44, "wstrb": 3},
+        {"rst_n": 0},  # reset -> wipe in-flight id1
+        {"rst_n": 1},
+    ]
+    r = _wr(tmp_path, cyc)
+    assert r["reset_clears"] == 1
+    assert r["outstanding_at_end"] == 0   # id1 cleared by reset, not a phantom hang
+    assert r["matched_count"] == 0
+
+
+def test_write_data_before_address_attaches_in_order(tmp_path):
+    # W beats can arrive before AW; they buffer and attach when AW arrives.
+    cyc = [
+        {"rst_n": 1, "wvalid": 1, "wready": 1, "wlast": 1, "wdata": 0x55, "wstrb": 3},
+        {"rst_n": 1, "awvalid": 1, "awready": 1, "awid": 2},
+        {"rst_n": 1, "bvalid": 1, "bready": 1, "bid": 2},
+    ]
+    r = _wr(tmp_path, cyc, capture_beats=True)
+    assert r["matched_count"] == 1
+    tx = r["transactions"][0]
+    assert tx["beat_count"] == 1
+    assert tx["data_beats"][0]["fields"]["top.wdata"] == "0x55"
+
+
+def test_data_channel_needs_both_valid_and_ready(tmp_path):
+    wave = _write(tmp_path, [{"rst_n": 1}], _AXI_WR)
+    r = reconstruct_transactions(
+        get_parser=lambda _w: VCDParser(wave), wave_path=wave, clock="top.clk",
+        req_valid="top.awvalid", req_ready="top.awready", req_id="top.awid",
+        cmp_valid="top.bvalid", cmp_ready="top.bready", cmp_id="top.bid",
+        data_valid="top.wvalid",  # data_ready missing
+    )
+    schemas.TxnReconstructResult.model_validate(r)
+    assert r["reason"] and "data_valid and data_ready" in r["reason"]

@@ -876,6 +876,12 @@ class LatencyStats(SchemaModel):
     mean_cycles: float
 
 
+class TxnBeat(SchemaModel):
+    time_ps: int
+    last: bool = False
+    fields: dict[str, str | None] = Field(default_factory=dict)
+
+
 class TxnRecord(SchemaModel):
     id: int
     request_time_ps: int
@@ -884,8 +890,11 @@ class TxnRecord(SchemaModel):
     latency_ps: int
     beat_count: int = 1
     outstanding_at_start: int = 0
+    data_complete: bool = True
     req_fields: dict[str, str | None] = Field(default_factory=dict)
     cmp_fields: dict[str, str | None] = Field(default_factory=dict)
+    # present only when capture_beats=True (per-beat write/read data)
+    data_beats: list[TxnBeat] = Field(default_factory=list)
 
 
 class TxnEndpoint(SchemaModel):
@@ -910,6 +919,8 @@ class TxnReconstructResult(SchemaModel):
     max_outstanding_id: int | None = None
     reorder_count: int = 0
     unknown_id_beats: int = 0
+    reset_clears: int = 0
+    orphan_data_beats: int = 0
     timeout_cycles: int | None = None
     slow_count: int = 0
     latency: LatencyStats | None = None
