@@ -863,3 +863,68 @@ class TestDiagnosticSnapshot:
 
         assert result.hierarchy.stale is True
         assert all(step["tool"] != "scan_structural_risks" for step in result.missing_steps)
+
+
+class TestDiagnosticSnapshotCaseIdentity:
+    """The process-global result cache survives across cases; the snapshot
+    must not present a previous case's state as current for a new target."""
+
+    def test_mismatched_case_dir_degrades_to_cold_start(self):
+        # Cache is fully populated for case0, but the caller is now targeting
+        # a different case. The snapshot must behave as a cold start for it.
+        _prefill_all()
+
+        result = server._handle_diagnostic_snapshot(
+            {"case_dir": "/tmp/verif/work/work_case_OTHER"}
+        )
+
+        assert result.sim_paths.available is False
+        # Downstream sections must not leak the previous case.
+        assert result.hierarchy.available is False
+        assert result.log_analysis.available is False
+        assert result.structural_scan is None
+        assert result.recommended_next.available is False
+        # Only get_sim_paths is suggested (no downstream noise without an anchor).
+        assert [s["tool"] for s in result.missing_steps] == ["get_sim_paths"]
+        assert "different case" in result.missing_steps[0]["reason"]
+
+    def test_mismatched_verif_root_degrades_to_cold_start(self):
+        _prefill_all()
+
+        result = server._handle_diagnostic_snapshot({"verif_root": "/tmp/other_verif"})
+
+        assert result.sim_paths.available is False
+        assert result.sim_paths.suggested_call["arguments"]["verif_root"] == "/tmp/other_verif"
+        assert [s["tool"] for s in result.missing_steps] == ["get_sim_paths"]
+
+    def test_matching_case_dir_is_confirmed_not_carried_over(self):
+        _prefill_all()
+
+        result = server._handle_diagnostic_snapshot(
+            {"case_dir": "/tmp/verif/work/work_case0"}
+        )
+
+        assert result.sim_paths.available is True
+        assert result.hierarchy.available is True
+        # A confirmed target carries no carried_over flag.
+        assert not (result.sim_paths.summary or {}).get("carried_over")
+
+    def test_no_target_flags_carried_over(self):
+        # Served from a prior call without a confirming target: the snapshot
+        # cannot prove the cache is for the caller's current case.
+        _prefill_all()
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.sim_paths.available is True
+        assert (result.sim_paths.summary or {}).get("carried_over") is True
+
+    def test_empty_cache_with_target_is_plain_cold_start(self):
+        # No cache at all + a target: ordinary cold start, no carried_over.
+        result = server._handle_diagnostic_snapshot(
+            {"case_dir": "/tmp/verif/work/work_case0"}
+        )
+
+        assert result.sim_paths.available is False
+        assert result.sim_paths.summary is None
+        assert "different case" not in result.missing_steps[0]["reason"]

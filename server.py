@@ -1181,7 +1181,12 @@ async def list_tools():
             description=(
                 "Cold-start accelerator that aggregates cached tool results into a single summary view. "
                 "It never triggers sub-steps and only reads cache. "
-                "Returns availability status, compact summaries, and suggested calls for missing steps."
+                "Returns availability status, compact summaries, and suggested calls for missing steps. "
+                "The result cache is process-global and survives across cases, so at the start of a new "
+                "session pass your target case (verif_root and/or case_dir): the snapshot validates the "
+                "cache against it and reports a clean cold start if the cache belongs to a different case. "
+                "If you pass no target, a cached sim_paths is returned with summary.carried_over=true to "
+                "signal it may belong to a previous case — confirm it or re-run get_sim_paths."
             ),
             inputSchema={
                 "type": "object",
@@ -1189,8 +1194,18 @@ async def list_tools():
                     "verif_root": {
                         "type": "string",
                         "description": (
-                            "Absolute path to the project's verif/ directory. "
-                            "Used only to build a suggested_call when get_sim_paths has not run yet."
+                            "Absolute path to the project's verif/ directory. Builds a suggested_call "
+                            "when get_sim_paths has not run, and validates that a cached get_sim_paths "
+                            "result belongs to this project (mismatch ⇒ honest cold start)."
+                        ),
+                    },
+                    "case_dir": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the specific case directory you are debugging. When given, "
+                            "the snapshot confirms the cached get_sim_paths is for this case; if it is for "
+                            "a different case, the snapshot degrades to a cold start instead of leaking the "
+                            "previous case's paths/hierarchy/log."
                         ),
                     },
                 },
@@ -2613,17 +2628,44 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
 
     sim_result = _result_cache.get("get_sim_paths")
     anchor = _result_provenance.get("get_sim_paths")
+
+    # Identity guard. The result cache is process-global and outlives a single
+    # case (it self-heals only when get_sim_paths re-runs with a new identity).
+    # This snapshot is documented to run *before* get_sim_paths, so a fresh
+    # session targeting a new case would otherwise be handed the *previous*
+    # case's paths/hierarchy/log as if they were current. When the caller names
+    # its target (verif_root/case_dir) and the cache is for a different case,
+    # present an honest cold start for the requested case rather than leaking
+    # the stale one.
+    requested_root = args.get("verif_root")
+    requested_case = args.get("case_dir")
+    case_mismatch = False
     if sim_result is not None:
+        if requested_case and not _same_realpath(requested_case, sim_result.case_dir):
+            case_mismatch = True
+        if requested_root and not _same_realpath(requested_root, sim_result.verif_root):
+            case_mismatch = True
+    if case_mismatch:
+        sim_result = None
+        anchor = None
+
+    if sim_result is not None:
+        summary = _extract_sim_paths_summary(sim_result)
+        # Served from a prior call without a confirming target: the snapshot
+        # cannot prove this cache belongs to the case the caller is now
+        # debugging. Flag it so a fresh session does not trust a stale case.
+        if not (requested_root or requested_case):
+            summary = {**(summary or {}), "carried_over": True}
         sections["sim_paths"] = schemas.DiagnosticSnapshotSection(
             available=True,
-            summary=_extract_sim_paths_summary(sim_result),
+            summary=summary,
         )
         quick_ref["simulator"] = sim_result.simulator
         quick_ref["case_dir"] = sim_result.case_dir
     else:
         suggested = _build_suggested_call("get_sim_paths")
-        if args.get("verif_root"):
-            suggested["arguments"]["verif_root"] = args["verif_root"]
+        if requested_root:
+            suggested["arguments"]["verif_root"] = requested_root
         sections["sim_paths"] = schemas.DiagnosticSnapshotSection(
             available=False,
             suggested_call=suggested,
@@ -2631,7 +2673,12 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         missing_steps.append({
             "tool": "get_sim_paths",
             "arguments": suggested["arguments"],
-            "reason": "Path discovery has not run yet, so simulation artifacts cannot be located.",
+            "reason": (
+                "Cached get_sim_paths is for a different case than the requested "
+                "target; re-run get_sim_paths for the current case."
+                if case_mismatch
+                else "Path discovery has not run yet, so simulation artifacts cannot be located."
+            ),
         })
 
     # Suggest build_kdb when the active simulator is Xcelium and the
@@ -2664,7 +2711,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
                     ),
                 })
 
-    hier_result = _result_cache.get("build_tb_hierarchy")
+    hier_result = None if case_mismatch else _result_cache.get("build_tb_hierarchy")
     if hier_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
             "build_tb_hierarchy",
@@ -2692,7 +2739,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
         })
 
-    log_result = _result_cache.get("parse_sim_log")
+    log_result = None if case_mismatch else _result_cache.get("parse_sim_log")
     compatible_log_result = None
     if log_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
@@ -2720,7 +2767,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
         })
 
-    scan_result = _result_cache.get("scan_structural_risks")
+    scan_result = None if case_mismatch else _result_cache.get("scan_structural_risks")
     compatible_hierarchy = bool(
         anchor is not None
         and hier_result is not None
@@ -2769,7 +2816,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         and not sections["log_analysis"].stale
         and getattr(log_result, "runtime_total_errors", None) == 0
     )
-    rec_result = _result_cache.get("recommend_failure_debug_next_steps")
+    rec_result = None if case_mismatch else _result_cache.get("recommend_failure_debug_next_steps")
     if rec_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
             "recommend_failure_debug_next_steps",
