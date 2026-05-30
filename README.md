@@ -40,6 +40,30 @@ TraceWeave is a workflow-oriented debug server rather than a loose collection of
 
 [Architecture](docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing) · [WeChat](#wechat)
 
+## When TraceWeave helps most
+
+TraceWeave is not a universal speedup, and it is honest about that. In blind
+benchmarking against a capable LLM that only reads source and text logs:
+
+- **When the RTL is readable and the bug is a source-visible logic error**, an
+  LLM reading the source is already fast. Here TraceWeave mainly *confirms* the
+  hypothesis from the waveform — and `scan_structural_risks` can statically pin
+  the offending line. Useful, but not where the moat is.
+- **TraceWeave becomes the decisive — sometimes the only — way to localize when
+  the answer is not in readable source:**
+  - the design is **encrypted/protected IP** or too large to eyeball, so the bug
+    cannot be read or grep'd; or
+  - the failure is a **timing / handshake / X / connectivity bug with no static
+    signature** and an **opaque symptom** (timeout, stall, divergence — no value
+    pattern in the log).
+
+  In those cases the clock-sampled waveform facts — cycle-aligned sampling,
+  `inspect_handshake`, `diff_first_divergence`, `period`, `trace_x_source`,
+  structural scanning — localize the failing stage and time directly, where
+  reading source or grepping cannot reach. Reading the source is a strong
+  baseline; TraceWeave earns its keep on **opaque symptoms and unreadable or
+  large designs.**
+
 ## Architecture
 
 - Architecture map: `docs/architecture.md`
