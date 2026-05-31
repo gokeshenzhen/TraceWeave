@@ -795,6 +795,36 @@ class SuggestHandshakesResult(SchemaModel):
     reason: str | None = None
 
 
+class ProtocolBundle(SchemaModel):
+    protocol: Literal["ahb", "apb"]
+    scope: str
+    direction_tag: Literal["initiator_side", "responder_side", "unknown"] = "unknown"
+    direction_basis: str = "unknown"
+    direction_confidence: Literal["high", "medium", "unknown"] = "unknown"
+    clock: str | None = None
+    reset: str | None = None
+    valid_htrans: str | None = None
+    htrans_rule: str | None = None
+    psel: str | None = None
+    penable: str | None = None
+    ready: str
+    payload: list[str] = Field(default_factory=list)
+    inspect_handshake_args: dict[str, Any] | None = None
+    confidence: str
+    rationale: str
+    needs: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SuggestProtocolBundlesResult(SchemaModel):
+    wave_path: str
+    protocol: Literal["ahb", "apb"]
+    scope: str | None = None
+    candidate_count: int = 0
+    candidates: list[ProtocolBundle] = Field(default_factory=list)
+    reason: str | None = None
+
+
 class SweptInterface(SchemaModel):
     scope: str
     clock: str | None = None

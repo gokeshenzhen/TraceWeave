@@ -193,8 +193,60 @@ class TestStructuralScannerToolContract:
                 {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
             )
 
-        assert result["required_next_call"] is None
-        assert result["suggested_next"] is None
+            assert result["required_next_call"] is None
+            assert result["suggested_next"] is None
+
+
+@pytest.mark.anyio
+class TestProtocolBundleToolContract:
+    async def test_tool_schema_requires_protocol(self):
+        tools = await server.list_tools()
+        tool = next(tool for tool in tools if tool.name == "suggest_protocol_bundles")
+
+        assert tool.inputSchema["required"] == ["wave_path", "protocol"]
+        assert tool.inputSchema["properties"]["protocol"]["enum"] == ["ahb", "apb"]
+
+    async def test_dispatch_validates_protocol_bundle_result(self):
+        with patch.object(server, "suggest_protocol_bundles", return_value={
+            "wave_path": "/tmp/w.fsdb",
+            "protocol": "ahb",
+            "scope": None,
+            "candidate_count": 1,
+            "candidates": [{
+                "protocol": "ahb",
+                "scope": "tb",
+                "direction_tag": "unknown",
+                "direction_basis": "no mechanical side marker found",
+                "direction_confidence": "unknown",
+                "clock": "tb.hclk",
+                "reset": None,
+                "valid_htrans": "tb.htrans",
+                "htrans_rule": "active",
+                "psel": None,
+                "penable": None,
+                "ready": "tb.hready",
+                "payload": ["tb.haddr"],
+                "inspect_handshake_args": {
+                    "clock": "tb.hclk",
+                    "valid_htrans": "tb.htrans",
+                    "htrans_rule": "active",
+                    "ready": "tb.hready",
+                    "payload": ["tb.haddr"],
+                },
+                "confidence": "high",
+                "rationale": "AHB htrans/ready pair in scope tb",
+                "needs": [],
+                "warnings": [],
+            }],
+            "reason": None,
+        }) as suggest_mock:
+            result = await server._dispatch(
+                "suggest_protocol_bundles",
+                {"wave_path": "/tmp/w.fsdb", "protocol": "ahb"},
+            )
+
+        assert result["candidates"][0]["valid_htrans"] == "tb.htrans"
+        suggest_mock.assert_called_once()
 
     async def test_cycle_query_tool_schema_and_dispatch(self):
         tools = await server.list_tools()

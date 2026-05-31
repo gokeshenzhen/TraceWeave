@@ -58,9 +58,10 @@ benchmarking against a capable LLM that only reads source and text logs:
     pattern in the log).
 
   In those cases the clock-sampled waveform facts — cycle-aligned sampling,
-  `inspect_handshake`, `sweep_handshakes`, `reconstruct_transactions`,
-  `verify_window`, `diff_first_divergence`, `period`, `trace_x_source`,
-  structural scanning — localize the failing stage and time directly, where
+  `inspect_handshake`, `suggest_protocol_bundles`, `sweep_handshakes`,
+  `reconstruct_transactions`, `verify_window`, `diff_first_divergence`,
+  `period`, `trace_x_source`, structural scanning — localize the failing stage
+  and time directly, where
   reading source or grepping cannot reach. Reading the source is a strong
   baseline; TraceWeave earns its keep on **opaque symptoms and unreadable or
   large designs.**
@@ -114,7 +115,7 @@ TraceWeave/
     ├── timespec.py               # Resolve @cursor / unit literals (12.34ns) to ps on time inputs
     ├── verify_condition.py       # diff_first_divergence, period, inspect_handshake
     ├── window_verify.py          # verify_window: temporal predicate over a clock window
-    ├── handshake_suggest.py      # suggest_handshakes: propose inspect_handshake bundles
+    ├── handshake_suggest.py      # suggest_handshakes / suggest_protocol_bundles
     ├── handshake_sweep.py        # sweep_handshakes: whole-design handshake anomaly sweep
     ├── txn_reconstruct.py        # reconstruct_transactions: id-correlated transaction layer
     └── usage_telemetry.py        # Local-only per-call usage telemetry (opt-out)
@@ -303,7 +304,8 @@ Time inputs on `get_signal_at_time`, `get_signal_transitions`, `get_signals_arou
 - `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`: Named, process-scoped time anchors. Tools that locate an instant (e.g. `diff_first_divergence`, `period`) auto-register a cursor you can later reference as `@<name>` instead of copying ps timestamps across calls. Cursors are not persisted — server restart drops them.
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`: First time two waveform signals hold unequal values — across two waveforms (e.g. passing vs failing run) or within one (two signals that should match, e.g. lockstep / shadow registers). Auto-registers a cursor at the divergence. Requires both sides to be dumped waveform signals (it does not compare against a software reference model).
 - `period(wave_path, signal, edge?, ...)`: Dominant edge-to-edge period of a signal and the first beat that deviates from it (off-beat), auto-registered as a cursor. For "this signal should be periodic — where did the cadence first break?" (clocks, strobes, fixed-rate valids).
-- `suggest_handshakes(wave_path, scope?, ...)`: Scans the waveform and proposes ready-to-use `inspect_handshake` bundles — pairs `*valid`/`*ready` by scope and stem, finds the clock, and groups the channel payload buses. Run it first so you don't hand-assemble `{clock, valid, ready, payload}`. Covers AXI/generic valid-ready and req/ack; does not synthesise an AHB "valid" (pass it manually).
+- `suggest_handshakes(wave_path, scope?, ...)`: Scans the waveform and proposes ready-to-use `inspect_handshake` bundles — pairs `*valid`/`*ready` by scope and stem, finds the clock, and groups the channel payload buses. Run it first so you don't hand-assemble `{clock, valid, ready, payload}`. Covers AXI/generic valid-ready and req/ack.
+- `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?, ...)`: Scans for protocol-specific bundles where there is no literal `valid`. AHB candidates return ready-to-use `inspect_handshake` args with `valid_htrans`, `ready`, and payload; APB candidates return `psel`/`penable`/`pready` facts and loudly report that `inspect_handshake` still needs a derived valid signal for `psel && penable`. Direction tags are mechanical discovery facts only (`initiator_side` / `responder_side` / `unknown`), with unknown/conflicting markers reported rather than guessed.
 - `inspect_handshake(wave_path, clock, valid, ready, payload?, ...)`: Cycle-by-cycle classification of a clocked valid/ready handshake — stall runs (valid high, ready low), the longest/over-threshold stalls, backpressure imbalance (ready high, valid low), and, when `payload` signals are given, payload-hold violations (a payload that changes while the transfer is still stalled). Protocol-agnostic: AXI `*valid`/`*ready`, generic valid-ready streams, or credit interfaces. For AHB there is no literal valid — pass `valid_htrans=<htrans path>` (and `htrans_rule`: `active`=NONSEQ/SEQ, or `non_idle`) and a derived valid is computed (with `payload`=haddr/hwrite/hsize which must hold while hready is low). Auto-registers a cursor at the first problem (hold violation > long stall > longest stall). Surfaces protocol-timing facts that leave no value pattern in scoreboard logs.
 - `sweep_handshakes(wave_path, scope?, ...)`: Whole-design handshake **anomaly sweep** — discovers every valid/ready interface and inspects each over the window in one call, returning a comparative fact table (per-interface stalls, deadlock signature, payload-hold, backpressure) ordered by a transparent mechanical key. For opaque global symptoms (timeout/hang) when you don't yet know which of many interfaces misbehaves; it collapses N `suggest_handshakes`+`inspect_handshake` round-trips into one. Returns facts, not a root-cause verdict — re-rank as the symptom warrants. On a backpressured pipeline the worst-stall ordering surfaces the propagation front, while the root is the stall→starvation boundary. Sets `truncated=true` (loudly) when discovery exceeds `max_interfaces` (default 64).
 - `verify_window(wave_path, clock, mode, predicate | antecedent+consequent, ...)`: Evaluate a temporal predicate over a clock window and return a precise `holds` verdict plus a concrete witness/counterexample (cycle + sampled values). Templates, not a DSL: a *term* is `{signal, op, value}` (`op`: eq/ne/gt/ge/lt/le/is_x/is_known); a *predicate* is a list of terms (implicit AND); `mode` is `always` / `never` / `eventually` / `implication` (A ⊦→ B within N cycles). x/z cycles are reported as `unknown` (never silently passed) and an implication whose response window runs past end-of-trace is `inconclusive` (never silently failed). Use to prove or disprove an RTL inference in one call.

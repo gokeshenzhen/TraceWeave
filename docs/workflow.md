@@ -191,6 +191,25 @@ Step 7: Deep dive (on demand, based on step 6 findings)
         Useful for sanity checks before deep analysis
 ```
 
+## Root-Cause Discipline For Protocol / Scoreboard Mismatches
+
+When a failure is a protocol or scoreboard mismatch (handshake stall/deadlock,
+data mismatch, or timing violation), do not conclude a root cause from one-sided
+evidence:
+
+- Carry at least two competing hypotheses about where the fault is — for example
+  the initiator/stimulus side versus the responder/DUT side — and keep both
+  alive until waveform evidence rejects one.
+- Before attributing the root cause to one side, check the opposite side with
+  waveform evidence.
+- A clean result on one side is not a whole-protocol verdict: "no violation found
+  on side X" does not establish "the protocol is correct." State which sides you
+  checked and which you did not.
+
+This discipline pairs with tool coverage facts: inspection tools should report
+which checks they actually performed, and the agent uses that coverage to avoid
+treating a one-sided result as a full protocol conclusion.
+
 ## Tool Dependency Graph
 
 ```
@@ -235,6 +254,7 @@ These are not part of the default flow above; reach for them when the symptom is
 - `cursor_set` / `cursor_list` / `cursor_delete` — manage the named time anchors referenced above.
 - `inspect_handshake(wave_path, clock, valid, ready, payload?)` — cycle-by-cycle classification of a clocked valid/ready handshake: stalls, long-stall windows, backpressure imbalance, and payload-hold violations during a stall. For protocol-timing bugs that leave no value pattern in scoreboard logs. AHB has no literal valid — pass `valid_htrans` instead.
 - `suggest_handshakes(wave_path, scope?)` — scan the waveform and propose ready-to-use `inspect_handshake` bundles (pairs `*valid`/`*ready`, finds the clock, groups payload). Run before `inspect_handshake` so you don't hand-assemble signal paths.
+- `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?)` — scan AHB/APB-style protocol bundles where there is no literal valid. AHB candidates return `valid_htrans`-based `inspect_handshake` args; APB candidates return `psel`/`penable`/`pready` facts and mark the missing derived-valid step. Treat `direction_tag=unknown` as a real coverage limitation, not as permission to infer a side.
 - `sweep_handshakes(wave_path, scope?)` — whole-design handshake anomaly sweep: discover every valid/ready interface and inspect each in one call, returning a comparative fact table. For opaque global symptoms (timeout/hang) when you don't yet know which interface misbehaves.
 - `verify_window(wave_path, clock, mode, predicate | antecedent+consequent)` — evaluate a temporal predicate (always/never/eventually/implication) over a clock window and return a `holds` verdict plus a concrete witness/counterexample. To prove or disprove an RTL inference in one call.
 - `reconstruct_transactions(wave_path, clock, req_valid, req_ready, cmp_valid, cmp_ready, ...)` — id-correlated request/response transaction layer: per-transaction latency plus outstanding/ordering/unmatched facts. AXI read AR→R, write AW→B (+ optional W-data channel); `req_id`/`cmp_id` optional (omit both for in-order AXI-Lite/APB streams).

@@ -12,9 +12,12 @@ list of ``{path, name, width}`` signal descriptors so it is fully unit-testable;
 the I/O wrapper (``suggest_handshakes``) gathers that list from a parser via
 ``search_signals`` and calls the core.
 
-Scope note: covers AXI ``*valid``/``*ready``, generic ``x_valid``/``x_ready``
-and ``req``/``ack`` handshakes. It does NOT synthesise an AHB "valid" (there is
-no literal valid signal — it is ``htrans != IDLE``); for AHB pass valid manually.
+Scope note: ``suggest_handshakes`` covers AXI ``*valid``/``*ready``, generic
+``x_valid``/``x_ready`` and ``req``/``ack`` handshakes. Protocols without a
+literal valid are handled by ``suggest_protocol_bundles``: AHB bundles use
+``valid_htrans`` for ``inspect_handshake``; APB bundles are reported as
+``psel``/``penable``/``pready`` facts because ``inspect_handshake`` does not
+accept a derived ``psel && penable`` valid expression yet.
 """
 
 from __future__ import annotations
@@ -188,6 +191,22 @@ def _pick_payload(scope_sigs: list[dict], stem: str, cap: int) -> list[str]:
 # Keywords used to gather the candidate signal set from a parser.
 _GATHER_KEYWORDS = (*VALID_MARKERS, *READY_MARKERS, *CLOCK_TOKENS)
 
+_COMMON_PROTOCOL_ROLES = {"clk", "clock", "rst", "reset", "resetn", "rst_n"}
+_AHB_ROLES = {
+    "htrans", "hready", "hreadyout", "haddr", "hwrite", "hsize", "hburst",
+    "hprot", "hwdata", "hrdata", "hresp", "hclk", "hresetn", "hreset",
+} | _COMMON_PROTOCOL_ROLES
+_AHB_PAYLOAD_ROLES = ("haddr", "hwrite", "hsize", "hburst", "hprot", "hwdata")
+_APB_ROLES = {
+    "psel", "penable", "pready", "paddr", "pwrite", "pwdata", "pstrb",
+    "pprot", "prdata", "pslverr", "pclk", "presetn", "preset",
+} | _COMMON_PROTOCOL_ROLES
+_APB_PAYLOAD_ROLES = ("paddr", "pwrite", "pwdata", "pstrb", "pprot")
+_PROTOCOL_GATHER_KEYWORDS = {
+    "ahb": tuple(sorted(_AHB_ROLES | set(CLOCK_TOKENS) | set(RESET_TOKENS))),
+    "apb": tuple(sorted(_APB_ROLES | set(CLOCK_TOKENS) | set(RESET_TOKENS))),
+}
+
 
 def suggest_handshakes(
     *,
@@ -234,6 +253,296 @@ def suggest_handshakes(
         "reason": None if bundles else (
             "no valid/ready handshake pairs found by name"
             + (f" under scope {scope}" if scope else "")
-            + " — for AHB pass valid manually (there is no literal valid signal)."
+            + " — for AHB/APB use suggest_protocol_bundles (there is no literal valid signal)."
+        ),
+    }
+
+
+def propose_protocol_bundles(
+    signals: list[dict],
+    protocol: str,
+    scope: str | None = None,
+    max_payload: int = 8,
+) -> list[dict]:
+    """Pure core for protocol-specific bundle discovery.
+
+    Direction tags are discovery-layer facts only. They come from mechanical
+    name/hierarchy markers such as ``mst_``/``slv_``; absent or conflicting
+    markers degrade to ``unknown`` rather than guessing protocol ownership.
+    """
+    protocol = protocol.lower()
+    if protocol not in ("ahb", "apb"):
+        raise ValueError("protocol must be 'ahb' or 'apb'")
+
+    records = [_protocol_rec(s) for s in signals if s.get("path")]
+    records = [r for r in records if r is not None]
+    if scope:
+        records = [r for r in records if r["path"].startswith(scope)]
+
+    if protocol == "ahb":
+        bundles = _propose_ahb_bundles(records, max_payload=max_payload)
+    else:
+        bundles = _propose_apb_bundles(records, max_payload=max_payload)
+
+    rank = {"high": 0, "medium": 1, "low": 2}
+    bundles.sort(key=lambda b: (
+        rank.get(b["confidence"], 9),
+        b["scope"].count("."),
+        b.get("valid_htrans") or b.get("psel") or "",
+    ))
+    return bundles
+
+
+def _protocol_rec(s: dict) -> dict | None:
+    path = s.get("path")
+    if not path:
+        return None
+    leaf = _leaf(path)
+    return {
+        "path": path,
+        "leaf": leaf,
+        "leaf_lower": leaf.lower(),
+        "width": int(s.get("width") or 1),
+        "scope": _parent(path),
+        "var_type": (s.get("var_type") or "").lower(),
+        "direction": (s.get("direction") or "").lower(),
+    }
+
+
+def _role_for(leaf_lower: str, roles: set[str]) -> str | None:
+    for role in sorted(roles, key=len, reverse=True):
+        if leaf_lower == role or leaf_lower.endswith("_" + role) or leaf_lower.endswith("." + role):
+            return role
+    return None
+
+
+def _prefix_for_role(leaf_lower: str, role: str) -> str:
+    if leaf_lower == role:
+        return ""
+    for sep in ("_", "."):
+        suffix = sep + role
+        if leaf_lower.endswith(suffix):
+            return leaf_lower[: -len(suffix) + 1]
+    return ""
+
+
+def _same_prefix(a: dict, b: dict, role_b: str) -> bool:
+    return _prefix_for_role(a["leaf_lower"], a["role"]) == _prefix_for_role(b["leaf_lower"], role_b)
+
+
+def _by_scope_and_role(records: list[dict], roles: set[str]) -> dict[str, dict[str, list[dict]]]:
+    grouped: dict[str, dict[str, list[dict]]] = {}
+    for rec in records:
+        role = _role_for(rec["leaf_lower"], roles)
+        if role is None:
+            continue
+        rec = {**rec, "role": role}
+        grouped.setdefault(rec["scope"], {}).setdefault(role, []).append(rec)
+    return grouped
+
+
+def _pick_protocol_clock(scope_records: dict[str, list[dict]], clock_roles: tuple[str, ...]) -> str | None:
+    for role in clock_roles:
+        vals = scope_records.get(role, [])
+        if vals:
+            return vals[0]["path"]
+    all_clocks = []
+    for role in clock_roles:
+        all_clocks.extend(scope_records.get(role, []))
+    return all_clocks[0]["path"] if all_clocks else None
+
+
+def _pick_protocol_payload(
+    scope_records: dict[str, list[dict]],
+    source: dict,
+    payload_roles: tuple[str, ...],
+    cap: int,
+) -> list[str]:
+    payload: list[str] = []
+    source_prefix = _prefix_for_role(source["leaf_lower"], source["role"])
+    for role in payload_roles:
+        candidates = scope_records.get(role, [])
+        if source_prefix:
+            prefixed = [c for c in candidates if _prefix_for_role(c["leaf_lower"], role) == source_prefix]
+            candidates = prefixed or candidates
+        for c in candidates:
+            if c["path"] not in payload:
+                payload.append(c["path"])
+            if len(payload) >= cap:
+                return payload
+    return payload
+
+
+def _direction_from_names(paths: list[str]) -> tuple[str, str, str, list[str]]:
+    initiator_markers: list[str] = []
+    responder_markers: list[str] = []
+    for path in paths:
+        text = path.lower()
+        init_match = (
+            re.search(r"(^|[._])(mst|master|mstr)([._]|$)", text)
+            or re.search(r"(^|[._])m_(ahb|apb)([._]|$)", text)
+        )
+        resp_match = (
+            re.search(r"(^|[._])(slv|slave)([._]|$)", text)
+            or re.search(r"(^|[._])s_(ahb|apb)([._]|$)", text)
+        )
+        if init_match:
+            initiator_markers.append(init_match.group(0).strip("._"))
+        if resp_match:
+            responder_markers.append(resp_match.group(0).strip("._"))
+
+    if initiator_markers and not responder_markers:
+        return "initiator_side", f"name_marker:{initiator_markers[0]}", "high", []
+    if responder_markers and not initiator_markers:
+        return "responder_side", f"name_marker:{responder_markers[0]}", "high", []
+    if initiator_markers and responder_markers:
+        return "unknown", "conflicting_name_markers", "unknown", [
+            "direction marker conflict; caller must not treat this bundle as side-qualified"
+        ]
+    return "unknown", "no mechanical side marker found", "unknown", [
+        "direction unknown; caller must state this rather than infer a side"
+    ]
+
+
+def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
+    grouped = _by_scope_and_role(records, _AHB_ROLES)
+    bundles: list[dict] = []
+    for scope_name, roles in grouped.items():
+        for htrans in roles.get("htrans", []):
+            ready_candidates = roles.get("hreadyout", []) + roles.get("hready", [])
+            if not ready_candidates:
+                continue
+            prefixed = [r for r in ready_candidates if _same_prefix(htrans, r, r["role"])]
+            ready = (prefixed or ready_candidates)[0]
+            clock = _pick_protocol_clock(roles, ("hclk", "clk", "clock"))
+            reset = _pick_protocol_clock(roles, ("hresetn", "hreset", "resetn", "rst_n", "reset", "rst"))
+            payload = _pick_protocol_payload(roles, htrans, _AHB_PAYLOAD_ROLES, max_payload)
+            side_paths = [htrans["path"], ready["path"], *payload]
+            direction_tag, direction_basis, direction_confidence, warnings = _direction_from_names(side_paths)
+            needs = []
+            if clock is None:
+                needs.append("clock")
+            confidence = "high" if clock and payload else "medium" if clock else "low"
+            inspect_args = None if clock is None else {
+                "clock": clock,
+                "valid_htrans": htrans["path"],
+                "htrans_rule": "active",
+                "ready": ready["path"],
+                "payload": payload,
+            }
+            bundles.append({
+                "protocol": "ahb",
+                "scope": scope_name,
+                "direction_tag": direction_tag,
+                "direction_basis": direction_basis,
+                "direction_confidence": direction_confidence,
+                "clock": clock,
+                "reset": reset,
+                "valid_htrans": htrans["path"],
+                "htrans_rule": "active",
+                "psel": None,
+                "penable": None,
+                "ready": ready["path"],
+                "payload": payload,
+                "inspect_handshake_args": inspect_args,
+                "confidence": confidence,
+                "rationale": f"AHB htrans/ready pair in scope {scope_name or '(top)'}",
+                "needs": needs,
+                "warnings": warnings,
+            })
+    return bundles
+
+
+def _propose_apb_bundles(records: list[dict], max_payload: int) -> list[dict]:
+    grouped = _by_scope_and_role(records, _APB_ROLES)
+    bundles: list[dict] = []
+    for scope_name, roles in grouped.items():
+        for psel in roles.get("psel", []):
+            ready_candidates = roles.get("pready", [])
+            if not ready_candidates:
+                continue
+            prefixed = [r for r in ready_candidates if _same_prefix(psel, r, r["role"])]
+            ready = (prefixed or ready_candidates)[0]
+            penable_candidates = roles.get("penable", [])
+            prefixed_penable = [p for p in penable_candidates if _same_prefix(psel, p, p["role"])]
+            penable = (prefixed_penable or penable_candidates or [None])[0]
+            clock = _pick_protocol_clock(roles, ("pclk", "clk", "clock"))
+            reset = _pick_protocol_clock(roles, ("presetn", "preset", "resetn", "rst_n", "reset", "rst"))
+            payload = _pick_protocol_payload(roles, psel, _APB_PAYLOAD_ROLES, max_payload)
+            side_paths = [psel["path"], ready["path"], *(payload or [])]
+            if penable:
+                side_paths.append(penable["path"])
+            direction_tag, direction_basis, direction_confidence, warnings = _direction_from_names(side_paths)
+            needs = ["derived_valid_signal_for_psel_and_penable"]
+            if clock is None:
+                needs.append("clock")
+            if penable is None:
+                needs.append("penable")
+            confidence = "high" if clock and penable and payload else "medium" if clock else "low"
+            bundles.append({
+                "protocol": "apb",
+                "scope": scope_name,
+                "direction_tag": direction_tag,
+                "direction_basis": direction_basis,
+                "direction_confidence": direction_confidence,
+                "clock": clock,
+                "reset": reset,
+                "valid_htrans": None,
+                "htrans_rule": None,
+                "psel": psel["path"],
+                "penable": penable["path"] if penable else None,
+                "ready": ready["path"],
+                "payload": payload,
+                "inspect_handshake_args": None,
+                "confidence": confidence,
+                "rationale": (
+                    f"APB psel/penable/pready bundle in scope {scope_name or '(top)'}; "
+                    "inspect_handshake needs an explicit derived valid signal for psel && penable"
+                ),
+                "needs": needs,
+                "warnings": warnings,
+            })
+    return bundles
+
+
+def suggest_protocol_bundles(
+    *,
+    get_parser: Callable[[str], Any],
+    wave_path: str,
+    protocol: str,
+    scope: str | None = None,
+    max_candidates: int = 8,
+) -> dict[str, Any]:
+    """Scan a waveform for AHB/APB protocol bundles. Reads existing waveforms
+    only — does NOT rerun simulation."""
+    protocol = protocol.lower()
+    if protocol not in _PROTOCOL_GATHER_KEYWORDS:
+        raise ValueError("protocol must be 'ahb' or 'apb'")
+
+    parser = get_parser(wave_path)
+    sigs: dict[str, dict] = {}
+
+    def _add(results: list[dict]) -> None:
+        for r in results or []:
+            p = r.get("path")
+            if p and p not in sigs:
+                sigs[p] = r
+
+    for kw in _PROTOCOL_GATHER_KEYWORDS[protocol]:
+        try:
+            _add(parser.search_signals(kw).get("results", []))
+        except Exception:
+            continue
+
+    bundles = propose_protocol_bundles(list(sigs.values()), protocol=protocol, scope=scope)
+    return {
+        "wave_path": wave_path,
+        "protocol": protocol,
+        "scope": scope,
+        "candidate_count": len(bundles),
+        "candidates": bundles[:max_candidates],
+        "reason": None if bundles else (
+            f"no {protocol.upper()} bundles found by protocol signal names"
+            + (f" under scope {scope}" if scope else "")
         ),
     }

@@ -6,7 +6,7 @@ The pairing/clock/payload logic is a pure function over a flat
 
 from __future__ import annotations
 
-from src.handshake_suggest import propose_handshake_bundles
+from src.handshake_suggest import propose_handshake_bundles, propose_protocol_bundles
 
 
 def _sig(path, width=1):
@@ -124,3 +124,87 @@ def test_ranking_prefers_complete_bundles():
     bundles = propose_handshake_bundles(sigs)
     assert bundles[0]["valid"] == "tb.x.valid"  # high confidence first
     assert bundles[0]["confidence"] == "high"
+
+
+def test_ahb_protocol_bundle_returns_valid_htrans_inspect_args_and_direction():
+    sigs = [
+        _sig("tb.hclk"),
+        _sig("tb.mst_HTRANS[1:0]", 2),
+        _sig("tb.mst_HREADYOUT"),
+        _sig("tb.mst_HADDR[31:0]", 32),
+        _sig("tb.mst_HWRITE"),
+        _sig("tb.mst_HWDATA[31:0]", 32),
+        _sig("tb.slv_HTRANS[1:0]", 2),
+        _sig("tb.slv_HREADYOUT"),
+    ]
+
+    bundles = propose_protocol_bundles(sigs, protocol="ahb")
+    master = next(b for b in bundles if b["valid_htrans"] == "tb.mst_HTRANS[1:0]")
+
+    assert master["protocol"] == "ahb"
+    assert master["direction_tag"] == "initiator_side"
+    assert master["direction_confidence"] == "high"
+    assert master["ready"] == "tb.mst_HREADYOUT"
+    assert master["inspect_handshake_args"] == {
+        "clock": "tb.hclk",
+        "valid_htrans": "tb.mst_HTRANS[1:0]",
+        "htrans_rule": "active",
+        "ready": "tb.mst_HREADYOUT",
+        "payload": ["tb.mst_HADDR[31:0]", "tb.mst_HWRITE", "tb.mst_HWDATA[31:0]"],
+    }
+
+
+def test_ahb_protocol_bundle_degrades_direction_to_unknown_without_marker():
+    sigs = [
+        _sig("tb.hclk"),
+        _sig("tb.HTRANS[1:0]", 2),
+        _sig("tb.HREADY"),
+        _sig("tb.HADDR[31:0]", 32),
+    ]
+
+    bundles = propose_protocol_bundles(sigs, protocol="ahb")
+
+    assert len(bundles) == 1
+    assert bundles[0]["direction_tag"] == "unknown"
+    assert bundles[0]["direction_confidence"] == "unknown"
+    assert "direction unknown" in bundles[0]["warnings"][0]
+
+
+def test_apb_protocol_bundle_reports_derived_valid_need_not_fake_inspect_args():
+    sigs = [
+        _sig("tb.pclk"),
+        _sig("tb.s_apb_psel"),
+        _sig("tb.s_apb_penable"),
+        _sig("tb.s_apb_pready"),
+        _sig("tb.s_apb_paddr[15:0]", 16),
+        _sig("tb.s_apb_pwrite"),
+        _sig("tb.s_apb_pwdata[31:0]", 32),
+    ]
+
+    bundles = propose_protocol_bundles(sigs, protocol="apb")
+    b = bundles[0]
+
+    assert b["protocol"] == "apb"
+    assert b["direction_tag"] == "responder_side"
+    assert b["psel"] == "tb.s_apb_psel"
+    assert b["penable"] == "tb.s_apb_penable"
+    assert b["ready"] == "tb.s_apb_pready"
+    assert b["inspect_handshake_args"] is None
+    assert "derived_valid_signal_for_psel_and_penable" in b["needs"]
+    assert set(b["payload"]) == {
+        "tb.s_apb_paddr[15:0]",
+        "tb.s_apb_pwrite",
+        "tb.s_apb_pwdata[31:0]",
+    }
+
+
+def test_protocol_bundle_scope_filter():
+    sigs = [
+        _sig("tb.a.hclk"), _sig("tb.a.HTRANS[1:0]", 2), _sig("tb.a.HREADY"),
+        _sig("tb.b.hclk"), _sig("tb.b.HTRANS[1:0]", 2), _sig("tb.b.HREADY"),
+    ]
+
+    bundles = propose_protocol_bundles(sigs, protocol="ahb", scope="tb.b")
+
+    assert len(bundles) == 1
+    assert bundles[0]["scope"] == "tb.b"

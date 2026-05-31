@@ -52,7 +52,7 @@ from src.timespec import resolve_timespec
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool — see docs/auto-debug-v2-pilot-results.md.
 from src.verify_condition import diff_first_divergence, period, inspect_handshake
-from src.handshake_suggest import suggest_handshakes
+from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.handshake_sweep import sweep_handshake_anomalies
 from src.window_verify import verify_window
 from src.txn_reconstruct import reconstruct_transactions
@@ -1638,7 +1638,7 @@ async def list_tools():
                 "hand-assemble {clock, valid, ready, payload} signal paths. Covers AXI "
                 "*valid/*ready, generic valid/ready, and req/ack. It does NOT synthesise "
                 "an AHB 'valid' (there is no literal valid signal — it is htrans != IDLE); "
-                "for AHB pass valid manually. Reads existing waveforms only."
+                "use suggest_protocol_bundles for AHB/APB. Reads existing waveforms only."
             ),
             inputSchema={
                 "type": "object",
@@ -1648,6 +1648,30 @@ async def list_tools():
                     "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
                 },
                 "required": ["wave_path"],
+            },
+        ),
+
+        Tool(
+            name="suggest_protocol_bundles",
+            description=(
+                "Scan a waveform for protocol-specific AHB/APB bundles. AHB candidates "
+                "return ready-to-use inspect_handshake args with valid_htrans + ready + "
+                "payload, because AHB has no literal valid signal. APB candidates return "
+                "psel/penable/pready facts and loudly report that inspect_handshake still "
+                "needs a derived valid signal for psel && penable. Direction tags are "
+                "mechanical discovery facts only; unknown/conflicting markers degrade to "
+                "direction_tag='unknown' rather than guessing a side. Reads existing "
+                "waveforms only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
+                    "protocol": {"type": "string", "enum": ["ahb", "apb"], "description": "Protocol bundle family to discover."},
+                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
+                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                },
+                "required": ["wave_path", "protocol"],
             },
         ),
 
@@ -1848,15 +1872,15 @@ async def list_tools():
         # tests are retained in src/verify_condition.py / schemas.py / tests so
         # it can be re-registered here in one block if a real use-case appears.
     ]
-    # A/B harness toggle: hide the WHOLE handshake feature (both
-    # suggest_handshakes and inspect_handshake) from list_tools so a cold
+    # A/B harness toggle: hide the WHOLE handshake feature (suggestion and
+    # inspection tools) from list_tools so a cold
     # "baseline" session cannot see or be hinted by it. Enabled by either
     # TRACEWEAVE_AB_HIDE_HANDSHAKE=1 or the presence of the sentinel file
     # /tmp/tw_ab_hide_handshake (touch it + reconnect for Arm A, rm it +
     # reconnect for Arm B). Used only for the handshake blind A/B pilots; off by
     # default for normal operation.
     if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists("/tmp/tw_ab_hide_handshake"):
-        hidden = {"inspect_handshake", "suggest_handshakes", "sweep_handshakes"}
+        hidden = {"inspect_handshake", "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes"}
         return [t for t in _tools if t.name not in hidden]
     return _tools
 
@@ -2351,6 +2375,16 @@ async def _dispatch(name: str, args: dict):
             max_candidates=args.get("max_candidates", 8),
         )
         return schemas.SuggestHandshakesResult.model_validate(result)
+
+    elif name == "suggest_protocol_bundles":
+        result = suggest_protocol_bundles(
+            get_parser=_get_parser,
+            wave_path=args["wave_path"],
+            protocol=args["protocol"],
+            scope=args.get("scope"),
+            max_candidates=args.get("max_candidates", 8),
+        )
+        return schemas.SuggestProtocolBundlesResult.model_validate(result)
 
     elif name == "sweep_handshakes":
         result = sweep_handshake_anomalies(
