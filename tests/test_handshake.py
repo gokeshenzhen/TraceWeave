@@ -95,6 +95,11 @@ def test_clean_handshake_no_findings(tmp_path: Path):
     assert r["cursor"] is None
     assert len(store) == 0
     assert r["reason"] is None
+    assert r["coverage"]["valid_ready_resolved"] is True
+    assert r["coverage"]["clock_sampled"] is True
+    assert r["coverage"]["stall_checked"] is True
+    assert r["coverage"]["backpressure_checked"] is True
+    assert r["coverage"]["payload_hold_requested"] is False
 
 
 def test_stall_counts_and_long_stall_finding(tmp_path: Path):
@@ -203,6 +208,10 @@ def test_no_edges_returns_reason(tmp_path: Path):
     assert r["sample_count"] == 0
     assert r["reason"] is not None
     assert "edge" in r["reason"]
+    assert r["coverage"]["valid_ready_resolved"] is True
+    assert r["coverage"]["clock_sampled"] is False
+    assert r["coverage"]["stall_checked"] is False
+    assert r["coverage"]["backpressure_checked"] is False
 
 
 def test_missing_valid_signal_reports_reason(tmp_path: Path):
@@ -232,6 +241,10 @@ def test_unresolved_payload_is_loud_not_silently_clean(tmp_path: Path):
     r = _run(tmp_path, "loud.vcd", cycles, payload=["top.nonexistent_bus"], max_wait_cycles=1)
     assert r["payload_unresolved"] == ["top.nonexistent_bus"]
     assert r["payload_hold_checked"] is False
+    assert r["coverage"]["payload_hold_requested"] is True
+    assert r["coverage"]["payload_hold_checked"] is False
+    assert r["coverage"]["payload_signals_checked"] == 0
+    assert r["coverage"]["payload_signals_unresolved"] == 1
     assert r["payload_hold_violations"] == 0
     assert any("did NOT run" in w for w in r["warnings"])
     # stall analysis is unaffected by the unresolved payload
@@ -244,7 +257,28 @@ def test_resolved_payload_marks_hold_checked(tmp_path: Path):
     r = _run(tmp_path, "checked.vcd", cycles, with_addr=True, payload=["top.addr"])
     assert r["payload_hold_checked"] is True
     assert r["payload_unresolved"] == []
+    assert r["coverage"]["payload_hold_requested"] is True
+    assert r["coverage"]["payload_hold_checked"] is True
+    assert r["coverage"]["payload_signals_checked"] == 1
+    assert r["coverage"]["payload_signals_unresolved"] == 0
     assert r["warnings"] == []
+
+
+def test_mixed_payload_resolution_reports_partial_coverage(tmp_path: Path):
+    cycles = [{"valid": 1, "ready": 1, "addr": 0x10} for _ in range(4)]
+    r = _run(
+        tmp_path,
+        "partial.vcd",
+        cycles,
+        with_addr=True,
+        payload=["top.addr", "top.missing"],
+    )
+
+    assert r["payload_hold_checked"] is False
+    assert r["coverage"]["payload_hold_checked"] is False
+    assert r["coverage"]["payload_hold_partially_checked"] is True
+    assert r["coverage"]["payload_signals_checked"] == 1
+    assert r["coverage"]["payload_signals_unresolved"] == 1
 
 
 # ── AHB-style derived valid (valid_htrans) ────────────────────────────────

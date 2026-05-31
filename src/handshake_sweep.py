@@ -36,6 +36,7 @@ _FACT_KEYS = (
     "sample_count", "transfer_count", "stall_count", "max_stall_cycles",
     "max_stall_begin_ps", "ended_in_stall", "final_stall_cycles",
     "payload_hold_violations", "ready_without_valid_cycles", "unknown_sample_cycles",
+    "coverage",
 )
 
 

@@ -149,6 +149,8 @@ def test_deadlocked_stage_sorts_first_and_sets_one_cursor(tmp_path):
     assert top["valid"] == "top.u1.in_valid"
     assert top["ended_in_stall"] is True
     assert "ended_in_stall" in top["flags"]
+    assert top["coverage"]["stall_checked"] is True
+    assert top["coverage"]["backpressure_checked"] is True
     assert res["cursor"] is not None
     assert len(cs.list()) == 1  # exactly ONE cursor for the whole sweep
 

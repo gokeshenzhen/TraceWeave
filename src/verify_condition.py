@@ -798,6 +798,18 @@ def inspect_handshake(
     payload_unresolved = [p for p in payload if p in signal_errors]
     resolved_payload = [p for p in payload if p not in signal_errors]
     warnings: list[str] = []
+    coverage: dict[str, Any] = {
+        "clock_sampled": False,
+        "valid_ready_resolved": False,
+        "stall_checked": False,
+        "backpressure_checked": False,
+        "payload_hold_requested": bool(check_payload_hold and payload),
+        "payload_hold_checked": False,
+        "payload_hold_partially_checked": False,
+        "payload_signals_requested": len(payload),
+        "payload_signals_checked": 0,
+        "payload_signals_unresolved": len(payload_unresolved),
+    }
 
     result: dict[str, Any] = {
         "wave_path": wave_path,
@@ -821,6 +833,7 @@ def inspect_handshake(
         "payload_hold_violations": 0,
         "payload_hold_checked": False,
         "payload_unresolved": payload_unresolved,
+        "coverage": coverage,
         "unknown_sample_cycles": 0,
         "findings": [],
         "cursor": None,
@@ -835,12 +848,15 @@ def inspect_handshake(
         if sig in signal_errors:
             result["reason"] = f"{role} signal not found: {signal_errors[sig]}"
             return result
+    coverage["valid_ready_resolved"] = True
 
     # The payload-hold check only runs on payload signals that actually
     # resolved. Be LOUD when some did not: a payload_hold_violations of 0 must
     # never be read as "payload stable" if the signal was simply not found.
     do_hold_check = check_payload_hold and bool(resolved_payload)
-    result["payload_hold_checked"] = do_hold_check
+    payload_hold_complete = do_hold_check and not payload_unresolved
+    coverage["payload_signals_checked"] = len(resolved_payload) if check_payload_hold else 0
+    coverage["payload_hold_partially_checked"] = do_hold_check and bool(payload_unresolved)
     if check_payload_hold and payload_unresolved:
         warnings.append(
             "payload-hold check did NOT run for unresolved signal(s): "
@@ -857,6 +873,11 @@ def inspect_handshake(
             f"no {edge} edges of clock {clock!r} in the window — cannot sample a handshake"
         )
         return result
+    coverage["clock_sampled"] = True
+    coverage["stall_checked"] = True
+    coverage["backpressure_checked"] = True
+    coverage["payload_hold_checked"] = payload_hold_complete
+    result["payload_hold_checked"] = payload_hold_complete
 
     findings: list[dict[str, Any]] = []
     in_stall = False
@@ -983,8 +1004,24 @@ def _handshake_input_error(
         "ended_in_stall": False, "final_stall_cycles": 0,
         "ready_without_valid_cycles": 0, "payload_hold_violations": 0,
         "payload_hold_checked": False, "payload_unresolved": [],
+        "coverage": _empty_handshake_coverage(),
         "unknown_sample_cycles": 0, "findings": [], "cursor": None,
         "reason": message, "warnings": [], "signal_errors": {},
+    }
+
+
+def _empty_handshake_coverage() -> dict[str, Any]:
+    return {
+        "clock_sampled": False,
+        "valid_ready_resolved": False,
+        "stall_checked": False,
+        "backpressure_checked": False,
+        "payload_hold_requested": False,
+        "payload_hold_checked": False,
+        "payload_hold_partially_checked": False,
+        "payload_signals_requested": 0,
+        "payload_signals_checked": 0,
+        "payload_signals_unresolved": 0,
     }
 
 

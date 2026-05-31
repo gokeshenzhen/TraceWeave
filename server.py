@@ -1811,6 +1811,8 @@ async def list_tools():
                 "*valid/*ready, an AHB pair (ready=hready, valid=a 1-bit 'htrans!=IDLE' "
                 "signal, payload=[htrans,haddr,hwrite,hsize] which must hold while "
                 "hready is low), a generic valid-ready stream, or a credit interface. "
+                "Returns coverage facts for the checks it actually ran "
+                "(stall, backpressure, payload-hold) without assigning protocol side. "
                 "Auto-registers a cursor at the first problem (hold violation > long "
                 "stall > longest stall). Reads existing waveforms only — does NOT rerun "
                 "simulation."

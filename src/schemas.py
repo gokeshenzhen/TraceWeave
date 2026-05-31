@@ -743,6 +743,21 @@ class HandshakeFinding(SchemaModel):
     stall_begin_ps: int | None = None
 
 
+class HandshakeCoverage(SchemaModel):
+    # Facts about what inspect_handshake actually evaluated. These are not side
+    # or protocol verdicts; discovery/caller context owns those labels.
+    clock_sampled: bool = False
+    valid_ready_resolved: bool = False
+    stall_checked: bool = False
+    backpressure_checked: bool = False
+    payload_hold_requested: bool = False
+    payload_hold_checked: bool = False
+    payload_hold_partially_checked: bool = False
+    payload_signals_requested: int = 0
+    payload_signals_checked: int = 0
+    payload_signals_unresolved: int = 0
+
+
 class HandshakeInspectResult(SchemaModel):
     wave_path: str
     clock: str
@@ -768,6 +783,7 @@ class HandshakeInspectResult(SchemaModel):
     payload_hold_violations: int = 0
     payload_hold_checked: bool = False
     payload_unresolved: list[str] = Field(default_factory=list)
+    coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0
     findings: list[HandshakeFinding] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
@@ -832,6 +848,7 @@ class SweptInterface(SchemaModel):
     ready: str
     payload: list[str] = Field(default_factory=list)
     confidence: str | None = None
+    coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     # flags are factual observations, never verdicts
     flags: list[str] = Field(default_factory=list)
     sample_count: int = 0
