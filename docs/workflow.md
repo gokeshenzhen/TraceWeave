@@ -205,6 +205,13 @@ evidence:
 - A clean result on one side is not a whole-protocol verdict: "no violation found
   on side X" does not establish "the protocol is correct." State which sides you
   checked and which you did not.
+- A confirmed violation/anomaly is a perception fact, not a consequence verdict.
+  Before stating what it *did* (its effect on the failing observable), confirm
+  that effect against the actual values — do not infer the consequence from the
+  anomaly alone, since the same anomaly can have different downstream effects.
+  (E.g. a stall-time hold violation may have skipped a beat or corrupted one; the
+  scoreboard `got=` value disambiguates — a never-written `00` vs a wrong
+  non-zero byte.)
 
 This discipline pairs with tool coverage facts: inspection tools should report
 which checks they actually performed, and the agent uses that coverage to avoid
