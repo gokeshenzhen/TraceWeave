@@ -1711,10 +1711,15 @@ async def list_tools():
                 "over thousands of cycles you cannot read yourself. Templates, not a DSL: "
                 "a term is {signal, op, value} (op: eq/ne/gt/ge/lt/le/is_x/is_known); a "
                 "predicate is a list of terms (implicit AND — run two calls for OR). Modes: "
-                "always(P), never(P), eventually(P), and implication (A |-> B within N "
-                "cycles, the protocol-response template). x/z cycles are reported as "
+                "always(P), never(P), eventually(P), implication (A |-> B within N "
+                "cycles, the protocol-response template), and sequence (the per-accepted-beat "
+                "increment of a signal — address-stride checks like AHB haddr +stride; "
+                "supports modulo for WRAP bursts and restart_when for burst boundaries). "
+                "x/z cycles are reported as "
                 "unknown (never silently passed); an implication whose response window runs "
-                "past end-of-trace is reported inconclusive (never silently failed). Use to "
+                "past end-of-trace is reported inconclusive (never silently failed). On a "
+                "finding it sets violating_signal + a next_action to explain_signal_driver "
+                "(bus facts do not self-attribute master/slave). Use to "
                 "prove/disprove an RTL inference in one call. Reads existing waveforms only."
             ),
             inputSchema={
@@ -1722,7 +1727,7 @@ async def list_tools():
                 "properties": {
                     "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
                     "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "mode": {"type": "string", "enum": ["always", "never", "eventually", "implication"], "description": "Temporal template to evaluate."},
+                    "mode": {"type": "string", "enum": ["always", "never", "eventually", "implication", "sequence"], "description": "Temporal template to evaluate."},
                     "predicate": {
                         "type": "array",
                         "description": "always/never/eventually: list of {signal, op, value} terms, AND-combined.",
@@ -1738,6 +1743,18 @@ async def list_tools():
                     },
                     "antecedent": {"type": "array", "description": "implication only: the A predicate (list of terms).", "items": {"type": "object"}},
                     "consequent": {"type": "array", "description": "implication only: the B predicate that must follow A.", "items": {"type": "object"}},
+                    "delta": {
+                        "type": "object",
+                        "description": "sequence only: check the per-accepted-beat increment of one signal. predicate is the accepted-beat gate (e.g. hready==1 && htrans active). E.g. AHB byte INCR: {signal:'top.haddr', value:1}. For WRAP bursts pass modulo = burst region bytes (size*len) so the wrap-around beat is accepted via (cur-prev) mod modulo. Pass restart_when (a predicate, e.g. htrans==NONSEQ) to re-seed at each new burst so burst boundaries are not flagged.",
+                        "properties": {
+                            "signal": {"type": "string", "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr)."},
+                            "value": {"type": ["integer", "string"], "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'."},
+                            "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le"], "description": "How the actual increment is compared to value. Default eq."},
+                            "modulo": {"type": ["integer", "string"], "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR."},
+                            "restart_when": {"type": "array", "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.", "items": {"type": "object"}},
+                        },
+                        "required": ["signal", "value"],
+                    },
                     "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A (inclusive). Default 1.", "default": 1},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
                     "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
@@ -2433,6 +2450,7 @@ async def _dispatch(name: str, args: dict):
             predicate=args.get("predicate"),
             antecedent=args.get("antecedent"),
             consequent=args.get("consequent"),
+            delta=args.get("delta"),
             within_cycles=args.get("within_cycles", 1),
             edge=args.get("edge", "posedge"),
             start_ps=_resolve_time(args.get("start_time_ps", 0)),

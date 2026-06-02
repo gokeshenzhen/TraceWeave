@@ -728,6 +728,17 @@ class PeriodResult(SchemaModel):
     reason: str | None = None
 
 
+class NextAction(SchemaModel):
+    # A forward-link emitted by a bus-fact tool ONLY when it has a concrete
+    # finding. Bridges a waveform fact to the next investigation (e.g. attribute a
+    # violation to a driving instance). Bus-fact tools never self-attribute
+    # master vs slave; attribution = bus-fact + drive-direction, composed by the
+    # caller. signal_path is the signal to feed the suggested tool.
+    tool: str
+    reason: str
+    signal_path: str | None = None
+
+
 class HandshakeFinding(SchemaModel):
     type: str
     severity: str
@@ -786,6 +797,12 @@ class HandshakeInspectResult(SchemaModel):
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0
     findings: list[HandshakeFinding] = Field(default_factory=list)
+    # violating_signal: the signal carrying the primary (cursor-anchored) finding
+    # — raw material for master/slave attribution, NOT a verdict. None when there
+    # is no signal-specific finding. next_actions fires only when a finding
+    # exists; it bridges the bus fact to RTL tracing (explain_signal_driver).
+    violating_signal: str | None = None
+    next_actions: list[NextAction] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -906,10 +923,17 @@ class WindowVerifyResult(SchemaModel):
     cycles_evaluated: int = 0
     unknown_cycles: int = 0
     antecedent_count: int = 0
+    # beats_evaluated: sequence mode only — accepted beats where a delta was
+    # actually compared (excludes first/restart/gate-false/unknown beats).
+    beats_evaluated: int = 0
     violation_count: int = 0
     inconclusive_count: int = 0
     counterexample: VerifyEvidence | None = None
     witness: VerifyEvidence | None = None
+    # violating_signal + next_actions: see HandshakeInspectResult. sequence mode
+    # populates these on an address/stride violation (master-driven signal).
+    violating_signal: str | None = None
+    next_actions: list[NextAction] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)

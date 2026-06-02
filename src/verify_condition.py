@@ -836,6 +836,8 @@ def inspect_handshake(
         "coverage": coverage,
         "unknown_sample_cycles": 0,
         "findings": [],
+        "violating_signal": None,
+        "next_actions": [],
         "cursor": None,
         "reason": None,
         "warnings": warnings,
@@ -964,11 +966,47 @@ def inspect_handshake(
         _close_stall(samples[-1]["time_ps"])
 
     result["findings"] = findings
+    _attach_handshake_attribution(result, findings, ready)
     _attach_handshake_cursor(
         result, cursor_store, findings, wave_path, valid_signal, ready, edge,
         cursor_name, cursor_note,
     )
     return result
+
+
+def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[str, Any]],
+                                  ready: str) -> None:
+    """Surface the signal carrying the primary finding + a forward-link to driver
+    lookup. Bus-fact tools do NOT self-attribute master vs slave (the trace holds
+    values, not ownership); this gives the caller the raw material to compose
+    attribution = bus-fact + drive-direction.
+
+    A payload-hold violation is on a master-driven control/data signal → point at
+    it directly. Otherwise a stall (valid && !ready) is a valid/ready relationship
+    → point at ``ready`` so the caller can resolve slave back-pressure vs the
+    master's valid. ``violating_signal`` stays None for a stall (no single faulty
+    signal — it is a relationship)."""
+    hold = next((f for f in findings if f.get("type") == "payload_hold_violation"), None)
+    if hold and hold.get("signal"):
+        sig = hold["signal"]
+        result["violating_signal"] = sig
+        result["next_actions"] = [{
+            "tool": "explain_signal_driver",
+            "reason": ("attribute this payload-hold violation: the held signal is "
+                       "master-driven, so a change during a stall points at the "
+                       "master's drive logic — confirm the driving instance."),
+            "signal_path": sig,
+        }]
+        return
+    stalled = result["ended_in_stall"] or any(f.get("type") == "long_stall" for f in findings)
+    if stalled:
+        result["next_actions"] = [{
+            "tool": "explain_signal_driver",
+            "reason": ("a stall is valid && !ready — resolve who drives ready "
+                       "(slave back-pressure) vs the master's valid to attribute "
+                       "the stall; the trace shows the values, not who drove them."),
+            "signal_path": ready,
+        }]
 
 
 def _ahb_valid_truth(value: Any, rule: str) -> bool | None:

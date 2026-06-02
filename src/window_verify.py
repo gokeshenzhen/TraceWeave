@@ -29,7 +29,7 @@ from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _resolve_signal_path
 
-_MODES = ("always", "never", "eventually", "implication")
+_MODES = ("always", "never", "eventually", "implication", "sequence")
 _TERM_OPS = ("eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known")
 _VALUE_OPS = ("eq", "ne", "gt", "ge", "lt", "le")
 
@@ -43,6 +43,7 @@ def verify_window(
     predicate: list[dict] | None = None,
     antecedent: list[dict] | None = None,
     consequent: list[dict] | None = None,
+    delta: dict | None = None,
     within_cycles: int = 1,
     edge: str = "posedge",
     start_ps: int = 0,
@@ -65,10 +66,13 @@ def verify_window(
         "cycles_evaluated": 0,
         "unknown_cycles": 0,
         "antecedent_count": 0,
+        "beats_evaluated": 0,
         "violation_count": 0,
         "inconclusive_count": 0,
         "counterexample": None,
         "witness": None,
+        "violating_signal": None,
+        "next_actions": [],
         "cursor": None,
         "reason": None,
         "warnings": [],
@@ -85,13 +89,25 @@ def verify_window(
         if predicate:
             result["reason"] = "implication uses antecedent + consequent, not predicate"
             return result
+        if delta:
+            result["reason"] = "implication does not use delta (only 'sequence' does)"
+            return result
         if within_cycles < 0:
             result["reason"] = "within_cycles must be >= 0"
             return result
     else:
+        # sequence reuses `predicate` as the accepted-beat gate.
         terms_sets = {"predicate": predicate}
         if antecedent or consequent:
             result["reason"] = f"mode {mode!r} uses predicate, not antecedent/consequent"
+            return result
+        if mode == "sequence":
+            derr = _validate_delta(delta)
+            if derr:
+                result["reason"] = derr
+                return result
+        elif delta:
+            result["reason"] = f"mode {mode!r} does not use delta (only 'sequence' does)"
             return result
 
     all_terms: list[dict] = []
@@ -108,8 +124,10 @@ def verify_window(
     # --- resolve signals (auto-correct bus bit-range; loud on miss) ----------
     clock = _resolve_signal_path(parser, clock)
     sig_map: dict[str, str] = {}
-    for t in all_terms:
-        raw = t["signal"]
+    seq_raws: list[str] = []
+    if mode == "sequence":
+        seq_raws = [delta["signal"], *(t["signal"] for t in (delta.get("restart_when") or []))]
+    for raw in [t["signal"] for t in all_terms] + seq_raws:
         if raw not in sig_map:
             sig_map[raw] = _resolve_signal_path(parser, raw)
     resolved_signals = sorted(set(sig_map.values()))
@@ -145,6 +163,8 @@ def verify_window(
             result, samples, _resolve_set(antecedent), _resolve_set(consequent),
             within_cycles,
         )
+    elif mode == "sequence":
+        _eval_sequence(result, samples, _resolve_set(predicate), _resolve_delta(delta, sig_map))
     else:
         _eval_simple(result, samples, mode, _resolve_set(predicate))
 
@@ -236,6 +256,116 @@ def _eval_implication(
     result["holds"] = violations == 0
 
 
+def _eval_sequence(result: dict, samples: list[dict], gate: list[dict], delta: dict) -> None:
+    """Check the per-accepted-beat increment of one signal (e.g. AHB haddr stride).
+
+    The increment is delta_signal[beat n] - [beat n-1] over the cycles where the
+    ``gate`` predicate holds (accepted beats). ``op``/``value`` compare it (default
+    eq). ``modulo`` (WRAP region bytes = size*len, supplied by the caller who
+    decoded the burst) takes the increment modulo so a legal wrap-around is not a
+    violation. ``restart_when`` (a predicate, e.g. htrans==NONSEQ) re-seeds the
+    sequence so a new burst's base address is not compared to the previous burst.
+
+    Faithfulness: the first accepted beat (and each restart beat) has no
+    predecessor → seed only, never a violation. A wait-state (gate false) keeps
+    the predecessor (it is not a new beat). Any x/z on the gate or the tracked
+    signal breaks continuity → counted unknown, predecessor reset (never a delta
+    across an unknown). WRAP boundaries beyond ``modulo`` and bursts without
+    ``restart_when`` are the caller's responsibility (kept anti-thick on purpose).
+    """
+    sig = delta["signal"]
+    op = delta["op"]
+    target = delta["value"]
+    modulo = delta["modulo"]
+    restart = delta["restart_when"]
+    result["cycles_evaluated"] = len(samples)
+    unknown = beats = violations = 0
+    first_violation: dict | None = None
+    prev_val: int | None = None
+    prev_idx: int | None = None
+    for i, s in enumerate(samples):
+        sigs = s["signals"]
+        g = _eval_predicate(gate, sigs)
+        if g is None:
+            unknown += 1
+            prev_val = None
+            continue
+        if not g:
+            continue  # not an accepted beat (e.g. a wait state) — predecessor holds
+        cur = _seq_dec(sigs.get(sig))
+        if cur is None:  # x/z on the tracked signal — cannot compute a delta
+            unknown += 1
+            prev_val = None
+            continue
+        rs = _eval_predicate(restart, sigs) if restart else False
+        if rs is None:
+            unknown += 1
+            prev_val = None
+            continue
+        if rs or prev_val is None:
+            prev_val, prev_idx = cur, i  # new burst / first beat — seed, no check
+            continue
+        beats += 1
+        actual = cur - prev_val
+        if modulo is not None:
+            actual %= modulo
+        if not _cmp(actual, op, target):
+            violations += 1
+            if first_violation is None:
+                first_violation = _seq_evidence(
+                    s, i, sig, cur, prev_val, prev_idx, actual, op, target, modulo,
+                )
+        prev_val, prev_idx = cur, i
+    result["unknown_cycles"] = unknown
+    result["beats_evaluated"] = beats
+    result["violation_count"] = violations
+    result["counterexample"] = first_violation
+    result["holds"] = violations == 0
+    if first_violation is not None:
+        result["violating_signal"] = sig
+        result["next_actions"] = [_driver_next_action(
+            sig,
+            "attribute this address/stride violation: the stepped signal is "
+            "master-driven, so a wrong increment points at the master's address "
+            "logic — confirm the driving instance (master vs slave).",
+        )]
+
+
+def _seq_dec(v: Any) -> int | None:
+    return v.get("dec") if isinstance(v, dict) else None
+
+
+def _cmp(a: int, op: str, b: int) -> bool:
+    if op == "eq":
+        return a == b
+    if op == "ne":
+        return a != b
+    if op == "gt":
+        return a > b
+    if op == "ge":
+        return a >= b
+    if op == "lt":
+        return a < b
+    return a <= b  # le (validated upfront)
+
+
+def _seq_evidence(sample: dict, idx: int, sig: str, cur: int, prev_val: int,
+                  prev_idx: int | None, actual: int, op: str, target: int,
+                  modulo: int | None) -> dict[str, Any]:
+    expected = f"{op} {target}" + (f" (mod {modulo})" if modulo is not None else "")
+    return {
+        "time_ps": sample["time_ps"],
+        "cycle_index": idx,
+        "signal_values": {
+            sig: hex(cur),
+            f"{sig}@prev_beat": hex(prev_val),
+            "prev_beat_cycle": str(prev_idx),
+            "actual_increment": str(actual),
+            "expected_increment": expected,
+        },
+    }
+
+
 def _eval_predicate(terms: list[dict], sig_values: dict[str, Any]) -> bool | None:
     """Three-valued AND: False if any term False, else None if any unknown, else True."""
     saw_none = False
@@ -293,6 +423,53 @@ def _validate_terms(terms: Any, label: str) -> str | None:
             except (ValueError, TypeError):
                 return f"term value {t.get('value')!r} on {t['signal']!r} is not an integer"
     return None
+
+
+def _validate_delta(delta: Any) -> str | None:
+    if not isinstance(delta, dict):
+        return ("sequence mode needs a 'delta' object "
+                "{signal, value, op?, modulo?, restart_when?}")
+    if not isinstance(delta.get("signal"), str) or not delta["signal"]:
+        return "delta needs a 'signal' (string) to track the per-beat increment of"
+    if "value" not in delta:
+        return "delta needs a 'value' (the expected per-beat increment, e.g. 1 for byte)"
+    try:
+        _coerce(delta["value"])
+    except (ValueError, TypeError):
+        return f"delta value {delta.get('value')!r} is not an integer"
+    op = delta.get("op", "eq")
+    if op not in _VALUE_OPS:
+        return f"delta op must be one of {_VALUE_OPS}, got {op!r}"
+    if delta.get("modulo") is not None:
+        try:
+            if _coerce(delta["modulo"]) <= 0:
+                return "delta modulo must be a positive integer (WRAP region size)"
+        except (ValueError, TypeError):
+            return f"delta modulo {delta.get('modulo')!r} is not an integer"
+    rw = delta.get("restart_when")
+    if rw is not None:
+        return _validate_terms(rw, "delta.restart_when")
+    return None
+
+
+def _resolve_delta(delta: dict, sig_map: dict[str, str]) -> dict:
+    """Coerce numeric fields and rewrite signal paths to their resolved form."""
+    out = {
+        "signal": sig_map[delta["signal"]],
+        "op": delta.get("op", "eq"),
+        "value": _coerce(delta["value"]),
+        "modulo": _coerce(delta["modulo"]) if delta.get("modulo") is not None else None,
+        "restart_when": [
+            {**t, "signal": sig_map[t["signal"]]} for t in (delta.get("restart_when") or [])
+        ],
+    }
+    return out
+
+
+def _driver_next_action(signal: str, reason: str) -> dict[str, Any]:
+    """Bridge a bus fact to RTL tracing. Bus-fact tools do NOT self-attribute
+    master vs slave; this points the caller at the drive-direction lookup."""
+    return {"tool": "explain_signal_driver", "reason": reason, "signal_path": signal}
 
 
 def _coerce(value: Any) -> int:

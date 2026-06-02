@@ -379,3 +379,43 @@ def test_explicit_cursor_name(tmp_path: Path):
              cursor_name="stall_start")
     assert r["cursor"]["name"] == "stall_start"
     assert store.get("stall_start") is not None
+
+
+def test_payload_hold_violation_attribution(tmp_path: Path):
+    # The payload-hold violation names the master-driven signal and bridges to
+    # explain_signal_driver — bus facts do not self-attribute master vs slave.
+    cycles = [
+        {"valid": 1, "ready": 1, "addr": 0x10},
+        {"valid": 1, "ready": 0, "addr": 0x10},
+        {"valid": 1, "ready": 0, "addr": 0x11},
+    ]
+    r = _run(tmp_path, "hold_attr.vcd", cycles, with_addr=True,
+             payload=["top.addr"], max_wait_cycles=100)
+    assert r["payload_hold_violations"] == 1
+    assert r["violating_signal"] == "top.addr"
+    assert len(r["next_actions"]) == 1
+    na = r["next_actions"][0]
+    assert na["tool"] == "explain_signal_driver"
+    assert na["signal_path"] == "top.addr"
+    assert "master" in na["reason"]
+
+
+def test_stall_attribution_points_at_ready(tmp_path: Path):
+    # A long stall has no single faulty signal; attribution lever is ready
+    # (slave back-pressure) vs the master's valid -> next_action targets ready,
+    # violating_signal stays None (it is a relationship, not one signal).
+    cycles = [{"valid": 1, "ready": 1}] + [{"valid": 1, "ready": 0}] * 5 + [{"valid": 1, "ready": 1}]
+    r = _run(tmp_path, "stall_attr.vcd", cycles, max_wait_cycles=3)
+    assert any(f["type"] == "long_stall" for f in r["findings"])
+    assert r["violating_signal"] is None
+    assert len(r["next_actions"]) == 1
+    assert r["next_actions"][0]["tool"] == "explain_signal_driver"
+    assert r["next_actions"][0]["signal_path"] == "top.ready"
+
+
+def test_clean_handshake_has_no_next_actions(tmp_path: Path):
+    cycles = [{"valid": 1, "ready": 1} for _ in range(4)]
+    r = _run(tmp_path, "clean_attr.vcd", cycles)
+    assert r["findings"] == []
+    assert r["violating_signal"] is None
+    assert r["next_actions"] == []

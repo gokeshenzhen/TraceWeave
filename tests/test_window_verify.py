@@ -185,3 +185,120 @@ def test_is_x_op(tmp_path):
              predicate=[{"signal": "top.cnt", "op": "is_x"}])
     assert r["holds"] is True
     assert r["witness"]["cycle_index"] == 1
+
+
+# --- sequence mode (per-accepted-beat increment / address stride) ------------
+_SEQ_SIGS = [("!", "clk", 1), ("#", "acc", 1), ("%", "addr", 8), ("&", "start", 1)]
+
+
+def test_sequence_incr_holds(tmp_path):
+    # accepted every cycle; addr 0,1,2,3 -> +1 stride holds
+    cycles = [{"acc": 1, "addr": a, "start": 0} for a in range(4)]
+    r = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence",
+             predicate=[{"signal": "top.acc", "op": "eq", "value": 1}],
+             delta={"signal": "top.addr", "value": 1})
+    assert r["holds"] is True
+    assert r["violation_count"] == 0
+    assert r["beats_evaluated"] == 3  # first beat seeds, 3 deltas checked
+
+
+def test_sequence_jump_is_violation_with_attribution(tmp_path):
+    store = CursorStore()
+    cycles = [{"acc": 1, "addr": a, "start": 0} for a in (0, 1, 5, 6)]
+    r = _run(tmp_path, cycles, _SEQ_SIGS, store=store, mode="sequence",
+             predicate=[{"signal": "top.acc", "op": "eq", "value": 1}],
+             delta={"signal": "top.addr", "value": 1})
+    assert r["holds"] is False
+    assert r["violation_count"] == 1
+    ce = r["counterexample"]
+    assert ce["cycle_index"] == 2
+    assert ce["signal_values"]["top.addr"] == "0x5"
+    assert ce["signal_values"]["top.addr@prev_beat"] == "0x1"
+    assert ce["signal_values"]["actual_increment"] == "4"
+    # attribution: names the master-driven signal + bridges to driver lookup
+    assert r["violating_signal"] == "top.addr"
+    assert r["next_actions"][0]["tool"] == "explain_signal_driver"
+    assert r["next_actions"][0]["signal_path"] == "top.addr"
+    assert r["cursor"] is not None
+    assert len(store.list()) == 1
+
+
+def test_sequence_wait_states_do_not_false_fail(tmp_path):
+    # addr only advances on accepted beats; it holds while acc==0 (wait state).
+    cycles = [
+        {"acc": 1, "addr": 0, "start": 0},
+        {"acc": 0, "addr": 0, "start": 0},  # wait state, addr holds — skipped
+        {"acc": 1, "addr": 1, "start": 0},
+        {"acc": 0, "addr": 1, "start": 0},
+        {"acc": 1, "addr": 2, "start": 0},
+    ]
+    r = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence",
+             predicate=[{"signal": "top.acc", "op": "eq", "value": 1}],
+             delta={"signal": "top.addr", "value": 1})
+    assert r["holds"] is True
+    assert r["beats_evaluated"] == 2
+
+
+def test_sequence_wrap_modulo_accepts_wraparound(tmp_path):
+    # WRAP byte burst, region 4 bytes: 0x6,0x7,0x4,0x5. raw delta at the wrap is
+    # -3; modulo 4 makes it +1 so the legal wrap is not a violation.
+    cycles = [{"acc": 1, "addr": a, "start": 0} for a in (0x6, 0x7, 0x4, 0x5)]
+    gate = [{"signal": "top.acc", "op": "eq", "value": 1}]
+    wrapped = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence", predicate=gate,
+                   delta={"signal": "top.addr", "value": 1, "modulo": 4})
+    assert wrapped["holds"] is True
+    # without modulo the same trace is flagged at the wrap beat
+    plain = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence", predicate=gate,
+                 delta={"signal": "top.addr", "value": 1})
+    assert plain["holds"] is False
+    assert plain["counterexample"]["cycle_index"] == 2
+
+
+def test_sequence_restart_when_reseeds_at_burst_start(tmp_path):
+    # two bursts: 0,1 then 8,9. start=1 marks each burst's first beat.
+    cycles = [
+        {"acc": 1, "addr": 0, "start": 1},
+        {"acc": 1, "addr": 1, "start": 0},
+        {"acc": 1, "addr": 8, "start": 1},  # new burst — re-seed, do not check 8-1
+        {"acc": 1, "addr": 9, "start": 0},
+    ]
+    gate = [{"signal": "top.acc", "op": "eq", "value": 1}]
+    with_restart = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence", predicate=gate,
+                        delta={"signal": "top.addr", "value": 1,
+                               "restart_when": [{"signal": "top.start", "op": "eq", "value": 1}]})
+    assert with_restart["holds"] is True
+    # without restart_when the cross-burst jump 1->8 is flagged
+    without = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence", predicate=gate,
+                   delta={"signal": "top.addr", "value": 1})
+    assert without["holds"] is False
+    assert without["counterexample"]["cycle_index"] == 2
+
+
+def test_sequence_xz_breaks_continuity_no_false_fail(tmp_path):
+    # an x on the tracked signal breaks the chain — counted unknown, the next
+    # known beat re-seeds rather than computing a bogus 2-step delta.
+    cycles = [
+        {"acc": 1, "addr": 0, "start": 0},
+        {"acc": 1, "addr": 1, "start": 0},
+        {"acc": 1, "addr": "x", "start": 0},
+        {"acc": 1, "addr": 3, "start": 0},
+    ]
+    r = _run(tmp_path, cycles, _SEQ_SIGS, mode="sequence",
+             predicate=[{"signal": "top.acc", "op": "eq", "value": 1}],
+             delta={"signal": "top.addr", "value": 1})
+    assert r["holds"] is True
+    assert r["unknown_cycles"] == 1
+    assert r["beats_evaluated"] == 1
+
+
+def test_sequence_missing_delta_is_loud(tmp_path):
+    r = _run(tmp_path, [{"acc": 1, "addr": 0, "start": 0}], _SEQ_SIGS, mode="sequence",
+             predicate=[{"signal": "top.acc", "op": "eq", "value": 1}])
+    assert r["reason"] and "delta" in r["reason"]
+
+
+def test_delta_on_non_sequence_mode_is_loud(tmp_path):
+    r = _run(tmp_path, _cnt_cycles(), _CNT_SIGS, mode="always",
+             predicate=[{"signal": "top.cnt", "op": "le", "value": 5}],
+             delta={"signal": "top.cnt", "value": 1})
+    assert r["reason"] and "delta" in r["reason"]
