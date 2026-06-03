@@ -329,6 +329,25 @@ class TestDiagnosticSnapshot:
         assert result.top_module == "top_tb"
         assert result.missing_steps is None
 
+    def test_snapshot_surfaces_protocol_symptom_hint(self):
+        _prefill_all()
+        hint = "scoreboard/compare-style failures are frequently a SYMPTOM ..."
+        log = _make_parse_result(total_errors=3).model_copy(
+            update={"protocol_symptom_hint": hint}
+        )
+        server._result_cache["parse_sim_log"] = log
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_symptom_hint == hint
+
+    def test_snapshot_no_protocol_symptom_hint_when_absent(self):
+        _prefill_all()  # default parse result carries no protocol hint
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_symptom_hint is None
+
     def test_log_summary_reports_auto_diff_when_present(self):
         _prefill_all()
         server._result_cache["parse_sim_log"] = schemas.ParseSimLogResult.model_validate(

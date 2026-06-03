@@ -250,12 +250,56 @@ def suggest_handshakes(
         "scope": scope,
         "candidate_count": len(bundles),
         "candidates": bundles[:max_candidates],
-        "reason": None if bundles else (
-            "no valid/ready handshake pairs found by name"
-            + (f" under scope {scope}" if scope else "")
-            + " — for AHB/APB use suggest_protocol_bundles (there is no literal valid signal)."
-        ),
+        "reason": None if bundles else _empty_result_reason(parser, wave_path, scope),
     }
+
+
+def _probe_present(parser: Any, token: str, scope: str | None) -> bool:
+    """True if a signal whose leaf is exactly ``token`` (or ``*_token``/``*.token``)
+    exists under ``scope``. Pure name-existence fact via search_signals."""
+    try:
+        results = parser.search_signals(token).get("results", [])
+    except Exception:
+        return False
+    for r in results:
+        p = r.get("path", "")
+        if scope and not p.startswith(scope):
+            continue
+        leaf = _leaf(p).lower()
+        if leaf == token or leaf.endswith("_" + token) or leaf.endswith("." + token):
+            return True
+    return False
+
+
+def _empty_result_reason(parser: Any, wave_path: str, scope: str | None) -> str:
+    """Empty-result hint for suggest_handshakes. A lightweight mechanical probe
+    for the strongest bus-family discriminators (htrans → AHB; psel+penable →
+    APB) upgrades the generic pointer into a copy-paste-ready
+    suggest_protocol_bundles call. Detection is name-existence fact, never a
+    guess — if no discriminator matches we keep the generic pointer rather than
+    asserting a protocol type."""
+    base = "no valid/ready handshake pairs found by name" + (
+        f" under scope {scope}" if scope else ""
+    )
+    has_ahb = _probe_present(parser, "htrans", scope)
+    has_apb = _probe_present(parser, "psel", scope) and _probe_present(parser, "penable", scope)
+    scope_arg = f', scope="{scope}"' if scope else ""
+    cmds: list[str] = []
+    if has_ahb:
+        cmds.append(f'suggest_protocol_bundles(wave_path="{wave_path}", protocol="ahb"{scope_arg})')
+    if has_apb:
+        cmds.append(f'suggest_protocol_bundles(wave_path="{wave_path}", protocol="apb"{scope_arg})')
+    if cmds:
+        family = "AHB/APB" if len(cmds) > 1 else ("AHB" if has_ahb else "APB")
+        return (
+            base
+            + f" — this looks like an {family} bus (no literal valid signal). Run: "
+            + "  ".join(cmds)
+        )
+    return (
+        base
+        + " — for AHB/APB use suggest_protocol_bundles (there is no literal valid signal)."
+    )
 
 
 def propose_protocol_bundles(

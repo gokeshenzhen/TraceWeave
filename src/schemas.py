@@ -288,6 +288,11 @@ class ParseSimLogResult(TruncatableResult):
     previous_log_detected: bool = False
     candidate_previous_logs: list[str] = Field(default_factory=list)
     suggested_followup_tool: str | None = None
+    # Generic, boundary-safe pointer set when a scoreboard/compare-style failure
+    # is detected: such failures are often a SYMPTOM of a lower-level bus-protocol
+    # problem. The hint names the protocol-health tools but does NOT assert a
+    # protocol type or a specific signal — root-cause judgement stays with the LLM.
+    protocol_symptom_hint: str | None = None
     first_group_context: ErrorContextResult | None = None
     problem_hints: ProblemHints | None = None
     auto_diff: DiffResult | None = None
@@ -501,6 +506,10 @@ class DiagnosticSnapshot(SchemaModel):
     primary_failure_target: dict[str, Any] | None = None
     suspected_failure_class: str | None = None
     recommended_signals: list[dict[str, Any]] | None = None
+    # Mirrors ParseSimLogResult.protocol_symptom_hint when a scoreboard/compare
+    # failure is present, so the snapshot's recommended_next surfaces the same
+    # boundary-safe protocol-health pointer at session start.
+    protocol_symptom_hint: str | None = None
     missing_steps: list[dict[str, Any]] | None = None
 
 

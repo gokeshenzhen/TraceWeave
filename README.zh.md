@@ -253,7 +253,7 @@ codex mcp list
 
 ### 会话概览
 
-- `get_diagnostic_snapshot`:只读地汇总缓存会话数据并给出下一步建议
+- `get_diagnostic_snapshot`:只读地汇总缓存会话数据并给出下一步建议;镜像 `parse_sim_log` 的 `protocol_symptom_hint`,使 scoreboard 失败在会话开始时就浮现协议健康检查指针
 
 ### 路径与层次结构
 
@@ -274,7 +274,7 @@ codex mcp list
 
 ### 日志分析
 
-- `parse_sim_log`:解析并归一化运行时失败,输出分组摘要与 `failure_events`;同时返回 `log_snapshot_id`,用于仿真器覆盖同名日志后的前后对比。
+- `parse_sim_log`:解析并归一化运行时失败,输出分组摘要与 `failure_events`;同时返回 `log_snapshot_id`,用于仿真器覆盖同名日志后的前后对比。当失败是 scoreboard/数据比对类时,会设置 `protocol_symptom_hint` —— 一个边界安全的指针,提醒在逐行读 RTL 前先用 `suggest_protocol_bundles`/`inspect_handshake` 检查总线协议健康;它从不断言协议类型或具体信号。
 - `diff_sim_failure_results`:按路径或 `base_snapshot_id` / `new_snapshot_id` 对比两次仿真运行。若前一次已对同一路径调用过 `parse_sim_log`,后续只传 `new_log_path` 时会自动使用上一轮解析快照作为 baseline。
 - `get_error_context`:抽取指定行号附近的原始日志上下文
 
@@ -294,7 +294,7 @@ codex mcp list
 - `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`:命名的、进程内的时间锚。定位到某时刻的工具(如 `diff_first_divergence`、`period`)会自动注册一个游标,后续可用 `@<name>` 引用,免去跨调用复制 ps 时间戳。游标不持久化——server 重启即丢。
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`:两个波形信号首次取值不相等的时刻——可跨两个波形(如 passing vs failing run),也可在同一波形内(两个本应相等的信号,如 lockstep / shadow 寄存器)。在分叉处自动注册游标。要求两侧都是被 dump 的波形信号(它不与软件参考模型比对)。
 - `period(wave_path, signal, edge?, ...)`:测信号边沿的主导周期,并标出第一个偏离该周期的拍(off-beat),自动注册为游标。用于"这个信号本应周期性——节奏第一次在哪里破"(时钟、strobe、定速 valid)。
-- `suggest_handshakes(wave_path, scope?, ...)`:扫描波形,提出可直接使用的 `inspect_handshake` bundle —— 按 scope 与 stem 配对 `*valid`/`*ready`、找到时钟、归组通道 payload 总线。先跑它,就不用手攒 `{clock, valid, ready, payload}`。覆盖 AXI/通用 valid-ready 与 req/ack。
+- `suggest_handshakes(wave_path, scope?, ...)`:扫描波形,提出可直接使用的 `inspect_handshake` bundle —— 按 scope 与 stem 配对 `*valid`/`*ready`、找到时钟、归组通道 payload 总线。先跑它,就不用手攒 `{clock, valid, ready, payload}`。覆盖 AXI/通用 valid-ready 与 req/ack。当什么都没找到时,会用一个轻量名字探测(`htrans`→AHB、`psel`+`penable`→APB)把空结果提示升级成可直接复制粘贴的 `suggest_protocol_bundles` 调用。
 - `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?, ...)`:扫描没有字面 `valid` 的协议 bundle。AHB candidate 会返回可直接传给 `inspect_handshake` 的 `valid_htrans`、`ready` 与 payload;APB candidate 返回 `psel`/`penable`/`pready` 事实,并明确标出 `inspect_handshake` 仍需要 `psel && penable` 的派生 valid 信号。方向标签只来自 discovery 层的机械事实(`initiator_side` / `responder_side` / `unknown`),推不出或冲突时返回 unknown,不硬猜。
 - `inspect_handshake(wave_path, clock, valid, ready, payload?, ...)`:对时钟化 valid/ready 握手逐拍分类 —— stall 连续段(valid 高、ready 低)、最长/超阈值 stall、背压失衡(ready 高、valid 低),以及给了 `payload` 时的保持违例(transfer 仍在 stall 期间 payload 发生变化)。协议无关:AXI `*valid`/`*ready`、通用 valid-ready 流、credit 接口。AHB 没有字面 valid —— 传 `valid_htrans=<htrans 路径>`(及 `htrans_rule`:`active`=NONSEQ/SEQ,或 `non_idle`)即可派生出 valid(`payload`=haddr/hwrite/hsize,它们在 hready 低时必须保持)。返回 `coverage` 事实,说明实际跑了哪些检查(`stall_checked`、`backpressure_checked`、`payload_hold_checked`/partial),但不标协议侧别。在第一个问题处自动注册游标(保持违例 > 长 stall > 最长 stall)。有 finding 时设置 `violating_signal`(payload-hold 时为那个 master 驱动的保持信号;stall 时为 `null`)和指向 `explain_signal_driver` 的 `next_actions` 链接——总线事实不自判 master/slave(归属 = 总线事实 + 驱动方向,由调用方组合;stall 的链接指向 `ready`)。给出在 scoreboard 日志里不留值规律的协议时序事实。
 - `sweep_handshakes(wave_path, scope?, ...)`:全设计握手**异常扫描** —— 一次调用发现每个 valid/ready 接口并逐个在窗口内 inspect,返回一张对比事实表(各接口的 stall、死锁特征、payload 保持、背压),按透明的机械键排序。用于不透明的全局症状(timeout/hang)、当你还不知道众多接口里哪个出问题时;它把 N 次 `suggest_handshakes`+`inspect_handshake` 往返压缩成一次。返回事实而非根因裁决——按症状自行重排。在背压流水线上,最长 stall 排序给出的是传播前沿,根因则在 stall→断粮(starvation)的边界。当发现的接口数超过 `max_interfaces`(默认 64)时会(响亮地)置 `truncated=true`。

@@ -6,7 +6,11 @@ The pairing/clock/payload logic is a pure function over a flat
 
 from __future__ import annotations
 
-from src.handshake_suggest import propose_handshake_bundles, propose_protocol_bundles
+from src.handshake_suggest import (
+    _empty_result_reason,
+    propose_handshake_bundles,
+    propose_protocol_bundles,
+)
 
 
 def _sig(path, width=1):
@@ -208,3 +212,60 @@ def test_protocol_bundle_scope_filter():
 
     assert len(bundles) == 1
     assert bundles[0]["scope"] == "tb.b"
+
+
+# --- 5.4: empty-result hint mechanical bus-family probe ------------------------
+
+
+class _FakeParser:
+    """Minimal parser exposing search_signals over a fixed signal-name list."""
+
+    def __init__(self, paths):
+        self._paths = paths
+
+    def search_signals(self, keyword):
+        k = keyword.lower()
+        return {"results": [{"path": p} for p in self._paths if k in p.lower()]}
+
+
+def test_empty_hint_ahb_gives_copy_paste_command():
+    parser = _FakeParser(["tb.mst_HTRANS[1:0]", "tb.mst_HREADYOUT", "tb.hclk"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", None)
+    assert 'suggest_protocol_bundles(wave_path="/w/a.fsdb", protocol="ahb")' in reason
+    assert 'protocol="apb"' not in reason
+
+
+def test_empty_hint_apb_requires_both_psel_and_penable():
+    parser = _FakeParser(["tb.psel", "tb.penable", "tb.pready", "tb.pclk"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", None)
+    assert 'suggest_protocol_bundles(wave_path="/w/a.fsdb", protocol="apb")' in reason
+    assert 'protocol="ahb"' not in reason
+
+
+def test_empty_hint_psel_alone_does_not_assert_apb():
+    # psel present but no penable -> not enough to claim APB -> generic pointer.
+    parser = _FakeParser(["tb.psel", "tb.pclk"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", None)
+    assert "Run:" not in reason
+    assert "use suggest_protocol_bundles" in reason
+
+
+def test_empty_hint_both_families_emits_two_commands():
+    parser = _FakeParser(["tb.HTRANS[1:0]", "tb.psel", "tb.penable"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", None)
+    assert 'protocol="ahb"' in reason
+    assert 'protocol="apb"' in reason
+
+
+def test_empty_hint_degrades_without_discriminator():
+    parser = _FakeParser(["tb.foo", "tb.bar", "tb.clk"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", None)
+    assert "Run:" not in reason
+    assert "no valid/ready handshake pairs found by name" in reason
+
+
+def test_empty_hint_propagates_scope_into_command():
+    parser = _FakeParser(["tb.u.HTRANS[1:0]", "tb.u.HREADY"])
+    reason = _empty_result_reason(parser, "/w/a.fsdb", "tb.u")
+    assert 'scope="tb.u"' in reason
+    assert "under scope tb.u" in reason

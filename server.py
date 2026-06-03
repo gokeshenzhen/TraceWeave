@@ -3116,12 +3116,19 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             )
         )
 
+    protocol_symptom_hint = (
+        getattr(compatible_log_result, "protocol_symptom_hint", None)
+        if (compatible_log_result is not None and not is_clean_run)
+        else None
+    )
+
     return schemas.DiagnosticSnapshot(
         sim_paths=sections["sim_paths"],
         hierarchy=sections["hierarchy"],
         log_analysis=sections["log_analysis"],
         structural_scan=sections["structural_scan"],
         recommended_next=sections["recommended_next"],
+        protocol_symptom_hint=protocol_symptom_hint,
         missing_steps=missing_steps if missing_steps else None,
         **quick_ref,
     )

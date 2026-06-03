@@ -217,6 +217,15 @@ This discipline pairs with tool coverage facts: inspection tools should report
 which checks they actually performed, and the agent uses that coverage to avoid
 treating a one-sided result as a full protocol conclusion.
 
+On a scoreboard/compare-style failure, `parse_sim_log` sets a generic
+`protocol_symptom_hint` (mirrored into `get_diagnostic_snapshot`'s top-level
+output) reminding you that such a mismatch is frequently the *symptom* of a
+lower-level bus-protocol problem — check interface protocol health with
+`suggest_protocol_bundles` / `inspect_handshake` before reading RTL line-by-line
+or scrubbing the waveform by hand. The hint is a boundary-safe pointer only: it
+never asserts a protocol type or names a specific signal, and the
+two-hypothesis discipline above still applies.
+
 ## Tool Dependency Graph
 
 ```

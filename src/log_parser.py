@@ -911,8 +911,36 @@ def _build_summary(
         "first_error_line": first_error_line,
         "groups": group_list,
         "sampling_strategy": sampling_strategy,
+        "protocol_symptom_hint": _protocol_symptom_hint(events),
         **_find_previous_log_hints(log_path),
     }
+
+
+# Failure classes for which a scoreboard/compare mismatch is frequently the
+# downstream symptom of a bus-protocol timing problem rather than the root cause.
+_PROTOCOL_SYMPTOM_SOURCES = frozenset({"scoreboard"})
+_PROTOCOL_SYMPTOM_MECHANISMS = frozenset({"mismatch", "protocol", "deadlock", "timeout"})
+
+_PROTOCOL_SYMPTOM_HINT = (
+    "scoreboard/compare-style failures are frequently a SYMPTOM of a lower-level "
+    "bus-protocol problem, not the root cause. Before reading RTL line-by-line or "
+    "inspecting the waveform by hand, check interface protocol health with the "
+    "protocol tools: suggest_protocol_bundles + inspect_handshake for AHB/APB, or "
+    "suggest_handshakes for valid/ready buses."
+)
+
+
+def _protocol_symptom_hint(events: list[dict[str, Any]]) -> str | None:
+    """Return a generic protocol-symptom pointer when a scoreboard/mismatch-class
+    failure is present. Boundary-safe: it never asserts a protocol type or a
+    specific signal — it only nudges toward the protocol-health tools."""
+    for event in events:
+        if (
+            event.get("failure_source") in _PROTOCOL_SYMPTOM_SOURCES
+            or event.get("failure_mechanism") in _PROTOCOL_SYMPTOM_MECHANISMS
+        ):
+            return _PROTOCOL_SYMPTOM_HINT
+    return None
 
 
 def _sample_groups_phase_stratified(

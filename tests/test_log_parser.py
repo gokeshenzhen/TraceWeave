@@ -864,3 +864,30 @@ class TestRealLog:
             "groups",
         ]:
             assert field in self.result
+
+
+# --- 5.1: protocol-symptom pointer on scoreboard/mismatch-class failures -------
+
+
+def test_protocol_symptom_hint_triggers_on_scoreboard_source():
+    events = [{"failure_source": "scoreboard", "failure_mechanism": "mismatch"}]
+    hint = log_parser_module._protocol_symptom_hint(events)
+    assert hint is not None
+    assert "protocol" in hint.lower()
+    # boundary-safe: never names a specific signal like HREADY
+    assert "hready" not in hint.lower()
+
+
+def test_protocol_symptom_hint_triggers_on_protocol_class_mechanism():
+    for mechanism in ("mismatch", "protocol", "deadlock", "timeout"):
+        events = [{"failure_source": "user_log", "failure_mechanism": mechanism}]
+        assert log_parser_module._protocol_symptom_hint(events) is not None
+
+
+def test_protocol_symptom_hint_none_for_non_protocol_failure():
+    events = [{"failure_source": "user_log", "failure_mechanism": "tb_error"}]
+    assert log_parser_module._protocol_symptom_hint(events) is None
+
+
+def test_protocol_symptom_hint_none_for_clean_run():
+    assert log_parser_module._protocol_symptom_hint([]) is None
