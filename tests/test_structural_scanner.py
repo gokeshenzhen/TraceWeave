@@ -145,6 +145,40 @@ class TestStructuralScanner:
         assert risk["type"] == "magic_condition"
         assert risk["line"] == 12
 
+    def test_magic_condition_skips_sva_boundary_assertion(self, monkeypatch, tmp_path):
+        # An AHB 1KB-boundary check lives inside an SVA property; the literal
+        # comparison there is a checker by construction, not suspect control
+        # logic. A real driver compare on the same literal must still report.
+        rtl = tmp_path / "ahb_assertion.sv"
+        rtl.write_text(
+            """\
+interface ahb_intf;
+  // 1KB Boundary Check
+  property kb_boundry_p;
+    @(posedge HCLK) disable iff(!HRESETn)
+      (HTRANS == 3) |-> (HADDR[10:0] != 11'b10_0000_0000);
+  endproperty
+
+  always_comb begin
+    if (mode == 2'b10) y = 1'b1;
+  end
+endinterface
+"""
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
+
+        assert result["total_risks"] == 1
+        risk = result["risks"][0]
+        assert "mode == 2'b10" in risk["evidence"][0]
+        assert all("HADDR" not in r["evidence"][0] for r in result["risks"])
+
     def test_skips_missing_files(self, monkeypatch):
         compile_result = _compile_result_for("des_clean.v")
         compile_result["files"]["user"].append(

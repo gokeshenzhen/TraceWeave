@@ -161,6 +161,7 @@ class WaveformAnalyzer:
         top_hint: str | None = None,
         structural_risks: list[dict[str, Any]] | None = None,
         problem_hints: dict[str, Any] | ProblemHints | None = None,
+        handshake_sweep: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         log_parser = SimLogParser(self.log_path, self.simulator)
         events = log_parser.parse_failure_events()
@@ -183,6 +184,7 @@ class WaveformAnalyzer:
         if event_analysis["recommended_signals"]:
             primary_for_risk["failing_signal_path"] = event_analysis["recommended_signals"][0].get("path")
         correlated_risks = _rank_structural_risks(structural_risks or [], primary_for_risk, normalized_hints)
+        runtime_protocol_findings = _build_runtime_protocol_findings(handshake_sweep)
         why = [
             "Selected the earliest failure with the strongest available timing/source anchor.",
             f"Failure classified heuristically as {failure_class}.",
@@ -191,12 +193,18 @@ class WaveformAnalyzer:
             why.append("Hierarchy ranking preferred DUT-facing instances over helper/checker nodes.")
         if correlated_risks:
             why.append("Structural scan risks were re-ranked against the primary failure instance and current symptom hints.")
+        if runtime_protocol_findings:
+            why.append(
+                "Runtime handshake sweep flagged protocol anomalies; these are facts to "
+                "correlate against the failure, not a root-cause verdict."
+            )
 
         return {
             "primary_failure_target": primary,
             "recommended_signals": event_analysis["recommended_signals"],
             "recommended_instances": event_analysis["likely_instances"],
             "correlated_structural_risks": correlated_risks,
+            "runtime_protocol_findings": runtime_protocol_findings,
             "suspected_failure_class": failure_class,
             "recommendation_strategy": "role_rank_v2_structural",
             "failure_window_center_ps": primary.get("time_ps"),
@@ -558,6 +566,54 @@ def _normalize_problem_hints(problem_hints: dict[str, Any] | ProblemHints | None
         return ProblemHints.model_validate(problem_hints)
     except Exception:
         return None
+
+
+def _runtime_finding_relevance(flags: list[str], attribution: dict[str, Any] | None) -> str:
+    if attribution and attribution.get("violating_side"):
+        return (
+            "one-sided protocol violation; the valid/HTRANS driver (channel producer) "
+            "owns this obligation — check it before blaming the ready/slave side"
+        )
+    if "ended_in_stall" in flags:
+        return (
+            "interface ended in an open stall (possible deadlock); two-sided — check "
+            "both the ready/slave back-pressure and the valid/master side"
+        )
+    return "protocol anomaly observed; treat as a fact to correlate, not a verdict"
+
+
+def _build_runtime_protocol_findings(handshake_sweep: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Carry flagged sweep_handshakes rows into recommend output.
+
+    The rows arrive already sorted by sweep's mechanical key
+    (handshake_sweep._sort_key); we preserve that order and only filter to
+    flagged interfaces. No re-ranking — one ordering, owned by the sweep tool.
+    """
+    if not handshake_sweep:
+        return []
+    findings: list[dict[str, Any]] = []
+    for iface in handshake_sweep.get("interfaces", []):
+        flags = iface.get("flags") or []
+        if not flags:
+            continue
+        attribution = iface.get("attribution")
+        findings.append(
+            {
+                "kind": iface.get("kind"),
+                "scope": iface.get("scope"),
+                "clock": iface.get("clock"),
+                "valid": iface.get("valid"),
+                "ready": iface.get("ready"),
+                "flags": flags,
+                "valid_deassert_violations": iface.get("valid_deassert_violations", 0),
+                "payload_hold_violations": iface.get("payload_hold_violations", 0),
+                "max_stall_cycles": iface.get("max_stall_cycles", 0),
+                "ended_in_stall": iface.get("ended_in_stall", False),
+                "attribution": attribution,
+                "relevance_reason": _runtime_finding_relevance(flags, attribution),
+            }
+        )
+    return findings
 
 
 def _rank_structural_risks(

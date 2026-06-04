@@ -76,7 +76,14 @@ Step 3: parse_sim_log(log_path, simulator)
 Step 4: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
 │  Get a strong default failure target and role-ranked signal suggestions.
 │  Returns: primary_failure_target, recommended_signals, recommended_instances,
-│           suspected_failure_class, recommendation_strategy, failure_window_center_ps
+│           suspected_failure_class, recommendation_strategy, failure_window_center_ps,
+│           correlated_structural_risks, runtime_protocol_findings
+│  - runtime_protocol_findings: flagged interfaces carried over from a compatible
+│    sweep_handshakes cache (the runtime-layer counterpart of
+│    correlated_structural_risks). Facts to correlate, not a verdict. If sweep
+│    has not run on a failing run with a waveform, required_next_call steers back
+│    to sweep_handshakes (degraded_reason="missing_handshake_sweep"); a
+│    scoreboard/compare/mismatch symptom prioritizes sweep over the structural scan.
 │
 │  What the agent does:
 │  - Use the top recommended signals first instead of blind substring search

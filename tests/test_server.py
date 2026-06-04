@@ -46,6 +46,19 @@ def _prefill_build_tb_hierarchy_state(**overrides):
     server._session_state["build_tb_hierarchy"] = state
 
 
+def _prefill_sweep_handshakes_cache(wave_path: str, interfaces=None):
+    """预填一个与 wave_path 兼容的 sweep_handshakes 缓存 + provenance。"""
+    server._result_cache["sweep_handshakes"] = server.schemas.HandshakeSweepResult.model_validate(
+        {
+            "wave_path": wave_path,
+            "interface_count": len(interfaces or []),
+            "flagged_count": len(interfaces or []),
+            "interfaces": interfaces or [],
+        }
+    )
+    server._result_provenance["sweep_handshakes"] = {"wave_path": wave_path, "scope": None}
+
+
 LOG_SAMPLE = """\
 Booting simulation
 module_a ERROR unique issue a @ 1 ns
@@ -1020,6 +1033,7 @@ $enddefinitions $end
             "compile_log": "/tmp/verif/work/elab.log",
             "simulator": "vcs",
         }
+        _prefill_sweep_handshakes_cache(str(wave_path))
 
         result = await server._dispatch(
             "recommend_failure_debug_next_steps",
@@ -1107,6 +1121,7 @@ $enddefinitions $end
             "compile_log": "/tmp/verif/work/elab.log",
             "simulator": "auto",
         }
+        _prefill_sweep_handshakes_cache(str(wave_path))
 
         result = await server._dispatch(
             "recommend_failure_debug_next_steps",
@@ -1122,6 +1137,147 @@ $enddefinitions $end
         assert result["correlated_structural_risks"][0]["relevance_score"] == 17
         assert result["workflow_incomplete"] is False
         assert result["required_next_call"] is None
+
+    async def test_recommend_consumes_sweep_cache_into_runtime_protocol_findings(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sb.sv", 66: top_tb.sb.route: started at 10ps failed at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$var wire 1 ! req $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {"scan_scope": "scope1", "files_scanned": 1, "total_risks": 0, "risks": [],
+             "categories_scanned": ["magic_condition"], "skipped_files": []}
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "vcs",
+        }
+        _prefill_sweep_handshakes_cache(
+            str(wave_path),
+            interfaces=[
+                {
+                    "kind": "ahb",
+                    "scope": "top_tb.m_if0",
+                    "clock": "top_tb.HCLK",
+                    "valid": "top_tb.m_if0.HTRANS",
+                    "ready": "top_tb.m_if0.HREADY",
+                    "flags": ["premature_valid_deassertion"],
+                    "valid_deassert_violations": 1,
+                    "max_stall_cycles": 4,
+                    "attribution": {
+                        "violating_side": "valid_driver",
+                        "exonerated_side": "ready_driver",
+                        "basis": "protocol_valid_hold_obligation",
+                    },
+                },
+            ],
+        )
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        findings = result["runtime_protocol_findings"]
+        assert findings, "sweep cache should populate runtime_protocol_findings"
+        top = findings[0]
+        assert top["kind"] == "ahb"
+        assert "HTRANS" in top["valid"]
+        assert top["flags"] == ["premature_valid_deassertion"]
+        assert top["attribution"]["violating_side"] == "valid_driver"
+        assert "valid" in top["relevance_reason"].lower()
+        # sweep cache present ⇒ workflow not flagged incomplete for a missing sweep
+        assert result["degraded_reason"] is None
+
+    async def test_recommend_requires_sweep_on_protocol_symptom_when_missing(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text(
+            '"/path/sb.sv", 66: top_tb.sb: READ-BACK mismatch at 20ps\n'
+        )
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$var wire 1 ! req $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#20
+1!
+"""
+        )
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.3",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 1,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 1,
+                "unique_types": 1,
+                "total_groups": 1,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 1,
+                "problem_hints": {"has_x": False, "has_z": False, "error_pattern": "mismatch"},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_path),
+            "simulator": "vcs",
+        }
+        # scan cache present, sweep cache absent ⇒ on a protocol/mismatch symptom
+        # the sweep takes priority over the (already-satisfied) structural scan.
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {"scan_scope": "scope1", "files_scanned": 1, "total_risks": 0, "risks": [],
+             "categories_scanned": ["magic_condition"], "skipped_files": []}
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "vcs",
+        }
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["workflow_incomplete"] is True
+        assert result["degraded_reason"] == "missing_handshake_sweep"
+        assert result["required_next_call"]["tool"] == "sweep_handshakes"
+        assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
 
     async def test_recommend_failure_debug_next_steps_ignores_incompatible_cached_inputs(self, tmp_path):
         _prefill_get_sim_paths_state()

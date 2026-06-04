@@ -479,8 +479,12 @@ class RecommendNextStepsResult(SchemaModel):
     recommendation_strategy: str | None = None
     failure_window_center_ps: int | None = None
     why: list[str] = Field(default_factory=list)
+    # Runtime-layer counterpart of correlated_structural_risks: flagged rows
+    # carried over from a compatible sweep_handshakes cache. Facts (already sorted
+    # by sweep's mechanical key), never a verdict — the LLM judges them.
+    runtime_protocol_findings: list[dict[str, Any]] = Field(default_factory=list)
     workflow_incomplete: bool = False
-    degraded_reason: Literal["missing_structural_scan"] | None = None
+    degraded_reason: Literal["missing_structural_scan", "missing_handshake_sweep"] | None = None
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
     next_iteration_hint: dict[str, Any] | None = None

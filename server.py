@@ -2216,6 +2216,7 @@ async def _dispatch(name: str, args: dict):
         request_context = _build_recommend_request_context(args)
         scan_cache = _get_compatible_recommend_scan_cache(request_context)
         parse_cache = _get_compatible_recommend_parse_cache(request_context)
+        sweep_cache = _get_compatible_recommend_sweep_cache(request_context)
         result = WaveformAnalyzer(
             log_path=args["log_path"],
             parser=_get_parser(args["wave_path"]),
@@ -2226,6 +2227,7 @@ async def _dispatch(name: str, args: dict):
             top_hint=args.get("top_hint"),
             structural_risks=[risk.model_dump() for risk in scan_cache.risks] if scan_cache is not None else None,
             problem_hints=parse_cache.problem_hints.model_dump() if parse_cache and parse_cache.problem_hints else None,
+            handshake_sweep=sweep_cache.model_dump() if sweep_cache is not None else None,
         )
         has_failure_context = False
         if parse_cache is not None:
@@ -2235,7 +2237,25 @@ async def _dispatch(name: str, args: dict):
             and result.get("suspected_failure_class") != "no_failure_detected"
         ):
             has_failure_context = True
-        if scan_cache is None and has_failure_context:
+        # Single primary missing-step recommendation. On a scoreboard/compare/
+        # mismatch symptom the runtime handshake sweep leads (a data-compare
+        # mismatch is more often a runtime protocol symptom than a structural
+        # one); otherwise the structural scan leads. get_diagnostic_snapshot is
+        # the broader auditor that lists every missing step; this is the single
+        # prioritized nudge for an agent that called recommend directly. Both
+        # treat "failure context + no compatible sweep cache" as sweep-needed.
+        missing_scan = scan_cache is None and has_failure_context
+        missing_sweep = sweep_cache is None and has_failure_context
+        protocol_symptom = _recommend_has_protocol_symptom(parse_cache)
+        primary_missing = _select_recommend_primary_missing_step(
+            missing_scan, missing_sweep, protocol_symptom
+        )
+        if primary_missing == "sweep":
+            result["workflow_incomplete"] = True
+            result["degraded_reason"] = "missing_handshake_sweep"
+            result["required_next_call"] = _build_sweep_required_next_call(args["wave_path"])
+            result["missing_inputs"] = []
+        elif primary_missing == "scan":
             result["workflow_incomplete"] = True
             result["degraded_reason"] = "missing_structural_scan"
             result["required_next_call"] = _build_scan_required_next_call(
@@ -2784,6 +2804,63 @@ def _get_compatible_recommend_scan_cache(
         request_context.get("compile_log"),
         request_context.get("simulator"),
     )
+
+
+def _get_compatible_recommend_sweep_cache(
+    request_context: dict[str, str | None],
+) -> schemas.HandshakeSweepResult | None:
+    sweep_cache = _result_cache.get("sweep_handshakes")
+    provenance = _result_provenance.get("sweep_handshakes")
+    if sweep_cache is None or provenance is None:
+        return None
+    if not _same_realpath(provenance.get("wave_path"), request_context.get("wave_path")):
+        return None
+    return sweep_cache
+
+
+def _build_sweep_required_next_call(wave_path: str | None) -> dict | None:
+    if not wave_path:
+        return None
+    return {
+        "tool": "sweep_handshakes",
+        "arguments": {"wave_path": wave_path},
+        "reason": (
+            "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
+            "symptom. Run the whole-design handshake sweep before reading RTL "
+            "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
+            "premature-valid-deassertion fact table in one call."
+        ),
+    }
+
+
+def _recommend_has_protocol_symptom(
+    parse_cache: schemas.ParseSimLogResult | None,
+) -> bool:
+    if parse_cache is None:
+        return False
+    if getattr(parse_cache, "protocol_symptom_hint", None):
+        return True
+    hints = getattr(parse_cache, "problem_hints", None)
+    if hints is not None and getattr(hints, "error_pattern", None) in {"mismatch", "xprop"}:
+        return True
+    return False
+
+
+def _select_recommend_primary_missing_step(
+    missing_scan: bool,
+    missing_sweep: bool,
+    protocol_symptom: bool,
+) -> str | None:
+    # Protocol symptom: sweep leads even when the structural scan is also
+    # missing. Otherwise the structural scan leads; sweep fills in when it is
+    # the only step still missing.
+    if missing_sweep and protocol_symptom:
+        return "sweep"
+    if missing_scan:
+        return "scan"
+    if missing_sweep:
+        return "sweep"
+    return None
 
 
 def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaModel) -> dict | None:

@@ -45,6 +45,17 @@ _BLOCK_TOKEN_RE = re.compile(
 )
 _CASE_ITEM_LINE_RE = re.compile(r"^\s*\d+'[bBhHdDoO][0-9a-fA-F_xXzZ]+\s*.*:")
 _DEFAULT_LINE_RE = re.compile(r"^\s*default\s*:", re.IGNORECASE)
+# SVA assertion context. A literal comparison inside a property/sequence block
+# (or an implication line) is a checker by construction — e.g. an AHB 1KB
+# boundary assertion `(HTRANS==3) |-> (HADDR[10:0] != 11'b...)` — not suspect
+# DUT/TB control logic. Same self-filtering rationale as the param/case/default
+# skips above; protocol-agnostic (no signal-name matching). `\bproperty\b` does
+# not match inside `endproperty` (no word boundary), so the two stay distinct.
+_PROPERTY_START_RE = re.compile(r"\bproperty\b", re.IGNORECASE)
+_PROPERTY_END_RE = re.compile(r"\bendproperty\b", re.IGNORECASE)
+_SEQUENCE_START_RE = re.compile(r"\bsequence\b", re.IGNORECASE)
+_SEQUENCE_END_RE = re.compile(r"\bendsequence\b", re.IGNORECASE)
+_ASSERT_IMPLICATION_RE = re.compile(r"\|->|\|=>")
 _ZERO_LITERAL_RE = re.compile(r"(\d+)'b(0+)", re.IGNORECASE)
 _MODULE_HEADER_RE = re.compile(
     r"^\s*module\s+(?P<name>\w+)(?:\s*#\s*\(.*?\))?\s*\((?P<ports>.*?)\)\s*;",
@@ -560,12 +571,51 @@ def _split_top_level_commas(text: str) -> list[str]:
     return [part for part in parts if part]
 
 
+def _assertion_line_numbers(text: str) -> set[int]:
+    """Line numbers that sit inside an SVA assertion context.
+
+    Tracks property/sequence block depth and flags any line carrying an
+    implication operator. Heuristic and line-based, matching the rest of the
+    scanner; `endproperty`/`endsequence` are not seen as block starts.
+    """
+    assertion_lines: set[int] = set()
+    prop_depth = 0
+    seq_depth = 0
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        starts_prop = bool(_PROPERTY_START_RE.search(line))
+        ends_prop = bool(_PROPERTY_END_RE.search(line))
+        starts_seq = bool(_SEQUENCE_START_RE.search(line))
+        ends_seq = bool(_SEQUENCE_END_RE.search(line))
+        in_block = prop_depth > 0 or seq_depth > 0
+        if (
+            in_block
+            or starts_prop
+            or ends_prop
+            or starts_seq
+            or ends_seq
+            or _ASSERT_IMPLICATION_RE.search(line)
+        ):
+            assertion_lines.add(line_no)
+        if starts_prop:
+            prop_depth += 1
+        if ends_prop:
+            prop_depth = max(0, prop_depth - 1)
+        if starts_seq:
+            seq_depth += 1
+        if ends_seq:
+            seq_depth = max(0, seq_depth - 1)
+    return assertion_lines
+
+
 def _scan_magic_condition(path: str, text: str) -> list[_Risk]:
     risks: list[_Risk] = []
+    assertion_lines = _assertion_line_numbers(text)
     for line_no, line in enumerate(text.splitlines(), start=1):
         if _PARAM_LINE_RE.search(line):
             continue
         if _CASE_ITEM_LINE_RE.match(line) or _DEFAULT_LINE_RE.match(line):
+            continue
+        if line_no in assertion_lines:
             continue
         for match in _MAGIC_COMPARE_RE.finditer(line):
             literal = match.group("lit")
