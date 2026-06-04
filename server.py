@@ -576,28 +576,36 @@ Waveform debug workflow:
      new_log_path; TraceWeave will use the previous parsed snapshot as baseline.
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="full".
    - Default detail_level is "summary" to keep MCP responses below harness budget.
-   - After parse, when a waveform exists and the run failed, call sweep_handshakes
-     — the runtime-layer counterpart of scan_structural_risks: a default-flow
-     protocol-health scan over every AHB and valid/ready interface, returning a
-     per-interface stall/deadlock/payload-hold fact table (facts to judge, not a
-     verdict). A scoreboard/data-compare failure is frequently a protocol symptom,
-     so run this one-call check before reading RTL line-by-line. It should not be
-     skipped by default; get_diagnostic_snapshot lists it in missing_steps with a
-     pre-filled wave_path when due.
 
-4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
+4. MUST call sweep_handshakes after parse_sim_log on a failing run that has a
+   waveform — before recommend, analyze_failures, or any manual waveform reading.
+   This is the runtime-layer counterpart of scan_structural_risks (step 2): a
+   default-flow protocol-health scan over every AHB and valid/ready interface in
+   ONE call, returning a per-interface stall/deadlock/payload-hold fact table
+   (facts to judge, not a verdict).
+   - A scoreboard/data-compare failure is frequently the symptom of a lower-level
+     protocol problem, so run this BEFORE reading RTL line-by-line or scrubbing the
+     waveform by hand.
+   - Do not skip by default — same rule as scan_structural_risks. Skip only when
+     there is no waveform or the user explicitly asks.
+   - Inspect the returned fact table: interfaces flagged ended_in_stall /
+     payload_hold_violation are the first to investigate. On an AHB write-data
+     failure, a master interface holding valid against a never-ready slave points
+     at the master's handshake (e.g. not waiting for HREADY).
 
-5. Call search_signals to confirm full hierarchical signal paths when needed.
+5. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
+
+6. Call search_signals to confirm full hierarchical signal paths when needed.
    - Derive keywords from build_tb_hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
    - When reading RTL source, verify the path is in the compile set first —
      call get_tb_file_detail(path=...) or lookup_tb_files(...) with the
      hierarchy_handle returned in step 2. The compile_log is the single
      source of truth for which file version was actually compiled.
 
-6. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
+7. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
    - Follow analysis_guide in the result.
 
-7. Use deep-dive tools when needed:
+8. Use deep-dive tools when needed:
    - analyze_failure_event for failure-centric instance/source correlation
    - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
    - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps
@@ -608,7 +616,7 @@ Waveform debug workflow:
    - get_signal_at_time for exact values
    - get_waveform_summary for waveform sanity checks
 
-8. Call get_diagnostic_snapshot at any time to check workflow state.
+9. Call get_diagnostic_snapshot at any time to check workflow state.
    - Does NOT execute any sub-steps; only reads cached results
 """.strip()
 
