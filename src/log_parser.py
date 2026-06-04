@@ -63,8 +63,16 @@ _TIME_PATTERNS = (
     (re.compile(r"\(time\s+(?P<value>[\d.]+)\s+(?P<unit>PS|NS|US|MS|S|FS)\)", re.IGNORECASE), "exact", None),
     (re.compile(r"\[(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\]", re.IGNORECASE), "exact", None),
     (re.compile(r"\btime\s*=\s*(?P<value>[\d.]+)\s*(?P<unit>ps|ns|us|ms|s|fs)\b", re.IGNORECASE), "exact", None),
-    (re.compile(r"@\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "exact", "ps"),
+    (re.compile(r"@\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "inferred", "ps"),
     (re.compile(r"\btime\s*=\s*(?P<value>[\d.]+)\b", re.IGNORECASE), "inferred", "ticks"),
+)
+_SIM_FOOTER_TIME_RE = re.compile(
+    r"\bTime:\s+[0-9][\d,]*(?:\.\d+)?\s*(fs|ps|ns|us|ms|s)\b",
+    re.IGNORECASE,
+)
+_TIMESCALE_RE = re.compile(
+    r"(?:^|\s)-timescale(?:=|\s+)\s*(\d+(?:\.\d+)?)?\s*(fs|ps|ns|us|ms|s)\s*/\s*(\d+(?:\.\d+)?)?\s*(fs|ps|ns|us|ms|s)\b",
+    re.IGNORECASE,
 )
 
 SCHEMA_VERSION = "2.0"
@@ -99,6 +107,12 @@ class TimeParseResult:
     time_parse_status: str
 
 
+@dataclass(frozen=True)
+class BareTimeInference:
+    unit: str
+    scale: float = 1.0
+
+
 def _normalize_time_unit(unit: str | None) -> str | None:
     if unit is None:
         return None
@@ -127,13 +141,16 @@ def _to_ps(value: float, unit: str | None) -> int | None:
     return int(value * mult[unit_upper])
 
 
-def _extract_time_info(line: str) -> TimeParseResult:
+def _extract_time_info(line: str, bare_time: BareTimeInference | None = None) -> TimeParseResult:
     for pattern, status, default_unit in _TIME_PATTERNS:
         match = pattern.search(line)
         if not match:
             continue
         raw_time = match.group("value")
-        unit = match.groupdict().get("unit") or default_unit
+        explicit_unit = match.groupdict().get("unit")
+        unit = explicit_unit or (
+            bare_time.unit if default_unit == "ps" and bare_time else default_unit
+        )
         normalized_unit = _normalize_time_unit(unit)
         if normalized_unit == "ticks":
             return TimeParseResult(
@@ -142,7 +159,10 @@ def _extract_time_info(line: str) -> TimeParseResult:
                 time_ps=int(float(raw_time)),
                 time_parse_status="inferred",
             )
-        time_ps = _to_ps(float(raw_time), normalized_unit)
+        value = float(raw_time)
+        if explicit_unit is None and default_unit == "ps" and bare_time is not None:
+            value *= bare_time.scale
+        time_ps = _to_ps(value, normalized_unit)
         if time_ps is not None:
             return TimeParseResult(
                 raw_time=raw_time,
@@ -156,6 +176,35 @@ def _extract_time_info(line: str) -> TimeParseResult:
         time_ps=None,
         time_parse_status="missing",
     )
+
+
+def _infer_bare_time_unit(lines: list[str], simulator: str) -> BareTimeInference | None:
+    """Infer the unit for simulator timestamps that omit an explicit suffix.
+
+    VCS UVM reports often print bare simulator ticks (``@ 155000:``), while
+    the run footer records the actual time precision (``Time: 3115000 ps``).
+    Prefer that footer because it reflects the elaborated simulation. Fall
+    back to the precision side of ``-timescale=<unit>/<precision>`` when the
+    footer is unavailable.
+    """
+    del simulator  # Reserved for simulator-specific formats as they appear.
+
+    for line in reversed(lines):
+        match = _SIM_FOOTER_TIME_RE.search(line)
+        if match:
+            unit = _normalize_time_unit(match.group(1))
+            return BareTimeInference(unit) if unit is not None else None
+
+    for line in lines[:200]:
+        match = _TIMESCALE_RE.search(line)
+        if match:
+            unit = _normalize_time_unit(match.group(4))
+            if unit is None:
+                return None
+            scale_text = match.group(3) or "1"
+            return BareTimeInference(unit=unit, scale=float(scale_text))
+
+    return None
 
 
 def _has_error_keyword(line_lower: str) -> bool:
@@ -214,6 +263,7 @@ class SimLogParser:
         if self.simulator not in {"vcs", "xcelium"}:
             raise ValueError("simulator must be 'vcs' or 'xcelium'")
         self._custom_patterns = self._load_custom_patterns()
+        self._bare_time_unit: BareTimeInference | None = None
 
     def parse(self, max_groups: int = DEFAULT_MAX_GROUPS) -> dict[str, Any]:
         return _build_summary(self.parse_failure_events(), self.log_path, self.simulator, max_groups)
@@ -231,6 +281,8 @@ class SimLogParser:
 
         with path.open("r", errors="replace") as handle:
             all_lines = handle.readlines()
+
+        self._bare_time_unit = _infer_bare_time_unit(all_lines, self.simulator)
 
         events: list[dict[str, Any]] = []
         i = 0
@@ -311,7 +363,7 @@ class SimLogParser:
             return self._filter_runtime_candidate(error, line_lower)
 
         if _GENERIC_ERROR_RE.search(line_lower):
-            time_info = _extract_time_info(line)
+            time_info = _extract_time_info(line, self._bare_time_unit)
             error = ParsedError(
                 group_signature=f"ERROR: {line.strip()[:80]}",
                 severity="ERROR",
@@ -396,8 +448,14 @@ class SimLogParser:
         severity = "FATAL" if level == "UVM_FATAL" else "ERROR"
         tag = match.group(7) or ""
         signature = f"{level} [{tag}]" if tag else level
-        raw_unit = _normalize_time_unit(match.group(5) or "ns")
-        time_ps = _to_ps(float(match.group(4)), raw_unit)
+        explicit_unit = match.group(5)
+        if explicit_unit:
+            raw_unit = _normalize_time_unit(explicit_unit)
+            time_ps = _to_ps(float(match.group(4)), raw_unit)
+        else:
+            bare_time = self._bare_time_unit or BareTimeInference("ps")
+            raw_unit = bare_time.unit
+            time_ps = _to_ps(float(match.group(4)) * bare_time.scale, raw_unit)
         return ParsedError(
             group_signature=signature,
             severity=severity,
@@ -406,7 +464,7 @@ class SimLogParser:
             message=(match.group(8) or "").strip(),
             raw_time=match.group(4),
             raw_time_unit=raw_unit,
-            time_parse_status="exact",
+            time_parse_status="exact" if explicit_unit else "inferred",
             source_file=match.group(2),
             source_line=int(match.group(3)),
             instance_path=match.group(6),
@@ -432,7 +490,7 @@ class SimLogParser:
                 time_ps = _to_ps(float(raw_time), raw_time_unit)
                 time_parse_status = "exact"
             else:
-                time_info = _extract_time_info(line)
+                time_info = _extract_time_info(line, self._bare_time_unit)
                 raw_time = time_info.raw_time
                 raw_time_unit = time_info.raw_time_unit
                 time_ps = time_info.time_ps

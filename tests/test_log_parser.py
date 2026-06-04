@@ -246,6 +246,68 @@ class TestUvmParsing:
         finally:
             os.unlink(log_path)
 
+    def test_vcs_uvm_bare_time_uses_vcs_footer_unit(self):
+        log_path = _write_log(
+            "\n".join(
+                [
+                    "UVM_ERROR /tmp/top_tb.sv(10) @ 155000: uvm_test_top.env.sb [SB] mismatch",
+                    "V C S   S i m u l a t i o n   R e p o r t",
+                    "Time: 3115000 ps",
+                ]
+            )
+            + "\n"
+        )
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["raw_time"] == "155000"
+            assert event["raw_time_unit"] == "ps"
+            assert event["time_ps"] == 155000
+            assert event["time_parse_status"] == "inferred"
+        finally:
+            os.unlink(log_path)
+
+    def test_vcs_uvm_bare_time_uses_timescale_precision_without_footer(self):
+        log_path = _write_log(
+            "\n".join(
+                [
+                    "Command: simv -timescale=1ns/10ps +UVM_TESTNAME=case0",
+                    "UVM_ERROR /tmp/top_tb.sv(10) @ 155000: uvm_test_top.env.sb [SB] mismatch",
+                ]
+            )
+            + "\n"
+        )
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["raw_time_unit"] == "ps"
+            assert event["time_ps"] == 1550000
+            assert event["time_parse_status"] == "inferred"
+        finally:
+            os.unlink(log_path)
+
+    def test_uvm_bare_time_falls_back_to_ps_inferred(self):
+        log_path = _write_log(
+            "UVM_ERROR /tmp/top_tb.sv(10) @ 155000: uvm_test_top.env.sb [SB] mismatch\n"
+        )
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["raw_time_unit"] == "ps"
+            assert event["time_ps"] == 155000
+            assert event["time_parse_status"] == "inferred"
+        finally:
+            os.unlink(log_path)
+
+    def test_uvm_explicit_time_unit_stays_exact(self):
+        log_path = _write_log(
+            "UVM_ERROR /tmp/top_tb.sv(10) @ 1661.000 ns: uvm_test_top.env.sb [SB] mismatch\n"
+        )
+        try:
+            event = SimLogParser(log_path, "vcs").parse_failure_events()[0]
+            assert event["raw_time_unit"] == "ns"
+            assert event["time_ps"] == 1661000
+            assert event["time_parse_status"] == "exact"
+        finally:
+            os.unlink(log_path)
+
     def test_uvm_multiline_table_is_extracted(self):
         log_path = _write_log(UVM_MULTILINE_TABLE_LOG_SAMPLE)
         try:
@@ -301,7 +363,7 @@ class TestGenericErrorFallback:
             events = SimLogParser(log_path, "vcs").parse_failure_events()
             assert events[0]["time_ps"] == 23100000
             assert events[0]["raw_time_unit"] == "ps"
-            assert events[0]["time_parse_status"] == "exact"
+            assert events[0]["time_parse_status"] == "inferred"
             assert events[1]["time_ps"] == 23100000
             assert events[1]["raw_time_unit"] == "ns"
             assert events[2]["time_ps"] == 23100000
@@ -429,7 +491,7 @@ class TestCustomPatterns:
             assert event["time_ps"] == 7300000
             assert event["raw_time"] == "7300000"
             assert event["raw_time_unit"] == "ps"
-            assert event["time_parse_status"] == "exact"
+            assert event["time_parse_status"] == "inferred"
         finally:
             os.unlink(log_path)
             custom_patterns.unlink()
