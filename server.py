@@ -84,6 +84,7 @@ _result_cache: dict[str, schemas.SchemaModel | None] = {
     "build_tb_hierarchy": None,
     "parse_sim_log": None,
     "scan_structural_risks": None,
+    "sweep_handshakes": None,
     "recommend_failure_debug_next_steps": None,
 }
 
@@ -92,6 +93,7 @@ _result_provenance: dict[str, dict | None] = {
     "build_tb_hierarchy": None,
     "parse_sim_log": None,
     "scan_structural_risks": None,
+    "sweep_handshakes": None,
     "recommend_failure_debug_next_steps": None,
 }
 
@@ -113,7 +115,7 @@ _handle_store = HandleStore()
 _cursor_store = CursorStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
-    "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "recommend_failure_debug_next_steps"],
+    "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "sweep_handshakes", "recommend_failure_debug_next_steps"],
     "build_tb_hierarchy": ["recommend_failure_debug_next_steps"],
     "parse_sim_log": ["recommend_failure_debug_next_steps"],
     "scan_structural_risks": ["recommend_failure_debug_next_steps"],
@@ -204,6 +206,12 @@ def _build_suggested_call(step: str) -> dict:
         if hier_state and hier_state.get("compile_log"):
             args["compile_log"] = hier_state["compile_log"]
         return {"tool": "recommend_failure_debug_next_steps", "arguments": args}
+    if step == "sweep_handshakes":
+        args: dict = {}
+        sim_result = _result_cache.get("get_sim_paths")
+        if sim_result and sim_result.wave_files:
+            args["wave_path"] = sim_result.wave_files[0].path
+        return {"tool": "sweep_handshakes", "arguments": args}
     return {"tool": step, "arguments": {}}
 
 
@@ -568,6 +576,14 @@ Waveform debug workflow:
      new_log_path; TraceWeave will use the previous parsed snapshot as baseline.
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="full".
    - Default detail_level is "summary" to keep MCP responses below harness budget.
+   - After parse, when a waveform exists and the run failed, call sweep_handshakes
+     — the runtime-layer counterpart of scan_structural_risks: a default-flow
+     protocol-health scan over every AHB and valid/ready interface, returning a
+     per-interface stall/deadlock/payload-hold fact table (facts to judge, not a
+     verdict). A scoreboard/data-compare failure is frequently a protocol symptom,
+     so run this one-call check before reading RTL line-by-line. It should not be
+     skipped by default; get_diagnostic_snapshot lists it in missing_steps with a
+     pre-filled wave_path when due.
 
 4. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
@@ -2417,7 +2433,10 @@ async def _dispatch(name: str, args: dict):
             max_interfaces=args.get("max_interfaces", 64),
             cursor_store=_cursor_store,
         )
-        return schemas.HandshakeSweepResult.model_validate(result)
+        validated = schemas.HandshakeSweepResult.model_validate(result)
+        _result_cache["sweep_handshakes"] = validated
+        _result_provenance["sweep_handshakes"] = _build_result_provenance(name, args, validated)
+        return validated
 
     elif name == "inspect_handshake":
         result = inspect_handshake(
@@ -2640,6 +2659,15 @@ def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) 
     }
 
 
+def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> dict:
+    return {
+        "interfaces_inspected": result.interface_count,
+        "flagged_count": result.flagged_count,
+        "discovered_count": result.discovered_count,
+        "truncated": result.truncated,
+    }
+
+
 def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict:
     return {
         "suspected_failure_class": result.suspected_failure_class,
@@ -2757,6 +2785,11 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
         return {
             "compile_log": args.get("compile_log"),
             "simulator": _resolve_session_simulator(args),
+        }
+    if tool_name == "sweep_handshakes":
+        return {
+            "wave_path": args.get("wave_path"),
+            "scope": args.get("scope"),
         }
     if tool_name == "recommend_failure_debug_next_steps":
         log_path = args.get("log_path")
@@ -3057,6 +3090,41 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             ),
         })
 
+    # Whole-design protocol health (sweep_handshakes) — the runtime-layer
+    # counterpart of scan_structural_risks: a default-flow perception step whose
+    # facts the LLM judges. Recommended only when a waveform exists AND the run
+    # actually failed (a clean run or a log-less session needs no protocol scan).
+    sweep_result = None if case_mismatch else _result_cache.get("sweep_handshakes")
+    has_waveform = bool(sim_result is not None and sim_result.wave_files)
+    sweep_failure_context = bool(
+        compatible_log_result is not None
+        and compatible_log_result.runtime_total_errors > 0
+    )
+    if sweep_result is not None:
+        sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
+            available=True,
+            summary=_extract_protocol_health_summary(sweep_result),
+        )
+    elif anchor is not None and has_waveform and sweep_failure_context:
+        sweep_call = _build_suggested_call("sweep_handshakes")
+        sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
+            available=False,
+            suggested_call=sweep_call,
+        )
+        missing_steps.append({
+            "tool": "sweep_handshakes",
+            "arguments": sweep_call["arguments"],
+            "reason": (
+                "Whole-design bus protocol health has not been checked; a "
+                "scoreboard/data-compare failure is frequently the symptom of a "
+                "lower-level protocol problem. sweep_handshakes inspects every "
+                "AHB and valid/ready interface in one call and returns a "
+                "per-interface stall/deadlock/payload-hold fact table."
+            ),
+        })
+    else:
+        sections["protocol_health"] = None
+
     is_clean_run = (
         anchor is not None
         and log_result is not None
@@ -3107,7 +3175,8 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "build_tb_hierarchy": 1,
             "scan_structural_risks": 2,
             "parse_sim_log": 3,
-            "recommend_failure_debug_next_steps": 4,
+            "sweep_handshakes": 4,
+            "recommend_failure_debug_next_steps": 5,
         }
         missing_steps.sort(
             key=lambda step: (
@@ -3127,6 +3196,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         hierarchy=sections["hierarchy"],
         log_analysis=sections["log_analysis"],
         structural_scan=sections["structural_scan"],
+        protocol_health=sections["protocol_health"],
         recommended_next=sections["recommended_next"],
         protocol_symptom_hint=protocol_symptom_hint,
         missing_steps=missing_steps if missing_steps else None,

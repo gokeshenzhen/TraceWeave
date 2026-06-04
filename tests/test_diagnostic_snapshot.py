@@ -210,16 +210,25 @@ def _make_scan_result() -> schemas.ScanStructuralRisksResult:
     })
 
 
+def _make_sweep_result() -> schemas.HandshakeSweepResult:
+    return schemas.HandshakeSweepResult.model_validate({
+        "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
+        "discovered_count": 2, "interface_count": 2, "flagged_count": 1,
+    })
+
+
 def _prefill_all():
     sim = _make_sim_paths_result()
     hier = _make_hierarchy_result()
     log = _make_parse_result()
     scan = _make_scan_result()
     rec = _make_recommend_result()
+    sweep = _make_sweep_result()
     server._result_cache["get_sim_paths"] = sim
     server._result_cache["build_tb_hierarchy"] = hier
     server._result_cache["parse_sim_log"] = log
     server._result_cache["scan_structural_risks"] = scan
+    server._result_cache["sweep_handshakes"] = sweep
     server._result_cache["recommend_failure_debug_next_steps"] = rec
     server._result_provenance["get_sim_paths"] = {
         "verif_root": sim.verif_root,
@@ -347,6 +356,51 @@ class TestDiagnosticSnapshot:
         result = server._handle_diagnostic_snapshot({})
 
         assert result.protocol_symptom_hint is None
+
+    def test_protocol_health_surfaced_when_sweep_has_run(self):
+        _prefill_all()  # includes a sweep_handshakes result
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is not None
+        assert result.protocol_health.available is True
+        assert result.protocol_health.summary["flagged_count"] == 1
+        # everything in the default flow has run -> nothing recommended
+        assert result.missing_steps is None
+
+    def test_sweep_recommended_when_waveform_and_failures(self):
+        _prefill_all()
+        server._result_cache["sweep_handshakes"] = None  # not run yet
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is not None
+        assert result.protocol_health.available is False
+        assert result.protocol_health.suggested_call["arguments"]["wave_path"].endswith(".vcd")
+        assert "sweep_handshakes" in [s["tool"] for s in result.missing_steps]
+
+    def test_sweep_not_recommended_on_clean_run(self):
+        _prefill_all()
+        server._result_cache["sweep_handshakes"] = None
+        server._result_cache["parse_sim_log"] = _make_parse_result(total_errors=0)
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is None
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
+
+    def test_sweep_not_recommended_without_waveform(self):
+        _prefill_all()
+        server._result_cache["sweep_handshakes"] = None
+        sim = _make_sim_paths_result()
+        server._result_cache["get_sim_paths"] = schemas.SimPathsResult.model_validate(
+            {**sim.model_dump(), "wave_files": []}
+        )
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is None
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
 
     def test_log_summary_reports_auto_diff_when_present(self):
         _prefill_all()
@@ -866,6 +920,7 @@ class TestDiagnosticSnapshot:
 
         assert [step["tool"] for step in result.missing_steps] == [
             "scan_structural_risks",
+            "sweep_handshakes",
             "recommend_failure_debug_next_steps",
         ]
 

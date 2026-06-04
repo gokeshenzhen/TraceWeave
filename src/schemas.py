@@ -501,6 +501,11 @@ class DiagnosticSnapshot(SchemaModel):
     hierarchy: DiagnosticSnapshotSection
     log_analysis: DiagnosticSnapshotSection
     structural_scan: DiagnosticSnapshotSection | None = None
+    # Whole-design protocol health (sweep_handshakes). Same role as
+    # structural_scan but at the waveform/runtime layer: a default-flow
+    # perception step whose facts the LLM judges. Present only when a waveform
+    # exists; recommended (via missing_steps) only on a failing run.
+    protocol_health: DiagnosticSnapshotSection | None = None
     recommended_next: DiagnosticSnapshotSection
     simulator: str | None = None
     case_dir: str | None = None

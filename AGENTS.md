@@ -4,13 +4,21 @@
 
 When the task involves simulation logs or waveforms (VCS/Xcelium logs, FSDB/VCD), the default toolchain is:
 
-`get_sim_paths -> build_tb_hierarchy + scan_structural_risks -> parse_sim_log -> recommend_failure_debug_next_steps`
+`get_sim_paths -> build_tb_hierarchy + scan_structural_risks -> parse_sim_log -> sweep_handshakes -> recommend_failure_debug_next_steps`
 
 Rules:
 
 - `build_tb_hierarchy` and `scan_structural_risks` must run in parallel on the same `compile_log`
 - `scan_structural_risks` should not be skipped by default
 - It may only be skipped if the user explicitly asks to skip it
+- `sweep_handshakes` is the runtime-layer counterpart of `scan_structural_risks`:
+  a default-flow protocol-health scan. Run it after `parse_sim_log` whenever a
+  waveform exists and the run failed; like the structural scan it should not be
+  skipped by default (skip only if there is no waveform or the user asks). It
+  returns a per-interface stall/deadlock/payload-hold fact table over every AHB
+  and valid/ready interface — facts the LLM judges, not a verdict. A
+  scoreboard/data-compare failure is frequently a protocol symptom, so this is
+  the cheap one-call check before reading RTL line-by-line.
 - Do not analyze or recommend fixes before MCP output is available
 - On protocol or scoreboard mismatches, carry at least two competing hypotheses
   and verify the opposite side with waveform evidence before assigning root

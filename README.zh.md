@@ -236,7 +236,7 @@ codex mcp list
 1. 调用 `get_sim_paths(verif_root, case_name?)`。
 2. 选择 `phase == "elaborate"` 的编译日志。
 3. 在同一个编译日志上并行运行 `build_tb_hierarchy` 与 `scan_structural_risks`。
-4. 如果有仿真日志,调用 `parse_sim_log`。
+4. 如果有仿真日志,调用 `parse_sim_log`;然后在失败且有波形的运行上调用 `sweep_handshakes` 做一次全设计协议健康扫描(default-flow 步骤,相当于运行期的 `scan_structural_risks`)。
 5. 使用 `recommend_failure_debug_next_steps` 或 `analyze_failure_event`。
 6. 当需要针对显式信号的波形快照时,使用 `search_signals` 与 `analyze_failures`。
 7. 对于更深入的调查,使用 `explain_signal_driver`、`trace_x_source` 或 `get_signals_by_cycle`。

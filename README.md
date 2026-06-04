@@ -246,7 +246,7 @@ This is the default workflow for simulation-log and waveform debug:
 1. Call `get_sim_paths(verif_root, case_name?)`.
 2. Choose the `phase == "elaborate"` compile log.
 3. Run `build_tb_hierarchy` and `scan_structural_risks` in parallel on that same compile log.
-4. If a sim log is present, call `parse_sim_log`.
+4. If a sim log is present, call `parse_sim_log`; then, on a failing run with a waveform, call `sweep_handshakes` for a one-call whole-design protocol-health scan (a default-flow step, like `scan_structural_risks` at the runtime layer).
 5. Use `recommend_failure_debug_next_steps` or `analyze_failure_event`.
 6. Use `search_signals` and `analyze_failures` when you need waveform snapshots for explicit signals.
 7. Use `explain_signal_driver`, `trace_x_source`, or `get_signals_by_cycle` for deeper investigation.
