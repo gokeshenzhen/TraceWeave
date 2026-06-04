@@ -419,3 +419,137 @@ def test_clean_handshake_has_no_next_actions(tmp_path: Path):
     assert r["findings"] == []
     assert r["violating_signal"] is None
     assert r["next_actions"] == []
+
+
+# ---------------------------------------------------------------------------
+# premature valid deassertion (wait-state hold) — the AHB
+# master-not-waiting-for-HREADY signature payload_hold cannot see.
+# ---------------------------------------------------------------------------
+
+
+def test_premature_valid_deassertion(tmp_path: Path):
+    # 1-cycle stall (valid high, ready low), then the master drops valid before
+    # ready ever arrived. payload_hold cannot catch this (stall is 1 cycle, and
+    # valid itself is not a payload signal); the wait-state hold check does.
+    cycles = [
+        {"valid": 1, "ready": 1},
+        {"valid": 1, "ready": 0},  # stall begins (cycle 1, posedge 15000)
+        {"valid": 0, "ready": 0},  # master drops the transfer (cycle 2, 25000)
+        {"valid": 0, "ready": 0},
+    ]
+    store = CursorStore()
+    r = _run(tmp_path, "deassert.vcd", cycles, store=store, max_wait_cycles=100)
+    assert r["valid_deassert_violations"] == 1
+    assert r["payload_hold_violations"] == 0
+    assert r["max_stall_cycles"] == 1
+    viols = [f for f in r["findings"] if f["type"] == "premature_valid_deassertion"]
+    assert len(viols) == 1
+    f = viols[0]
+    assert f["signal"] == "top.valid"
+    assert f["time_ps"] == 25000
+    assert f["stall_begin_ps"] == 15000
+    assert f["stall_cycles"] == 1
+    assert f["severity"] == "error"
+    # cursor anchored at the deassertion
+    assert r["cursor"]["time_ps"] == 25000
+    assert len(store) == 1
+    # attribution points at the master-driven valid + bridges to driver lookup
+    assert r["violating_signal"] == "top.valid"
+    assert len(r["next_actions"]) == 1
+    na = r["next_actions"][0]
+    assert na["tool"] == "explain_signal_driver"
+    assert na["signal_path"] == "top.valid"
+    assert "master" in na["reason"]
+    assert r["coverage"]["valid_hold_requested"] is True
+    assert r["coverage"]["valid_hold_checked"] is True
+
+
+def test_deassert_against_ready_high_is_violation(tmp_path: Path):
+    # Stall, then valid drops the same cycle ready goes high: the beat the slave
+    # was finally ready to accept is gone — still a hold violation.
+    cycles = [
+        {"valid": 1, "ready": 0},  # stall (cycle 0, posedge 5000)
+        {"valid": 0, "ready": 1},  # master drops valid as ready arrives
+    ]
+    r = _run(tmp_path, "deassert_rdy.vcd", cycles, max_wait_cycles=100)
+    assert r["valid_deassert_violations"] == 1
+    assert [f["type"] for f in r["findings"]] == ["premature_valid_deassertion"]
+
+
+def test_normal_stall_then_accept_is_clean(tmp_path: Path):
+    # valid held through the stall until accepted -> no deassertion.
+    cycles = [
+        {"valid": 1, "ready": 0},
+        {"valid": 1, "ready": 0},
+        {"valid": 1, "ready": 1},  # accepted, valid was held the whole time
+        {"valid": 0, "ready": 0},  # legitimate drop AFTER acceptance
+    ]
+    r = _run(tmp_path, "held.vcd", cycles, max_wait_cycles=100)
+    assert r["valid_deassert_violations"] == 0
+    assert [f for f in r["findings"] if f["type"] == "premature_valid_deassertion"] == []
+
+
+def test_unknown_valid_after_stall_is_not_deassertion(tmp_path: Path):
+    # An x on valid the cycle after a stall is "unknown", not a deassertion.
+    cycles = [
+        {"valid": 1, "ready": 0},   # stall
+        {"valid": "x", "ready": 0},  # unknown valid -> counted unknown, no flag
+    ]
+    r = _run(tmp_path, "deassert_x.vcd", cycles, max_wait_cycles=100)
+    assert r["valid_deassert_violations"] == 0
+    assert r["unknown_sample_cycles"] == 1
+    assert [f for f in r["findings"] if f["type"] == "premature_valid_deassertion"] == []
+
+
+def test_check_valid_hold_false_disables_check(tmp_path: Path):
+    cycles = [
+        {"valid": 1, "ready": 0},
+        {"valid": 0, "ready": 0},
+    ]
+    r = _run(tmp_path, "deassert_off.vcd", cycles, check_valid_hold=False,
+             max_wait_cycles=100)
+    assert r["valid_deassert_violations"] == 0
+    assert r["findings"] == []
+    assert r["coverage"]["valid_hold_requested"] is False
+    assert r["coverage"]["valid_hold_checked"] is False
+
+
+def test_ahb_htrans_deassertion(tmp_path: Path):
+    # AHB master not waiting for HREADY: htrans NONSEQ (2) while hready low, then
+    # back to IDLE (0) the next cycle. valid is derived from htrans.
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module top $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 2 # htrans $end",
+        "$var wire 1 % hready $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    # cycle 0: htrans=NONSEQ(10), hready=0 (stall); cycle 1: htrans=IDLE(00)
+    htrans_bits = ["10", "00"]
+    hready_bits = ["0", "0"]
+    for i, (ht, hr) in enumerate(zip(htrans_bits, hready_bits)):
+        t_low = 10 * i
+        t_high = 10 * i + 5
+        lines.append(f"#{t_low}")
+        lines.append("0!")
+        lines.append(f"b{ht} #")
+        lines.append(f"{hr}%")
+        lines.append(f"#{t_high}")
+        lines.append("1!")
+    wave = _write(tmp_path, "ahb_deassert.vcd", "\n".join(lines) + "\n")
+    r = inspect_handshake(
+        get_parser=_parser_factory(),
+        wave_path=wave,
+        clock="top.clk",
+        valid_htrans="top.htrans",
+        htrans_rule="active",
+        ready="top.hready",
+        max_wait_cycles=100,
+    )
+    assert r["valid_source"] == "htrans:active"
+    assert r["valid_deassert_violations"] == 1
+    viols = [f for f in r["findings"] if f["type"] == "premature_valid_deassertion"]
+    assert len(viols) == 1
+    assert viols[0]["signal"] == "top.htrans"

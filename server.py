@@ -589,9 +589,11 @@ Waveform debug workflow:
    - Do not skip by default — same rule as scan_structural_risks. Skip only when
      there is no waveform or the user explicitly asks.
    - Inspect the returned fact table: interfaces flagged ended_in_stall /
-     payload_hold_violation are the first to investigate. On an AHB write-data
-     failure, a master interface holding valid against a never-ready slave points
-     at the master's handshake (e.g. not waiting for HREADY).
+     payload_hold_violation / premature_valid_deassertion are the first to
+     investigate. On an AHB write-data failure, a master interface holding valid
+     against a never-ready slave points at the master's handshake; a
+     premature_valid_deassertion flag (often with max_stall_cycles==1) is the
+     master dropping the transfer instead of waiting for HREADY.
 
 5. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
@@ -1705,7 +1707,8 @@ async def list_tools():
                 "Whole-design handshake anomaly sweep: discover EVERY valid/ready "
                 "interface and inspect each over the window in one call, returning a "
                 "comparative fact table (per-interface stalls, deadlock signature "
-                "ended_in_stall, payload-hold, backpressure) ordered by a transparent "
+                "ended_in_stall, payload-hold, premature valid deassertion, "
+                "backpressure) ordered by a transparent "
                 "mechanical key. Use on opaque global symptoms (timeout/hang) when you "
                 "don't know which of many interfaces misbehaves — it collapses N "
                 "suggest+inspect round-trips into one. Returns FACTS, not a root-cause "
@@ -1848,15 +1851,18 @@ async def list_tools():
                 "(valid high, ready low), the longest/over-threshold stall windows, "
                 "backpressure imbalance (ready high, valid low), and — when payload "
                 "signals are given — payload-hold violations (a payload that changes "
-                "while the transfer is still stalled). Protocol-agnostic: AXI "
+                "while the transfer is still stalled), and premature valid "
+                "deassertion (a stalled beat whose valid/htrans drops before ready/"
+                "HREADY arrives — the AHB master-not-waiting-for-HREADY bug, which "
+                "needs no payload to detect). Protocol-agnostic: AXI "
                 "*valid/*ready, an AHB pair (ready=hready, valid=a 1-bit 'htrans!=IDLE' "
                 "signal, payload=[htrans,haddr,hwrite,hsize] which must hold while "
                 "hready is low), a generic valid-ready stream, or a credit interface. "
                 "Returns coverage facts for the checks it actually ran "
-                "(stall, backpressure, payload-hold) without assigning protocol side. "
-                "Auto-registers a cursor at the first problem (hold violation > long "
-                "stall > longest stall). Reads existing waveforms only — does NOT rerun "
-                "simulation."
+                "(stall, backpressure, payload-hold, valid-hold) without assigning "
+                "protocol side. Auto-registers a cursor at the first problem (hold "
+                "violation > premature deassertion > long stall > longest stall). "
+                "Reads existing waveforms only — does NOT rerun simulation."
             ),
             inputSchema={
                 "type": "object",
@@ -1893,6 +1899,11 @@ async def list_tools():
                     "check_payload_hold": {
                         "type": "boolean",
                         "description": "Flag payload changes during a stall. Default true (only meaningful when payload is given).",
+                        "default": True,
+                    },
+                    "check_valid_hold": {
+                        "type": "boolean",
+                        "description": "Flag premature valid/transfer deassertion: a stalled beat (valid high, ready low) whose valid goes low the next edge before ready arrives = the master dropped the transfer instead of waiting (e.g. AHB htrans->IDLE without waiting for HREADY). Needs no payload. Default true.",
                         "default": True,
                     },
                     "active_high": {
@@ -2461,6 +2472,7 @@ async def _dispatch(name: str, args: dict):
             end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
             max_wait_cycles=args.get("max_wait_cycles", 16),
             check_payload_hold=args.get("check_payload_hold", True),
+            check_valid_hold=args.get("check_valid_hold", True),
             active_high=args.get("active_high", True),
             cursor_store=_cursor_store,
             cursor_name=args.get("cursor_name"),

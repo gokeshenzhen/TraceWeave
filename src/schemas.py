@@ -764,12 +764,14 @@ class HandshakeFinding(SchemaModel):
     begin_ps: int | None = None
     end_ps: int | None = None
     cycles: int | None = None
-    # payload_hold_violation fields
+    # payload_hold_violation / premature_valid_deassertion fields
     time_ps: int | None = None
     signal: str | None = None
     from_value: str | None = None
     to_value: str | None = None
     stall_begin_ps: int | None = None
+    # premature_valid_deassertion: cycles the beat was stalled before valid dropped
+    stall_cycles: int | None = None
 
 
 class HandshakeCoverage(SchemaModel):
@@ -785,6 +787,9 @@ class HandshakeCoverage(SchemaModel):
     payload_signals_requested: int = 0
     payload_signals_checked: int = 0
     payload_signals_unresolved: int = 0
+    # wait-state hold (premature valid deassertion) — needs no payload signal
+    valid_hold_requested: bool = False
+    valid_hold_checked: bool = False
 
 
 class HandshakeInspectResult(SchemaModel):
@@ -811,6 +816,10 @@ class HandshakeInspectResult(SchemaModel):
     ready_without_valid_cycles: int = 0
     payload_hold_violations: int = 0
     payload_hold_checked: bool = False
+    # premature_valid_deassertion count: the master dropped a stalled transfer
+    # (valid/htrans went inactive) before ready/HREADY arrived. The AHB
+    # master-not-waiting-for-HREADY signature payload_hold cannot see.
+    valid_deassert_violations: int = 0
     payload_unresolved: list[str] = Field(default_factory=list)
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0
@@ -905,6 +914,7 @@ class SweptInterface(SchemaModel):
     ended_in_stall: bool = False
     final_stall_cycles: int = 0
     payload_hold_violations: int = 0
+    valid_deassert_violations: int = 0
     ready_without_valid_cycles: int = 0
     unknown_sample_cycles: int = 0
 

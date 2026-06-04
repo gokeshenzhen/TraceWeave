@@ -290,3 +290,79 @@ def test_sweep_covers_both_ahb_and_valid_ready(tmp_path):
     assert top["kind"] == "ahb" and top["ended_in_stall"] is True
     vr = [i for i in res["interfaces"] if i["kind"] == "valid_ready"][0]
     assert vr["flags"] == []
+
+
+# --- premature valid deassertion (master not waiting for ready/HREADY) --------
+
+
+def _deassert_two_stage_vcd(n_cycles: int = 12) -> str:
+    """Two valid/ready stages. u0 is clean (valid & ready high every cycle). u1
+    stalls one cycle then the master DROPS valid before ready (the AHB
+    master-not-waiting bug) — max_stall_cycles stays 1, no payload-hold, so only
+    the valid-hold check can flag it."""
+    header = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$scope module u0 $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 1 # in_valid $end",
+        "$var wire 1 $ in_ready $end",
+        "$upscope $end",
+        "$scope module u1 $end",
+        "$var wire 1 % clk $end",
+        "$var wire 1 & in_valid $end",
+        "$var wire 1 ' in_ready $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    # u1 valid pattern per cycle: stall(1,r0) -> drop(0) -> idle... repeating so
+    # several deassertions accrue.
+    body: list[str] = []
+    t, lvl = 0, 0
+    for cyc in range(n_cycles):
+        # set values at cycle start (clk low)
+        body.append(f"#{t}")
+        body.append("0!")
+        body.append("0%")
+        # u0 clean
+        body.append("1#")
+        body.append("1$")
+        # u1: pattern by cyc % 3
+        phase = cyc % 3
+        if phase == 0:
+            v1, r1 = "1", "0"  # stall
+        elif phase == 1:
+            v1, r1 = "0", "0"  # premature drop
+        else:
+            v1, r1 = "0", "0"  # idle
+        body.append(f"{v1}&")
+        body.append(f"{r1}'")
+        # posedge
+        t += 5
+        body.append(f"#{t}")
+        body.append("1!")
+        body.append("1%")
+        t += 5
+    return "\n".join(header + body) + "\n"
+
+
+def test_sweep_flags_and_ranks_premature_deassertion(tmp_path):
+    cs = CursorStore()
+    res = _sweep(tmp_path, _deassert_two_stage_vcd(),
+                 cursor_store=cs, max_wait_cycles=16)
+    assert res["interface_count"] == 2
+    # u1 (the deasserting stage) must sort first and carry the factual flag.
+    top = res["interfaces"][0]
+    assert top["valid"] == "top.u1.in_valid"
+    assert top["valid_deassert_violations"] >= 1
+    assert "premature_valid_deassertion" in top["flags"]
+    assert top["ended_in_stall"] is False  # the bug, not a deadlock
+    assert top["max_stall_cycles"] == 1    # the give-away short stall
+    # the clean stage has no flags
+    clean = next(i for i in res["interfaces"] if i["valid"] == "top.u0.in_valid")
+    assert clean["flags"] == []
+    assert clean["valid_deassert_violations"] == 0
+    # exactly one cursor for the whole sweep, anchored on the flagged stage
+    assert res["cursor"] is not None
+    assert len(cs.list()) == 1

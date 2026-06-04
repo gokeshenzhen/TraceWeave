@@ -722,6 +722,7 @@ def inspect_handshake(
     end_ps: int = -1,
     max_wait_cycles: int = DEFAULT_MAX_WAIT_CYCLES,
     check_payload_hold: bool = True,
+    check_valid_hold: bool = True,
     active_high: bool = True,
     max_findings: int = DEFAULT_MAX_HANDSHAKE_FINDINGS,
     cursor_store: CursorStore | None = None,
@@ -747,6 +748,19 @@ def inspect_handshake(
     ``htrans``/``haddr`` must hold steady while ``hready`` is low). This is the
     highest-value, hardest-to-eyeball check and exactly the class of bug that
     leaves no value pattern in scoreboard logs.
+
+    When ``check_valid_hold`` is set (default), a complementary **wait-state
+    hold** rule is enforced on the valid/transfer itself: once a beat is stalled
+    (valid high, ready low at one edge), the transfer MUST persist until it is
+    accepted. If at the next edge ``valid`` is known-low — the master dropped the
+    transfer before ready arrived — it is a ``premature_valid_deassertion``
+    finding. This catches the AHB master that does not wait for ``HREADY``
+    (``HTRANS`` driven back to IDLE the cycle after a wait state), a bug
+    ``payload_hold`` structurally cannot see: with a 1-cycle stall the payload
+    never gets a chance to change, and ``HTRANS`` (the derived valid) is not a
+    payload signal. Unlike payload-hold this needs no ``payload`` argument — it
+    watches the valid source itself. An x/z valid at the next edge is treated as
+    unknown (no violation), not a deassertion.
 
     ``active_high=False`` inverts the valid/ready polarity. Samples where valid
     or ready is x/z are counted in ``unknown_sample_cycles`` and do not extend a
@@ -809,6 +823,8 @@ def inspect_handshake(
         "payload_signals_requested": len(payload),
         "payload_signals_checked": 0,
         "payload_signals_unresolved": len(payload_unresolved),
+        "valid_hold_requested": bool(check_valid_hold),
+        "valid_hold_checked": False,
     }
 
     result: dict[str, Any] = {
@@ -832,6 +848,7 @@ def inspect_handshake(
         "ready_without_valid_cycles": 0,
         "payload_hold_violations": 0,
         "payload_hold_checked": False,
+        "valid_deassert_violations": 0,
         "payload_unresolved": payload_unresolved,
         "coverage": coverage,
         "unknown_sample_cycles": 0,
@@ -880,12 +897,14 @@ def inspect_handshake(
     coverage["backpressure_checked"] = True
     coverage["payload_hold_checked"] = payload_hold_complete
     result["payload_hold_checked"] = payload_hold_complete
+    coverage["valid_hold_checked"] = bool(check_valid_hold)
 
     findings: list[dict[str, Any]] = []
     in_stall = False
     stall_begin: int | None = None
     stall_cycles = 0
     stall_payload: dict[str, Any] = {}
+    stall_valid_repr: str | None = None
 
     def _close_stall(end_ps_val: int | None) -> None:
         nonlocal in_stall, stall_cycles, stall_begin
@@ -913,6 +932,27 @@ def inspect_handshake(
         else:
             v = _hs_truth(sig.get(valid_signal), active_high)
         r = _hs_truth(sig.get(ready), active_high)
+
+        # Wait-state hold: if the previous edge left us stalled (valid high,
+        # ready low) the beat must persist until accepted. A known-low valid
+        # here means the master dropped the transfer before ready arrived — a
+        # premature deassertion (e.g. AHB htrans -> IDLE without waiting for
+        # HREADY). Evaluated BEFORE this edge is reclassified, and only on a
+        # known False (an x/z valid is "unknown", never a deassertion).
+        if in_stall and check_valid_hold and v is False:
+            result["valid_deassert_violations"] += 1
+            if len(findings) < max_findings:
+                findings.append({
+                    "type": "premature_valid_deassertion",
+                    "severity": "error",
+                    "time_ps": s["time_ps"],
+                    "signal": valid_signal,
+                    "from_value": stall_valid_repr,
+                    "to_value": _hs_repr(sig.get(valid_signal)),
+                    "stall_begin_ps": stall_begin,
+                    "stall_cycles": stall_cycles,
+                })
+
         if v is None or r is None:
             result["unknown_sample_cycles"] += 1
             _close_stall(s["time_ps"])
@@ -931,6 +971,7 @@ def inspect_handshake(
                 stall_begin = s["time_ps"]
                 stall_cycles = 1
                 stall_payload = {p: sig.get(p) for p in resolved_payload}
+                stall_valid_repr = _hs_repr(sig.get(valid_signal))
             else:
                 stall_cycles += 1
                 if do_hold_check:
@@ -998,6 +1039,21 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
             "signal_path": sig,
         }]
         return
+    deassert = next((f for f in findings if f.get("type") == "premature_valid_deassertion"), None)
+    if deassert and deassert.get("signal"):
+        sig = deassert["signal"]
+        result["violating_signal"] = sig
+        result["next_actions"] = [{
+            "tool": "explain_signal_driver",
+            "reason": ("attribute this premature valid deassertion: valid (or AHB "
+                       "htrans) went inactive while the beat was still stalled "
+                       "(ready/HREADY low) — the master dropped the transfer instead "
+                       "of holding it until accepted. valid is master-driven, so "
+                       "confirm the master's drive logic actually waits for "
+                       "ready/HREADY before advancing."),
+            "signal_path": sig,
+        }]
+        return
     stalled = result["ended_in_stall"] or any(f.get("type") == "long_stall" for f in findings)
     if stalled:
         result["next_actions"] = [{
@@ -1041,9 +1097,11 @@ def _handshake_input_error(
         "max_stall_cycles": 0, "max_stall_begin_ps": None,
         "ended_in_stall": False, "final_stall_cycles": 0,
         "ready_without_valid_cycles": 0, "payload_hold_violations": 0,
-        "payload_hold_checked": False, "payload_unresolved": [],
+        "payload_hold_checked": False, "valid_deassert_violations": 0,
+        "payload_unresolved": [],
         "coverage": _empty_handshake_coverage(),
-        "unknown_sample_cycles": 0, "findings": [], "cursor": None,
+        "unknown_sample_cycles": 0, "findings": [],
+        "violating_signal": None, "next_actions": [], "cursor": None,
         "reason": message, "warnings": [], "signal_errors": {},
     }
 
@@ -1060,6 +1118,8 @@ def _empty_handshake_coverage() -> dict[str, Any]:
         "payload_signals_requested": 0,
         "payload_signals_checked": 0,
         "payload_signals_unresolved": 0,
+        "valid_hold_requested": False,
+        "valid_hold_checked": False,
     }
 
 
@@ -1140,7 +1200,8 @@ def _attach_handshake_cursor(
 ) -> None:
     if cursor_store is None:
         return
-    # Anchor priority: payload hold violation > long stall > longest stall.
+    # Anchor priority: payload hold violation > premature valid deassertion >
+    # long stall > longest stall.
     anchor_time: int | None = None
     anchor_desc = ""
     for f in findings:
@@ -1148,6 +1209,12 @@ def _attach_handshake_cursor(
             anchor_time = f["time_ps"]
             anchor_desc = f"payload hold violation on {f['signal']}"
             break
+    if anchor_time is None:
+        for f in findings:
+            if f["type"] == "premature_valid_deassertion":
+                anchor_time = f["time_ps"]
+                anchor_desc = f"premature valid deassertion on {f['signal']}"
+                break
     if anchor_time is None:
         for f in findings:
             if f["type"] == "long_stall":
