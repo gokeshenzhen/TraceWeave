@@ -168,6 +168,11 @@ def sweep_handshake_anomalies(
         if res.get("reason"):
             skipped.append({**base, "reason": res["reason"]})
             continue
+        # Carry side attribution only for one-sided rows (payload-hold / premature
+        # deassertion → valid_driver side). A clean or two-sided-stall row leaves
+        # it None so the table is not bloated with empty blocks.
+        attribution = res.get("attribution") or {}
+        row_attribution = attribution if attribution.get("violating_side") else None
         interfaces.append({
             "scope": nb["scope"],
             "clock": nb["clock"],
@@ -177,6 +182,7 @@ def sweep_handshake_anomalies(
             "payload": nb["payload"],
             "confidence": nb["confidence"],
             "flags": _flags(res),
+            "attribution": row_attribution,
             **{k: res.get(k) for k in _FACT_KEYS},
         })
 

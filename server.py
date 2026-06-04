@@ -1862,6 +1862,11 @@ async def list_tools():
                 "(stall, backpressure, payload-hold, valid-hold) without assigning "
                 "protocol side. Auto-registers a cursor at the first problem (hold "
                 "violation > premature deassertion > long stall > longest stall). "
+                "For the one-sided violations (payload-hold, premature deassertion) "
+                "it also returns a structured `attribution` block "
+                "(violating_side=valid_driver, exonerated_side=ready_driver) so the "
+                "caller does NOT start in the slave driver/monitor — the responder "
+                "cannot cause either; a plain two-sided stall leaves attribution empty. "
                 "Reads existing waveforms only — does NOT rerun simulation."
             ),
             inputSchema={

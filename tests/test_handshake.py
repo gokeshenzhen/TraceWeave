@@ -553,3 +553,80 @@ def test_ahb_htrans_deassertion(tmp_path: Path):
     viols = [f for f in r["findings"] if f["type"] == "premature_valid_deassertion"]
     assert len(viols) == 1
     assert viols[0]["signal"] == "top.htrans"
+
+
+# ---------------------------------------------------------------------------
+# structured side attribution (one-sided violations -> valid_driver side;
+# two-sided stall -> no side). Role from protocol, never read off the trace.
+# ---------------------------------------------------------------------------
+
+
+def test_deassertion_attribution_blames_valid_driver(tmp_path: Path):
+    cycles = [
+        {"valid": 1, "ready": 0},
+        {"valid": 0, "ready": 0},
+    ]
+    r = _run(tmp_path, "attr_deassert.vcd", cycles, max_wait_cycles=100)
+    a = r["attribution"]
+    assert a["violating_side"] == "valid_driver"
+    assert a["exonerated_side"] == "ready_driver"
+    assert a["basis"] == "protocol_valid_hold_obligation"
+    assert "slave driver/monitor" in a["note"]
+
+
+def test_payload_hold_attribution_blames_valid_driver(tmp_path: Path):
+    cycles = [
+        {"valid": 1, "ready": 0, "addr": 0x10},
+        {"valid": 1, "ready": 0, "addr": 0x11},
+    ]
+    r = _run(tmp_path, "attr_hold.vcd", cycles, with_addr=True,
+             payload=["top.addr"], max_wait_cycles=100)
+    assert r["payload_hold_violations"] == 1
+    a = r["attribution"]
+    assert a["violating_side"] == "valid_driver"
+    assert a["exonerated_side"] == "ready_driver"
+    assert a["basis"] == "protocol_payload_hold_obligation"
+    assert "slave driver/monitor" in a["note"]
+
+
+def test_plain_stall_attribution_is_two_sided(tmp_path: Path):
+    # A long stall (valid held, ready never comes) is genuinely two-sided: the
+    # trace cannot attribute a side.
+    cycles = [{"valid": 1, "ready": 0}] * 8
+    r = _run(tmp_path, "attr_stall.vcd", cycles, max_wait_cycles=3)
+    a = r["attribution"]
+    assert a["violating_side"] is None
+    assert a["exonerated_side"] is None
+    assert a["basis"] == "two_sided_stall"
+
+
+def test_clean_attribution_is_empty(tmp_path: Path):
+    r = _run(tmp_path, "attr_clean.vcd", [{"valid": 1, "ready": 1}] * 4)
+    a = r["attribution"]
+    assert a["violating_side"] is None and a["basis"] is None and a["note"] is None
+
+
+def test_ahb_attribution_note_says_master(tmp_path: Path):
+    # For an AHB (htrans-derived) valid the note can name the master directly,
+    # since HTRANS is always master-driven.
+    lines = [
+        "$timescale 1ns $end",
+        "$scope module top $end",
+        "$var wire 1 ! clk $end",
+        "$var wire 2 # htrans $end",
+        "$var wire 1 % hready $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    for i, (ht, hr) in enumerate(zip(["10", "00"], ["0", "0"])):
+        t_low, t_high = 10 * i, 10 * i + 5
+        lines += [f"#{t_low}", "0!", f"b{ht} #", f"{hr}%", f"#{t_high}", "1!"]
+    wave = _write(tmp_path, "attr_ahb.vcd", "\n".join(lines) + "\n")
+    r = inspect_handshake(
+        get_parser=_parser_factory(), wave_path=wave, clock="top.clk",
+        valid_htrans="top.htrans", htrans_rule="active", ready="top.hready",
+        max_wait_cycles=100,
+    )
+    a = r["attribution"]
+    assert a["violating_side"] == "valid_driver"
+    assert "master" in a["note"]

@@ -359,10 +359,15 @@ def test_sweep_flags_and_ranks_premature_deassertion(tmp_path):
     assert "premature_valid_deassertion" in top["flags"]
     assert top["ended_in_stall"] is False  # the bug, not a deadlock
     assert top["max_stall_cycles"] == 1    # the give-away short stall
-    # the clean stage has no flags
+    # the deasserting row carries structured side attribution
+    assert top["attribution"] is not None
+    assert top["attribution"]["violating_side"] == "valid_driver"
+    assert top["attribution"]["exonerated_side"] == "ready_driver"
+    # the clean stage has no flags and no attribution block
     clean = next(i for i in res["interfaces"] if i["valid"] == "top.u0.in_valid")
     assert clean["flags"] == []
     assert clean["valid_deassert_violations"] == 0
+    assert clean["attribution"] is None
     # exactly one cursor for the whole sweep, anchored on the flagged stage
     assert res["cursor"] is not None
     assert len(cs.list()) == 1

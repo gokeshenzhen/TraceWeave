@@ -774,6 +774,21 @@ class HandshakeFinding(SchemaModel):
     stall_cycles: int | None = None
 
 
+class HandshakeAttribution(SchemaModel):
+    # Structured side attribution for one-sided protocol violations. NOT read
+    # from the trace (which holds values, not ownership) — derived from protocol:
+    # payload-hold and premature-valid-deassertion are both breaches of the
+    # valid-driver's obligation, so violating_side='valid_driver' /
+    # exonerated_side='ready_driver'. A plain (two-sided) stall leaves both None.
+    # The valid-driver is the channel producer — master on AXI AW/AR/W, slave on
+    # R/B — so resolve the actual instance via explain_signal_driver rather than
+    # assuming master (AHB htrans is the exception: always master-driven).
+    violating_side: str | None = None
+    exonerated_side: str | None = None
+    basis: str | None = None
+    note: str | None = None
+
+
 class HandshakeCoverage(SchemaModel):
     # Facts about what inspect_handshake actually evaluated. These are not side
     # or protocol verdicts; discovery/caller context owns those labels.
@@ -829,6 +844,9 @@ class HandshakeInspectResult(SchemaModel):
     # is no signal-specific finding. next_actions fires only when a finding
     # exists; it bridges the bus fact to RTL tracing (explain_signal_driver).
     violating_signal: str | None = None
+    # Structured side attribution for one-sided violations (payload-hold,
+    # premature-valid-deassertion). Empty (all None) for a two-sided stall.
+    attribution: HandshakeAttribution = Field(default_factory=HandshakeAttribution)
     next_actions: list[NextAction] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     reason: str | None = None
@@ -906,6 +924,9 @@ class SweptInterface(SchemaModel):
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     # flags are factual observations, never verdicts
     flags: list[str] = Field(default_factory=list)
+    # Side attribution for a one-sided violation row (payload-hold / premature
+    # deassertion → valid_driver side); None for clean or two-sided-stall rows.
+    attribution: HandshakeAttribution | None = None
     sample_count: int = 0
     transfer_count: int = 0
     stall_count: int = 0

@@ -854,6 +854,7 @@ def inspect_handshake(
         "unknown_sample_cycles": 0,
         "findings": [],
         "violating_signal": None,
+        "attribution": _empty_attribution(),
         "next_actions": [],
         "cursor": None,
         "reason": None,
@@ -1015,27 +1016,72 @@ def inspect_handshake(
     return result
 
 
+def _empty_attribution() -> dict[str, Any]:
+    return {
+        "violating_side": None,
+        "exonerated_side": None,
+        "basis": None,
+        "note": None,
+    }
+
+
+def _producer_gloss(use_htrans: bool) -> str:
+    """Master/slave gloss for the valid-driver, honest about channel direction.
+
+    The violating side is always whoever drives valid (the producer of *this*
+    channel). That is the master on AXI AW/AR/W but the SLAVE on R/B, so we do
+    NOT hardcode 'master' for a generic valid — explain_signal_driver resolves
+    the actual instance. AHB is the exception: HTRANS is always master-driven."""
+    if use_htrans:
+        return ("valid here is HTRANS, which AHB drives from the master — this is "
+                "a master-side protocol violation")
+    return ("the violating side is whoever drives valid (the channel's producer): "
+            "the master on AXI AW/AR/W, but the slave on R/B — confirm via the "
+            "driver lookup rather than assuming master")
+
+
 def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[str, Any]],
                                   ready: str) -> None:
     """Surface the signal carrying the primary finding + a forward-link to driver
-    lookup. Bus-fact tools do NOT self-attribute master vs slave (the trace holds
-    values, not ownership); this gives the caller the raw material to compose
-    attribution = bus-fact + drive-direction.
+    lookup, and — for the one-sided violation classes — a structured ``attribution``
+    block that names the responsible side.
 
-    A payload-hold violation is on a master-driven control/data signal → point at
-    it directly. Otherwise a stall (valid && !ready) is a valid/ready relationship
-    → point at ``ready`` so the caller can resolve slave back-pressure vs the
-    master's valid. ``violating_signal`` stays None for a stall (no single faulty
-    signal — it is a relationship)."""
+    The boundary: the *trace* holds values, not ownership, so we never read
+    master/slave off the waveform. But two violation classes are one-sided by
+    PROTOCOL, not by trace:
+
+    - ``payload_hold_violation`` and ``premature_valid_deassertion`` are both
+      breaches of the valid-driver's obligation (payload travels with valid; only
+      the producer can mutate payload mid-stall or drop valid before acceptance).
+      So ``violating_side='valid_driver'`` / ``exonerated_side='ready_driver'`` —
+      the responder/consumer (ready/HREADY side, the slave on a request channel)
+      cannot cause either, so the caller should NOT start in the slave
+      driver/monitor. ``explain_signal_driver`` on valid lands on the actual
+      producing instance (and reveals a mis-wired input if it is not the producer).
+    - A plain stall (valid && !ready) is genuinely TWO-sided (legitimate slave
+      back-pressure vs the master over-asserting valid), so no side is attributed
+      — ``violating_side`` stays None and the link targets ``ready``."""
+    use_htrans = str(result.get("valid_source", "")).startswith("htrans")
+    gloss = _producer_gloss(use_htrans)
+
     hold = next((f for f in findings if f.get("type") == "payload_hold_violation"), None)
     if hold and hold.get("signal"):
         sig = hold["signal"]
         result["violating_signal"] = sig
+        result["attribution"] = {
+            "violating_side": "valid_driver",
+            "exonerated_side": "ready_driver",
+            "basis": "protocol_payload_hold_obligation",
+            "note": (f"payload-hold violation: payload travels with valid, so {gloss}. "
+                     "The ready/responder (slave on a request channel) cannot cause "
+                     "it — do not start in the slave driver/monitor."),
+        }
         result["next_actions"] = [{
             "tool": "explain_signal_driver",
-            "reason": ("attribute this payload-hold violation: the held signal is "
-                       "master-driven, so a change during a stall points at the "
-                       "master's drive logic — confirm the driving instance."),
+            "reason": ("attribute this payload-hold violation: the held signal moves "
+                       "with valid (same producer), so a change during a stall points "
+                       f"at the valid-driver's logic — {gloss}. Confirm the driving "
+                       "instance; the ready/slave side cannot cause this."),
             "signal_path": sig,
         }]
         return
@@ -1043,19 +1089,38 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
     if deassert and deassert.get("signal"):
         sig = deassert["signal"]
         result["violating_signal"] = sig
+        result["attribution"] = {
+            "violating_side": "valid_driver",
+            "exonerated_side": "ready_driver",
+            "basis": "protocol_valid_hold_obligation",
+            "note": (f"premature valid deassertion: {gloss}. Holding valid until "
+                     "acceptance is the valid-driver's obligation; the ready/responder "
+                     "(slave on a request channel) physically cannot make valid drop "
+                     "— do not start in the slave driver/monitor."),
+        }
         result["next_actions"] = [{
             "tool": "explain_signal_driver",
             "reason": ("attribute this premature valid deassertion: valid (or AHB "
                        "htrans) went inactive while the beat was still stalled "
-                       "(ready/HREADY low) — the master dropped the transfer instead "
-                       "of holding it until accepted. valid is master-driven, so "
-                       "confirm the master's drive logic actually waits for "
-                       "ready/HREADY before advancing."),
+                       f"(ready/HREADY low) — {gloss}, and holding valid until "
+                       "acceptance is the valid-driver's obligation. Confirm the "
+                       "driving instance actually waits for ready/HREADY; the "
+                       "ready/slave side cannot cause this. If the driver is not the "
+                       "producer you expect, the valid input was mis-wired."),
             "signal_path": sig,
         }]
         return
     stalled = result["ended_in_stall"] or any(f.get("type") == "long_stall" for f in findings)
     if stalled:
+        result["attribution"] = {
+            "violating_side": None,
+            "exonerated_side": None,
+            "basis": "two_sided_stall",
+            "note": ("a stall is valid && !ready — genuinely two-sided (legitimate "
+                     "slave back-pressure vs the master over-asserting valid). The "
+                     "trace cannot attribute a side; resolve who drives ready vs "
+                     "valid to decide."),
+        }
         result["next_actions"] = [{
             "tool": "explain_signal_driver",
             "reason": ("a stall is valid && !ready — resolve who drives ready "
@@ -1101,7 +1166,8 @@ def _handshake_input_error(
         "payload_unresolved": [],
         "coverage": _empty_handshake_coverage(),
         "unknown_sample_cycles": 0, "findings": [],
-        "violating_signal": None, "next_actions": [], "cursor": None,
+        "violating_signal": None, "attribution": _empty_attribution(),
+        "next_actions": [], "cursor": None,
         "reason": message, "warnings": [], "signal_errors": {},
     }
 
