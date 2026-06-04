@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from src.handshake_suggest import (
     _empty_result_reason,
+    _inspect_handshake_relay,
     propose_handshake_bundles,
     propose_protocol_bundles,
+    suggest_protocol_bundles,
 )
 
 
@@ -269,3 +271,70 @@ def test_empty_hint_propagates_scope_into_command():
     reason = _empty_result_reason(parser, "/w/a.fsdb", "tb.u")
     assert 'scope="tb.u"' in reason
     assert "under scope tb.u" in reason
+
+
+# --- suggest -> inspect_handshake relay (chain the discovery to the analysis) --
+
+
+def test_inspect_relay_emits_copy_paste_call_for_ahb_candidate():
+    bundles = [{
+        "inspect_handshake_args": {
+            "clock": "tb.hclk",
+            "valid_htrans": "tb.mst_HTRANS[1:0]",
+            "htrans_rule": "active",
+            "ready": "tb.mst_HREADYOUT",
+            "payload": ["tb.mst_HADDR[31:0]", "tb.mst_HWRITE"],
+        }
+    }]
+    ns = _inspect_handshake_relay("/w/a.fsdb", bundles)
+    assert ns is not None
+    assert 'inspect_handshake(wave_path="/w/a.fsdb"' in ns
+    assert 'valid_htrans="tb.mst_HTRANS[1:0]"' in ns
+    assert 'ready="tb.mst_HREADYOUT"' in ns
+    assert "tb.mst_HADDR[31:0]" in ns
+    assert "next" in ns.lower()
+
+
+def test_inspect_relay_emits_one_line_per_args_candidate():
+    bundles = [
+        {"inspect_handshake_args": {"clock": "c", "valid_htrans": "m.HTRANS",
+                                    "htrans_rule": "active", "ready": "m.HREADY", "payload": []}},
+        {"inspect_handshake_args": {"clock": "c", "valid_htrans": "s.HTRANS",
+                                    "htrans_rule": "active", "ready": "s.HREADY", "payload": []}},
+    ]
+    ns = _inspect_handshake_relay("/w/a.fsdb", bundles)
+    assert ns.count("inspect_handshake(") == 2
+
+
+def test_inspect_relay_skips_candidates_without_args():
+    # APB candidates carry inspect_handshake_args=None (need a derived valid).
+    bundles = [{"inspect_handshake_args": None, "psel": "tb.psel"}]
+    assert _inspect_handshake_relay("/w/a.fsdb", bundles) is None
+
+
+def test_inspect_relay_none_for_empty():
+    assert _inspect_handshake_relay("/w/a.fsdb", []) is None
+
+
+def test_suggest_protocol_bundles_wrapper_attaches_inspect_relay():
+    sigs = {
+        "tb.hclk": {"path": "tb.hclk", "width": 1, "var_type": "wire"},
+        "tb.mst_HTRANS[1:0]": {"path": "tb.mst_HTRANS[1:0]", "width": 2, "var_type": "wire"},
+        "tb.mst_HREADYOUT": {"path": "tb.mst_HREADYOUT", "width": 1, "var_type": "wire"},
+        "tb.mst_HADDR[31:0]": {"path": "tb.mst_HADDR[31:0]", "width": 32, "var_type": "wire"},
+        "tb.mst_HWRITE": {"path": "tb.mst_HWRITE", "width": 1, "var_type": "wire"},
+    }
+
+    class _P:
+        def search_signals(self, kw):
+            k = kw.lower()
+            return {"results": [v for p, v in sigs.items() if k in p.lower()]}
+
+    res = suggest_protocol_bundles(
+        get_parser=lambda w: _P(), wave_path="/w/a.fsdb", protocol="ahb"
+    )
+    assert res["candidate_count"] >= 1
+    assert res["next_step"] is not None
+    assert 'inspect_handshake(wave_path="/w/a.fsdb"' in res["next_step"]
+    assert 'valid_htrans="tb.mst_HTRANS[1:0]"' in res["next_step"]
+    assert 'ready="tb.mst_HREADYOUT"' in res["next_step"]

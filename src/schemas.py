@@ -266,6 +266,15 @@ class ErrorGroup(SchemaModel):
 
 class ParseSimLogResult(TruncatableResult):
     log_file: str
+    # Generic, boundary-safe pointer set when a scoreboard/compare-style failure
+    # is detected: such failures are often a SYMPTOM of a lower-level bus-protocol
+    # problem. The hint names the protocol-health tools but does NOT assert a
+    # protocol type or a specific signal — root-cause judgement stays with the LLM.
+    # Placed near the top of the schema ON PURPOSE: parse_sim_log returns large
+    # first_group_context/failure_events blobs, and a hint buried after them gets
+    # diluted past a weak model's attention. Field order = serialized JSON order,
+    # so this surfaces the pointer before the big payloads.
+    protocol_symptom_hint: str | None = None
     simulator: str
     schema_version: str
     contract_version: str
@@ -288,11 +297,6 @@ class ParseSimLogResult(TruncatableResult):
     previous_log_detected: bool = False
     candidate_previous_logs: list[str] = Field(default_factory=list)
     suggested_followup_tool: str | None = None
-    # Generic, boundary-safe pointer set when a scoreboard/compare-style failure
-    # is detected: such failures are often a SYMPTOM of a lower-level bus-protocol
-    # problem. The hint names the protocol-health tools but does NOT assert a
-    # protocol type or a specific signal — root-cause judgement stays with the LLM.
-    protocol_symptom_hint: str | None = None
     first_group_context: ErrorContextResult | None = None
     problem_hints: ProblemHints | None = None
     auto_diff: DiffResult | None = None
@@ -865,6 +869,13 @@ class SuggestProtocolBundlesResult(SchemaModel):
     candidate_count: int = 0
     candidates: list[ProtocolBundle] = Field(default_factory=list)
     reason: str | None = None
+    # Copy-paste-ready inspect_handshake relay for the discovered candidates.
+    # Discovery only LOCATES interfaces; the analysis step is inspect_handshake.
+    # Weak models stop after discovery unless the next call is spelled out for
+    # them with concrete args at the point the args first exist (here, not at
+    # parse time — parse has no signal paths). Boundary-safe: it advances the
+    # analysis, it does not assert a protocol side or a root cause.
+    next_step: str | None = None
 
 
 class SweptInterface(SchemaModel):

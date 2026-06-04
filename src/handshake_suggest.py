@@ -579,14 +579,47 @@ def suggest_protocol_bundles(
             continue
 
     bundles = propose_protocol_bundles(list(sigs.values()), protocol=protocol, scope=scope)
+    candidates = bundles[:max_candidates]
     return {
         "wave_path": wave_path,
         "protocol": protocol,
         "scope": scope,
         "candidate_count": len(bundles),
-        "candidates": bundles[:max_candidates],
+        "candidates": candidates,
         "reason": None if bundles else (
             f"no {protocol.upper()} bundles found by protocol signal names"
             + (f" under scope {scope}" if scope else "")
         ),
+        "next_step": _inspect_handshake_relay(wave_path, candidates),
     }
+
+
+def _inspect_handshake_relay(wave_path: str, bundles: list[dict]) -> str | None:
+    """Build a copy-paste-ready inspect_handshake call for each candidate that
+    already carries ``inspect_handshake_args`` (AHB candidates with a clock).
+    Discovery only LOCATES the interface; this spells out the analysis step at
+    the one point the args exist. APB candidates carry no args (they need a
+    derived valid first), so they produce no relay line. Boundary-safe: advances
+    the analysis, never asserts a side or a root cause."""
+    cmds: list[str] = []
+    for b in bundles:
+        args = b.get("inspect_handshake_args")
+        if not args:
+            continue
+        payload = args.get("payload") or []
+        cmds.append(
+            f'inspect_handshake(wave_path="{wave_path}", '
+            f'clock="{args.get("clock")}", '
+            f'valid_htrans="{args.get("valid_htrans")}", '
+            f'htrans_rule="{args.get("htrans_rule", "active")}", '
+            f'ready="{args.get("ready")}", '
+            f'payload={payload!r})'
+        )
+    if not cmds:
+        return None
+    return (
+        "Discovery only LOCATED the interface(s) above — this is not yet an "
+        "analysis. NEXT, run inspect_handshake on each to get the cycle-by-cycle "
+        "handshake classification (stalls, payload-hold during wait states) that "
+        "discovery cannot give. Copy-paste:\n" + "\n".join(cmds)
+    )
