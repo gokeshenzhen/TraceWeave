@@ -881,6 +881,10 @@ class SuggestProtocolBundlesResult(SchemaModel):
 class SweptInterface(SchemaModel):
     scope: str
     clock: str | None = None
+    # kind: "valid_ready" (AXI / generic valid-ready / req-ack) or "ahb" (no
+    # literal valid — derived from htrans). For an ahb row, `valid` carries the
+    # HTRANS signal path used as the derived valid.
+    kind: str = "valid_ready"
     valid: str
     ready: str
     payload: list[str] = Field(default_factory=list)

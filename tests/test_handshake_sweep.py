@@ -209,3 +209,84 @@ def test_facts_exposed_and_note_disclaims_verdict(tmp_path):
         assert "max_stall_cycles" in iface
         assert "transfer_count" in iface
     assert res["note"] and "not a verdict" in res["note"]
+
+
+# --- AHB coverage (sweep now discovers htrans/hready buses too) --------------
+
+
+def _ahb_stall_vcd(n_cycles: int = 30) -> str:
+    """One AHB interface (top.m_if0) driving HTRANS=NONSEQ with HREADY held low
+    -> a master valid (htrans active) against a never-ready slave -> deadlock."""
+    header = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$scope module m_if0 $end",
+        "$var wire 1 ! HCLK $end",
+        "$var wire 2 # HTRANS $end",
+        "$var wire 1 $ HREADY $end",
+        "$var wire 32 a HADDR $end",
+        "$var wire 1 b HWRITE $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    body = ["#0", "0!", "b10 #", "0$", "b0 a", "0b"]
+    t, lvl = 0, 0
+    for _ in range(1, n_cycles * 2):
+        t += 10
+        lvl ^= 1
+        body.append(f"#{t}")
+        body.append(f"{lvl}!")
+    return "\n".join(header + body) + "\n"
+
+
+def _mixed_ahb_vr_vcd(n_cycles: int = 30) -> str:
+    """A design with BOTH an AHB bus (stalling) and a valid/ready bus (clean)."""
+    header = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$scope module m_if0 $end",          # AHB, stalling
+        "$var wire 1 ! HCLK $end",
+        "$var wire 2 # HTRANS $end",
+        "$var wire 1 $ HREADY $end",
+        "$var wire 32 a HADDR $end",
+        "$upscope $end",
+        "$scope module s_axi $end",          # A-class, clean
+        "$var wire 1 % clk $end",
+        "$var wire 1 & wvalid $end",
+        "$var wire 1 ( wready $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    body = ["#0", "0!", "b10 #", "0$", "b0 a", "0%", "1&", "1("]
+    t, lvl = 0, 0
+    for _ in range(1, n_cycles * 2):
+        t += 10
+        lvl ^= 1
+        body.append(f"#{t}")
+        body.append(f"{lvl}!")   # HCLK
+        body.append(f"{lvl}%")   # axi clk
+    return "\n".join(header + body) + "\n"
+
+
+def test_sweep_covers_ahb_interface(tmp_path):
+    res = _sweep(tmp_path, _ahb_stall_vcd(), max_wait_cycles=4)
+    ahb = [i for i in res["interfaces"] if i["kind"] == "ahb"]
+    assert len(ahb) == 1, res                 # discovered AND inspected the AHB bus
+    assert "HTRANS" in ahb[0]["valid"]        # derived valid = htrans path
+    assert "HREADY" in ahb[0]["ready"]
+    assert ahb[0]["ended_in_stall"] is True
+    assert "ended_in_stall" in ahb[0]["flags"]
+
+
+def test_sweep_covers_both_ahb_and_valid_ready(tmp_path):
+    res = _sweep(tmp_path, _mixed_ahb_vr_vcd(), max_wait_cycles=4)
+    kinds = sorted({i["kind"] for i in res["interfaces"]})
+    assert kinds == ["ahb", "valid_ready"], res
+    assert res["interface_count"] == 2
+    # the stalling AHB bus sorts first and is flagged; the A-class bus is clean
+    top = res["interfaces"][0]
+    assert top["kind"] == "ahb" and top["ended_in_stall"] is True
+    vr = [i for i in res["interfaces"] if i["kind"] == "valid_ready"][0]
+    assert vr["flags"] == []

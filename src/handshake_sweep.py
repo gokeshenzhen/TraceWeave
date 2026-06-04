@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from src.cursor_store import CursorStore
-from src.handshake_suggest import suggest_handshakes
+from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.verify_condition import inspect_handshake
 
 DEFAULT_MAX_INTERFACES = 64
@@ -38,6 +38,30 @@ _FACT_KEYS = (
     "payload_hold_violations", "ready_without_valid_cycles", "unknown_sample_cycles",
     "coverage",
 )
+
+
+def _normalize_vr(b: dict[str, Any]) -> dict[str, Any]:
+    """A-class (valid/ready) bundle from suggest_handshakes -> common shape."""
+    return {
+        "scope": b.get("scope", ""), "clock": b.get("clock"),
+        "valid": b["valid"], "ready": b["ready"], "kind": "valid_ready",
+        "payload": b.get("payload") or [], "confidence": b.get("confidence"),
+        "inspect_kwargs": {"valid": b["valid"]},
+    }
+
+
+def _normalize_ahb(b: dict[str, Any]) -> dict[str, Any]:
+    """AHB bundle from suggest_protocol_bundles -> common shape. AHB has no
+    literal valid; inspect_handshake derives it from htrans (valid_htrans)."""
+    return {
+        "scope": b.get("scope", ""), "clock": b.get("clock"),
+        "valid": b.get("valid_htrans"), "ready": b.get("ready"), "kind": "ahb",
+        "payload": b.get("payload") or [], "confidence": b.get("confidence"),
+        "inspect_kwargs": {
+            "valid_htrans": b.get("valid_htrans"),
+            "htrans_rule": b.get("htrans_rule") or "active",
+        },
+    }
 
 
 def _flags(res: dict[str, Any]) -> list[str]:
@@ -94,44 +118,59 @@ def sweep_handshake_anomalies(
     Returns a comparative fact table sorted by ``_sort_key``. Registers exactly
     ONE cursor, at the top interface's longest-stall begin, when that interface
     shows any anomaly flag (so a follow-up call can jump straight there)."""
-    sug = suggest_handshakes(
+    # Discover BOTH families: valid/ready (A-class: AXI / generic / req-ack, via
+    # suggest_handshakes) AND AHB (no literal valid, via suggest_protocol_bundles).
+    # Each returns empty on a design that lacks it, so running both is safe and
+    # gives a whole-design sweep regardless of bus type. APB is deliberately not
+    # scanned: its candidates carry no inspect_handshake args (they need a derived
+    # psel&&penable valid that inspect_handshake doesn't accept yet), so they would
+    # only land in `skipped`.
+    vr = suggest_handshakes(
         get_parser=get_parser, wave_path=wave_path, scope=scope,
         max_candidates=max_interfaces,
     )
-    bundles = sug.get("candidates", [])
-    # Total interfaces discovered before the max_interfaces cap. suggest orders by
-    # confidence then scope then path, so a cap silently drops the *tail* of that
-    # ordering — which on a uniform pipeline is the higher-numbered stages, often
-    # exactly where the root sits. Surface truncation LOUDLY so the LLM knows
-    # coverage was partial and can re-run with a higher max_interfaces.
-    discovered = int(sug.get("candidate_count", len(bundles)))
-    truncated = discovered > len(bundles)
+    ahb = suggest_protocol_bundles(
+        get_parser=get_parser, wave_path=wave_path, protocol="ahb", scope=scope,
+        max_candidates=max_interfaces,
+    )
+    normalized = (
+        [_normalize_vr(b) for b in vr.get("candidates", [])]
+        + [_normalize_ahb(b) for b in ahb.get("candidates", [])]
+    )
+    # Total interfaces discovered across both families before the max_interfaces
+    # cap. A cap silently drops the *tail* of each ordering — on a uniform pipeline
+    # the higher-numbered stages, often exactly where the root sits. Surface
+    # truncation LOUDLY so the LLM knows coverage was partial.
+    discovered = int(vr.get("candidate_count", 0)) + int(ahb.get("candidate_count", 0))
+    truncated = discovered > len(normalized) or len(normalized) > max_interfaces
+    to_inspect = normalized[:max_interfaces]
 
     interfaces: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for b in bundles:
-        base = {"scope": b.get("scope", ""), "valid": b["valid"], "ready": b["ready"]}
-        if not b.get("clock"):
+    for nb in to_inspect:
+        base = {"scope": nb["scope"], "valid": nb["valid"] or "", "ready": nb["ready"] or ""}
+        if not nb.get("clock"):
             skipped.append({**base, "reason": "no clock found in scope/ancestors"})
             continue
         res = inspect_handshake(
             get_parser=get_parser, wave_path=wave_path,
-            clock=b["clock"], valid=b["valid"], ready=b["ready"],
-            payload=b.get("payload") or [],
+            clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
             edge=edge, start_ps=start_ps, end_ps=end_ps,
             max_wait_cycles=max_wait_cycles,
             cursor_store=None,  # the sweep sets ONE cursor, not one per interface
+            **nb["inspect_kwargs"],
         )
         if res.get("reason"):
             skipped.append({**base, "reason": res["reason"]})
             continue
         interfaces.append({
-            "scope": b.get("scope", ""),
-            "clock": b.get("clock"),
-            "valid": b["valid"],
-            "ready": b["ready"],
-            "payload": b.get("payload") or [],
-            "confidence": b.get("confidence"),
+            "scope": nb["scope"],
+            "clock": nb["clock"],
+            "valid": nb["valid"],
+            "ready": nb["ready"],
+            "kind": nb["kind"],
+            "payload": nb["payload"],
+            "confidence": nb["confidence"],
             "flags": _flags(res),
             **{k: res.get(k) for k in _FACT_KEYS},
         })
@@ -157,8 +196,11 @@ def sweep_handshake_anomalies(
             cursor = ref.as_dict()
 
     n_flagged = sum(1 for i in interfaces if i["flags"])
-    if not bundles:
-        reason = sug.get("reason") or "no valid/ready handshake interfaces found by name"
+    if not normalized:
+        parts = [r for r in (vr.get("reason"), ahb.get("reason")) if r]
+        reason = " | ".join(parts) if parts else (
+            "no valid/ready or AHB handshake interfaces found by name"
+        )
     elif not interfaces:
         reason = "handshake interfaces found but none could be inspected (see skipped)"
     else:
@@ -168,7 +210,7 @@ def sweep_handshake_anomalies(
     if truncated:
         warn = (
             f"COVERAGE TRUNCATED: {discovered} interfaces discovered but only "
-            f"{len(bundles)} swept (max_interfaces={max_interfaces}). The dropped "
+            f"{len(to_inspect)} swept (max_interfaces={max_interfaces}). The dropped "
             f"interfaces are the tail of suggest's ordering — re-run with "
             f"max_interfaces>={discovered} for full coverage before trusting the ranking."
         )

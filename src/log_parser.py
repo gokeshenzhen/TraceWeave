@@ -924,9 +924,11 @@ _PROTOCOL_SYMPTOM_MECHANISMS = frozenset({"mismatch", "protocol", "deadlock", "t
 _PROTOCOL_SYMPTOM_HINT = (
     "scoreboard/compare-style failures are frequently a SYMPTOM of a lower-level "
     "bus-protocol problem, not the root cause. Before reading RTL line-by-line or "
-    "inspecting the waveform by hand, check interface protocol health with the "
-    "protocol tools: suggest_protocol_bundles + inspect_handshake for AHB/APB, or "
-    "suggest_handshakes for valid/ready buses."
+    "inspecting the waveform by hand, run sweep_handshakes once: it checks the "
+    "protocol health of every bus interface (AHB + AXI/valid-ready) in a single "
+    "call and returns a per-interface stall/deadlock/payload-hold fact table. "
+    "Drill into one interface with suggest_protocol_bundles/suggest_handshakes + "
+    "inspect_handshake only if you need to."
 )
 
 
