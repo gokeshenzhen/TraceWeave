@@ -820,6 +820,31 @@ class TestDispatchParseSimLog:
         finally:
             Path(log_path).unlink()
 
+    async def test_summary_first_group_context_uses_small_window(self):
+        _prefill_get_sim_paths_state()
+        lines = [f"info before {idx}\n" for idx in range(35)]
+        lines.append("module_a ERROR bounded context issue @ 100 ns\n")
+        lines.extend(f"info after {idx}\n" for idx in range(35))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write("".join(lines))
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                },
+            )
+
+            ctx = result["first_group_context"]
+            assert ctx is not None
+            assert ctx["end_line"] - ctx["start_line"] + 1 <= 25
+            assert "module_a ERROR bounded context issue" in ctx["context"]
+        finally:
+            Path(log_path).unlink()
+
     async def test_returns_first_group_context(self):
         _prefill_get_sim_paths_state()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
@@ -846,6 +871,38 @@ class TestDispatchParseSimLog:
             assert ctx is not None
             assert ctx["center_line"] == 6
             assert "ERROR" in ctx["context"]
+        finally:
+            Path(log_path).unlink()
+
+    async def test_full_detail_slims_returned_failure_events_only(self):
+        _prefill_get_sim_paths_state()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as handle:
+            handle.write(
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 1 ns: reporter [TOP] repeated issue\n"
+                "UVM_ERROR /tmp/top_tb.sv(10) @ 2 ns: reporter [TOP] repeated issue\n"
+            )
+            log_path = handle.name
+
+        try:
+            result = await server._dispatch(
+                "parse_sim_log",
+                {
+                    "log_path": log_path,
+                    "simulator": "vcs",
+                    "detail_level": "full",
+                },
+            )
+
+            event = result["failure_events"][0]
+            assert "log_path" not in event
+            assert "field_provenance" in event
+            structured_fields = event.get("structured_fields") or {}
+            assert structured_fields.get("reporter") != event["instance_path"]
+
+            original = server._result_provenance["parse_sim_log"]["all_failure_events"][0]
+            assert original["log_path"] == log_path
+            assert original["structured_fields"]["reporter"] == original["instance_path"]
+            assert original["structured_fields"]["tag"] == "TOP"
         finally:
             Path(log_path).unlink()
 

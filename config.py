@@ -79,6 +79,13 @@ DEFAULT_DETAIL_LEVEL = "summary"
 DEFAULT_MAX_EVENTS_PER_GROUP = 3
 AUTO_DOWNGRADE_THRESHOLD = 2000
 
+# parse_sim_log 内嵌的 first_group_context 上下文窗口。
+# 刻意远小于 get_error_context 的默认 100/100：first_group_context 是“顺手瞥一眼
+# 首错现场”，在大 log 里无条件塞 200 行原始文本会占据整个返回（实测占 ~92%）。
+# 需要更宽上下文时按需调 get_error_context（仍用 DEFAULT_LOG_CONTEXT_*）。
+FIRST_GROUP_CONTEXT_BEFORE = 12
+FIRST_GROUP_CONTEXT_AFTER = 12
+
 # trace_x_source 默认追踪参数
 DEFAULT_X_TRACE_MAX_DEPTH = 20
 X_TRACE_MAX_BRANCH_FANOUT = 5

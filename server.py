@@ -32,6 +32,7 @@ from config import (
     DEFAULT_DETAIL_LEVEL,
     DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_EVENTS_PER_GROUP,
+    FIRST_GROUP_CONTEXT_AFTER, FIRST_GROUP_CONTEXT_BEFORE,
     FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
@@ -564,8 +565,8 @@ Waveform debug workflow:
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
    - Use grouped errors to choose the first group_index to inspect.
-   - first_group_context contains ~200 lines of raw log text around the first error.
-     Use get_error_context only for other groups.
+   - first_group_context contains a small window (~12 lines each side) of raw log
+     text around the first error. Use get_error_context for a wider view.
    - If previous_log_detected is true, consider diff_sim_failure_results early.
    - When parse_sim_log returns auto_diff, it contains a diff against the previous
      parse of the same log. Use it to verify which failures were resolved or
@@ -2648,6 +2649,41 @@ def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) ->
     return result
 
 
+def _slim_returned_events(events: list[dict], log_file: str | None) -> list[dict]:
+    """为响应 payload 生成浅拷贝并去掉逐事件冗余字段。
+
+    只作用于返回副本：绝不可就地修改入参 dict（它们与快照/provenance 的完整
+    事件集共享对象，diff_sim_failure_results 依赖其完整字段）。保留
+    field_provenance（可信度信号）。
+    """
+    slimmed: list[dict] = []
+    for event in events:
+        copy = dict(event)  # 浅拷贝，pop 只影响副本
+        # log_path 在每条事件上重复顶层 log_file
+        if log_file is not None and copy.get("log_path") == log_file:
+            copy.pop("log_path", None)
+        # missing_fields 在完整解析的常见情形下为空列表
+        if not copy.get("missing_fields"):
+            copy.pop("missing_fields", None)
+        # structured_fields.reporter 重复 instance_path；tag 已在 group_signature 里
+        sf = copy.get("structured_fields")
+        if isinstance(sf, dict):
+            trimmed = {
+                key: value
+                for key, value in sf.items()
+                if not (
+                    (key == "reporter" and value == copy.get("instance_path"))
+                    or (key == "tag" and value and str(value) in (copy.get("group_signature") or ""))
+                )
+            }
+            if trimmed:
+                copy["structured_fields"] = trimmed
+            else:
+                copy.pop("structured_fields", None)
+        slimmed.append(copy)
+    return slimmed
+
+
 # ── Diagnostic Snapshot helpers ──────────────────────────────────
 
 def _extract_sim_paths_summary(result: schemas.SimPathsResult) -> dict:
@@ -3637,8 +3673,8 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
                 context = get_error_context(
                     args["log_path"],
                     first_line,
-                    before=DEFAULT_LOG_CONTEXT_BEFORE,
-                    after=DEFAULT_LOG_CONTEXT_AFTER,
+                    before=FIRST_GROUP_CONTEXT_BEFORE,
+                    after=FIRST_GROUP_CONTEXT_AFTER,
                 )
                 first_group_context = schemas.ErrorContextResult.model_validate(context)
             except Exception:
@@ -3646,7 +3682,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
 
     summary["detail_level"] = detail_level
     summary["auto_downgraded"] = False
-    summary["failure_events"] = returned_events
+    summary["failure_events"] = _slim_returned_events(
+        returned_events, summary.get("log_file")
+    )
     summary["failure_events_total"] = total
     summary["failure_events_returned"] = len(returned_events)
     summary["failure_events_truncated"] = len(returned_events) < total
