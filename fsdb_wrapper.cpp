@@ -192,9 +192,10 @@ _AppendTransitionLine(
     bool &truncated
 )
 {
-    char line[1024];
-    snprintf(line, sizeof(line), "%llu\t%s\n", time_ps, value.c_str());
-    return _AppendText(out_buf, buf_size, pos, std::string(line), truncated);
+    /* std::string, not a fixed buffer: a wide bus value can exceed any fixed
+     * size and would otherwise be truncated (dropping the '\n'). */
+    std::string line = std::to_string(time_ps) + "\t" + value + "\n";
+    return _AppendText(out_buf, buf_size, pos, line, truncated);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -382,11 +383,15 @@ fsdb_get_transitions(void *handle, const char *signal_path,
                 break;
 
             std::string val = _VCToStr(vc_ptr, bsize, bpb);
-            char line[512];
-            snprintf(line, sizeof(line), "%llu\t%s\n", t_ps, val.c_str());
-            int len = strlen(line);
+            /* Build the line with std::string, not a fixed stack buffer: a wide
+             * bus (e.g. 1024-bit AXI wdata) renders to >512 chars, and a fixed
+             * buffer would truncate the line and drop the trailing '\n', gluing
+             * every transition into one and silently defeating downstream
+             * value-at-edge sampling (payload-hold checks). */
+            std::string line = std::to_string(t_ps) + "\t" + val + "\n";
+            int len = (int)line.size();
             if (pos + len + 1 >= buf_size) break;
-            memcpy(out_buf + pos, line, len);
+            memcpy(out_buf + pos, line.data(), len);
             pos += len;
             count++;
         } while (FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
