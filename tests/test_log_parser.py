@@ -71,6 +71,13 @@ UVM_DOTTED_REPORTER_LOG_SAMPLE = """\
 UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb [SCOREBOARD] compare failed
 """
 
+# Reporting instance path with an array index (agent_h[0]) and a sequence
+# handle (seqr@@seq_name) — ubiquitous in real UVM logs. A [\\w.]+ instance
+# group silently drops these, hiding every array/sequence-reported error.
+UVM_ARRAY_SEQUENCE_REPORTER_LOG_SAMPLE = """\
+UVM_ERROR /tmp/seq.sv(90) @ 101510: uvm_test_top.env_h.master_agent_h[0].read_seqr_h@@xbar_rd_s0_m0 [xbar_read_seq] xbar readback mismatch master=0 slave=0 got=0x0
+"""
+
 UVM_MULTILINE_TABLE_LOG_SAMPLE = """\
 UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb [SCOREBOARD] packet compare failed
   the expect pkt is
@@ -243,6 +250,26 @@ class TestUvmParsing:
             assert event["group_signature"] == "UVM_ERROR [SCOREBOARD]"
             assert event["instance_path"] == "uvm_test_top.env.scb"
             assert event["failure_source"] == "scoreboard"
+        finally:
+            os.unlink(log_path)
+
+    def test_uvm_reporter_allows_array_index_and_sequence_handle(self):
+        log_path = _write_log(UVM_ARRAY_SEQUENCE_REPORTER_LOG_SAMPLE)
+        try:
+            parser = SimLogParser(log_path, "vcs")
+            events = parser.parse_failure_events()
+            assert len(events) == 1, "array/sequence-reported UVM_ERROR was dropped"
+            event = events[0]
+            assert event["group_signature"] == "UVM_ERROR [xbar_read_seq]"
+            assert event["instance_path"] == (
+                "uvm_test_top.env_h.master_agent_h[0].read_seqr_h@@xbar_rd_s0_m0"
+            )
+            # The readback-mismatch error must be classified so the
+            # protocol_symptom_hint fires and steers toward sweep_handshakes
+            # (instead of the error being invisible and no nudge emitted).
+            assert event["failure_source"] == "scoreboard"
+            summary = SimLogParser(log_path, "vcs").parse()
+            assert summary["protocol_symptom_hint"] is not None
         finally:
             os.unlink(log_path)
 

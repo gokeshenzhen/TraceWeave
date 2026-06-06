@@ -49,7 +49,12 @@ _UVM_RE = re.compile(
     r"(UVM_ERROR|UVM_FATAL)\s+"
     r"([^\s(]+)\((\d+)\)\s+"
     r"@\s+([\d.]+)\s*(ps|ns|us|fs)?:\s+"
-    r"([\w.]+)\s+"
+    # Reporting instance path: must accept standard UVM names with array
+    # indices (agent_h[0]) and sequence handles (seqr@@seq_name). A bare
+    # [\w.]+ stops at the first '[' and the whole UVM_ERROR is silently
+    # dropped — which hides every array/sequence-reported error. The trailing
+    # \s+ still bounds it (the '[id]' tag and message are space-separated).
+    r"([\w.\[\]@]+)\s+"
     r"(?:\[([^\]]+)\]\s+)?"
     r"(.*)",
     re.IGNORECASE,
