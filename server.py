@@ -3722,6 +3722,22 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
         )
     summary["auto_diff"] = auto_diff
 
+    # Spell out the concrete sweep call at the one layer where its args first
+    # co-exist: the symptom (just computed) + the wave path (cached get_sim_paths).
+    # A prose protocol_symptom_hint alone gets skipped by weak models; the
+    # ready-to-run call does not. Gated on BOTH a symptom AND an available wave
+    # (_build_sweep_required_next_call returns None without a wave_path) —
+    # suggestion only, the LLM still decides whether to run it.
+    summary["protocol_symptom_next_step"] = None
+    if summary.get("protocol_symptom_hint"):
+        sim_paths = _result_cache.get("get_sim_paths")
+        wave_path = (
+            sim_paths.wave_files[0].path
+            if sim_paths and getattr(sim_paths, "wave_files", None)
+            else None
+        )
+        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(wave_path)
+
     validated = _enforce_output_budget(
         schemas.ParseSimLogResult.model_validate(summary),
         [

@@ -264,6 +264,16 @@ class ErrorGroup(SchemaModel):
     xprop_priority: Literal["high", "normal"] | None = None
 
 
+class SuggestedToolCall(SchemaModel):
+    # A concrete, ready-to-run tool call (args already filled) surfaced when the
+    # args first co-exist. Unlike NextAction (a signal-keyed forward link), this
+    # carries the actual arguments so a weak model can run it verbatim instead of
+    # re-deriving them. Suggestion only — the caller still decides.
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
+
+
 class ParseSimLogResult(TruncatableResult):
     log_file: str
     # Generic, boundary-safe pointer set when a scoreboard/compare-style failure
@@ -275,6 +285,13 @@ class ParseSimLogResult(TruncatableResult):
     # diluted past a weak model's attention. Field order = serialized JSON order,
     # so this surfaces the pointer before the big payloads.
     protocol_symptom_hint: str | None = None
+    # The actionable companion to protocol_symptom_hint: the concrete
+    # sweep_handshakes(...) call with wave_path already filled from the cached
+    # get_sim_paths. Set by the server ONLY when the hint fires AND a waveform is
+    # available — the prose hint alone gets skipped by weak models, so the call is
+    # spelled out at the one layer where the symptom and the wave path co-exist
+    # (the suggest->inspect relay lesson applied to parse->sweep). Suggestion only.
+    protocol_symptom_next_step: SuggestedToolCall | None = None
     simulator: str
     schema_version: str
     contract_version: str

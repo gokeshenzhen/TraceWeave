@@ -6,6 +6,7 @@ test_server.py
 import json
 import os
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -303,6 +304,68 @@ class TestProtocolBundleToolContract:
         assert result["effective_num_cycles"] == server.MAX_CYCLES_PER_QUERY
         assert result["capped"] is True
         assert result["num_cycles_returned"] == 3
+
+
+_SCOREBOARD_MISMATCH_LINE = (
+    "UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb "
+    "[SCOREBOARD] expected=0x5a, actual=0x58 txn_id=84\n"
+)
+
+
+@pytest.mark.anyio
+class TestParseSimLogSweepNextStep:
+    async def test_protocol_symptom_emits_ready_to_run_sweep_call(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+            assert res.protocol_symptom_hint is not None
+            step = res.protocol_symptom_next_step
+            assert step is not None, "sweep call not surfaced despite symptom + wave"
+            assert step.tool == "sweep_handshakes"
+            assert step.arguments["wave_path"] == str(wave)
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_no_sweep_call_without_a_waveform(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(wave_files=[])
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+            assert res.protocol_symptom_hint is not None  # symptom still reported
+            assert res.protocol_symptom_next_step is None  # but no runnable call
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_no_sweep_call_without_protocol_symptom(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text("module_a ERROR something went wrong @ 1 ns\n")
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+            assert res.protocol_symptom_hint is None
+            assert res.protocol_symptom_next_step is None
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
 
 
 @pytest.mark.anyio
