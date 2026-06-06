@@ -235,12 +235,19 @@ def suggest_handshakes(
 
     # Pass 2: for each scope that has a valid/ready pair, pull siblings so the
     # payload buses (which won't match a role keyword) are visible to the core.
+    # Search by the FULL scope path, not just its leaf name: a leaf like
+    # "axi4_master_drv_bfm_h" repeats across every instance, so a leaf keyword
+    # under search_signals' result cap returns only the first instance's
+    # siblings and deeper instances' payload buses (e.g. master[3].wdata) are
+    # silently dropped -> empty payload -> payload-hold never runs on them.
     seed = propose_handshake_bundles(list(sigs.values()), scope=scope)
+    searched_scopes: set[str] = set()
     for b in seed:
-        leaf = b["scope"].rsplit(".", 1)[-1] if b["scope"] else ""
-        if leaf:
+        scope_path = b["scope"]
+        if scope_path and scope_path not in searched_scopes:
+            searched_scopes.add(scope_path)
             try:
-                _add(parser.search_signals(leaf).get("results", []))
+                _add(parser.search_signals(scope_path, max_results=512).get("results", []))
             except Exception:
                 pass
 

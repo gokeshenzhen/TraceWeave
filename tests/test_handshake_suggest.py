@@ -11,6 +11,7 @@ from src.handshake_suggest import (
     _inspect_handshake_relay,
     propose_handshake_bundles,
     propose_protocol_bundles,
+    suggest_handshakes,
     suggest_protocol_bundles,
 )
 
@@ -225,9 +226,52 @@ class _FakeParser:
     def __init__(self, paths):
         self._paths = paths
 
-    def search_signals(self, keyword):
+    def search_signals(self, keyword, max_results=100):
         k = keyword.lower()
-        return {"results": [{"path": p} for p in self._paths if k in p.lower()]}
+        hits = [{"path": p} for p in self._paths if k in p.lower()]
+        return {"results": hits[:max_results]}
+
+
+class _CappedParser:
+    """search_signals that honours max_results and returns rich descriptors,
+    to model the result cap that truncates cross-instance gathers."""
+
+    def __init__(self, sigs, default_cap):
+        self._sigs = sigs  # list of {path,name,width}
+        self._cap = default_cap
+
+    def search_signals(self, keyword, max_results=None):
+        cap = self._cap if max_results is None else max_results
+        k = keyword.lower()
+        hits = [s for s in self._sigs if k in s["path"].lower()]
+        return {"results": hits[:cap]}
+
+
+def test_payload_gathered_for_deep_instance_despite_result_cap():
+    """Regression: two instances share a scope leaf ('drv'). With a leaf-keyword
+    gather under the search result cap, the second instance's wide payload buses
+    were dropped (empty payload -> payload-hold never ran). suggest_handshakes
+    must search by the full (instance-unique) scope so every instance's payload
+    is gathered regardless of the cap."""
+    sigs = []
+    for i in (0, 1):
+        sc = f"tb.m[{i}].drv"
+        sigs += [
+            {"path": f"{sc}.clk", "name": "clk", "width": 1},
+            {"path": f"{sc}.wvalid", "name": "wvalid", "width": 1},
+            {"path": f"{sc}.wready", "name": "wready", "width": 1},
+            {"path": f"{sc}.wdata[1023:0]", "name": "wdata[1023:0]", "width": 1024},
+            {"path": f"{sc}.wstrb[127:0]", "name": "wstrb[127:0]", "width": 128},
+        ]
+    # default_cap=6 < 10 total, so a leaf search for "drv" returns only m[0];
+    # m[1].wdata is only reachable via a full-scope search.
+    parser = _CappedParser(sigs, default_cap=6)
+    res = suggest_handshakes(get_parser=lambda w: parser, wave_path="/w/a.fsdb",
+                             max_candidates=50)
+    by_scope = {b["scope"]: b for b in res["candidates"]}
+    assert "tb.m[1].drv" in by_scope, res["candidates"]
+    payload = by_scope["tb.m[1].drv"]["payload"]
+    assert "tb.m[1].drv.wdata[1023:0]" in payload, payload
 
 
 def test_empty_hint_ahb_gives_copy_paste_command():
