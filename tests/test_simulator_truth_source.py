@@ -92,6 +92,69 @@ endmodule
 
 
 @pytest.mark.anyio
+async def test_dispatch_restores_hierarchy_state_from_cache_for_explain_signal_driver(
+    monkeypatch, tmp_path
+):
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun\nxmelab\n")
+    server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
+        {
+            "hierarchy_handle": "tbh_aaaaaaaa",
+            "project": {"top_module": "top_tb", "simulator": "xcelium"},
+            "interfaces": [],
+        }
+    )
+    server._result_provenance["build_tb_hierarchy"] = {
+        "compile_log": str(compile_log),
+        "simulator": "xcelium",
+    }
+
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut;
+  logic a, b;
+  assign K_sub = a ^ b;
+endmodule
+"""
+    )
+    wave_path = tmp_path / "wave.vcd"
+    wave_path.write_text("$timescale 1ps $end\n$enddefinitions $end\n#0\n")
+
+    captured: dict[str, str] = {}
+
+    def fake_parse_compile_log(log_path, simulator="auto"):
+        captured["simulator"] = simulator
+        return {
+            "top_modules": ["top_tb"],
+            "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]},
+        }
+
+    monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
+
+    result = await server._dispatch(
+        "explain_signal_driver",
+        {
+            "signal_path": "top_tb.u0.K_sub",
+            "wave_path": str(wave_path),
+            "compile_log": str(compile_log),
+            "top_hint": "top_tb",
+        },
+    )
+
+    assert server._session_state["build_tb_hierarchy"] == {
+        "compile_log": str(compile_log),
+        "simulator": "xcelium",
+    }
+    assert captured["simulator"] == "xcelium"
+    assert result["driver_status"] == "resolved"
+
+
+@pytest.mark.anyio
 async def test_build_only_session_stale_compile_log_falls_back_to_auto_for_explain_signal_driver(
     monkeypatch, tmp_path
 ):

@@ -141,6 +141,15 @@ _PREREQUISITES: dict[str, list[str]] = {
     "dump_tb_section": ["build_tb_hierarchy"],
 }
 
+_HANDLE_TOOL_NAMES = {
+    "get_tb_subtree",
+    "lookup_tb_files",
+    "find_tb_instance",
+    "get_tb_file_detail",
+    "get_tb_class_hierarchy",
+    "dump_tb_section",
+}
+
 _PREREQUISITE_REASONS: dict[str, str] = {
     "get_sim_paths": (
         "get_sim_paths must be called first to discover simulator type, "
@@ -153,12 +162,91 @@ _PREREQUISITE_REASONS: dict[str, str] = {
 }
 
 
-def _check_prerequisites(tool_name: str) -> dict | None:
+def _restore_get_sim_paths_state_from_cache() -> bool:
+    if _session_state["get_sim_paths"] is not None:
+        return True
+    sim_result = _result_cache.get("get_sim_paths")
+    if sim_result is None:
+        return False
+    provenance = _result_provenance.get("get_sim_paths") or _build_result_provenance(
+        "get_sim_paths", {}, sim_result
+    )
+    if provenance is None:
+        return False
+    _session_state["get_sim_paths"] = {
+        "verif_root": provenance.get("verif_root"),
+        "case_dir": provenance.get("case_dir"),
+        "simulator": provenance.get("simulator"),
+        "compile_log": provenance.get("compile_log"),
+    }
+    return True
+
+
+def _handle_resolves_for_current_process(args: dict) -> bool:
+    handle = args.get("handle") or ""
+    return bool(handle and _handle_store.resolve(handle) is not None)
+
+
+def _restore_build_tb_hierarchy_state_from_cache(tool_name: str, args: dict) -> bool:
+    if _session_state["build_tb_hierarchy"] is not None:
+        return True
+
+    if tool_name in _HANDLE_TOOL_NAMES and _handle_resolves_for_current_process(args):
+        full = _handle_store.resolve(args.get("handle") or "") or {}
+        provenance = _result_provenance.get("build_tb_hierarchy") or {}
+        project = full.get("project") if isinstance(full, dict) else {}
+        _session_state["build_tb_hierarchy"] = {
+            "compile_log": provenance.get("compile_log"),
+            "simulator": provenance.get("simulator")
+            or (project or {}).get("simulator")
+            or "auto",
+        }
+        return True
+
+    hierarchy_result = _result_cache.get("build_tb_hierarchy")
+    provenance = _result_provenance.get("build_tb_hierarchy")
+    if hierarchy_result is None or provenance is None:
+        return False
+
+    requested_compile_log = args.get("compile_log")
+    if requested_compile_log and not _same_realpath(
+        provenance.get("compile_log"), requested_compile_log
+    ):
+        return False
+
+    requested_simulator = args.get("simulator")
+    provenance_simulator = provenance.get("simulator")
+    if (
+        requested_simulator
+        and requested_simulator != "auto"
+        and provenance_simulator not in {None, "auto", requested_simulator}
+    ):
+        return False
+
+    _session_state["build_tb_hierarchy"] = {
+        "compile_log": provenance.get("compile_log"),
+        "simulator": provenance_simulator or hierarchy_result.project.get("simulator") or "auto",
+    }
+    return True
+
+
+def _restore_prerequisite_state_from_cache(step: str, tool_name: str, args: dict) -> bool:
+    if step == "get_sim_paths":
+        return _restore_get_sim_paths_state_from_cache()
+    if step == "build_tb_hierarchy":
+        return _restore_build_tb_hierarchy_state_from_cache(tool_name, args)
+    return False
+
+
+def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | None:
     prereqs = _PREREQUISITES.get(tool_name)
     if not prereqs:
         return None
+    args = args or {}
     for step in prereqs:
-        if _session_state[step] is None:
+        if _session_state[step] is None and not _restore_prerequisite_state_from_cache(
+            step, tool_name, args
+        ):
             block = {
                 "ok": False,
                 "error_code": "missing_prerequisite",
@@ -1983,7 +2071,7 @@ async def call_tool(name: str, arguments: dict):
 
 
 async def _dispatch(name: str, args: dict):
-    block = _check_prerequisites(name)
+    block = _check_prerequisites(name, args)
     if block is not None:
         return schemas.PrerequisiteBlockResult.model_validate(block)
 

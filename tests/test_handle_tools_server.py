@@ -19,16 +19,17 @@ def _reset_session_state():
     server.reset_session_state()
 
 
-def _seed_session_with_handle(handle="tbh_test0001"):
+def _seed_session_with_handle(handle="tbh_test0001", *, seed_session=True):
     """Register a synthetic full_result under `handle` and flip both
     session-state flags so prerequisite gating passes."""
-    server._session_state["get_sim_paths"] = {
-        "verif_root": "/tmp", "case_dir": "/tmp/c", "simulator": "vcs",
-        "compile_log": "/tmp/c/elab.log",
-    }
-    server._session_state["build_tb_hierarchy"] = {
-        "compile_log": "/tmp/c/elab.log", "simulator": "vcs",
-    }
+    if seed_session:
+        server._session_state["get_sim_paths"] = {
+            "verif_root": "/tmp", "case_dir": "/tmp/c", "simulator": "vcs",
+            "compile_log": "/tmp/c/elab.log",
+        }
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": "/tmp/c/elab.log", "simulator": "vcs",
+        }
     full = {
         "project": {"top_module": "top", "simulator": "vcs"},
         "component_tree": {
@@ -82,6 +83,15 @@ async def test_handle_tool_returns_expired_for_unknown_handle():
     result = await server._dispatch("get_tb_subtree", {"handle": "tbh_zzzz"})
     payload = result.model_dump()
     assert payload["error"] == "handle_expired"
+
+
+@pytest.mark.anyio
+async def test_handle_tool_accepts_resolved_handle_when_session_state_lost():
+    h = _seed_session_with_handle(seed_session=False)
+    result = await server._dispatch("lookup_tb_files", {"handle": h, "basename": "alu.sv"})
+    payload = result.model_dump()
+    assert payload["total"] == 1
+    assert payload["matches"][0]["path"] == "/p/alu.sv"
 
 
 # ── per-tool happy paths via dispatcher ─────────────────────────────
