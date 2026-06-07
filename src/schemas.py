@@ -501,7 +501,11 @@ class RecommendNextStepsResult(SchemaModel):
     # by sweep's mechanical key), never a verdict — the LLM judges them.
     runtime_protocol_findings: list[dict[str, Any]] = Field(default_factory=list)
     workflow_incomplete: bool = False
-    degraded_reason: Literal["missing_structural_scan", "missing_handshake_sweep"] | None = None
+    degraded_reason: Literal[
+        "missing_structural_scan",
+        "missing_handshake_sweep",
+        "incomplete_handshake_sweep",
+    ] | None = None
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
     next_iteration_hint: dict[str, Any] | None = None
@@ -710,7 +714,6 @@ class ToolErrorResult(SchemaModel):
 
 # ---------------------------------------------------------------------------
 # Auto-debug v2: cursors + verify primitives
-# See docs/auto-debug-decisions-v2.md
 # ---------------------------------------------------------------------------
 
 
@@ -978,6 +981,12 @@ class HandshakeSweepResult(SchemaModel):
     interface_count: int = 0
     flagged_count: int = 0
     truncated: bool = False
+    # Coverage facts for interpreting flagged_count. In particular,
+    # zero_coverage means no protocol interfaces were checked, so flagged_count=0
+    # is not evidence of a clean protocol run.
+    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = "complete"
+    coverage_warnings: list[str] = Field(default_factory=list)
+    suggested_next_actions: list[dict[str, Any]] = Field(default_factory=list)
     interfaces: list[SweptInterface] = Field(default_factory=list)
     skipped: list[SweptSkip] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None

@@ -214,6 +214,7 @@ def _make_sweep_result() -> schemas.HandshakeSweepResult:
     return schemas.HandshakeSweepResult.model_validate({
         "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
         "discovered_count": 2, "interface_count": 2, "flagged_count": 1,
+        "coverage_status": "complete",
     })
 
 
@@ -365,8 +366,34 @@ class TestDiagnosticSnapshot:
         assert result.protocol_health is not None
         assert result.protocol_health.available is True
         assert result.protocol_health.summary["flagged_count"] == 1
+        assert result.protocol_health.summary["coverage_status"] == "complete"
         # everything in the default flow has run -> nothing recommended
         assert result.missing_steps is None
+
+    def test_zero_coverage_sweep_is_surfaced_but_still_recommended(self):
+        _prefill_all()
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": "/tmp/verif/work/work_case0/top_tb.vcd"},
+            "reason": "Retry without scope.",
+        }
+        server._result_cache["sweep_handshakes"] = schemas.HandshakeSweepResult.model_validate({
+            "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
+            "discovered_count": 0,
+            "interface_count": 0,
+            "flagged_count": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": ["ZERO COVERAGE: no protocol interfaces checked"],
+            "suggested_next_actions": [retry],
+        })
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is not None
+        assert result.protocol_health.available is True
+        assert result.protocol_health.summary["coverage_status"] == "zero_coverage"
+        assert result.protocol_health.suggested_call == retry
+        assert "sweep_handshakes" in [s["tool"] for s in result.missing_steps]
 
     def test_sweep_recommended_when_waveform_and_failures(self):
         _prefill_all()

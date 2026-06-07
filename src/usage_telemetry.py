@@ -2,10 +2,10 @@
 
 Why this exists
 ---------------
-The auto-debug v2 retrospective (see docs/auto-debug-decisions-v2.md) concluded
-that the real bottleneck is orchestration (call count / tokens), not raw
-analysis power, and that we should *stop building tools for "might be useful"
-and demand real usage numbers*. This module is the measuring instrument: it
+The auto-debug v2 retrospective concluded that the real bottleneck is
+orchestration (call count / tokens), not raw analysis power, and that we should
+*stop building tools for "might be useful" and demand real usage numbers*. This
+module is the measuring instrument: it
 records one line per MCP tool call so we can later answer, with data:
 
   * how often the shipped primitives (cursor/period/diff_first_divergence) are

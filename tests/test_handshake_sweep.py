@@ -161,6 +161,7 @@ def test_all_clean_no_flags_no_cursor(tmp_path):
                  cursor_store=cs, max_wait_cycles=4)
     assert res["interface_count"] == 2
     assert res["flagged_count"] == 0
+    assert res["coverage_status"] == "complete"
     assert all(i["flags"] == [] for i in res["interfaces"])
     assert res["cursor"] is None
     assert len(cs.list()) == 0
@@ -170,6 +171,8 @@ def test_interface_without_clock_is_skipped(tmp_path):
     res = _sweep(tmp_path, _multi_stage_vcd(["0"], with_clock=False),
                  max_wait_cycles=4)
     assert res["interface_count"] == 0
+    assert res["coverage_status"] == "degraded"
+    assert res["coverage_warnings"]
     assert len(res["skipped"]) == 1
     assert "clock" in res["skipped"][0]["reason"]
 
@@ -182,8 +185,30 @@ def test_no_handshake_pairs_returns_honest_reason(tmp_path):
     )
     res = _sweep(tmp_path, vcd)
     assert res["interface_count"] == 0
+    assert res["coverage_status"] == "zero_coverage"
     assert res["interfaces"] == []
     assert res["reason"]
+    assert "not a protocol pass" in res["coverage_warnings"][0]
+
+
+def test_scoped_zero_coverage_is_not_a_protocol_pass(tmp_path):
+    res = _sweep(
+        tmp_path,
+        _multi_stage_vcd(["1", "1"]),
+        scope="top.axi4_crossbar_h",
+        max_wait_cycles=4,
+    )
+    assert res["discovered_count"] == 0
+    assert res["interface_count"] == 0
+    assert res["flagged_count"] == 0
+    assert res["coverage_status"] == "zero_coverage"
+    assert res["coverage_warnings"]
+    assert "ZERO COVERAGE" in res["note"]
+    assert "not a protocol pass" in res["coverage_warnings"][0]
+    assert res["suggested_next_actions"]
+    retry = res["suggested_next_actions"][0]
+    assert retry["tool"] == "sweep_handshakes"
+    assert "scope" not in retry["arguments"]
 
 
 def test_truncation_is_loud(tmp_path):
@@ -192,6 +217,8 @@ def test_truncation_is_loud(tmp_path):
     res = _sweep(tmp_path, _multi_stage_vcd(["1", "0", "1"]),
                  max_interfaces=1, max_wait_cycles=4)
     assert res["truncated"] is True
+    assert res["coverage_status"] == "truncated"
+    assert res["coverage_warnings"]
     assert res["discovered_count"] == 3
     assert res["interface_count"] == 1
     assert "TRUNCATED" in res["note"]
@@ -200,6 +227,7 @@ def test_truncation_is_loud(tmp_path):
 def test_full_coverage_not_truncated(tmp_path):
     res = _sweep(tmp_path, _multi_stage_vcd(["1", "0", "1"]), max_wait_cycles=4)
     assert res["truncated"] is False
+    assert res["coverage_status"] == "complete"
     assert res["discovered_count"] == res["interface_count"] == 3
 
 

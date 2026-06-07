@@ -9,9 +9,9 @@ A *TimeSpec* is the value a time-taking tool accepts. It widens the old
 
 What this module deliberately does NOT do yet: arithmetic
 (``@name + 3*cycle(clk)``). That belongs to the Lark grammar slated for a
-later milestone (see docs/auto-debug-decisions-v2.md, decision 4). Keeping
-the resolver arithmetic-free here means every time input across the server
-gains cursor + unit support without pulling in the parser.
+later milestone. Keeping the resolver arithmetic-free here means every time
+input across the server gains cursor + unit support without pulling in the
+parser.
 """
 
 from __future__ import annotations

@@ -106,6 +106,32 @@ _SORT_DESC = (
 )
 
 
+def _retry_without_scope_action(
+    *,
+    wave_path: str,
+    edge: str,
+    start_ps: int,
+    end_ps: int,
+    max_wait_cycles: int,
+    max_interfaces: int,
+) -> dict[str, Any]:
+    return {
+        "tool": "sweep_handshakes",
+        "reason": (
+            "Retry without scope to establish design-level protocol coverage; "
+            "the scoped sweep checked zero interfaces."
+        ),
+        "arguments": {
+            "wave_path": wave_path,
+            "edge": edge,
+            "start_time_ps": int(start_ps),
+            "end_time_ps": int(end_ps),
+            "max_wait_cycles": int(max_wait_cycles),
+            "max_interfaces": int(max_interfaces),
+        },
+    }
+
+
 def sweep_handshake_anomalies(
     *,
     get_parser: Callable[[str], Any],
@@ -217,15 +243,57 @@ def sweep_handshake_anomalies(
     else:
         reason = None
 
-    note = _SORT_DESC if interfaces else None
-    if truncated:
-        warn = (
+    coverage_warnings: list[str] = []
+    suggested_next_actions: list[dict[str, Any]] = []
+    if not normalized:
+        coverage_status = "zero_coverage"
+        warning = (
+            "ZERO COVERAGE: sweep_handshakes did not discover any valid/ready or "
+            "AHB interfaces, so no protocol interfaces were checked. flagged_count=0 "
+            "is not a protocol pass."
+        )
+        if scope:
+            warning += (
+                f" The requested scope {scope!r} may be below, above, or separate "
+                "from the dumped interface signals; retry without scope or with a "
+                "parent/interface scope."
+            )
+            suggested_next_actions.append(
+                _retry_without_scope_action(
+                    wave_path=wave_path,
+                    edge=edge,
+                    start_ps=start_ps,
+                    end_ps=end_ps,
+                    max_wait_cycles=max_wait_cycles,
+                    max_interfaces=max_interfaces,
+                )
+            )
+        coverage_warnings.append(warning)
+    elif truncated:
+        coverage_status = "truncated"
+        coverage_warnings.append(
             f"COVERAGE TRUNCATED: {discovered} interfaces discovered but only "
             f"{len(to_inspect)} swept (max_interfaces={max_interfaces}). The dropped "
-            f"interfaces are the tail of suggest's ordering — re-run with "
+            "interfaces are the tail of suggest's ordering; re-run with "
             f"max_interfaces>={discovered} for full coverage before trusting the ranking."
         )
+    elif skipped:
+        coverage_status = "degraded"
+        coverage_warnings.append(
+            "COVERAGE DEGRADED: one or more discovered handshake interfaces could "
+            "not be inspected; see skipped. flagged_count=0 only covers inspected rows."
+        )
+    else:
+        coverage_status = "complete"
+
+    note = _SORT_DESC if interfaces else None
+    if truncated:
+        warn = coverage_warnings[0]
         note = warn if note is None else f"{warn} | {note}"
+    elif coverage_status == "zero_coverage":
+        note = coverage_warnings[0]
+    elif coverage_status == "degraded":
+        note = coverage_warnings[0] if note is None else f"{coverage_warnings[0]} | {note}"
 
     return {
         "wave_path": wave_path,
@@ -237,6 +305,9 @@ def sweep_handshake_anomalies(
         "interface_count": len(interfaces),
         "flagged_count": n_flagged,
         "truncated": truncated,
+        "coverage_status": coverage_status,
+        "coverage_warnings": coverage_warnings,
+        "suggested_next_actions": suggested_next_actions,
         "interfaces": interfaces,
         "skipped": skipped,
         "cursor": cursor,

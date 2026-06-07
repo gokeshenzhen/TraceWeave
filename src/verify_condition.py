@@ -1,8 +1,8 @@
 """verify_condition — verification primitives over existing waveforms.
 
-This is the entry point for the auto-debug DSL described in
-``docs/auto-debug-decisions-v2.md``. The v2 MVP intentionally bypasses the
-Lark grammar and exposes two primitives that LLMs cannot do on their own:
+This is the entry point for the auto-debug DSL. The v2 MVP intentionally
+bypasses the Lark grammar and exposes two primitives that LLMs cannot do on
+their own:
 
 - ``diff_first_divergence`` — find the first time two signals disagree
 - ``period`` — detect a signal's dominant period inside a window and flag

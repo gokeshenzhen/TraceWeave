@@ -47,13 +47,35 @@ def _prefill_build_tb_hierarchy_state(**overrides):
     server._session_state["build_tb_hierarchy"] = state
 
 
-def _prefill_sweep_handshakes_cache(wave_path: str, interfaces=None):
+def _prefill_sweep_handshakes_cache(
+    wave_path: str,
+    interfaces=None,
+    *,
+    coverage_status: str = "complete",
+    coverage_warnings=None,
+    suggested_next_actions=None,
+):
     """预填一个与 wave_path 兼容的 sweep_handshakes 缓存 + provenance。"""
+    if interfaces is None and coverage_status == "complete":
+        interfaces = [
+            {
+                "kind": "valid_ready",
+                "scope": "top_tb.if0",
+                "clock": "top_tb.clk",
+                "valid": "top_tb.if0.valid",
+                "ready": "top_tb.if0.ready",
+                "flags": [],
+            }
+        ]
     server._result_cache["sweep_handshakes"] = server.schemas.HandshakeSweepResult.model_validate(
         {
             "wave_path": wave_path,
+            "discovered_count": len(interfaces or []),
             "interface_count": len(interfaces or []),
-            "flagged_count": len(interfaces or []),
+            "flagged_count": sum(1 for iface in (interfaces or []) if iface.get("flags")),
+            "coverage_status": coverage_status,
+            "coverage_warnings": coverage_warnings or [],
+            "suggested_next_actions": suggested_next_actions or [],
             "interfaces": interfaces or [],
         }
     )
@@ -1396,6 +1418,73 @@ $enddefinitions $end
 
         assert result["workflow_incomplete"] is True
         assert result["degraded_reason"] == "missing_handshake_sweep"
+        assert result["required_next_call"]["tool"] == "sweep_handshakes"
+        assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
+
+    async def test_recommend_treats_zero_coverage_sweep_as_incomplete(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        _prefill_build_tb_hierarchy_state()
+        log_path = tmp_path / "run.log"
+        wave_path = tmp_path / "wave.vcd"
+        log_path.write_text('"/path/sb.sv", 66: top_tb.sb: READ-BACK mismatch at 20ps\n')
+        wave_path.write_text("$timescale 1ps $end\n$enddefinitions $end\n")
+        server._result_cache["parse_sim_log"] = server.schemas.ParseSimLogResult.model_validate(
+            {
+                "log_file": str(log_path),
+                "simulator": "vcs",
+                "schema_version": "2.0",
+                "contract_version": "1.3",
+                "failure_events_schema_version": "1.0",
+                "parser_capabilities": [],
+                "runtime_total_errors": 1,
+                "runtime_fatal_count": 0,
+                "runtime_error_count": 1,
+                "unique_types": 1,
+                "total_groups": 1,
+                "truncated": False,
+                "max_groups": 50,
+                "first_error_line": 1,
+                "problem_hints": {"has_x": False, "has_z": False, "error_pattern": "mismatch"},
+            }
+        )
+        server._result_provenance["parse_sim_log"] = {
+            "log_path": str(log_path),
+            "simulator": "vcs",
+        }
+        server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
+            {"scan_scope": "scope1", "files_scanned": 1, "total_risks": 0, "risks": [],
+             "categories_scanned": ["magic_condition"], "skipped_files": []}
+        )
+        server._result_provenance["scan_structural_risks"] = {
+            "compile_log": "/tmp/verif/work/elab.log",
+            "simulator": "vcs",
+        }
+        _prefill_sweep_handshakes_cache(
+            str(wave_path),
+            interfaces=[],
+            coverage_status="zero_coverage",
+            coverage_warnings=["ZERO COVERAGE: no protocol interfaces checked"],
+            suggested_next_actions=[
+                {
+                    "tool": "sweep_handshakes",
+                    "arguments": {"wave_path": str(wave_path)},
+                    "reason": "Retry without scope.",
+                }
+            ],
+        )
+
+        result = await server._dispatch(
+            "recommend_failure_debug_next_steps",
+            {
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
+                "simulator": "vcs",
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert result["workflow_incomplete"] is True
+        assert result["degraded_reason"] == "incomplete_handshake_sweep"
         assert result["required_next_call"]["tool"] == "sweep_handshakes"
         assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
 
