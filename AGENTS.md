@@ -21,7 +21,14 @@ Rules:
   the cheap one-call check before reading RTL line-by-line. Always read
   `coverage_status`: `zero_coverage` means no protocol interfaces were checked
   and is not a pass; `truncated`/`degraded` means partial coverage, so
-  `flagged_count=0` is not a clean-protocol conclusion.
+  `flagged_count=0` is not a clean-protocol conclusion. When `coverage_status`
+  is `truncated`, the result includes `suggested_next_actions` with a one-click
+  retry; follow it to complete coverage. The compact `finding_summary` (by_flag,
+  by_channel_hint, top_scopes) surfaces which channels have findings before
+  opening the full interface list. **Critical**: do not collapse global findings
+  from the sweep + targeted clean checks on one interface into a false "protocol
+  is clean" verdict. State both facts: "global findings exist on W-channel,
+  targeted Master0 R-channel checks are clean" → points to next layer (HVL/BFM).
 - Do not analyze or recommend fixes before MCP output is available
 - On protocol or scoreboard mismatches, carry at least two competing hypotheses
   and verify the opposite side with waveform evidence before assigning root
