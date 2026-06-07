@@ -971,6 +971,21 @@ class SweptSkip(SchemaModel):
     reason: str
 
 
+class FindingSummary(SchemaModel):
+    """Compact top-level factual summary of discovered findings, survives truncation.
+
+    by_flag: count of interfaces with each flag type.
+    by_channel_hint: count of interfaces with findings grouped by probable AXI channel
+                     (R, W, AR, AW, B) inferred from signal names; "other" for
+                     unidentifiable channels.
+    top_scopes: list of scope paths for the top 3 interfaces by sort order
+                (most likely interesting first); empty if no flagged interfaces.
+    """
+    by_flag: dict[str, int] = Field(default_factory=dict)
+    by_channel_hint: dict[str, int] = Field(default_factory=dict)
+    top_scopes: list[str] = Field(default_factory=list)
+
+
 class HandshakeSweepResult(SchemaModel):
     wave_path: str
     scope: str | None = None
@@ -987,6 +1002,7 @@ class HandshakeSweepResult(SchemaModel):
     coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = "complete"
     coverage_warnings: list[str] = Field(default_factory=list)
     suggested_next_actions: list[dict[str, Any]] = Field(default_factory=list)
+    finding_summary: FindingSummary | None = None
     interfaces: list[SweptInterface] = Field(default_factory=list)
     skipped: list[SweptSkip] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None

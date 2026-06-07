@@ -83,13 +83,21 @@ Step 4: sweep_handshakes(wave_path, ...)
 │
 │  What the agent does:
 │  - Prefer the first sweep unscoped unless the interface scope is already known
-│  - Interpret flagged_count only with coverage_status
-│  - coverage_status="zero_coverage" means no protocol interfaces were checked;
-│    it is not a protocol pass. Follow suggested_next_actions, usually retry
-│    without scope or with a parent/interface scope.
-│  - coverage_status="truncated" or "degraded" means partial coverage; do not
-│    call the protocol clean from flagged_count=0.
-│  - Treat flagged rows as facts to correlate, not as root-cause verdicts.
+│  - Always examine the finding_summary before diving into individual interfaces
+│  - Interpret flagged_count only with coverage_status:
+│    * coverage_status="zero_coverage" means no protocol interfaces were checked;
+│      it is not a protocol pass. Follow suggested_next_actions, usually retry
+│      without scope or with a parent/interface scope.
+│    * coverage_status="truncated" or "degraded" means partial coverage; do not
+│      call the protocol clean from flagged_count=0. Follow suggested_next_actions
+│      to complete the sweep.
+│    * coverage_status="complete" and flagged_count=0 means all interfaces are clean.
+│  - Global findings (flagged interfaces) are facts to correlate against the symptom,
+│    not root-cause verdicts. Findings on one channel/interface may be unrelated to
+│    a mismatch on another channel.
+│  - If the symptom is on interface A but global sweep findings are on interface B,
+│    that is a correlation fact, not a clearance. Run targeted checks on A to
+│    establish whether A's protocol is clean; global findings on B remain true.
 │
 ▼
 Step 5: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
@@ -245,6 +253,15 @@ evidence:
 This discipline pairs with tool coverage facts: inspection tools should report
 which checks they actually performed, and the agent uses that coverage to avoid
 treating a one-sided result as a full protocol conclusion.
+
+**Global vs. Targeted Protocol Checks:** `sweep_handshakes` performs a whole-design
+scan across every protocol interface in the waveform. `inspect_handshake`, 
+`reconstruct_transactions`, and `verify_window` are targeted checks on one interface
+or signal. A targeted clean result ("no violation on Master0's R channel") does NOT
+erase earlier global findings ("W channel has payload-hold violations"). State both
+facts: the global findings exist, and the targeted check on the symptom-correlated
+interface is clean. That combination points to the next layer (HVL/BFM) rather than
+a protocol root cause.
 
 On a scoreboard/compare-style failure, `parse_sim_log` sets a generic
 `protocol_symptom_hint` (mirrored into `get_diagnostic_snapshot`'s top-level

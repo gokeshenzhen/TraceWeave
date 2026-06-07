@@ -132,6 +132,95 @@ def _retry_without_scope_action(
     }
 
 
+def _retry_truncated_action(
+    *,
+    wave_path: str,
+    edge: str,
+    start_ps: int,
+    end_ps: int,
+    max_wait_cycles: int,
+    discovered_count: int,
+    max_interfaces: int,
+) -> dict[str, Any]:
+    return {
+        "tool": "sweep_handshakes",
+        "reason": (
+            f"Previous sweep discovered {discovered_count} interfaces but only "
+            f"swept {max_interfaces} due to cap. Re-run with max_interfaces>={discovered_count} "
+            "for complete coverage before trusting the interface ranking."
+        ),
+        "arguments": {
+            "wave_path": wave_path,
+            "edge": edge,
+            "start_time_ps": int(start_ps),
+            "end_time_ps": int(end_ps),
+            "max_wait_cycles": int(max_wait_cycles),
+            "max_interfaces": int(discovered_count),
+        },
+    }
+
+
+def _infer_channel_hint(valid_or_htrans: str) -> str:
+    """Infer AXI channel from valid/valid_htrans signal name.
+
+    Returns one of: 'R', 'W', 'AR', 'AW', 'B', 'other'.
+    """
+    sig_lower = valid_or_htrans.lower()
+    # Check for AXI channel markers in the signal name
+    if "_r_" in sig_lower or "_rvalid" in sig_lower or sig_lower.endswith("_r"):
+        return "R"
+    if "_w_" in sig_lower or "_wvalid" in sig_lower or sig_lower.endswith("_w"):
+        return "W"
+    if "_ar_" in sig_lower or "_arvalid" in sig_lower or sig_lower.endswith("_ar"):
+        return "AR"
+    if "_aw_" in sig_lower or "_awvalid" in sig_lower or sig_lower.endswith("_aw"):
+        return "AW"
+    if "_b_" in sig_lower or "_bvalid" in sig_lower or sig_lower.endswith("_b"):
+        return "B"
+    # Fallback: look for channel name anywhere in the string
+    for ch in ["_r", "_w", "_ar", "_aw", "_b"]:
+        if ch in sig_lower:
+            return ch.lstrip("_").upper()
+    return "other"
+
+
+def _compute_finding_summary(
+    interfaces: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute compact factual summary of flagged findings.
+
+    Returns dict with:
+      by_flag: count of interfaces with each flag
+      by_channel_hint: count of flagged interfaces by inferred AXI channel
+      top_scopes: list of top 3 scope paths by sort order (most interesting first)
+    """
+    by_flag: dict[str, int] = {}
+    by_channel: dict[str, int] = {}
+    top_scopes: list[str] = []
+
+    for iface in interfaces:
+        flags = iface.get("flags", [])
+        if not flags:
+            continue
+        # Count each flag occurrence
+        for flag in flags:
+            by_flag[flag] = by_flag.get(flag, 0) + 1
+        # Count by channel (only for flagged interfaces)
+        channel = _infer_channel_hint(iface.get("valid", ""))
+        by_channel[channel] = by_channel.get(channel, 0) + 1
+        # Collect top 3 scopes
+        if len(top_scopes) < 3:
+            scope = iface.get("scope", "(top)")
+            if scope:
+                top_scopes.append(scope)
+
+    return {
+        "by_flag": by_flag,
+        "by_channel_hint": by_channel,
+        "top_scopes": top_scopes,
+    }
+
+
 def sweep_handshake_anomalies(
     *,
     get_parser: Callable[[str], Any],
@@ -277,6 +366,17 @@ def sweep_handshake_anomalies(
             "interfaces are the tail of suggest's ordering; re-run with "
             f"max_interfaces>={discovered} for full coverage before trusting the ranking."
         )
+        suggested_next_actions.append(
+            _retry_truncated_action(
+                wave_path=wave_path,
+                edge=edge,
+                start_ps=start_ps,
+                end_ps=end_ps,
+                max_wait_cycles=max_wait_cycles,
+                discovered_count=discovered,
+                max_interfaces=max_interfaces,
+            )
+        )
     elif skipped:
         coverage_status = "degraded"
         coverage_warnings.append(
@@ -285,6 +385,8 @@ def sweep_handshake_anomalies(
         )
     else:
         coverage_status = "complete"
+
+    finding_summary = _compute_finding_summary(interfaces) if n_flagged > 0 else None
 
     note = _SORT_DESC if interfaces else None
     if truncated:
@@ -308,6 +410,7 @@ def sweep_handshake_anomalies(
         "coverage_status": coverage_status,
         "coverage_warnings": coverage_warnings,
         "suggested_next_actions": suggested_next_actions,
+        "finding_summary": finding_summary,
         "interfaces": interfaces,
         "skipped": skipped,
         "cursor": cursor,

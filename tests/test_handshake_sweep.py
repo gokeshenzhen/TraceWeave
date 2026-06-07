@@ -399,3 +399,41 @@ def test_sweep_flags_and_ranks_premature_deassertion(tmp_path):
     # exactly one cursor for the whole sweep, anchored on the flagged stage
     assert res["cursor"] is not None
     assert len(cs.list()) == 1
+
+
+# --- finding_summary and truncated suggested_next_actions (Phase 1) ----------
+
+
+def test_finding_summary_is_none_when_no_interfaces(tmp_path):
+    res = _sweep(tmp_path, _multi_stage_vcd([]))
+    assert res["finding_summary"] is None
+
+
+def test_finding_summary_is_none_when_no_flags(tmp_path):
+    res = _sweep(tmp_path, _multi_stage_vcd(["1", "1"]), max_wait_cycles=4)
+    assert res["finding_summary"] is None
+
+
+def test_finding_summary_counts_flags_and_scopes(tmp_path):
+    res = _sweep(tmp_path, _multi_stage_vcd(["0", "1"]), max_wait_cycles=4)
+    assert res["finding_summary"] is not None
+    # u0 has ended_in_stall
+    assert res["finding_summary"]["by_flag"].get("ended_in_stall") == 1
+    assert "top.u0" in res["finding_summary"]["top_scopes"]
+
+
+def test_truncation_adds_suggested_next_action(tmp_path):
+    res = _sweep(tmp_path, _multi_stage_vcd(["1", "0", "1"]),
+                 max_interfaces=1, max_wait_cycles=4)
+    assert res["coverage_status"] == "truncated"
+    assert res["suggested_next_actions"]
+    retry = res["suggested_next_actions"][0]
+    assert retry["tool"] == "sweep_handshakes"
+    assert retry["arguments"]["max_interfaces"] == 3  # discovered_count
+    assert "previous sweep" in retry["reason"].lower()
+
+
+def test_complete_coverage_no_truncation_action(tmp_path):
+    res = _sweep(tmp_path, _multi_stage_vcd(["1", "0", "1"]), max_wait_cycles=4)
+    assert res["coverage_status"] == "complete"
+    assert res["suggested_next_actions"] == []
