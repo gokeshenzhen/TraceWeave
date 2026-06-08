@@ -160,59 +160,69 @@ def _retry_truncated_action(
     }
 
 
-def _infer_channel_hint(valid_or_htrans: str) -> str:
-    """Infer AXI channel from valid/valid_htrans signal name.
+# AXI channel markers, most-specific first: the address channels (AR/AW) share
+# their trailing r/w letter with the data/response channels (R/W/B), so they MUST
+# be tested before R/W to avoid an arvalid being mis-tagged as R. Each entry is
+# (channel, substring-markers). A canonical AXI valid is `*arvalid`/`*wvalid`/...;
+# the `_x_` infix form covers names like `m0_w_valid`.
+_AXI_CHANNEL_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("AR", ("arvalid", "_ar_")),
+    ("AW", ("awvalid", "_aw_")),
+    ("W", ("wvalid", "_w_")),
+    ("R", ("rvalid", "_r_")),
+    ("B", ("bvalid", "_b_")),
+)
 
-    Returns one of: 'R', 'W', 'AR', 'AW', 'B', 'other'.
+
+def _infer_channel_hint(valid_or_htrans: str) -> str:
+    """Infer the AXI channel a valid/htrans signal belongs to, from its name.
+
+    Returns 'AR'/'AW'/'W'/'R'/'B' for the five AXI channels, or 'other' when the
+    name carries no recognizable AXI channel marker (generic valid/ready, AHB
+    htrans, credit interfaces). This is a naming heuristic that only groups the
+    finding_summary — it never drives a verdict, and degrades to 'other' rather
+    than guessing.
     """
-    sig_lower = valid_or_htrans.lower()
-    # Check for AXI channel markers in the signal name
-    if "_r_" in sig_lower or "_rvalid" in sig_lower or sig_lower.endswith("_r"):
-        return "R"
-    if "_w_" in sig_lower or "_wvalid" in sig_lower or sig_lower.endswith("_w"):
-        return "W"
-    if "_ar_" in sig_lower or "_arvalid" in sig_lower or sig_lower.endswith("_ar"):
-        return "AR"
-    if "_aw_" in sig_lower or "_awvalid" in sig_lower or sig_lower.endswith("_aw"):
-        return "AW"
-    if "_b_" in sig_lower or "_bvalid" in sig_lower or sig_lower.endswith("_b"):
-        return "B"
-    # Fallback: look for channel name anywhere in the string
-    for ch in ["_r", "_w", "_ar", "_aw", "_b"]:
-        if ch in sig_lower:
-            return ch.lstrip("_").upper()
+    s = valid_or_htrans.lower()
+    for channel, markers in _AXI_CHANNEL_MARKERS:
+        if any(m in s for m in markers):
+            return channel
     return "other"
 
 
 def _compute_finding_summary(
     interfaces: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compute compact factual summary of flagged findings.
+    """Compute a compact factual summary of flagged findings (assumes
+    ``interfaces`` is already sorted by ``_sort_key``).
 
     Returns dict with:
-      by_flag: count of interfaces with each flag
-      by_channel_hint: count of flagged interfaces by inferred AXI channel
-      top_scopes: list of top 3 scope paths by sort order (most interesting first)
+      by_flag: count of flagged interfaces carrying each flag.
+      by_channel_hint: per-AXI-channel flagged count, SEEDED with 0 for every
+        channel present among inspected interfaces — so a clean channel shows
+        explicitly as ``R: 0`` rather than silently vanishing. The explicit zero
+        is the "W is dirty while R is clean" contrast this summary exists to make
+        loud; an absent key is ambiguous (not checked vs. no such channel vs. clean).
+      top_scopes: up to 3 DISTINCT scope paths in sort order (most interesting
+        first); empty scope (a top-level interface) renders as "(top)".
     """
     by_flag: dict[str, int] = {}
+    # Seed every inspected channel at 0 so a clean channel is visible, not absent.
     by_channel: dict[str, int] = {}
-    top_scopes: list[str] = []
-
     for iface in interfaces:
-        flags = iface.get("flags", [])
+        by_channel.setdefault(_infer_channel_hint(iface.get("valid") or ""), 0)
+
+    top_scopes: list[str] = []
+    for iface in interfaces:
+        flags = iface.get("flags") or []
         if not flags:
             continue
-        # Count each flag occurrence
         for flag in flags:
             by_flag[flag] = by_flag.get(flag, 0) + 1
-        # Count by channel (only for flagged interfaces)
-        channel = _infer_channel_hint(iface.get("valid", ""))
-        by_channel[channel] = by_channel.get(channel, 0) + 1
-        # Collect top 3 scopes
-        if len(top_scopes) < 3:
-            scope = iface.get("scope", "(top)")
-            if scope:
-                top_scopes.append(scope)
+        by_channel[_infer_channel_hint(iface.get("valid") or "")] += 1
+        scope = iface.get("scope") or "(top)"
+        if scope not in top_scopes and len(top_scopes) < 3:
+            top_scopes.append(scope)
 
     return {
         "by_flag": by_flag,

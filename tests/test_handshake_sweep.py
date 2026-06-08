@@ -13,7 +13,11 @@ import string
 from pathlib import Path
 
 from src.cursor_store import CursorStore
-from src.handshake_sweep import sweep_handshake_anomalies
+from src.handshake_sweep import (
+    _compute_finding_summary,
+    _infer_channel_hint,
+    sweep_handshake_anomalies,
+)
 from src.vcd_parser import VCDParser
 from src.verify_condition import inspect_handshake
 
@@ -437,3 +441,56 @@ def test_complete_coverage_no_truncation_action(tmp_path):
     res = _sweep(tmp_path, _multi_stage_vcd(["1", "0", "1"]), max_wait_cycles=4)
     assert res["coverage_status"] == "complete"
     assert res["suggested_next_actions"] == []
+
+
+# --- _infer_channel_hint (pure) ----------------------------------------------
+
+
+def test_infer_channel_hint_canonical_axi_valids():
+    # Canonical *Xvalid names map to their channel; AR/AW must win over R/W.
+    assert _infer_channel_hint("hdl_top.m0.m_axi_arvalid") == "AR"
+    assert _infer_channel_hint("hdl_top.m0.m_axi_awvalid") == "AW"
+    assert _infer_channel_hint("hdl_top.m0.m_axi_wvalid") == "W"
+    assert _infer_channel_hint("hdl_top.m0.m_axi_rvalid") == "R"
+    assert _infer_channel_hint("hdl_top.m0.m_axi_bvalid") == "B"
+
+
+def test_infer_channel_hint_infix_form_and_specificity():
+    # `_x_` infix form, and AR/AW are not swallowed by the R/W markers.
+    assert _infer_channel_hint("top.s00_aw_valid") == "AW"
+    assert _infer_channel_hint("top.s00_ar_valid") == "AR"
+    assert _infer_channel_hint("top.s00_w_valid") == "W"
+
+
+def test_infer_channel_hint_unknown_is_other():
+    # Generic valid/ready and AHB htrans carry no AXI channel marker.
+    assert _infer_channel_hint("top.u1.in_valid") == "other"
+    assert _infer_channel_hint("top.ahb_if.htrans") == "other"
+    assert _infer_channel_hint("") == "other"
+
+
+# --- _compute_finding_summary (pure): the DeepSeek-case contrast ------------
+
+
+def test_finding_summary_clean_channel_shows_explicit_zero():
+    # The whole point for the AXI repro case: W is flagged, R is inspected-but-clean.
+    # R must appear as an explicit 0, not silently vanish.
+    interfaces = [
+        {"valid": "m0.m_axi_wvalid", "scope": "hdl_top.m0", "flags": ["payload_hold_violation"]},
+        {"valid": "m0.m_axi_rvalid", "scope": "hdl_top.m0", "flags": []},
+    ]
+    summary = _compute_finding_summary(interfaces)
+    assert summary["by_channel_hint"] == {"W": 1, "R": 0}
+    assert summary["by_flag"] == {"payload_hold_violation": 1}
+
+
+def test_finding_summary_top_scopes_deduped_and_top_level_rendered():
+    # Two flagged channels in the same scope → scope listed ONCE; an empty scope
+    # (top-level interface) renders as "(top)", never dropped.
+    interfaces = [
+        {"valid": "wvalid", "scope": "", "flags": ["long_stall"]},
+        {"valid": "rvalid", "scope": "hdl_top.m1", "flags": ["ended_in_stall"]},
+        {"valid": "arvalid", "scope": "hdl_top.m1", "flags": ["long_stall"]},
+    ]
+    summary = _compute_finding_summary(interfaces)
+    assert summary["top_scopes"] == ["(top)", "hdl_top.m1"]  # deduped, top-level kept

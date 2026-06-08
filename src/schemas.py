@@ -972,14 +972,18 @@ class SweptSkip(SchemaModel):
 
 
 class FindingSummary(SchemaModel):
-    """Compact top-level factual summary of discovered findings, survives truncation.
+    """Compact top-level factual summary of flagged findings, survives truncation.
 
-    by_flag: count of interfaces with each flag type.
-    by_channel_hint: count of interfaces with findings grouped by probable AXI channel
-                     (R, W, AR, AW, B) inferred from signal names; "other" for
-                     unidentifiable channels.
-    top_scopes: list of scope paths for the top 3 interfaces by sort order
-                (most likely interesting first); empty if no flagged interfaces.
+    by_flag: count of flagged interfaces carrying each flag type.
+    by_channel_hint: per-AXI-channel flagged count (R/W/AR/AW/B, "other" for
+                     non-AXI/unidentifiable), inferred from the valid/htrans
+                     signal name. SEEDED with 0 for every channel present among
+                     inspected interfaces, so a clean channel shows explicitly as
+                     ``R: 0`` rather than vanishing — an absent key would be
+                     ambiguous (not checked vs. no such channel vs. clean). This
+                     is a naming heuristic for grouping only, never a verdict.
+    top_scopes: up to 3 DISTINCT scope paths in sort order (most likely
+                interesting first); a top-level interface renders as "(top)".
     """
     by_flag: dict[str, int] = Field(default_factory=dict)
     by_channel_hint: dict[str, int] = Field(default_factory=dict)
