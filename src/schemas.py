@@ -837,6 +837,10 @@ class HandshakeCoverage(SchemaModel):
     # i.e. AHB (valid_htrans) bundles — off for a literal-valid interface whose
     # payload may be data lanes that are legally x on disabled byte strobes.
     x_while_valid_checked: bool = False
+    # AHB write data-phase hold: needs hwrite + write_data (the data-phase window,
+    # offset one cycle from the address-phase valid).
+    write_data_hold_requested: bool = False
+    write_data_hold_checked: bool = False
 
 
 class HandshakeInspectResult(SchemaModel):
@@ -871,6 +875,9 @@ class HandshakeInspectResult(SchemaModel):
     # valid was known-asserted — a definite violation. Only checked on AHB
     # (control-only payload); see coverage.x_while_valid_checked.
     x_while_valid_violations: int = 0
+    # write_data_hold count: HWDATA changed during a write data-phase wait state
+    # (HREADY low) — the master must hold write data until accepted. AHB-only.
+    write_data_hold_violations: int = 0
     # protocol_semantics: AHB-only receipt naming which metrics are faithful vs
     # suppressed on this interface (so the surface reads as all-true-positive and a
     # reader cannot wave a real finding away as a valid/ready-vs-AHB mismatch).
@@ -928,6 +935,11 @@ class ProtocolBundle(SchemaModel):
     penable: str | None = None
     ready: str
     payload: list[str] = Field(default_factory=list)
+    # AHB only: HWRITE (write qualifier) + HWDATA (data bus) for the write
+    # data-phase HWDATA-hold check. None when not located; HWDATA is deliberately
+    # NOT in `payload` (address-phase hold) because it is a data-phase signal.
+    hwrite: str | None = None
+    write_data: str | None = None
     inspect_handshake_args: dict[str, Any] | None = None
     confidence: str
     rationale: str
@@ -978,6 +990,7 @@ class SweptInterface(SchemaModel):
     payload_hold_violations: int = 0
     valid_deassert_violations: int = 0
     x_while_valid_violations: int = 0
+    write_data_hold_violations: int = 0
     # ready_without_valid_cycles is a raw count; on an `ahb` row it is idle-bus
     # (HREADY high while HTRANS idle), NOT backpressure — it is suppressed from
     # `flags` and the sort for ahb rows so it never reads as an anomaly.

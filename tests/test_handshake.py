@@ -292,6 +292,8 @@ def _build_ahb_vcd(cycles: list[dict]) -> str:
         "$var wire 1 % hready $end",
         "$var wire 2 ( htrans $end",
         "$var wire 8 & haddr $end",
+        "$var wire 1 ) hwrite $end",
+        "$var wire 8 * hwdata $end",
         "$upscope $end",
         "$enddefinitions $end",
     ]
@@ -305,6 +307,12 @@ def _build_ahb_vcd(cycles: list[dict]) -> str:
             lines.append("bxxxxxxxx &")
         else:
             lines.append(f"b{int(haddr):08b} &")
+        lines.append(f"{int(c.get('hwrite', 0))})")
+        hwdata = c.get("hwdata", 0)
+        if hwdata == "x":
+            lines.append("bxxxxxxxx *")
+        else:
+            lines.append(f"b{int(hwdata):08b} *")
         lines.append(f"#{10*i+5}")
         lines.append("1!")
     return "\n".join(lines) + "\n"
@@ -412,6 +420,56 @@ def test_literal_valid_does_not_run_x_while_valid(tmp_path: Path):
              max_wait_cycles=8)
     assert r["coverage"]["x_while_valid_checked"] is False
     assert r["x_while_valid_violations"] == 0
+
+
+def test_ahb_write_data_hold_violation(tmp_path: Path):
+    # Write addr accepted (c0); data phase c1..c3 with HREADY low at c1/c2. HWDATA
+    # must stay constant through the wait; changing it mid-wait is a violation.
+    cycles = [
+        {"htrans": 2, "hready": 1, "hwrite": 1, "haddr": 0x10, "hwdata": 0x00},  # write addr accepted
+        {"htrans": 0, "hready": 0, "hwdata": 0xAA},   # data phase starts (latch 0xAA)
+        {"htrans": 0, "hready": 0, "hwdata": 0xBB},   # HWDATA moved mid-wait -> violation
+        {"htrans": 0, "hready": 1, "hwdata": 0xBB},   # data accepted
+        {"htrans": 0, "hready": 1, "hwdata": 0x00},   # next: HWDATA may change (legal)
+    ]
+    store = CursorStore()
+    r = _run_ahb(tmp_path, "ahb_wdh.vcd", cycles, payload=["top.haddr"],
+                 hwrite="top.hwrite", write_data="top.hwdata",
+                 max_wait_cycles=8, cursor_store=store)
+    assert r["coverage"]["write_data_hold_checked"] is True
+    assert r["write_data_hold_violations"] == 1
+    viol = [f for f in r["findings"] if f["type"] == "write_data_hold_violation"]
+    assert len(viol) == 1 and viol[0]["signal"] == "top.hwdata"
+    assert r["violating_signal"] == "top.hwdata"
+    assert r["attribution"]["violating_side"] == "valid_driver"
+    assert r["next_actions"] and r["next_actions"][0]["tool"] == "explain_signal_driver"
+    assert r["cursor"] is not None
+
+
+def test_ahb_write_data_held_through_wait_is_clean(tmp_path: Path):
+    cycles = [
+        {"htrans": 2, "hready": 1, "hwrite": 1, "haddr": 0x10, "hwdata": 0x00},
+        {"htrans": 0, "hready": 0, "hwdata": 0xAA},
+        {"htrans": 0, "hready": 0, "hwdata": 0xAA},   # held — legal
+        {"htrans": 0, "hready": 1, "hwdata": 0xAA},   # accepted
+        {"htrans": 0, "hready": 1, "hwdata": 0x55},   # next data, legal
+    ]
+    r = _run_ahb(tmp_path, "ahb_wdh_clean.vcd", cycles,
+                 hwrite="top.hwrite", write_data="top.hwdata", max_wait_cycles=8)
+    assert r["write_data_hold_violations"] == 0
+
+
+def test_ahb_read_data_phase_not_checked_for_write_hold(tmp_path: Path):
+    # A read transfer (HWRITE=0) drives no write data; HWDATA churn must NOT flag.
+    cycles = [
+        {"htrans": 2, "hready": 1, "hwrite": 0, "haddr": 0x10, "hwdata": 0x00},
+        {"htrans": 0, "hready": 0, "hwdata": 0xAA},
+        {"htrans": 0, "hready": 0, "hwdata": 0xBB},   # churn, but it's a READ -> ignore
+        {"htrans": 0, "hready": 1, "hwdata": 0xCC},
+    ]
+    r = _run_ahb(tmp_path, "ahb_rd_nohold.vcd", cycles,
+                 hwrite="top.hwrite", write_data="top.hwdata", max_wait_cycles=8)
+    assert r["write_data_hold_violations"] == 0
 
 
 def test_ahb_emits_protocol_semantics_receipt(tmp_path: Path):

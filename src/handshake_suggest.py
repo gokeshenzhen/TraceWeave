@@ -464,6 +464,16 @@ def _direction_from_names(paths: list[str]) -> tuple[str, str, str, list[str]]:
     ]
 
 
+def _pick_prefixed_path(roles: dict, role: str, anchor: dict) -> str | None:
+    """The role-signal sharing ``anchor``'s interface prefix (else the first), or
+    None if absent — used to attach HWRITE/HWDATA to the right AHB interface."""
+    cands = roles.get(role, [])
+    if not cands:
+        return None
+    prefixed = [c for c in cands if _same_prefix(anchor, c, c["role"])]
+    return (prefixed or cands)[0]["path"]
+
+
 def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
     grouped = _by_scope_and_role(records, _AHB_ROLES)
     bundles: list[dict] = []
@@ -477,6 +487,11 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
             clock = _pick_protocol_clock(roles, ("hclk", "clk", "clock"))
             reset = _pick_protocol_clock(roles, ("hresetn", "hreset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, htrans, _AHB_PAYLOAD_ROLES, max_payload)
+            # HWRITE (qualifier) + HWDATA (data bus) enable the write data-phase
+            # HWDATA-hold check, which is a *different* window than payload-hold —
+            # so HWDATA is supplied here, not in the address-phase `payload`.
+            hwrite_sig = _pick_prefixed_path(roles, "hwrite", htrans)
+            hwdata_sig = _pick_prefixed_path(roles, "hwdata", htrans)
             side_paths = [htrans["path"], ready["path"], *payload]
             direction_tag, direction_basis, direction_confidence, warnings = _direction_from_names(side_paths)
             needs = []
@@ -490,6 +505,11 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
                 "ready": ready["path"],
                 "payload": payload,
             }
+            if inspect_args is not None:
+                if hwrite_sig:
+                    inspect_args["hwrite"] = hwrite_sig
+                if hwdata_sig:
+                    inspect_args["write_data"] = hwdata_sig
             bundles.append({
                 "protocol": "ahb",
                 "scope": scope_name,
@@ -504,6 +524,8 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
                 "penable": None,
                 "ready": ready["path"],
                 "payload": payload,
+                "hwrite": hwrite_sig,
+                "write_data": hwdata_sig,
                 "inspect_handshake_args": inspect_args,
                 "confidence": confidence,
                 "rationale": f"AHB htrans/ready pair in scope {scope_name or '(top)'}",

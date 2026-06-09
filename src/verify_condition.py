@@ -717,6 +717,8 @@ def inspect_handshake(
     valid_htrans: str | None = None,
     htrans_rule: str = "active",
     payload: list[str] | None = None,
+    hwrite: str | None = None,
+    write_data: str | None = None,
     edge: str = "posedge",
     start_ps: int = 0,
     end_ps: int = -1,
@@ -770,6 +772,13 @@ def inspect_handshake(
     be data lanes that are legally x on disabled byte strobes (a false positive);
     see ``coverage.x_while_valid_checked``.
 
+    Passing ``hwrite`` + ``write_data`` (AHB HWDATA) enables a **write data-phase
+    hold** check: HWDATA must stay stable from the cycle after a write address is
+    accepted through the cycle its data is accepted (HREADY high), so a change
+    during a data-phase wait state is a ``write_data_hold_violation``. This is a
+    separate pass from payload-hold because the data phase trails the htrans-derived
+    valid by one cycle — which is also why HWDATA is not a payload signal.
+
     ``active_high=False`` inverts the valid/ready polarity. Samples where valid
     or ready is x/z are counted in ``unknown_sample_cycles`` and do not extend a
     stall (an honest break rather than guessing across unknown). A cursor is
@@ -812,8 +821,17 @@ def inspect_handshake(
     valid_source = f"htrans:{htrans_rule}" if use_htrans else "signal"
     payload = [_resolve_signal_path(parser, p) for p in payload_in]
 
+    # AHB write data-phase hold (G3): HWDATA must stay stable while HREADY is low
+    # during a *write* data phase. This is a different window than the address-phase
+    # payload-hold (the data phase trails the htrans-derived valid by one cycle), so
+    # it needs HWRITE (to qualify writes) and the HWDATA bus, supplied separately.
+    want_write_data_hold = use_htrans and hwrite is not None and write_data is not None
+    hwrite_sig = _resolve_signal_path(parser, hwrite) if want_write_data_hold else None
+    wdata_sig = _resolve_signal_path(parser, write_data) if want_write_data_hold else None
+    extra_signals = [s for s in (hwrite_sig, wdata_sig) if s]
+
     sampled = sample_signals_on_edges(
-        parser, clock, [valid_signal, ready, *payload],
+        parser, clock, [valid_signal, ready, *payload, *extra_signals],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
     signal_errors = sampled.get("signal_errors", {})
@@ -838,6 +856,9 @@ def inspect_handshake(
         # literal-valid interface because its payload may be data lanes that are
         # legally x on disabled byte strobes — checking those would false-positive.
         "x_while_valid_checked": False,
+        # AHB write data-phase hold: needs hwrite + write_data; data-phase window.
+        "write_data_hold_requested": bool(want_write_data_hold),
+        "write_data_hold_checked": False,
     }
 
     result: dict[str, Any] = {
@@ -867,6 +888,10 @@ def inspect_handshake(
         # an active transfer with an unknown address/control field). Only checked on
         # AHB (control-only payload); see coverage.x_while_valid_checked.
         "x_while_valid_violations": 0,
+        # write_data_hold: HWDATA changed during a write data-phase wait state
+        # (HREADY low) — the master must hold write data until accepted. AHB-only;
+        # see coverage.write_data_hold_checked.
+        "write_data_hold_violations": 0,
         "payload_unresolved": payload_unresolved,
         "coverage": coverage,
         # protocol_semantics: an AHB-only "receipt" stating which of this result's
@@ -930,6 +955,17 @@ def inspect_handshake(
     coverage["x_while_valid_checked"] = do_x_while_valid
     x_while_valid_active: set[str] = set()  # debounce: one finding per x episode
 
+    wd_hold_unresolved = [s for s in extra_signals if s in signal_errors]
+    do_write_data_hold = want_write_data_hold and not wd_hold_unresolved
+    coverage["write_data_hold_checked"] = do_write_data_hold
+    if want_write_data_hold and wd_hold_unresolved:
+        warnings.append(
+            "write-data-hold check did NOT run for unresolved signal(s): "
+            + ", ".join(wd_hold_unresolved)
+            + " — a write_data_hold_violations of 0 does NOT mean HWDATA was held. "
+            "HWDATA usually needs an explicit bit range (e.g. 'top.hwdata[31:0]')."
+        )
+
     if use_htrans:
         result["protocol_semantics"] = {
             "protocol": "ahb",
@@ -950,6 +986,11 @@ def inspect_handshake(
             "x_while_valid": (
                 "checked on the control payload" if do_x_while_valid
                 else "not checked: no control payload resolved"
+            ),
+            "write_data_hold": (
+                "checked: HWDATA must hold through a write data-phase wait state"
+                if do_write_data_hold
+                else "not checked: pass hwrite + write_data to enable"
             ),
         }
 
@@ -1090,6 +1131,16 @@ def inspect_handshake(
         result["final_stall_cycles"] = stall_cycles
         _close_stall(samples[-1]["time_ps"])
 
+    # AHB write data-phase hold pass (G3): a separate sweep over the same samples,
+    # because the data phase trails the address-phase htrans valid by one cycle.
+    if do_write_data_hold:
+        wd_count, wd_findings = _ahb_write_data_hold(
+            samples, valid_signal, ready, hwrite_sig, wdata_sig, active_high,
+            max_findings - len(findings),
+        )
+        result["write_data_hold_violations"] = wd_count
+        findings.extend(wd_findings)
+
     result["findings"] = findings
     _attach_handshake_attribution(result, findings, ready)
     _attach_handshake_cursor(
@@ -1097,6 +1148,74 @@ def inspect_handshake(
         cursor_name, cursor_note,
     )
     return result
+
+
+def _ahb_write_data_hold(
+    samples: list[dict[str, Any]],
+    htrans_sig: str,
+    ready_sig: str,
+    hwrite_sig: str,
+    wdata_sig: str,
+    active_high: bool,
+    max_findings: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """AHB write data-phase hold: HWDATA must stay stable from the cycle after a
+    write address is accepted through the cycle its data is accepted (HREADY high).
+    Faithful to AHB's folded HREADY + one-cycle data-phase offset, so it is a
+    *separate* pass from the address-phase payload-hold (which is keyed on the
+    htrans-derived valid and would mis-window HWDATA).
+
+    A write data phase is "outstanding" once a NONSEQ/SEQ write address is accepted
+    (htrans active && HWRITE && HREADY) and persists across wait states until the
+    next HREADY high. While it is outstanding the HWDATA latched at the start of the
+    phase must not change; a known change is a ``write_data_hold_violation``. Reads
+    are not tracked (HRDATA is slave-driven). x/z on HWDATA or unknown ready breaks
+    continuity rather than guessing — never a false positive."""
+    findings: list[dict[str, Any]] = []
+    count = 0
+    outstanding_write: bool | None = None  # None=no live data phase; True=write
+    phase_open = False
+    latched: Any = None
+    for s in samples:
+        sig = s["signals"]
+        htr = _ahb_valid_truth(sig.get(htrans_sig), "active")   # NONSEQ/SEQ
+        hr = _hs_truth(sig.get(ready_sig), active_high)
+        hw = _hs_truth(sig.get(hwrite_sig), active_high)        # True = write
+        wd = sig.get(wdata_sig)
+
+        if outstanding_write is True:
+            if not phase_open:
+                phase_open = True
+                latched = wd
+            elif _hs_known(latched) and _hs_known(wd) and wd != latched:
+                count += 1
+                if len(findings) < max_findings:
+                    findings.append({
+                        "type": "write_data_hold_violation",
+                        "severity": "error",
+                        "time_ps": s["time_ps"],
+                        "signal": wdata_sig,
+                        "from_value": _hs_repr(latched),
+                        "to_value": _hs_repr(wd),
+                    })
+                latched = wd  # report only the first change of each data phase
+        else:
+            phase_open = False
+            latched = None
+
+        # Advance the outstanding data phase at the end of the cycle. HREADY high
+        # completes the current phase and (if an address is accepted now) opens the
+        # next; an unknown ready clears state rather than guessing across it.
+        if hr is True:
+            phase_open = False
+            latched = None
+            outstanding_write = (hw is True) if htr is True else None
+        elif hr is None:
+            outstanding_write = None
+            phase_open = False
+            latched = None
+        # hr is False: phase persists unchanged
+    return count, findings
 
 
 def _empty_attribution() -> dict[str, Any]:
@@ -1188,6 +1307,28 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
                        "with valid (same producer), so a change during a stall points "
                        f"at the valid-driver's logic — {gloss}. Confirm the driving "
                        "instance; the ready/slave side cannot cause this."),
+            "signal_path": sig,
+        }]
+        return
+    wdh = next((f for f in findings if f.get("type") == "write_data_hold_violation"), None)
+    if wdh and wdh.get("signal"):
+        sig = wdh["signal"]
+        result["violating_signal"] = sig
+        result["attribution"] = {
+            "violating_side": "valid_driver",
+            "exonerated_side": "ready_driver",
+            "basis": "protocol_write_data_hold_obligation",
+            "note": ("write data-phase hold violation: HWDATA changed while HREADY was "
+                     "low (data not yet accepted). AHB write data is driven by the "
+                     "master, so this is a master-side defect; the slave (HREADY side) "
+                     "cannot cause it — do not start in the slave driver/monitor."),
+        }
+        result["next_actions"] = [{
+            "tool": "explain_signal_driver",
+            "reason": ("attribute this write-data-hold violation: HWDATA is master-driven, "
+                       "so a change during a data-phase wait state points at the master "
+                       "BFM/driver not holding write data until HREADY. Confirm the "
+                       "driving instance; the slave side cannot cause this."),
             "signal_path": sig,
         }]
         return
@@ -1372,8 +1513,8 @@ def _attach_handshake_cursor(
 ) -> None:
     if cursor_store is None:
         return
-    # Anchor priority: x-while-valid > payload hold violation >
-    # premature valid deassertion > long stall > longest stall.
+    # Anchor priority: x-while-valid > payload hold violation > write data hold
+    # violation > premature valid deassertion > long stall > longest stall.
     anchor_time: int | None = None
     anchor_desc = ""
     for f in findings:
@@ -1386,6 +1527,12 @@ def _attach_handshake_cursor(
             if f["type"] == "payload_hold_violation":
                 anchor_time = f["time_ps"]
                 anchor_desc = f"payload hold violation on {f['signal']}"
+                break
+    if anchor_time is None:
+        for f in findings:
+            if f["type"] == "write_data_hold_violation":
+                anchor_time = f["time_ps"]
+                anchor_desc = f"write data hold violation on {f['signal']}"
                 break
     if anchor_time is None:
         for f in findings:

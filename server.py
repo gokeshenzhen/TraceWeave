@@ -1982,8 +1982,10 @@ async def list_tools():
                     "payload": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation.",
+                        "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation. For AHB do NOT include hwdata here — pass it as write_data (it is a data-phase signal, a different window).",
                     },
+                    "hwrite": {"type": "string", "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check."},
+                    "write_data": {"type": "string", "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold."},
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge"],
@@ -2592,6 +2594,8 @@ async def _dispatch(name: str, args: dict):
             htrans_rule=args.get("htrans_rule", "active"),
             ready=args["ready"],
             payload=args.get("payload"),
+            hwrite=args.get("hwrite"),
+            write_data=args.get("write_data"),
             edge=args.get("edge", "posedge"),
             start_ps=_resolve_time(args.get("start_time_ps", 0)),
             end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),

@@ -36,7 +36,7 @@ _FACT_KEYS = (
     "sample_count", "transfer_count", "stall_count", "max_stall_cycles",
     "max_stall_begin_ps", "ended_in_stall", "final_stall_cycles",
     "payload_hold_violations", "valid_deassert_violations",
-    "x_while_valid_violations",
+    "x_while_valid_violations", "write_data_hold_violations",
     "ready_without_valid_cycles", "unknown_sample_cycles",
     "coverage",
 )
@@ -62,6 +62,10 @@ def _normalize_ahb(b: dict[str, Any]) -> dict[str, Any]:
         "inspect_kwargs": {
             "valid_htrans": b.get("valid_htrans"),
             "htrans_rule": b.get("htrans_rule") or "active",
+            # hwrite + write_data enable the write data-phase HWDATA-hold check;
+            # both are None on a bundle that did not locate them (check stays off).
+            **({"hwrite": b["hwrite"]} if b.get("hwrite") else {}),
+            **({"write_data": b["write_data"]} if b.get("write_data") else {}),
         },
     }
 
@@ -80,6 +84,8 @@ def _flags(res: dict[str, Any], kind: str) -> list[str]:
         flags.append("x_while_valid")
     if res.get("payload_hold_violations"):
         flags.append("payload_hold_violation")
+    if res.get("write_data_hold_violations"):
+        flags.append("write_data_hold_violation")
     if res.get("valid_deassert_violations"):
         flags.append("premature_valid_deassertion")
     if any(f.get("type") == "long_stall" for f in res.get("findings", [])):
@@ -94,14 +100,15 @@ def _flags(res: dict[str, Any], kind: str) -> list[str]:
 def _sort_key(iface: dict[str, Any]) -> tuple:
     """Transparent mechanical ordering (documented in the result note). Surfaces
     the most-likely-interesting facts first; it is NOT a causal ranking.
-      deadlock signature -> x-while-valid -> hold violations -> premature
-      deassertion -> longest stall -> backpressure.
+      deadlock signature -> x-while-valid -> payload-hold -> write-data-hold ->
+      premature deassertion -> longest stall -> backpressure.
     ready_without_valid does NOT weight an ahb row (idle-bus, not backpressure)."""
     rwv = int(iface.get("ready_without_valid_cycles") or 0) if iface.get("kind") != "ahb" else 0
     return (
         0 if iface.get("ended_in_stall") else 1,
         -int(iface.get("x_while_valid_violations") or 0),
         -int(iface.get("payload_hold_violations") or 0),
+        -int(iface.get("write_data_hold_violations") or 0),
         -int(iface.get("valid_deassert_violations") or 0),
         -int(iface.get("max_stall_cycles") or 0),
         -rwv,
@@ -112,8 +119,9 @@ def _sort_key(iface: dict[str, Any]) -> tuple:
 _SORT_DESC = (
     "ordered (convenience, not a verdict) by: ended_in_stall, then "
     "x_while_valid_violations, then payload_hold_violations, then "
-    "valid_deassert_violations, then max_stall_cycles, then "
-    "ready_without_valid_cycles (ahb rows excluded: idle-bus, not backpressure). "
+    "write_data_hold_violations, then valid_deassert_violations, then "
+    "max_stall_cycles, then ready_without_valid_cycles (ahb rows excluded: "
+    "idle-bus, not backpressure). "
     "Raw facts are exposed per interface — re-rank as the symptom warrants."
 )
 
