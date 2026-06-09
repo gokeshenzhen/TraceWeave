@@ -441,10 +441,12 @@ def _direction_from_names(paths: list[str]) -> tuple[str, str, str, list[str]]:
         init_match = (
             re.search(r"(^|[._])(mst|master|mstr)([._]|$)", text)
             or re.search(r"(^|[._])m_(ahb|apb)([._]|$)", text)
+            or re.search(r"(^|[._])m_if[0-9]*([._]|$)", text)
         )
         resp_match = (
             re.search(r"(^|[._])(slv|slave)([._]|$)", text)
             or re.search(r"(^|[._])s_(ahb|apb)([._]|$)", text)
+            or re.search(r"(^|[._])s_if[0-9]*([._]|$)", text)
         )
         if init_match:
             initiator_markers.append(init_match.group(0).strip("._"))
@@ -487,13 +489,20 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
             clock = _pick_protocol_clock(roles, ("hclk", "clk", "clock"))
             reset = _pick_protocol_clock(roles, ("hresetn", "hreset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, htrans, _AHB_PAYLOAD_ROLES, max_payload)
-            # HWRITE (qualifier) + HWDATA (data bus) enable the write data-phase
-            # HWDATA-hold check, which is a *different* window than payload-hold —
-            # so HWDATA is supplied here, not in the address-phase `payload`.
-            hwrite_sig = _pick_prefixed_path(roles, "hwrite", htrans)
-            hwdata_sig = _pick_prefixed_path(roles, "hwdata", htrans)
             side_paths = [htrans["path"], ready["path"], *payload]
             direction_tag, direction_basis, direction_confidence, warnings = _direction_from_names(side_paths)
+            # HWRITE (qualifier) + HWDATA (data bus) enable the write data-phase
+            # HWDATA-hold check — but it is sound ONLY on the PRODUCER (initiator)
+            # interface, where HWDATA is the master's single-source driven output.
+            # On a responder/consumer interface HWDATA is a combinational
+            # interconnect-mux output that glitches to its idle value for ~1 cycle at
+            # each clock edge (owner re-settle), which the edge sampler catches as a
+            # spurious mid-stall change -> false positive. So attach hwrite/write_data
+            # only when the interface is mechanically confirmed initiator-side; on an
+            # unknown/responder interface the check is skipped (conservative: no FP).
+            is_producer = direction_tag == "initiator_side"
+            hwrite_sig = _pick_prefixed_path(roles, "hwrite", htrans) if is_producer else None
+            hwdata_sig = _pick_prefixed_path(roles, "hwdata", htrans) if is_producer else None
             needs = []
             if clock is None:
                 needs.append("clock")

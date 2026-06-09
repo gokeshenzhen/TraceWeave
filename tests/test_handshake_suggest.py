@@ -184,6 +184,40 @@ def test_ahb_protocol_bundle_degrades_direction_to_unknown_without_marker():
     assert bundles[0]["direction_tag"] == "unknown"
     assert bundles[0]["direction_confidence"] == "unknown"
     assert "direction unknown" in bundles[0]["warnings"][0]
+    # write-data-hold is producer-only: an unknown-direction interface must NOT
+    # carry hwrite/write_data (HWDATA on a non-producer interface is a mux output
+    # that glitches at the edge -> false positive).
+    assert bundles[0].get("hwrite") is None
+    assert bundles[0].get("write_data") is None
+    assert "hwrite" not in (bundles[0]["inspect_handshake_args"] or {})
+    assert "write_data" not in (bundles[0]["inspect_handshake_args"] or {})
+
+
+def test_ahb_write_data_hold_is_producer_only():
+    # A responder (slave) AHB interface: HWDATA present, but it is a consumer view
+    # (interconnect-mux output) — write-data-hold must be suppressed there.
+    slv = [
+        _sig("tb.hclk"),
+        _sig("tb.slv_HTRANS[1:0]", 2),
+        _sig("tb.slv_HREADYOUT"),
+        _sig("tb.slv_HADDR[31:0]", 32),
+        _sig("tb.slv_HWRITE"),
+        _sig("tb.slv_HWDATA[31:0]", 32),
+    ]
+    b = next(x for x in propose_protocol_bundles(slv, protocol="ahb")
+             if x["valid_htrans"] == "tb.slv_HTRANS[1:0]")
+    assert b["direction_tag"] == "responder_side"
+    assert b["hwrite"] is None and b["write_data"] is None
+    assert "write_data" not in (b["inspect_handshake_args"] or {})
+
+    # The m_if / s_if interface-naming convention is recognized for direction.
+    mif = [_sig("tb.m_if0.HCLK"), _sig("tb.m_if0.HTRANS[1:0]", 2),
+           _sig("tb.m_if0.HREADY"), _sig("tb.m_if0.HWRITE"),
+           _sig("tb.m_if0.HWDATA[31:0]", 32)]
+    bm = next(x for x in propose_protocol_bundles(mif, protocol="ahb")
+              if x["valid_htrans"] == "tb.m_if0.HTRANS[1:0]")
+    assert bm["direction_tag"] == "initiator_side"
+    assert bm["write_data"] == "tb.m_if0.HWDATA[31:0]"  # producer -> check runs
 
 
 def test_apb_protocol_bundle_reports_derived_valid_need_not_fake_inspect_args():

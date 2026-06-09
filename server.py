@@ -1775,8 +1775,11 @@ async def list_tools():
             description=(
                 "Scan a waveform for protocol-specific AHB/APB bundles. AHB candidates "
                 "return ready-to-use inspect_handshake args with valid_htrans + ready + "
-                "payload (address-phase control) + hwrite/write_data (HWDATA, for the "
-                "write data-phase hold check), because AHB has no literal valid signal. "
+                "payload (address-phase control), plus hwrite/write_data (HWDATA, for the "
+                "write data-phase hold check) ONLY on initiator-side interfaces (a "
+                "responder's HWDATA is an interconnect-mux output that glitches at the "
+                "clock edge, so the check is withheld there to stay zero-FP), because "
+                "AHB has no literal valid signal. "
                 "APB candidates return "
                 "psel/penable/pready facts and loudly report that inspect_handshake still "
                 "needs a derived valid signal for psel && penable. Direction tags are "
@@ -1999,7 +2002,7 @@ async def list_tools():
                         "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation. For AHB do NOT include hwdata here — pass it as write_data (it is a data-phase signal, a different window).",
                     },
                     "hwrite": {"type": "string", "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check."},
-                    "write_data": {"type": "string", "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold."},
+                    "write_data": {"type": "string", "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold. Pass it ONLY for the producer (initiator/master) interface: on a responder/slave interface HWDATA is an interconnect-mux output that glitches at the clock edge and would false-positive."},
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge"],
