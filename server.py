@@ -1902,7 +1902,7 @@ async def list_tools():
                         },
                         "required": ["signal", "value"],
                     },
-                    "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A (inclusive). Default 1.", "default": 1},
+                    "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.", "default": 1},
                     "overlap": {"type": "boolean", "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.", "default": True},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
                     "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},

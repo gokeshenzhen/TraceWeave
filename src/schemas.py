@@ -572,13 +572,14 @@ class DriverChainHop(SchemaModel):
 class DriverLoadCrossCheck(SchemaModel):
     """Receipt of the NPI driver-vs-loads contradiction check.
 
-    Emitted only by the NPI backend when a boundary-only net's register
-    fan-in lands on a construct that is ALSO a load of the same net (a net
-    cannot be both driven by and read into the same register). That means
-    fan-in walked to a LOAD, not the driver — the real driver is
-    testbench/behavioral (procedural drive via virtual interface +
-    clocking block), invisible to RTL register fan-in. ``conflict=True``
-    pairs with ``driver_status="testbench_driven"`` on the parent result.
+    Emitted only by the NPI backend when the driver it reports for a net is
+    ALSO a load of that same net — an interface-slice alias in the net's
+    ``driver_list``, or a register reached by fan-in — and no genuine RTL
+    driver remains. A net cannot be both driven by and read into the same
+    pin, so that "driver" is a LOAD: the real driver is testbench/behavioral
+    (procedural drive via virtual interface + clocking block), invisible to
+    NPI's RTL fan-in. ``conflict=True`` pairs with
+    ``driver_status="testbench_driven"`` on the parent result.
     """
 
     performed: bool = False

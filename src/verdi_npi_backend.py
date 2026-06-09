@@ -798,14 +798,11 @@ class VerdiNpiBackend:
             base["unsupported_reason"] = "all_drivers_unformattable"
             return base
 
-        # If the reported head driver is actually a load-alias, prefer a genuine
-        # RTL driver among the remaining candidates; if none exists, report an
-        # honest testbench_driven no-op rather than naming a load as the driver.
-        decision = self._loadcheck_head(formatted, load_raws)
-        if decision == "testbench":
-            return self._apply_testbench_driven(base, _testbench_verdict(formatted[0]))
-        if isinstance(decision, int):
-            formatted = [formatted[decision]] + formatted[:decision] + formatted[decision + 1:]
+        # The driver_list load-alias check + genuine-driver promotion already ran
+        # above (the single source of truth — that is what covers recursive=True);
+        # ``formatted`` here just re-formats the same, possibly-reordered drivers,
+        # so its head is already the promoted genuine driver. Only drop the
+        # cross-check scratch field before the hops enter the result schema.
         formatted = [_strip_npi_raw(d) for d in formatted]
 
         head = formatted[0]
@@ -937,8 +934,9 @@ class VerdiNpiBackend:
         verdict: dict[str, Any],
     ) -> dict[str, Any]:
         """Rewrite the result as an honest no-op: the net has no RTL driver
-        (the fan-in 'driver' is actually a load), so the real driver is
-        testbench/behavioral. Do NOT surface the load as a driver/exact."""
+        (the driver NPI reported is actually a load-alias of the same net), so
+        the real driver is testbench/behavioral. Do NOT surface the load as a
+        driver/exact."""
         base.update({
             "driver_status": "testbench_driven",
             "driver_kind": None,

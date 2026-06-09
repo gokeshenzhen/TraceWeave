@@ -197,12 +197,13 @@ VerdiNpiBackend.find_driver / find_loads / find_path
     ├── net resolve fails             → backend="verdi_npi", stopped_at="signal_path_unresolved_in_npi"
     ├── driver_list raises            → backend="verdi_npi", stopped_at="npi_driver_list_failed"
     ├── driver_list empty             → backend="verdi_npi", stopped_at="no_npi_drivers"
+    ├── [pre-check] driver_list head is a LOAD of this net (load-alias) & no genuine RTL driver
+    │       → driver_status="testbench_driven"  (keyed on driver_list, BEFORE fan-in → covers recursive=True)
+    │         (if a genuine RTL driver remains among the candidates → promote it to head, continue)
     ├── boundary-only drivers OR recursive=True
     │       → net.fan_in_reg_list(stop_at_pin, report_primary_port, top_scope_name)
-    │       ├── fan_in succeeds       → build driver_chain (queried + boundary points)
+    │       ├── fan_in succeeds       → build driver_chain (+ 2nd load-alias check on the fan-in head)
     │       └── fan_in raises         → fall through to single-hop formatting (still NPI)
-    ├── reported driver == a LOAD of the same net (load-alias, both paths)
-    │       → driver_status="testbench_driven" (no RTL driver; real driver is TB/behavioral)
     └── normal driver                 → single-hop format
 ```
 
