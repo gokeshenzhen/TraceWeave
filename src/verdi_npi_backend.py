@@ -740,6 +740,35 @@ class VerdiNpiBackend:
         # interface + clocking block), invisible to NPI's RTL fan-in.
         load_raws = self._net_load_raws(net)
 
+        # Load-alias short-circuit BEFORE fan-in. The judgment must be keyed on
+        # NPI's ORIGINAL driver_list (what it *claims* drives the net), not on
+        # the fan-in result: when the driver_list head is an interface-slice
+        # alias of a load and no genuine RTL register driver remains, the net
+        # has no RTL driver regardless of recursive/boundary. Deciding here is
+        # what covers recursive=True — otherwise fan-in walks across the
+        # boundary to a downstream LOAD register (e.g. an AHB matrix lock_owner
+        # that merely READS the net) and the (lock_owner, load_list) comparison
+        # misses because lock_owner is in fan-OUT, not the net's load_list.
+        # FP-safe: a real self-referential counter's driver_list head is a
+        # genuine Reg cell that is NOT in its own load_list (the load is a
+        # distinct Add/Assignment), so it never short-circuits.
+        driver_pairs = [
+            (hdl, fmt)
+            for hdl, fmt in ((h, self._format_driver(h)) for h in drivers)
+            if fmt is not None
+        ]
+        if driver_pairs:
+            pre = self._loadcheck_head([f for _, f in driver_pairs], load_raws)
+            if pre == "testbench":
+                return self._apply_testbench_driven(
+                    base, _testbench_verdict(driver_pairs[0][1]),
+                )
+            if isinstance(pre, int):
+                # Promote the genuine RTL driver so boundary detection and the
+                # downstream formatting use it as head, not the load-alias.
+                driver_pairs = [driver_pairs[pre]] + driver_pairs[:pre] + driver_pairs[pre + 1:]
+                drivers = [hdl for hdl, _ in driver_pairs]
+
         # Detect "boundary-only" drivers: every reported driver is a raw
         # hierarchy port (no synthesized cell tag — i.e. no ':' in name).
         # These are NPI's way of saying "the net is a module port; the

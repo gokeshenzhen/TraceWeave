@@ -1083,6 +1083,47 @@ def test_driver_boundary_fan_in_load_yields_testbench_driven(monkeypatch, tmp_pa
     schemas.ExplainDriverResult.model_validate(r)
 
 
+def test_driver_recursive_interface_alias_yields_testbench_driven(monkeypatch, tmp_path):
+    """The v6_3_3 regression: with recursive=True the fan-in head is the DUT's
+    lock_owner (which READS the net, so it is in fan-OUT, NOT load_list), so the
+    old (lock_owner vs load_list) compare missed. The decision must key on the
+    ORIGINAL driver_list — head is an interface-slice alias that IS in load_list,
+    only other driver is an Init block — and short-circuit BEFORE fan-in.
+
+    driver_list = [ahb_intf alias (== load[0]), Init]; load_list does NOT contain
+    lock_owner; fan_in WOULD return lock_owner. Expect testbench_driven."""
+    log = _make_compile_log(tmp_path)
+    alias = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")
+    init = _MockPin("tb_top.tb_top:Init2#Init2:87:89:Init.m_if1.HTRANS")
+    alias_load = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")
+    sigtap = _MockPin("tb_top.tb_top:Always17#SigTap17:111:111:Assignment.m_if1.HTRANS")
+    # fan-in (the trap) resolves to a DUT register that merely reads the net —
+    # it is NOT in load_list, so only the driver_list-keyed check catches it.
+    lock_owner = _MockPin("tb_top.dut.ahb_matrix:Always131#Always4:135:153:Reg.lock_owner[0][1]")
+    net = _MockNet(
+        drivers=[alias, init],
+        loads=[alias_load, sigtap],
+        fan_in=[lock_owner],
+    )
+    netlist_obj = _MockNetlist({"tb_top.m_if1.HTRANS": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="tb_top.m_if1.HTRANS",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "testbench_driven"
+    assert r["driver_kind"] is None
+    assert r["confidence"] is None
+    # The DUT lock_owner must NOT leak through as a driver/chain.
+    assert r["driver_chain"] is None
+    assert "ahb_matrix" not in (r.get("source_file") or "")
+    assert r["cross_check"]["conflict"] is True
+    schemas.ExplainDriverResult.model_validate(r)
+
+
 def test_driver_boundary_only_genuine_upstream_not_flagged(monkeypatch, tmp_path):
     """A boundary-only net whose fan-in lands on a genuine upstream driver (not a
     load) resolves normally — no false testbench flag."""

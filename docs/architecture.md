@@ -232,6 +232,12 @@ VerdiNpiBackend.find_driver / find_loads / find_path
   with a `cross_check.conflict` receipt — never a load named as an `exact`
   driver. Byte-identical matching keeps it FP-safe: a real `q <= q + 1`
   counter loads into a distinct `Add`/`Assignment` cell, so it never matches.
+  The decision is keyed on the **original `driver_list`** and short-circuits
+  *before* fan-in, so it covers `recursive=True` too — under recursion fan-in
+  walks to a downstream LOAD register (the matrix `lock_owner` that reads the
+  net), which is in the net's fan-OUT, not its `load_list`, so a fan-in-keyed
+  compare would miss; widening the load set to fan-OUT is wrong because a
+  self-counter's own `Reg` is in its fan-out (the feedback).
 - For Xcelium / `xrun` flows there is no KDB by default. NPI requires a
   separate `vericom -kdb` + `elabcom -elab kdb` pass over the same
   sources. When `AUTO_KDB_BUILD` is on (default), TraceWeave's
