@@ -414,6 +414,26 @@ def test_literal_valid_does_not_run_x_while_valid(tmp_path: Path):
     assert r["x_while_valid_violations"] == 0
 
 
+def test_ahb_emits_protocol_semantics_receipt(tmp_path: Path):
+    # An AHB run carries a receipt naming which metrics are faithful vs suppressed,
+    # so a reader cannot wave a real finding away as a valid/ready-vs-AHB mismatch.
+    cycles = [{"htrans": 2, "hready": 1, "haddr": 0x10},
+              {"htrans": 0, "hready": 1, "haddr": 0x00}]
+    r = _run_ahb(tmp_path, "ahb_psem.vcd", cycles, payload=["top.haddr"])
+    ps = r["protocol_semantics"]
+    assert ps is not None and ps["protocol"] == "ahb"
+    assert "faithful" in ps["valid_hold"]
+    assert "not_a_violation" in ps["ready_without_valid"]
+    assert "HWDATA" in ps["payload_hold"]
+
+
+def test_literal_valid_has_no_protocol_semantics(tmp_path: Path):
+    # A literal-valid interface needs no receipt — every metric is faithful as-is.
+    cycles = [{"valid": 1, "ready": 1}, {"valid": 0, "ready": 0}]
+    r = _run(tmp_path, "litval_psem.vcd", cycles)
+    assert r["protocol_semantics"] is None
+
+
 def test_ahb_missing_htrans_is_loud(tmp_path: Path):
     cycles = [{"htrans": 2, "hready": 1, "haddr": 0x10}]
     wave = _write(tmp_path, "ahb_missing.vcd", _build_ahb_vcd(cycles))
@@ -513,6 +533,9 @@ def test_premature_valid_deassertion(tmp_path: Path):
     assert f["time_ps"] == 25000
     assert f["stall_begin_ps"] == 15000
     assert f["stall_cycles"] == 1
+    # the witness: the dropped beat was never accepted (forecloses the
+    # "just pipeline overlap" misreading of this true positive)
+    assert f["accepted_before_deassert"] is False
     assert f["severity"] == "error"
     # cursor anchored at the deassertion
     assert r["cursor"]["time_ps"] == 25000

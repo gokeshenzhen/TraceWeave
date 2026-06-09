@@ -796,6 +796,10 @@ class HandshakeFinding(SchemaModel):
     stall_begin_ps: int | None = None
     # premature_valid_deassertion: cycles the beat was stalled before valid dropped
     stall_cycles: int | None = None
+    # premature_valid_deassertion witness: False = the dropped beat was never
+    # accepted (ready/HREADY low the whole time it was asserted). Forecloses the
+    # "just AHB pipeline overlap" misreading of a true positive.
+    accepted_before_deassert: bool | None = None
 
 
 class HandshakeAttribution(SchemaModel):
@@ -867,6 +871,11 @@ class HandshakeInspectResult(SchemaModel):
     # valid was known-asserted — a definite violation. Only checked on AHB
     # (control-only payload); see coverage.x_while_valid_checked.
     x_while_valid_violations: int = 0
+    # protocol_semantics: AHB-only receipt naming which metrics are faithful vs
+    # suppressed on this interface (so the surface reads as all-true-positive and a
+    # reader cannot wave a real finding away as a valid/ready-vs-AHB mismatch).
+    # None for a literal-valid interface, where every metric is faithful as-is.
+    protocol_semantics: dict[str, str] | None = None
     payload_unresolved: list[str] = Field(default_factory=list)
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0

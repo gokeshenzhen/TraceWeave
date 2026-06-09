@@ -869,6 +869,11 @@ def inspect_handshake(
         "x_while_valid_violations": 0,
         "payload_unresolved": payload_unresolved,
         "coverage": coverage,
+        # protocol_semantics: an AHB-only "receipt" stating which of this result's
+        # own metrics are faithful vs suppressed, so the surface reads as all-true-
+        # positive and a reader cannot dismiss a real finding as a generic
+        # valid/ready-vs-AHB semantic mismatch. None for a literal-valid interface.
+        "protocol_semantics": None,
         "unknown_sample_cycles": 0,
         "findings": [],
         "violating_signal": None,
@@ -925,6 +930,29 @@ def inspect_handshake(
     coverage["x_while_valid_checked"] = do_x_while_valid
     x_while_valid_active: set[str] = set()  # debounce: one finding per x episode
 
+    if use_htrans:
+        result["protocol_semantics"] = {
+            "protocol": "ahb",
+            "valid_hold": (
+                "faithful: the AHB address phase must hold HTRANS while HREADY is "
+                "low, so premature_valid_deassertion is a real violation (the witness "
+                "accepted_before_deassert=False proves the beat was never accepted)"
+            ),
+            "ready_without_valid": (
+                "not_a_violation: HREADY high while HTRANS idle is an idle bus, not "
+                "backpressure — the count is retained as a fact, not flagged"
+            ),
+            "payload_hold": (
+                "address-phase control only (HADDR/HWRITE/HSIZE/HBURST/HPROT); "
+                "HWDATA/HRDATA are excluded — they are data-phase, trailing the "
+                "derived valid by one cycle"
+            ),
+            "x_while_valid": (
+                "checked on the control payload" if do_x_while_valid
+                else "not checked: no control payload resolved"
+            ),
+        }
+
     findings: list[dict[str, Any]] = []
     in_stall = False
     stall_begin: int | None = None
@@ -977,6 +1005,11 @@ def inspect_handshake(
                     "to_value": _hs_repr(sig.get(valid_signal)),
                     "stall_begin_ps": stall_begin,
                     "stall_cycles": stall_cycles,
+                    # The dropped beat was stalled (ready/HREADY low) the whole time it
+                    # was asserted — it was NEVER accepted. This is the witness that
+                    # forecloses the "it's just AHB pipeline overlap" reading: an
+                    # accepted beat would have seen ready high before valid dropped.
+                    "accepted_before_deassert": False,
                 })
 
         # x-while-valid: with a known-asserted valid the address/control payload
