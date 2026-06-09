@@ -17,6 +17,7 @@ from src.handshake_sweep import (
     _compute_finding_summary,
     _flags,
     _infer_channel_hint,
+    _is_clocking_block_scope,
     _sort_key,
     sweep_handshake_anomalies,
 )
@@ -115,6 +116,56 @@ def _sweep(tmp_path, vcd, **kw):
     return sweep_handshake_anomalies(
         get_parser=_parser_factory(), wave_path=_write(tmp_path, vcd), **kw
     )
+
+
+# --- clocking-block scope filter --------------------------------------------
+
+def test_is_clocking_block_scope():
+    assert _is_clocking_block_scope("tb_top.m_if0.mdrv_cb")
+    assert _is_clocking_block_scope("tb.s_if1.smon_cb")
+    assert _is_clocking_block_scope("top.if0.driver_clocking")
+    assert _is_clocking_block_scope("top.if0.cb")
+    # a real interface scope must NOT be filtered
+    assert not _is_clocking_block_scope("tb_top.s_if1")
+    assert not _is_clocking_block_scope("top.u_cbus")  # 'cbus' is not '_cb'
+    assert not _is_clocking_block_scope("top.acb_if")
+
+
+# AHB interface top.if0 plus a clocking-block mirror top.if0.drv_cb (htrans/hready,
+# no own clock). The sweep must inspect if0 and DROP drv_cb entirely.
+def _ahb_with_cb_vcd(n_cycles: int = 12) -> str:
+    header = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$scope module if0 $end",
+        "$var wire 1 ! hclk $end",
+        "$var wire 2 a HTRANS $end",
+        "$var wire 1 b HREADY $end",
+        "$scope module drv_cb $end",
+        "$var wire 2 c HTRANS $end",
+        "$var wire 1 d HREADY $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    body = ["#0", "0!", "b10 a", "1b", "b10 c", "1d"]
+    t, lvl = 0, 0
+    for _ in range(1, n_cycles * 2):
+        t += 10
+        lvl ^= 1
+        body.append(f"#{t}")
+        body.append(f"{lvl}!")
+    return "\n".join(header + body) + "\n"
+
+
+def test_sweep_drops_clocking_block_scopes(tmp_path):
+    r = _sweep(tmp_path, _ahb_with_cb_vcd())
+    scopes = [i["scope"] for i in r["interfaces"]] + [s["scope"] for s in r["skipped"]]
+    assert "top.if0" in [i["scope"] for i in r["interfaces"]]
+    assert all("drv_cb" not in s for s in scopes)        # clocking block dropped
+    assert r["discovered_count"] == 1                    # not inflated by the mirror
+    assert r["coverage_status"] == "complete"            # no skip -> not degraded
 
 
 # --- flags / sort: ahb ready_without_valid suppression + x_while_valid ------

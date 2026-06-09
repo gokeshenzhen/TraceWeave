@@ -42,6 +42,17 @@ _FACT_KEYS = (
 )
 
 
+def _is_clocking_block_scope(scope: str) -> bool:
+    """A SystemVerilog clocking block (e.g. ``tb.m_if0.mdrv_cb``) mirrors its parent
+    interface's signals for TB sampling — it is not a distinct bus and has no clock
+    of its own, so handshake discovery would at best re-inspect a duplicate of the
+    parent interface and at worst only ``skip`` it (dragging coverage to 'degraded').
+    Drop it from the sweep. Heuristic on the scope leaf: the SV ``_cb`` clocking-block
+    suffix convention (mdrv_cb/smon_cb/...), or a ``*clocking`` name."""
+    leaf = (scope.rsplit(".", 1)[-1]).split("[", 1)[0].lower()
+    return leaf.endswith("_cb") or leaf == "cb" or leaf.endswith("clocking")
+
+
 def _normalize_vr(b: dict[str, Any]) -> dict[str, Any]:
     """A-class (valid/ready) bundle from suggest_handshakes -> common shape."""
     return {
@@ -283,15 +294,24 @@ def sweep_handshake_anomalies(
         get_parser=get_parser, wave_path=wave_path, protocol="ahb", scope=scope,
         max_candidates=max_interfaces,
     )
+    # Drop clocking-block scopes (TB sampling mirrors of a parent interface, no own
+    # clock) BEFORE counting/inspecting, so they neither inflate discovered_count nor
+    # land in `skipped` and pull coverage to 'degraded'. The real interface (parent)
+    # is always discovered alongside them.
+    vr_cands = [b for b in vr.get("candidates", []) if not _is_clocking_block_scope(b.get("scope") or "")]
+    ahb_cands = [b for b in ahb.get("candidates", []) if not _is_clocking_block_scope(b.get("scope") or "")]
+    dropped_cb = ((len(vr.get("candidates", [])) - len(vr_cands))
+                  + (len(ahb.get("candidates", [])) - len(ahb_cands)))
     normalized = (
-        [_normalize_vr(b) for b in vr.get("candidates", [])]
-        + [_normalize_ahb(b) for b in ahb.get("candidates", [])]
+        [_normalize_vr(b) for b in vr_cands]
+        + [_normalize_ahb(b) for b in ahb_cands]
     )
-    # Total interfaces discovered across both families before the max_interfaces
-    # cap. A cap silently drops the *tail* of each ordering — on a uniform pipeline
-    # the higher-numbered stages, often exactly where the root sits. Surface
-    # truncation LOUDLY so the LLM knows coverage was partial.
-    discovered = int(vr.get("candidate_count", 0)) + int(ahb.get("candidate_count", 0))
+    # Total real interfaces discovered across both families before the max_interfaces
+    # cap (clocking-block mirrors excluded). A cap silently drops the *tail* of each
+    # ordering — on a uniform pipeline the higher-numbered stages, often exactly where
+    # the root sits. Surface truncation LOUDLY so the LLM knows coverage was partial.
+    discovered = (int(vr.get("candidate_count", 0)) + int(ahb.get("candidate_count", 0))
+                  - dropped_cb)
     truncated = discovered > len(normalized) or len(normalized) > max_interfaces
     to_inspect = normalized[:max_interfaces]
 
