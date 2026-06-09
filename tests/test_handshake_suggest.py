@@ -152,13 +152,17 @@ def test_ahb_protocol_bundle_returns_valid_htrans_inspect_args_and_direction():
     assert master["direction_tag"] == "initiator_side"
     assert master["direction_confidence"] == "high"
     assert master["ready"] == "tb.mst_HREADYOUT"
+    # HWDATA is a DATA-phase signal and is deliberately NOT in the payload-hold
+    # set: it trails the address phase by a cycle, so checking its hold during an
+    # address-phase stall would false-positive. Only address-phase control remains.
     assert master["inspect_handshake_args"] == {
         "clock": "tb.hclk",
         "valid_htrans": "tb.mst_HTRANS[1:0]",
         "htrans_rule": "active",
         "ready": "tb.mst_HREADYOUT",
-        "payload": ["tb.mst_HADDR[31:0]", "tb.mst_HWRITE", "tb.mst_HWDATA[31:0]"],
+        "payload": ["tb.mst_HADDR[31:0]", "tb.mst_HWRITE"],
     }
+    assert "tb.mst_HWDATA[31:0]" not in master["inspect_handshake_args"]["payload"]
 
 
 def test_ahb_protocol_bundle_degrades_direction_to_unknown_without_marker():

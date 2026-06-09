@@ -196,7 +196,16 @@ _AHB_ROLES = {
     "htrans", "hready", "hreadyout", "haddr", "hwrite", "hsize", "hburst",
     "hprot", "hwdata", "hrdata", "hresp", "hclk", "hresetn", "hreset",
 } | _COMMON_PROTOCOL_ROLES
-_AHB_PAYLOAD_ROLES = ("haddr", "hwrite", "hsize", "hburst", "hprot", "hwdata")
+# Address-phase signals ONLY. inspect_handshake's payload-hold runs during an
+# address-phase stall (htrans-derived valid high, HREADY low), where AHB requires
+# HADDR + control to stay stable — so a hold violation on these is a true positive.
+# HWDATA/HRDATA are DATA-phase signals: they belong to the *previous* transfer's
+# data phase and legitimately change a cycle later, so checking their hold during
+# an address-phase stall is phase-mismatched and would false-positive on any
+# multi-cycle stall. They are still discovered (in _AHB_ROLES) but never enter the
+# hold check. Data-integrity-during-wait belongs to reconstruct_transactions /
+# verify_window, not here.
+_AHB_PAYLOAD_ROLES = ("haddr", "hwrite", "hsize", "hburst", "hprot")
 _APB_ROLES = {
     "psel", "penable", "pready", "paddr", "pwrite", "pwdata", "pstrb",
     "pprot", "prdata", "pslverr", "pclk", "presetn", "preset",

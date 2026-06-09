@@ -829,6 +829,10 @@ class HandshakeCoverage(SchemaModel):
     # wait-state hold (premature valid deassertion) — needs no payload signal
     valid_hold_requested: bool = False
     valid_hold_checked: bool = False
+    # x-while-valid: only run when the payload is control (address-phase) signals,
+    # i.e. AHB (valid_htrans) bundles — off for a literal-valid interface whose
+    # payload may be data lanes that are legally x on disabled byte strobes.
+    x_while_valid_checked: bool = False
 
 
 class HandshakeInspectResult(SchemaModel):
@@ -859,6 +863,10 @@ class HandshakeInspectResult(SchemaModel):
     # (valid/htrans went inactive) before ready/HREADY arrived. The AHB
     # master-not-waiting-for-HREADY signature payload_hold cannot see.
     valid_deassert_violations: int = 0
+    # x_while_valid count: a control/address payload signal was x/z at an edge where
+    # valid was known-asserted — a definite violation. Only checked on AHB
+    # (control-only payload); see coverage.x_while_valid_checked.
+    x_while_valid_violations: int = 0
     payload_unresolved: list[str] = Field(default_factory=list)
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0
@@ -960,6 +968,10 @@ class SweptInterface(SchemaModel):
     final_stall_cycles: int = 0
     payload_hold_violations: int = 0
     valid_deassert_violations: int = 0
+    x_while_valid_violations: int = 0
+    # ready_without_valid_cycles is a raw count; on an `ahb` row it is idle-bus
+    # (HREADY high while HTRANS idle), NOT backpressure — it is suppressed from
+    # `flags` and the sort for ahb rows so it never reads as an anomaly.
     ready_without_valid_cycles: int = 0
     unknown_sample_cycles: int = 0
 

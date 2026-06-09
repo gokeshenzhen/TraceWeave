@@ -300,7 +300,11 @@ def _build_ahb_vcd(cycles: list[dict]) -> str:
         lines.append("0!")
         lines.append(f"{int(c['hready'])}%")
         lines.append(f"b{int(c['htrans']):02b} (")
-        lines.append(f"b{int(c.get('haddr', 0)):08b} &")
+        haddr = c.get("haddr", 0)
+        if haddr == "x":
+            lines.append("bxxxxxxxx &")
+        else:
+            lines.append(f"b{int(haddr):08b} &")
         lines.append(f"#{10*i+5}")
         lines.append("1!")
     return "\n".join(lines) + "\n"
@@ -348,6 +352,66 @@ def test_ahb_busy_counts_only_under_non_idle(tmp_path: Path):
     non_idle = _run_ahb(tmp_path, "busy_n.vcd", cycles, htrans_rule="non_idle", max_wait_cycles=8)
     assert active["stall_count"] == 0
     assert non_idle["stall_count"] == 1
+
+
+def test_ahb_x_while_valid_flags_control_x_under_asserted_valid(tmp_path: Path):
+    # A NONSEQ beat (valid asserted) carrying an x on HADDR is a definite
+    # violation: an active transfer with an unknown address field.
+    cycles = [
+        {"htrans": 2, "hready": 1, "haddr": 0x10},   # NONSEQ, known addr — clean
+        {"htrans": 2, "hready": 1, "haddr": "x"},     # NONSEQ, addr x -> x_while_valid
+        {"htrans": 0, "hready": 1, "haddr": 0x00},     # IDLE
+    ]
+    store = CursorStore()
+    r = _run_ahb(tmp_path, "ahb_xwv.vcd", cycles, payload=["top.haddr"],
+                 max_wait_cycles=8, cursor_store=store)
+    assert r["coverage"]["x_while_valid_checked"] is True
+    assert r["x_while_valid_violations"] == 1
+    viol = [f for f in r["findings"] if f["type"] == "x_while_valid"]
+    assert len(viol) == 1 and viol[0]["signal"] == "top.haddr"
+    # one-sided: attributed to the valid-driver, bridges to driver lookup
+    assert r["violating_signal"] == "top.haddr"
+    assert r["attribution"]["violating_side"] == "valid_driver"
+    assert r["next_actions"] and r["next_actions"][0]["tool"] == "explain_signal_driver"
+    assert r["cursor"] is not None
+
+
+def test_ahb_x_while_valid_debounces_persistent_x(tmp_path: Path):
+    # An x that persists across multiple asserted-valid cycles reports ONCE per
+    # episode, not every cycle; a fresh beat after a known cycle re-reports.
+    cycles = [
+        {"htrans": 2, "hready": 1, "haddr": "x"},   # episode 1 begins
+        {"htrans": 2, "hready": 1, "haddr": "x"},   # same episode — no new finding
+        {"htrans": 2, "hready": 1, "haddr": 0x10},   # known — episode ends
+        {"htrans": 2, "hready": 1, "haddr": "x"},   # episode 2 — re-reports
+    ]
+    r = _run_ahb(tmp_path, "ahb_xwv_deb.vcd", cycles, payload=["top.haddr"],
+                 max_wait_cycles=8)
+    assert r["x_while_valid_violations"] == 2
+
+
+def test_ahb_x_while_valid_not_flagged_when_valid_deasserted(tmp_path: Path):
+    # x on HADDR while HTRANS is IDLE (no active transfer) is NOT a violation.
+    cycles = [
+        {"htrans": 0, "hready": 1, "haddr": "x"},   # IDLE, addr x -> benign
+        {"htrans": 2, "hready": 1, "haddr": 0x10},   # NONSEQ, known
+    ]
+    r = _run_ahb(tmp_path, "ahb_xwv_idle.vcd", cycles, payload=["top.haddr"],
+                 max_wait_cycles=8)
+    assert r["x_while_valid_violations"] == 0
+
+
+def test_literal_valid_does_not_run_x_while_valid(tmp_path: Path):
+    # For a literal-valid interface the payload may be data lanes (legally x on
+    # disabled byte strobes), so the check stays OFF — no false positive.
+    cycles = [
+        {"valid": 1, "ready": 1, "addr": "x"},
+        {"valid": 1, "ready": 1, "addr": 0x10},
+    ]
+    r = _run(tmp_path, "litval_x.vcd", cycles, with_addr=True, payload=["top.addr"],
+             max_wait_cycles=8)
+    assert r["coverage"]["x_while_valid_checked"] is False
+    assert r["x_while_valid_violations"] == 0
 
 
 def test_ahb_missing_htrans_is_loud(tmp_path: Path):

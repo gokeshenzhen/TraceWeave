@@ -15,7 +15,9 @@ from pathlib import Path
 from src.cursor_store import CursorStore
 from src.handshake_sweep import (
     _compute_finding_summary,
+    _flags,
     _infer_channel_hint,
+    _sort_key,
     sweep_handshake_anomalies,
 )
 from src.vcd_parser import VCDParser
@@ -113,6 +115,36 @@ def _sweep(tmp_path, vcd, **kw):
     return sweep_handshake_anomalies(
         get_parser=_parser_factory(), wave_path=_write(tmp_path, vcd), **kw
     )
+
+
+# --- flags / sort: ahb ready_without_valid suppression + x_while_valid ------
+
+def test_flags_suppresses_ready_without_valid_on_ahb():
+    # On an AHB row, ready_without_valid means HREADY high while HTRANS idle (an
+    # idle bus, not backpressure) — it must NOT surface as an anomaly flag. On a
+    # valid_ready row it still does.
+    res = {"ready_without_valid_cycles": 5}
+    assert "ready_without_valid" not in _flags(res, "ahb")
+    assert "ready_without_valid" in _flags(res, "valid_ready")
+
+
+def test_flags_includes_x_while_valid():
+    assert "x_while_valid" in _flags({"x_while_valid_violations": 2}, "ahb")
+    assert "x_while_valid" not in _flags({"x_while_valid_violations": 0}, "ahb")
+
+
+def test_sort_key_ranks_x_while_valid_above_payload_hold():
+    xwv = {"x_while_valid_violations": 1, "valid": "a"}
+    hold = {"payload_hold_violations": 9, "valid": "b"}
+    assert _sort_key(xwv) < _sort_key(hold)
+
+
+def test_sort_key_excludes_ahb_ready_without_valid_weight():
+    # An AHB row's ready_without_valid_cycles must not pull it above an otherwise
+    # equal valid_ready row — it carries no anomaly weight on ahb.
+    ahb = {"kind": "ahb", "ready_without_valid_cycles": 50, "valid": "a"}
+    clean = {"kind": "ahb", "ready_without_valid_cycles": 0, "valid": "a"}
+    assert _sort_key(ahb) == _sort_key(clean)
 
 
 # --- ended_in_stall (decision A: deadlock signature on inspect_handshake) ----

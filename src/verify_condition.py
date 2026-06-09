@@ -762,6 +762,14 @@ def inspect_handshake(
     watches the valid source itself. An x/z valid at the next edge is treated as
     unknown (no violation), not a deassertion.
 
+    For an AHB (``valid_htrans``) interface, whose ``payload`` is address-phase
+    control only, a third check runs: at any edge where the derived valid is
+    known-asserted, a control/address payload signal that is x/z is a
+    ``x_while_valid`` finding — an active transfer carrying an unknown control
+    field. It stays OFF for a literal-``valid`` interface because that payload may
+    be data lanes that are legally x on disabled byte strobes (a false positive);
+    see ``coverage.x_while_valid_checked``.
+
     ``active_high=False`` inverts the valid/ready polarity. Samples where valid
     or ready is x/z are counted in ``unknown_sample_cycles`` and do not extend a
     stall (an honest break rather than guessing across unknown). A cursor is
@@ -825,6 +833,11 @@ def inspect_handshake(
         "payload_signals_unresolved": len(payload_unresolved),
         "valid_hold_requested": bool(check_valid_hold),
         "valid_hold_checked": False,
+        # x-while-valid: only meaningful when the payload is control (address-phase)
+        # signals, which is guaranteed for AHB (valid_htrans) bundles. Off for a
+        # literal-valid interface because its payload may be data lanes that are
+        # legally x on disabled byte strobes — checking those would false-positive.
+        "x_while_valid_checked": False,
     }
 
     result: dict[str, Any] = {
@@ -849,6 +862,11 @@ def inspect_handshake(
         "payload_hold_violations": 0,
         "payload_hold_checked": False,
         "valid_deassert_violations": 0,
+        # x_while_valid: a control/address payload signal was x/z at an edge where
+        # valid was known-asserted — a definite protocol violation (the bus carries
+        # an active transfer with an unknown address/control field). Only checked on
+        # AHB (control-only payload); see coverage.x_while_valid_checked.
+        "x_while_valid_violations": 0,
         "payload_unresolved": payload_unresolved,
         "coverage": coverage,
         "unknown_sample_cycles": 0,
@@ -899,6 +917,13 @@ def inspect_handshake(
     coverage["payload_hold_checked"] = payload_hold_complete
     result["payload_hold_checked"] = payload_hold_complete
     coverage["valid_hold_checked"] = bool(check_valid_hold)
+    # x-while-valid is only zero-FP when the payload is control (address-phase)
+    # signals — guaranteed for AHB (htrans-derived valid), where the bundle carries
+    # HADDR + control and never HWDATA. For a literal-valid interface the payload
+    # may be data lanes (legally x on disabled strobes), so the check stays off.
+    do_x_while_valid = use_htrans and bool(resolved_payload)
+    coverage["x_while_valid_checked"] = do_x_while_valid
+    x_while_valid_active: set[str] = set()  # debounce: one finding per x episode
 
     findings: list[dict[str, Any]] = []
     in_stall = False
@@ -953,6 +978,31 @@ def inspect_handshake(
                     "stall_begin_ps": stall_begin,
                     "stall_cycles": stall_cycles,
                 })
+
+        # x-while-valid: with a known-asserted valid the address/control payload
+        # must be fully driven. An x/z here is a definite violation (active transfer
+        # carrying an unknown control field). Debounced so a persistent x reports
+        # once per episode, not every cycle; reset when valid drops so a fresh beat
+        # re-reports. Only the control payload (AHB) reaches here — see do_x_while_valid.
+        if do_x_while_valid and v is True:
+            for p in resolved_payload:
+                if not _hs_known(sig.get(p)):
+                    if p not in x_while_valid_active:
+                        x_while_valid_active.add(p)
+                        result["x_while_valid_violations"] += 1
+                        if len(findings) < max_findings:
+                            findings.append({
+                                "type": "x_while_valid",
+                                "severity": "error",
+                                "time_ps": s["time_ps"],
+                                "signal": p,
+                                "from_value": _hs_repr(sig.get(valid_signal)),
+                                "to_value": _hs_repr(sig.get(p)),
+                            })
+                else:
+                    x_while_valid_active.discard(p)
+        elif do_x_while_valid:
+            x_while_valid_active.clear()
 
         if v is None or r is None:
             result["unknown_sample_cycles"] += 1
@@ -1063,6 +1113,29 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
       — ``violating_side`` stays None and the link targets ``ready``."""
     use_htrans = str(result.get("valid_source", "")).startswith("htrans")
     gloss = _producer_gloss(use_htrans)
+
+    xwv = next((f for f in findings if f.get("type") == "x_while_valid"), None)
+    if xwv and xwv.get("signal"):
+        sig = xwv["signal"]
+        result["violating_signal"] = sig
+        result["attribution"] = {
+            "violating_side": "valid_driver",
+            "exonerated_side": "ready_driver",
+            "basis": "protocol_known_value_obligation",
+            "note": (f"x/z on a control field while valid is asserted: {gloss}. The "
+                     "address/control bus is driven by the valid-producer, so an "
+                     "unknown value there is a producer-side defect; the ready/responder "
+                     "cannot drive it — do not start in the slave driver/monitor."),
+        }
+        result["next_actions"] = [{
+            "tool": "explain_signal_driver",
+            "reason": ("attribute this x-while-valid: the control field carrying x/z is "
+                       f"driven by the valid-producer — {gloss}. Trace its driver to the "
+                       "source of the unknown (uninitialised reg, mis-wired input, or "
+                       "multi-driver X)."),
+            "signal_path": sig,
+        }]
+        return
 
     hold = next((f for f in findings if f.get("type") == "payload_hold_violation"), None)
     if hold and hold.get("signal"):
@@ -1266,15 +1339,21 @@ def _attach_handshake_cursor(
 ) -> None:
     if cursor_store is None:
         return
-    # Anchor priority: payload hold violation > premature valid deassertion >
-    # long stall > longest stall.
+    # Anchor priority: x-while-valid > payload hold violation >
+    # premature valid deassertion > long stall > longest stall.
     anchor_time: int | None = None
     anchor_desc = ""
     for f in findings:
-        if f["type"] == "payload_hold_violation":
+        if f["type"] == "x_while_valid":
             anchor_time = f["time_ps"]
-            anchor_desc = f"payload hold violation on {f['signal']}"
+            anchor_desc = f"x/z on {f['signal']} while valid asserted"
             break
+    if anchor_time is None:
+        for f in findings:
+            if f["type"] == "payload_hold_violation":
+                anchor_time = f["time_ps"]
+                anchor_desc = f"payload hold violation on {f['signal']}"
+                break
     if anchor_time is None:
         for f in findings:
             if f["type"] == "premature_valid_deassertion":
