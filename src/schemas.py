@@ -422,6 +422,10 @@ class SignalsAroundTimeResult(SchemaModel):
     extra_transitions: int
     signals: dict[str, Any] = Field(default_factory=dict)
     truncated: bool = False
+    # Set when a value_at_center is a sub-cycle transient (combinational glitch at
+    # the clock edge that settles back within the cycle); the affected signals also
+    # carry center_transient / center_settles_to / center_settle_ps. None otherwise.
+    transient_note: str | None = None
 
 
 class CycleEntry(SchemaModel):

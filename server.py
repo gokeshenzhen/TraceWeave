@@ -68,6 +68,7 @@ from src.x_trace import trace_x_source
 from src.cycle_query import (
     _compute_clock_period_ps,
     _extract_edge_times,
+    annotate_center_transients,
     get_signals_by_cycle,
 )
 from pydantic import BaseModel
@@ -1085,7 +1086,15 @@ async def list_tools():
                 "clock_period_ps. It also rejects center_time_ps past the recorded "
                 "simulation end. For multi-cycle sampling, get_signals_by_cycle "
                 "still requires an explicit clock_path. FSDB support depends on "
-                "fsdb_runtime.enabled."
+                "fsdb_runtime.enabled.\n"
+                "\n"
+                "If a value_at_center is a SUB-CYCLE TRANSIENT — a combinational "
+                "glitch at the clock edge that settles back within the same cycle "
+                "(e.g. an interconnect mux re-settling to idle for ~1ns at each edge) "
+                "— the result sets `transient_note` and the signal carries "
+                "`center_transient`/`center_settles_to`/`center_settle_ps`. Treat the "
+                "SETTLED value as the protocol value; do not attribute a root cause to "
+                "an edge-sampled value that is flagged transient."
             ),
             inputSchema={
                 "type": "object",
@@ -2186,6 +2195,10 @@ async def _dispatch(name: str, args: dict):
             window_ps,
             args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
+        # Flag any value_at_center that is a sub-cycle transient (combinational
+        # glitch at the clock edge) so a point sample is not misread as the settled
+        # protocol value (e.g. an interconnect mux glitching to idle at each edge).
+        annotate_center_transients(result)
         return schemas.SignalsAroundTimeResult.model_validate(result)
 
     elif name == "get_signals_by_cycle":

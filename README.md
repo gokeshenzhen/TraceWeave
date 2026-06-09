@@ -293,7 +293,7 @@ All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or 
 - `search_signals`: Resolve full hierarchical signal paths. Each result also carries `direction` (`input`/`output`/`inout`/`implicit`/`null`) and `var_type` (`wire`/`reg`/`integer`/`real`/`parameter`/…), so clients can filter ports/nets/variables in a chosen scope without a separate tool. **FSDB** populates both fields; **VCD** populates only `var_type` and returns `direction: null` (the VCD format does not encode port direction)
 - `get_signal_at_time`: Query a signal value at a specific timestamp
 - `get_signal_transitions`: Retrieve transitions for a signal over time
-- `get_signals_around_time`: Retrieve context around a failure timestamp
+- `get_signals_around_time`: Retrieve context around a failure timestamp. Flags a `value_at_center` that is a **sub-cycle transient** (a combinational glitch at the clock edge that settles back within the same cycle — e.g. an interconnect mux re-settling to idle for ~1ns) via `transient_note` + per-signal `center_transient`/`center_settles_to`, so an edge-sampled glitch is not misread as the settled protocol value.
 - `get_signals_by_cycle`: Sample signals cycle-by-cycle on a clock edge
 - `get_waveform_summary`: Return waveform metadata
 

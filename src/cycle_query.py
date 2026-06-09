@@ -222,3 +222,73 @@ def _normalize_signal_value(value: Any) -> dict[str, Any]:
             "dec": value.get("dec"),
         }
     return {"bin": None, "hex": None, "dec": None}
+
+
+# ---------------------------------------------------------------------------
+# Sub-cycle transient annotation for get_signals_around_time
+# ---------------------------------------------------------------------------
+
+def _value_key(v: Any) -> Any:
+    """Comparable key for an enriched value dict ({bin,hex,dec}) or a raw value."""
+    if isinstance(v, dict):
+        return v.get("bin") or v.get("hex") or v.get("dec")
+    return v
+
+
+def annotate_center_transients(result: dict[str, Any]) -> dict[str, Any]:
+    """Flag a ``value_at_center`` that is a sub-cycle transient — a combinational
+    glitch at/just-after a clock edge that settles back within the same cycle.
+
+    The sampled value is CORRECT for that exact ps, but a model reading it as the
+    settled protocol value can misattribute: e.g. an interconnect owner-mux drives
+    its data output to the idle value for ~1ns at each clock edge (sequential
+    lock_owner updates on the edge while the combinational mux re-settles), so a
+    point sample at the edge reads idle/garbage that the design never actually
+    captures. Detect the unmistakable, zero-FP signature: the centre value is a
+    brief excursion that RETURNS to the value held just before it (X -> glitch -> X),
+    and add ``center_transient`` + ``center_settles_to`` + ``center_settle_ps`` so
+    the reader treats the settled value as the protocol value. Mutates and returns
+    ``result``. Best-effort: only fires when the window captured the settle."""
+    center = result.get("center_time_ps")
+    if center is None:
+        return result
+    flagged: list[str] = []
+    for path, sig in (result.get("signals") or {}).items():
+        if not isinstance(sig, dict) or sig.get("error"):
+            continue
+        vc = sig.get("value_at_center")
+        trs = sig.get("transitions_in_window") or []
+        pre = sig.get("pre_window_transitions") or []
+        if vc is None or not trs:
+            continue
+        trs_sorted = sorted(trs, key=lambda t: t["time_ps"])
+        after = [t for t in trs_sorted if t["time_ps"] > center]
+        before = [t for t in trs_sorted if t["time_ps"] <= center]
+        if not after:
+            continue
+        t_next = after[0]
+        # value the signal held just BEFORE the centre value was entered
+        if len(before) >= 2:
+            v_prev = before[-2]["value"]
+        elif pre:
+            v_prev = sorted(pre, key=lambda t: t["time_ps"])[-1]["value"]
+        else:
+            continue  # cannot establish the pre-value -> stay conservative
+        kc, kn, kp = _value_key(vc), _value_key(t_next["value"]), _value_key(v_prev)
+        # dip-and-return: centre differs from a value that is the same before & after
+        if kc != kn and kn == kp:
+            sig["center_transient"] = True
+            sig["center_settles_to"] = t_next["value"]
+            sig["center_settle_ps"] = t_next["time_ps"]
+            flagged.append(path)
+    if flagged:
+        result["transient_note"] = (
+            "value_at_center is a SUB-CYCLE TRANSIENT (glitch) for: "
+            + ", ".join(flagged)
+            + " — it settles back to center_settles_to at center_settle_ps within the "
+            "same cycle. Treat the SETTLED value as the protocol value; the edge "
+            "sample is likely a combinational glitch (e.g. an interconnect mux "
+            "re-settling at the clock edge), not what the design captures. Do not "
+            "attribute a root cause to this edge value alone."
+        )
+    return result

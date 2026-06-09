@@ -4,11 +4,61 @@ from pathlib import Path
 
 import pytest
 
-from src.cycle_query import get_signals_by_cycle
+from src.cycle_query import annotate_center_transients, get_signals_by_cycle
 from src.vcd_parser import VCDParser
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+
+
+def _v(h):
+    return {"bin": None, "hex": h, "dec": None}
+
+
+def test_annotate_flags_dip_and_return_glitch():
+    # X -> glitch(0) -> X across the clock edge: value_at_center is the glitch, the
+    # signal returns to the pre-value 1ns later -> sub-cycle transient.
+    res = {
+        "center_time_ps": 175001,
+        "signals": {
+            "s.HWDATA": {
+                "value_at_center": _v("0x0"),
+                "transitions_in_window": [
+                    {"time_ps": 174000, "value": _v("0x2773345d")},
+                    {"time_ps": 175000, "value": _v("0x0")},
+                    {"time_ps": 176000, "value": _v("0x2773345d")},
+                ],
+                "pre_window_transitions": [],
+            }
+        },
+    }
+    annotate_center_transients(res)
+    sig = res["signals"]["s.HWDATA"]
+    assert sig["center_transient"] is True
+    assert sig["center_settles_to"]["hex"] == "0x2773345d"
+    assert sig["center_settle_ps"] == 176000
+    assert res["transient_note"] and "SUB-CYCLE TRANSIENT" in res["transient_note"]
+
+
+def test_annotate_does_not_flag_a_normal_cycle_boundary_change():
+    # A legit transfer A -> B (does NOT return to A): not a dip, must not be flagged.
+    res = {
+        "center_time_ps": 175001,
+        "signals": {
+            "s.HWDATA": {
+                "value_at_center": _v("0xB"),
+                "transitions_in_window": [
+                    {"time_ps": 174000, "value": _v("0xA")},
+                    {"time_ps": 175000, "value": _v("0xB")},
+                    {"time_ps": 185000, "value": _v("0xC")},
+                ],
+                "pre_window_transitions": [],
+            }
+        },
+    }
+    annotate_center_transients(res)
+    assert res["signals"]["s.HWDATA"].get("center_transient") is None
+    assert res.get("transient_note") is None
 
 
 def _parser() -> VCDParser:
