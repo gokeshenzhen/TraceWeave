@@ -1134,9 +1134,13 @@ def inspect_handshake(
     # AHB write data-phase hold pass (G3): a separate sweep over the same samples,
     # because the data phase trails the address-phase htrans valid by one cycle.
     if do_write_data_hold:
+        # Independent finding budget: a noisy premature-deassertion interface must
+        # not starve write-data-hold of its witnesses (and thus its higher-priority
+        # attribution/cursor). The sweep echoes only counts, so the larger findings
+        # list matters only to a direct inspect_handshake caller.
         wd_count, wd_findings = _ahb_write_data_hold(
             samples, valid_signal, ready, hwrite_sig, wdata_sig, active_high,
-            max_findings - len(findings),
+            max_findings,
         )
         result["write_data_hold_violations"] = wd_count
         findings.extend(wd_findings)
