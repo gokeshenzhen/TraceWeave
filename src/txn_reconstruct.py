@@ -23,7 +23,10 @@ core generic instead of hard-coding AXI's five channels.
 Faithful: a latency distribution (min/median/max/mean), not an "outlier" verdict;
 unmatched requests/completions surfaced loudly (the hang signature); an asserted
 ``reset`` clears in-flight state so a transaction straddling reset is not reported
-as a phantom hang. Reads existing waveforms only.
+as a phantom hang. An optional ``req_len`` (AxLEN) compares each txn's observed
+beat count to ``req_len+1`` and flags a mismatch (early/late LAST, dropped/extra
+beat) per-txn + as an aggregate — x/z len is not checked, so never a false
+positive. Reads existing waveforms only.
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ def reconstruct_transactions(
     cmp_ready: str,
     cmp_id: str | None = None,
     req_fields: list[str] | None = None,
+    req_len: str | None = None,
     cmp_last: str | None = None,
     cmp_fields: list[str] | None = None,
     data_valid: str | None = None,
@@ -107,6 +111,10 @@ def reconstruct_transactions(
     if has_id:
         spec["req_id"] = req_id
         spec["cmp_id"] = cmp_id
+    if req_len is not None:
+        # AxLEN (AWLEN/ARLEN): expected data/response beats = req_len + 1. Captured
+        # at request, compared against the observed beat count at completion.
+        spec["req_len"] = req_len
     if cmp_last is not None:
         spec["cmp_last"] = cmp_last
     if has_data:
@@ -202,6 +210,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
     rv, rr = r["req_valid"], r["req_ready"]
     cv, cr = r["cmp_valid"], r["cmp_ready"]
     rid, cid = r.get("req_id"), r.get("cmp_id")  # None in no-id (FIFO) mode
+    len_sig = r.get("req_len")                    # AxLEN; None if not supplied
     clast = r.get("cmp_last")
     dv, dr_, dlast = r.get("data_valid"), r.get("data_ready"), r.get("data_last")
     rst = r.get("reset")
@@ -223,6 +232,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
     reorder = 0
     reset_clears = 0
     orphan_data_beats = 0
+    beat_count_mismatch = 0
     per_id_out: dict[int, int] = {}
     per_id_peak: dict[int, int] = {}
     beat_ctr: dict[int, int] = {}         # id -> cmp beats since last completion
@@ -276,6 +286,8 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                     "id": rid_val if cfg.has_id else None,
                     "seq": seq, "idx": idx, "time_ps": t,
                     "outstanding_at_start": outstanding,
+                    # AxLEN decoded at request; None on x/z (no check, never a FP).
+                    "len": _dec(sig.get(len_sig)) if len_sig is not None else None,
                     "req_fields": {f: _hs_repr(sig.get(f)) for f in cfg.req_fields},
                     "data_complete": not cfg.has_data,
                     "data_beat_count": 0,
@@ -327,6 +339,14 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                         lat = idx - req["idx"]
                         latencies.append(lat)
                         beats = req["data_beat_count"] if cfg.has_data else n_cmp_beats
+                        # Beat-count vs AxLEN: a correct burst has exactly len+1
+                        # beats. A mismatch is a real protocol error (early/late
+                        # LAST, dropped/extra beat). x/z len -> expected None -> no
+                        # check (never a false positive).
+                        exp_beats = req["len"] + 1 if req["len"] is not None else None
+                        is_mismatch = exp_beats is not None and beats != exp_beats
+                        if is_mismatch:
+                            beat_count_mismatch += 1
                         transactions.append({
                             "id": cid_val if cfg.has_id else None,
                             "request_time_ps": req["time_ps"],
@@ -334,6 +354,8 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                             "latency_cycles": lat,
                             "latency_ps": t - req["time_ps"],
                             "beat_count": beats,
+                            "expected_beats": exp_beats,
+                            "beat_count_mismatch": is_mismatch,
                             "outstanding_at_start": req["outstanding_at_start"],
                             "data_complete": req["data_complete"],
                             "req_fields": req["req_fields"],
@@ -367,6 +389,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
         "unknown_id_beats": unknown_id_beats,
         "reset_clears": reset_clears,
         "orphan_data_beats": orphan_data_beats,
+        "beat_count_mismatch_count": beat_count_mismatch,
     })
     return {
         "latencies": latencies,
@@ -430,6 +453,12 @@ def _finalize(result, acc, max_transactions, timeout_cycles, warnings) -> None:
             f"{result['orphan_data_beats']} data beat(s) had no open request to attach to "
             "(data before address, or a window starting mid-burst)."
         )
+    if result.get("beat_count_mismatch_count"):
+        warnings.append(
+            f"{result['beat_count_mismatch_count']} transaction(s) had a beat count != "
+            "AxLEN+1 (early/late LAST, dropped or extra beat) — see each txn's "
+            "beat_count vs expected_beats."
+        )
 
 
 def _attach_cursor(result, cursor_store, wave_path, edge, cursor_name, cursor_note) -> None:
@@ -467,6 +496,7 @@ def _empty_result(wave_path, clock, edge, start_ps, end_ps) -> dict[str, Any]:
         "max_outstanding_per_id": 0, "max_outstanding_id": None,
         "reorder_count": 0, "unknown_id_beats": 0,
         "reset_clears": 0, "orphan_data_beats": 0,
+        "beat_count_mismatch_count": 0,
         "timeout_cycles": None, "slow_count": 0,
         "latency": None,
         "transactions": [], "transactions_truncated": False,

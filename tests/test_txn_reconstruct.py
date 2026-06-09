@@ -306,3 +306,46 @@ def test_one_sided_id_is_loud(tmp_path):
     )
     schemas.TxnReconstructResult.model_validate(r)
     assert r["reason"] and "both req_id and cmp_id, or neither" in r["reason"]
+
+
+# --- G2: beat-count vs AxLEN -------------------------------------------------
+
+_AXI_RD_LEN = _AXI_RD + [("L", "arlen", 3)]
+
+
+def test_beat_count_vs_axlen_mismatch(tmp_path):
+    # id1: arlen=1 -> expect 2 beats, gets 2 (match). id2: arlen=2 -> expect 3,
+    # gets 2 beats (rlast early) -> beat_count_mismatch.
+    cyc = [
+        {},
+        {"arvalid": 1, "arready": 1, "arid": 1, "arlen": 1},
+        {"arvalid": 1, "arready": 1, "arid": 2, "arlen": 2},
+        {},
+        {"rvalid": 1, "rready": 1, "rid": 1, "rlast": 0},
+        {"rvalid": 1, "rready": 1, "rid": 1, "rlast": 1},
+        {"rvalid": 1, "rready": 1, "rid": 2, "rlast": 0},
+        {"rvalid": 1, "rready": 1, "rid": 2, "rlast": 1},
+    ]
+    wave = _write(tmp_path, cyc, _AXI_RD_LEN)
+    r = reconstruct_transactions(
+        get_parser=lambda _w: VCDParser(wave), wave_path=wave, clock="top.clk",
+        req_valid="top.arvalid", req_ready="top.arready", req_id="top.arid",
+        cmp_valid="top.rvalid", cmp_ready="top.rready", cmp_id="top.rid",
+        cmp_last="top.rlast", req_len="top.arlen",
+    )
+    schemas.TxnReconstructResult.model_validate(r)
+    assert r["beat_count_mismatch_count"] == 1
+    by_id = {tx["id"]: tx for tx in r["transactions"]}
+    assert by_id[1]["expected_beats"] == 2 and by_id[1]["beat_count_mismatch"] is False
+    assert by_id[2]["expected_beats"] == 3 and by_id[2]["beat_count"] == 2
+    assert by_id[2]["beat_count_mismatch"] is True
+    assert any("AxLEN+1" in w for w in r["warnings"])
+
+
+def test_no_req_len_means_no_beat_check(tmp_path):
+    # Without req_len every txn reports expected_beats=None and no mismatch — a
+    # 0 count is "not checked", not a clean-burst verdict.
+    r = _rd(tmp_path, _OOO)
+    assert r["beat_count_mismatch_count"] == 0
+    assert all(tx["expected_beats"] is None and tx["beat_count_mismatch"] is False
+               for tx in r["transactions"])

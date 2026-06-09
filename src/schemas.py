@@ -1104,6 +1104,10 @@ class TxnRecord(SchemaModel):
     latency_cycles: int
     latency_ps: int
     beat_count: int = 1
+    # AxLEN+1 (None when req_len was not supplied or its value was x/z). A
+    # beat_count != expected_beats is a real burst-length violation.
+    expected_beats: int | None = None
+    beat_count_mismatch: bool = False
     outstanding_at_start: int = 0
     data_complete: bool = True
     req_fields: dict[str, str | None] = Field(default_factory=dict)
@@ -1136,6 +1140,9 @@ class TxnReconstructResult(SchemaModel):
     unknown_id_beats: int = 0
     reset_clears: int = 0
     orphan_data_beats: int = 0
+    # transactions whose observed beat_count != AxLEN+1 (needs req_len). 0 when
+    # req_len was not supplied — a fact, not a clean-burst verdict in that case.
+    beat_count_mismatch_count: int = 0
     timeout_cycles: int | None = None
     slow_count: int = 0
     latency: LatencyStats | None = None
