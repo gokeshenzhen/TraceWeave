@@ -645,13 +645,20 @@ def _inspect_handshake_relay(wave_path: str, bundles: list[dict]) -> str | None:
         if not args:
             continue
         payload = args.get("payload") or []
+        # hwrite + write_data (HWDATA) enable the write data-phase hold check; emit
+        # them in the relay so the copy-paste call actually runs it.
+        extra = ""
+        if args.get("hwrite"):
+            extra += f', hwrite="{args["hwrite"]}"'
+        if args.get("write_data"):
+            extra += f', write_data="{args["write_data"]}"'
         cmds.append(
             f'inspect_handshake(wave_path="{wave_path}", '
             f'clock="{args.get("clock")}", '
             f'valid_htrans="{args.get("valid_htrans")}", '
             f'htrans_rule="{args.get("htrans_rule", "active")}", '
             f'ready="{args.get("ready")}", '
-            f'payload={payload!r})'
+            f'payload={payload!r}{extra})'
         )
     if not cmds:
         return None

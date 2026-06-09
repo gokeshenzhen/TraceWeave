@@ -376,6 +376,7 @@ def test_suggest_protocol_bundles_wrapper_attaches_inspect_relay():
         "tb.mst_HREADYOUT": {"path": "tb.mst_HREADYOUT", "width": 1, "var_type": "wire"},
         "tb.mst_HADDR[31:0]": {"path": "tb.mst_HADDR[31:0]", "width": 32, "var_type": "wire"},
         "tb.mst_HWRITE": {"path": "tb.mst_HWRITE", "width": 1, "var_type": "wire"},
+        "tb.mst_HWDATA[31:0]": {"path": "tb.mst_HWDATA[31:0]", "width": 32, "var_type": "wire"},
     }
 
     class _P:
@@ -390,4 +391,8 @@ def test_suggest_protocol_bundles_wrapper_attaches_inspect_relay():
     assert res["next_step"] is not None
     assert 'inspect_handshake(wave_path="/w/a.fsdb"' in res["next_step"]
     assert 'valid_htrans="tb.mst_HTRANS[1:0]"' in res["next_step"]
+    # the relay must spell out hwrite + write_data so the copy-paste call actually
+    # runs the write data-phase HWDATA-hold check
+    assert 'hwrite="tb.mst_HWRITE"' in res["next_step"]
+    assert 'write_data="tb.mst_HWDATA[31:0]"' in res["next_step"]
     assert 'ready="tb.mst_HREADYOUT"' in res["next_step"]
