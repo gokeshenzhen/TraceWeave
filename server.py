@@ -1354,7 +1354,14 @@ async def list_tools():
                 "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
                 "the static source-regex backend cannot reach; otherwise the static backend "
                 "runs. Each driver_chain hop carries source_info_origin ('compile_log' or 'npi') "
-                "so consumers can tell which provenance produced its file:line."
+                "so consumers can tell which provenance produced its file:line. "
+                "driver_status='testbench_driven' (with cross_check.conflict=true) means NPI "
+                "found NO RTL driver: the only 'driver' it reported is also a LOAD of the same "
+                "net (an interface-slice alias or a register that reads the net), so the real "
+                "driver is testbench/behavioral — a UVM driver writing through a virtual "
+                "interface + clocking block, invisible to RTL fan-in. Treat that as 'start in "
+                "the TB driver/BFM', NOT as a mis-wire or a DUT-register driver; for an AHB "
+                "master's HTRANS/HADDR this is the expected, correct answer."
             ),
             inputSchema={
                 "type": "object",

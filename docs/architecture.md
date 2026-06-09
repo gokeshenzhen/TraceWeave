@@ -201,6 +201,8 @@ VerdiNpiBackend.find_driver / find_loads / find_path
     │       → net.fan_in_reg_list(stop_at_pin, report_primary_port, top_scope_name)
     │       ├── fan_in succeeds       → build driver_chain (queried + boundary points)
     │       └── fan_in raises         → fall through to single-hop formatting (still NPI)
+    ├── reported driver == a LOAD of the same net (load-alias, both paths)
+    │       → driver_status="testbench_driven" (no RTL driver; real driver is TB/behavioral)
     └── normal driver                 → single-hop format
 ```
 
@@ -217,6 +219,19 @@ VerdiNpiBackend.find_driver / find_loads / find_path
 - `top_scope_name` for fan-in is derived from `signal_path.split(".", 1)[0]`
   — driven by the query, not by project-specific config — so the bound is
   correct across designs without hardcoding any top name.
+- **Driver-vs-loads cross-check.** A net cannot be both driven by and read
+  into the same elaborated pin, so when the reported driver's raw identity
+  (modulo bit-indexing) is byte-identical to one of the net's own loads, that
+  "driver" is a load-alias (interface slice / a register reading the net), not
+  the source. NPI's register fan-in cannot see a procedural UVM driver (virtual
+  interface + clocking block), so on such a net it can walk to a nearby LOAD
+  register inside the DUT and mislabel it the driver (the AHB-master-HTRANS →
+  matrix `lock_owner` misattribution). The cross-check (`driver_is_load_alias`
+  + `_loadcheck_head`, fed by the net's own `load_list()`) promotes a genuine
+  RTL driver if one remains, else returns `driver_status="testbench_driven"`
+  with a `cross_check.conflict` receipt — never a load named as an `exact`
+  driver. Byte-identical matching keeps it FP-safe: a real `q <= q + 1`
+  counter loads into a distinct `Add`/`Assignment` cell, so it never matches.
 - For Xcelium / `xrun` flows there is no KDB by default. NPI requires a
   separate `vericom -kdb` + `elabcom -elab kdb` pass over the same
   sources. When `AUTO_KDB_BUILD` is on (default), TraceWeave's

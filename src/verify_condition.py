@@ -1263,7 +1263,11 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
       the responder/consumer (ready/HREADY side, the slave on a request channel)
       cannot cause either, so the caller should NOT start in the slave
       driver/monitor. ``explain_signal_driver`` on valid lands on the actual
-      producing instance (and reveals a mis-wired input if it is not the producer).
+      producing instance — but when the producer is a UVM/TB driver (procedural
+      drive via virtual interface + clocking block), NPI's RTL register fan-in
+      cannot see it and may land on a nearby DUT register that is actually a LOAD
+      of the net; the driver tool reports ``driver_status='testbench_driven'`` in
+      that case rather than naming the load as the driver.
     - A plain stall (valid && !ready) is genuinely TWO-sided (legitimate slave
       back-pressure vs the master over-asserting valid), so no side is attributed
       — ``violating_side`` stays None and the link targets ``ready``."""
@@ -1356,8 +1360,15 @@ def _attach_handshake_attribution(result: dict[str, Any], findings: list[dict[st
                        f"(ready/HREADY low) — {gloss}, and holding valid until "
                        "acceptance is the valid-driver's obligation. Confirm the "
                        "driving instance actually waits for ready/HREADY; the "
-                       "ready/slave side cannot cause this. If the driver is not the "
-                       "producer you expect, the valid input was mis-wired."),
+                       "ready/slave side cannot cause this. NOTE: the producer of an "
+                       "AHB master's htrans is the UVM master driver (procedural drive "
+                       "via virtual interface + clocking block), which NPI's RTL "
+                       "register fan-in cannot see. If explain_signal_driver lands on a "
+                       "DUT/RTL register (e.g. an interconnect/matrix), treat that as "
+                       "NPI walking the net to a nearby LOAD register, NOT a real "
+                       "mis-wire pointing at that module — the tool reports "
+                       "driver_status='testbench_driven' (cross_check.conflict) when it "
+                       "detects this; cross-check with find_signal_loads if unsure."),
             "signal_path": sig,
         }]
         return

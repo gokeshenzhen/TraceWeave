@@ -734,6 +734,12 @@ class VerdiNpiBackend:
             base["stopped_at"] = "no_npi_drivers"
             return base
 
+        # The net's own loads, used to detect the misattribution where NPI
+        # reports a LOAD (or an interface-slice alias of a load) as the driver:
+        # the true driver is testbench/behavioral (procedural drive via virtual
+        # interface + clocking block), invisible to NPI's RTL fan-in.
+        load_raws = self._net_load_raws(net)
+
         # Detect "boundary-only" drivers: every reported driver is a raw
         # hierarchy port (no synthesized cell tag — i.e. no ':' in name).
         # These are NPI's way of saying "the net is a module port; the
@@ -746,6 +752,13 @@ class VerdiNpiBackend:
                 net, signal_path, top, max_branches=_FAN_IN_MAX_BRANCHES,
             )
             if chain is not None:
+                decision = self._loadcheck_head(chain, load_raws)
+                if decision == "testbench":
+                    return self._apply_testbench_driven(
+                        base, _testbench_verdict(chain[0]),
+                    )
+                if isinstance(decision, int):
+                    chain = [chain[decision]] + chain[:decision] + chain[decision + 1:]
                 return self._apply_chain(base, chain, signal_path, recursive)
             # fan_in unavailable / failed — fall through to single-hop
             # formatting so we surface *something* instead of crashing.
@@ -755,6 +768,16 @@ class VerdiNpiBackend:
             base["driver_status"] = "unsupported"
             base["unsupported_reason"] = "all_drivers_unformattable"
             return base
+
+        # If the reported head driver is actually a load-alias, prefer a genuine
+        # RTL driver among the remaining candidates; if none exists, report an
+        # honest testbench_driven no-op rather than naming a load as the driver.
+        decision = self._loadcheck_head(formatted, load_raws)
+        if decision == "testbench":
+            return self._apply_testbench_driven(base, _testbench_verdict(formatted[0]))
+        if isinstance(decision, int):
+            formatted = [formatted[decision]] + formatted[:decision] + formatted[decision + 1:]
+        formatted = [_strip_npi_raw(d) for d in formatted]
 
         head = formatted[0]
         base.update({
@@ -830,6 +853,80 @@ class VerdiNpiBackend:
                 hops.append(entry)
         return hops
 
+    def _net_load_raws(self, net: Any) -> list[str] | None:
+        """Raw NPI full-names of every load of ``net`` (for the driver-vs-load
+        cross-check). Returns None when there is no load list or the NPI call
+        fails — never raises, so a cross-check failure cannot break driver
+        resolution."""
+        if not hasattr(net, "load_list"):
+            return None
+        try:
+            with _silence_native_stdio():
+                raw_loads = net.load_list() or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("cross-check load_list failed: %s", exc)
+            return None
+        names: list[str] = []
+        for hdl in raw_loads:
+            try:
+                name = hdl.full_name() if hasattr(hdl, "full_name") else None
+            except Exception:  # noqa: BLE001
+                name = None
+            if name:
+                names.append(name)
+        return names or None
+
+    @staticmethod
+    def _loadcheck_head(
+        candidates: list[dict[str, Any]],
+        load_raws: list[str] | None,
+    ) -> int | str | None:
+        """Decide what to do with the reported head driver given the net's loads.
+
+        - ``None``  → head is a genuine driver (or no loads to compare); proceed.
+        - ``int``   → head is a load-alias but candidate[int] is a genuine RTL
+                      driver; promote it to head.
+        - ``"testbench"`` → head is a load-alias and no genuine RTL driver
+                      remains; the real driver is testbench/behavioral.
+        """
+        if not candidates or not load_raws:
+            return None
+        head = candidates[0]
+        if not driver_is_load_alias(head.get("_npi_raw"), load_raws):
+            return None
+        for idx, cand in enumerate(candidates[1:], start=1):
+            raw = cand.get("_npi_raw")
+            if driver_is_load_alias(raw, load_raws):
+                continue
+            if _is_genuine_runtime_driver(raw, cand.get("driver_kind")):
+                return idx
+        return "testbench"
+
+    @staticmethod
+    def _apply_testbench_driven(
+        base: dict[str, Any],
+        verdict: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Rewrite the result as an honest no-op: the net has no RTL driver
+        (the fan-in 'driver' is actually a load), so the real driver is
+        testbench/behavioral. Do NOT surface the load as a driver/exact."""
+        base.update({
+            "driver_status": "testbench_driven",
+            "driver_kind": None,
+            "source_file": None,
+            "source_line": None,
+            "expression_summary": verdict["note"],
+            "upstream_signals": [],
+            "instance_port_connections": None,
+            "confidence": None,
+            "unsupported_reason": "driver_is_load_real_driver_is_testbench",
+            "stopped_at": "testbench_driven",
+            "driver_chain": None,
+            "chain_summary": None,
+            "cross_check": verdict,
+        })
+        return base
+
     @staticmethod
     def _apply_chain(
         base: dict[str, Any],
@@ -842,6 +939,9 @@ class VerdiNpiBackend:
             base["unsupported_reason"] = "no_npi_fan_in"
             base["stopped_at"] = "no_npi_fan_in"
             return base
+        # Drop the cross-check-only raw name before hops enter driver_chain
+        # (the schema forbids extra fields).
+        hops = [_strip_npi_raw(hop) for hop in hops]
         head = hops[0]
         base.update({
             "driver_status": "resolved",
@@ -915,6 +1015,8 @@ class VerdiNpiBackend:
             "stopped_at": None,
             "backend": "verdi_npi",
             "backend_confidence": "exact",
+            # For driver-vs-load cross-check only; stripped before return.
+            "_npi_raw": raw,
         }
 
     def _format_driver(self, hdl: Any) -> dict[str, Any] | None:
@@ -935,6 +1037,8 @@ class VerdiNpiBackend:
                 "npi" if (inst_file is not None or line is not None) else None
             ),
             "expression_summary": _driver_summary(raw, kind),
+            # For driver-vs-load cross-check only; stripped before return.
+            "_npi_raw": raw,
         }
 
     def _format_load(self, hdl: Any, include_expr: bool) -> dict[str, Any] | None:
@@ -1138,6 +1242,88 @@ def _fan_in_summary(raw: str, kind: str) -> str:
     if kind == "primary_input_port":
         return f"fan-in stops at primary port {raw}"
     return _driver_summary(raw, kind)
+
+
+def _strip_npi_raw(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return ``entry`` without the cross-check-only ``_npi_raw`` field, so it
+    can pass the ``extra='forbid'`` result schema."""
+    if "_npi_raw" not in entry:
+        return entry
+    return {k: v for k, v in entry.items() if k != "_npi_raw"}
+
+
+def _norm_raw(raw: str | None) -> str | None:
+    """Normalize an NPI full-name to a stable identity for driver-vs-load
+    comparison: drop every bit-range / bit-index ``[...]`` segment so that, e.g.,
+    ``tb.m_if.ahb_intf#[3:4]`` and ``tb.m_if.ahb_intf#[3:4]`` (or per-bit slices)
+    collapse to one identity. Returns None for a falsy input."""
+    if not raw:
+        return None
+    return re.sub(r"\[[^\]]*\]", "", raw)
+
+
+def driver_is_load_alias(head_raw: str | None, load_raws: list[str] | None) -> bool:
+    """True when the reported driver is byte-identical (modulo bit-indexing) to a
+    LOAD of the same net.
+
+    A net cannot be both driven by and a load of the same elaborated pin/alias —
+    when NPI reports the same identity on both sides it is an aliasing artifact
+    (an interface slice or a boundary alias of the net's own consumer), so that
+    "driver" is really a load and cannot be the source. This is the FP-safe
+    discriminator: a legitimate self-referential counter (``q <= q + 1``) drives
+    net ``q`` from a ``Reg`` cell while net ``q`` loads into a distinct ``Add`` /
+    ``Assignment`` cell — different identities, so it never matches here.
+
+    Pure and string-keyed → fully unit-testable without a live KDB.
+    """
+    if not head_raw or not load_raws:
+        return False
+    norm = _norm_raw(head_raw)
+    return any(_norm_raw(lr) == norm for lr in load_raws if lr)
+
+
+def _is_genuine_runtime_driver(raw: str | None, kind: str | None) -> bool:
+    """True when a non-alias driver candidate is a real runtime logic/register
+    driver — i.e. it carries a synthesized logic-cell tag and is not an
+    initial-value block or a bare hierarchy/primary port. Used to decide whether,
+    after discarding a load-alias head, any genuine RTL driver remains (else the
+    real driver is testbench/behavioral)."""
+    if not raw:
+        return False
+    if _first_colon_outside_brackets(raw) is None:
+        return False  # bare hierarchy port / primary-input alias, not a logic driver
+    return kind not in ("initial", "primary_input_port", "instance_port", None)
+
+
+def _testbench_verdict(head: dict[str, Any]) -> dict[str, Any]:
+    """Build the ``cross_check`` receipt for a testbench_driven no-op from the
+    load-alias head hop that triggered it."""
+    scope = (
+        head.get("resolved_instance_path")
+        or head.get("load_path")
+        or head.get("signal_path")
+    )
+    line = head.get("source_line")
+    where = scope if scope else "the reported driver"
+    note = (
+        f"NPI resolved this net's driver to {where}"
+        + (f" (line {line})" if line is not None else "")
+        + ", but that same construct is also a LOAD of this net (it reads the net "
+        "as an input / is an interface-slice alias of the net's own consumer). A net "
+        "cannot be both driven by and read into the same pin, so this is a load, not "
+        "the driver: NPI found no RTL register/logic driver for this net. The real "
+        "driver is testbench/behavioral (e.g. a UVM driver writing through a virtual "
+        "interface + clocking block), which NPI's RTL fan-in cannot see. Do NOT treat "
+        f"{where} as the driver, and do NOT read this as a mis-wire pointing at that "
+        "module."
+    )
+    return {
+        "performed": True,
+        "conflict": True,
+        "matched_scope": str(scope) if scope else None,
+        "matched_line": int(line) if isinstance(line, int) else None,
+        "note": note,
+    }
 
 
 def _classify_load_kind(npi_path: str, hdl_type: str | None) -> str:

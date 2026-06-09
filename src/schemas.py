@@ -569,6 +569,25 @@ class DriverChainHop(SchemaModel):
     backend_confidence: Literal["exact", "approximate", "unverified"] = "approximate"
 
 
+class DriverLoadCrossCheck(SchemaModel):
+    """Receipt of the NPI driver-vs-loads contradiction check.
+
+    Emitted only by the NPI backend when a boundary-only net's register
+    fan-in lands on a construct that is ALSO a load of the same net (a net
+    cannot be both driven by and read into the same register). That means
+    fan-in walked to a LOAD, not the driver — the real driver is
+    testbench/behavioral (procedural drive via virtual interface +
+    clocking block), invisible to RTL register fan-in. ``conflict=True``
+    pairs with ``driver_status="testbench_driven"`` on the parent result.
+    """
+
+    performed: bool = False
+    conflict: bool = False
+    matched_scope: str | None = None
+    matched_line: int | None = None
+    note: str | None = None
+
+
 class ExplainDriverResult(SchemaModel):
     signal_path: str
     wave_path: str
@@ -588,6 +607,7 @@ class ExplainDriverResult(SchemaModel):
     recursive: bool = False
     driver_chain: list[DriverChainHop] | None = None
     chain_summary: str | None = None
+    cross_check: DriverLoadCrossCheck | None = None
     backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
     backend_status: BackendStatus | None = None
 

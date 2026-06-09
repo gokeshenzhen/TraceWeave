@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src import schemas
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
     _classify_driver_kind,
@@ -15,6 +16,9 @@ from src.verdi_npi_backend import (
     _line_from_synthesized,
     _scope_from_synthesized,
     _scope_inst_of,
+    _is_genuine_runtime_driver,
+    _norm_raw,
+    driver_is_load_alias,
 )
 
 
@@ -960,3 +964,166 @@ def test_format_driver_multi_driven_chain_carries_npi_origin(monkeypatch, tmp_pa
     assert origins == ["npi", "npi"]
     files = sorted(h["source_file"] for h in r["driver_chain"])
     assert files == ["/p/a.sv", "/p/b.sv"]
+
+
+# ---------------------------------------------------------------------------
+# Driver-vs-loads cross-check (TB-driver misattribution guard)
+# ---------------------------------------------------------------------------
+
+
+def test_norm_raw_strips_bit_ranges_and_indices():
+    assert _norm_raw("tb.m_if.ahb_intf#[3:4]") == "tb.m_if.ahb_intf#"
+    assert _norm_raw("x.dut:Always0#Always0:135:153:Reg.lock_owner[0][1]") == (
+        "x.dut:Always0#Always0:135:153:Reg.lock_owner"
+    )
+    assert _norm_raw(None) is None
+
+
+def test_driver_is_load_alias_matches_modulo_bit_index():
+    loads = ["tb.m_if.ahb_intf#[3:4]", "tb.tb:Always1#SigTap:9:9:Assignment.x"]
+    # Identical interface-slice alias (differing only in bit-range).
+    assert driver_is_load_alias("tb.m_if.ahb_intf#[3:4]", loads) is True
+    assert driver_is_load_alias("tb.m_if.ahb_intf#[5:6]", loads) is True
+    # A genuine register on a different cell is NOT a load alias.
+    assert driver_is_load_alias("tb.dut:Always0#Always0:10:11:Reg.q", loads) is False
+    # No loads / no head → never a conflict.
+    assert driver_is_load_alias("tb.x", None) is False
+    assert driver_is_load_alias(None, loads) is False
+
+
+def test_is_genuine_runtime_driver_excludes_init_and_ports():
+    reg = "tb.dut:Always0#Always0:10:11:Reg.q"
+    assert _is_genuine_runtime_driver(reg, "always_ff") is True
+    # Initial-value block is not the runtime driver.
+    assert _is_genuine_runtime_driver(
+        "tb.tb:Init2#Init2:87:89:Init.m_if1.HTRANS", "initial"
+    ) is False
+    # Bare hierarchy port (no synth tag) is not a logic driver.
+    assert _is_genuine_runtime_driver("tb.m_if1.HTRANS", "instance_port") is False
+    assert _is_genuine_runtime_driver(None, "always_ff") is False
+
+
+def test_driver_interface_alias_reported_as_load_yields_testbench_driven(monkeypatch, tmp_path):
+    """The reproduced ahb_repro bug: NPI's driver_list head is an interface-slice
+    alias of the net (``m_if1.ahb_intf#[3:4]``) that is ALSO load[0]; the only
+    other driver is an initial block. We must report testbench_driven, never the
+    interface alias (or a DUT register) as the driver."""
+    log = _make_compile_log(tmp_path)
+    alias = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")              # has ':' via bit-range
+    init = _MockPin("tb_top.tb_top:Init2#Init2:87:89:Init.m_if1.HTRANS")
+    alias_load = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")
+    sigtap = _MockPin("tb_top.tb_top:Always17#SigTap17:111:111:Assignment.m_if1.HTRANS")
+    net = _MockNet(drivers=[alias, init], loads=[alias_load, sigtap])
+    netlist_obj = _MockNetlist({"tb_top.m_if1.HTRANS": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="tb_top.m_if1.HTRANS",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "testbench_driven"
+    assert r["driver_kind"] is None
+    assert r["confidence"] is None
+    assert r["source_file"] is None and r["source_line"] is None
+    assert r["driver_chain"] is None
+    assert r["unsupported_reason"] == "driver_is_load_real_driver_is_testbench"
+    assert r["stopped_at"] == "testbench_driven"
+    assert r["cross_check"]["conflict"] is True
+    # No leaked internal field.
+    assert "_npi_raw" not in r
+    schemas.ExplainDriverResult.model_validate(r)
+
+
+def test_driver_load_alias_head_promotes_genuine_alternative(monkeypatch, tmp_path):
+    """If the head is a load-alias but a genuine RTL register driver exists among
+    the other candidates, promote the real driver instead of giving up."""
+    log = _make_compile_log(tmp_path)
+    alias = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")
+    reg = _MockPin("tb_top.dut.src:Always0#Always0:50:55:Reg.ROH_q")
+    alias_load = _MockPin("tb_top.m_if1.ahb_intf#[3:4]")
+    net = _MockNet(drivers=[alias, reg], loads=[alias_load])
+    netlist_obj = _MockNetlist({"tb_top.m_if1.HTRANS": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="tb_top.m_if1.HTRANS",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "resolved"
+    assert r["driver_kind"] == "always_ff"
+    assert r["source_line"] == 50
+    assert r.get("cross_check") is None
+    assert "_npi_raw" not in r
+
+
+def test_driver_boundary_fan_in_load_yields_testbench_driven(monkeypatch, tmp_path):
+    """Boundary-only net whose fan-in lands on a register that is ALSO a load of
+    the net (the v6_3_2 failure shape) → testbench_driven."""
+    log = _make_compile_log(tmp_path)
+    lock_owner = _MockPin("top_tb.dut.matrix:Always0#Always0:135:140:Reg.lock_owner")
+    lock_owner_load = _MockPin("top_tb.dut.matrix:Always0#Always0:135:140:Reg.lock_owner")
+    self_port = _MockPin("top_tb.m_if1.HTRANS", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[lock_owner], loads=[lock_owner_load])
+    netlist_obj = _MockNetlist({"top_tb.m_if1.HTRANS": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="top_tb.m_if1.HTRANS",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "testbench_driven"
+    assert r["cross_check"]["matched_scope"] == "top_tb.dut.matrix"
+    assert r["cross_check"]["matched_line"] == 135
+    schemas.ExplainDriverResult.model_validate(r)
+
+
+def test_driver_boundary_only_genuine_upstream_not_flagged(monkeypatch, tmp_path):
+    """A boundary-only net whose fan-in lands on a genuine upstream driver (not a
+    load) resolves normally — no false testbench flag."""
+    log = _make_compile_log(tmp_path)
+    upstream = _MockPin("top_tb.dut.src:Always0#Always0:50:55:Reg.ROH_q")
+    consumer_load = _MockPin("top_tb.dut.matrix:Always3#Always0:135:140:Reg.lock_owner")
+    self_port = _MockPin("top_tb.m_if1.HTRANS", t="npiNlPort")
+    net = _MockNet(drivers=[self_port], fan_in=[upstream], loads=[consumer_load])
+    netlist_obj = _MockNetlist({"top_tb.m_if1.HTRANS": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="top_tb.m_if1.HTRANS",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=False,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "resolved"
+    assert r["driver_kind"] == "always_ff"
+    assert r["source_line"] == 50
+    assert r.get("cross_check") is None
+
+
+def test_driver_self_referential_counter_not_flagged(monkeypatch, tmp_path):
+    """A real ``q <= q + 1`` counter drives net q from a Reg cell while net q
+    loads into a DISTINCT Add cell — different raw identities, so the raw-identity
+    cross-check does NOT mistake the legitimate self-reference for a TB driver."""
+    log = _make_compile_log(tmp_path)
+    reg = _MockPin("top_tb.dut.cnt:Always0#Always0:135:140:Reg.ROH_q")
+    # The net's load is the adder reading q (a different elaborated cell).
+    adder_load = _MockPin("top_tb.dut.cnt:Always0#Always0:135:140:Add.ROH_sum")
+    net = _MockNet(drivers=[reg], fan_in=[reg], loads=[adder_load])
+    netlist_obj = _MockNetlist({"top_tb.dut.cnt.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, netlist_obj=netlist_obj)
+    r = backend.find_driver(
+        signal_path="top_tb.dut.cnt.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+    assert r["driver_status"] == "resolved"
+    assert r["driver_status"] != "testbench_driven"
+    assert r.get("cross_check") is None
