@@ -1086,8 +1086,16 @@ class WindowVerifyResult(SchemaModel):
     start_ps: int = 0
     end_ps: int = -1
     within_cycles: int | None = None
+    # implication only: True = overlapping (|->, response window [i, i+N]
+    # includes the antecedent cycle); False = non-overlapping (|=>, window
+    # [i+1, i+N]) for stability/hold properties. None for non-implication modes.
+    overlap: bool | None = None
     signals: list[str] = Field(default_factory=list)
     holds: bool = False
+    # implication only: True when a PASS was vacuous — every antecedent satisfied
+    # the consequent on its OWN cycle, so within_cycles never mattered. A vacuous
+    # holds proves nothing about a LATER cycle; re-run with overlap=false.
+    vacuous: bool = False
     cycles_evaluated: int = 0
     unknown_cycles: int = 0
     antecedent_count: int = 0

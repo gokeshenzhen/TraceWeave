@@ -151,6 +151,98 @@ def test_and_of_two_terms(tmp_path):
     assert r["counterexample"]["cycle_index"] == 0
 
 
+# --- overlap / non-overlapping implication + vacuity (A+B) ------------------
+# AHB-style hold property: a stalled beat (valid high, ready low) must STILL hold
+# valid the NEXT cycle. The antecedent already implies the consequent on its own
+# cycle, so overlap=True is a vacuous pass; overlap=false is the right shape.
+_VR_SIGS = [("!", "clk", 1), ("#", "valid", 1), ("%", "ready", 1)]
+_DEASSERT = [  # valid dropped the cycle after the stall (premature deassertion)
+    {"valid": 0, "ready": 0}, {"valid": 1, "ready": 0},
+    {"valid": 0, "ready": 1}, {"valid": 0, "ready": 0},
+]
+_HELD = [  # valid held through the wait state until ready (legal)
+    {"valid": 0, "ready": 0}, {"valid": 1, "ready": 0},
+    {"valid": 1, "ready": 1}, {"valid": 0, "ready": 0},
+]
+_HOLD_ANT = [{"signal": "top.valid", "op": "eq", "value": 1},
+             {"signal": "top.ready", "op": "eq", "value": 0}]
+_HOLD_CON = [{"signal": "top.valid", "op": "eq", "value": 1}]
+
+
+def test_implication_overlap_true_is_vacuous_pass_on_hold_property(tmp_path):
+    """overlap=True (default) on a hold property whose antecedent implies the
+    consequent on its own cycle → trivially holds, but flagged vacuous + warned.
+    This is the exact trap codex hit on premature_valid_deassertion."""
+    r = _run(tmp_path, _DEASSERT, _VR_SIGS, mode="implication",
+             antecedent=_HOLD_ANT, consequent=_HOLD_CON, within_cycles=1)
+    assert r["holds"] is True            # vacuously
+    assert r["vacuous"] is True
+    assert r["overlap"] is True
+    assert r["antecedent_count"] == 1
+    assert r["violation_count"] == 0
+    assert any("VACUOUS" in w for w in r["warnings"])
+
+
+def test_implication_non_overlap_catches_premature_deassertion(tmp_path):
+    """overlap=false starts the response window the NEXT cycle → it sees valid
+    drop and reports a real violation, not a vacuous pass."""
+    r = _run(tmp_path, _DEASSERT, _VR_SIGS, mode="implication",
+             antecedent=_HOLD_ANT, consequent=_HOLD_CON,
+             within_cycles=1, overlap=False)
+    assert r["holds"] is False
+    assert r["vacuous"] is False
+    assert r["overlap"] is False
+    assert r["violation_count"] == 1
+    assert r["counterexample"]["cycle_index"] == 1
+    assert not any("VACUOUS" in w for w in r["warnings"])
+
+
+def test_implication_non_overlap_holds_when_valid_is_held(tmp_path):
+    """overlap=false on a trace where valid IS held until ready → genuine pass,
+    not vacuous."""
+    r = _run(tmp_path, _HELD, _VR_SIGS, mode="implication",
+             antecedent=_HOLD_ANT, consequent=_HOLD_CON,
+             within_cycles=1, overlap=False)
+    assert r["holds"] is True
+    assert r["vacuous"] is False
+    assert r["violation_count"] == 0
+
+
+def test_implication_non_overlap_requires_within_ge_1(tmp_path):
+    r = _run(tmp_path, _HELD, _VR_SIGS, mode="implication",
+             antecedent=_HOLD_ANT, consequent=_HOLD_CON,
+             within_cycles=0, overlap=False)
+    assert r["holds"] is False
+    assert "overlap=false" in (r["reason"] or "")
+
+
+def test_implication_genuine_later_response_not_vacuous(tmp_path):
+    """A real response-arrives-later property (req -> ack within 3) is NOT
+    vacuous even with overlap=True — the window genuinely contributed."""
+    cycles = [{"req": 0, "ack": 0}, {"req": 1, "ack": 0}, {"req": 0, "ack": 0},
+              {"req": 0, "ack": 1}, {"req": 0, "ack": 0}]
+    r = _run(tmp_path, cycles, _RA_SIGS, mode="implication",
+             antecedent=[{"signal": "top.req", "op": "eq", "value": 1}],
+             consequent=[{"signal": "top.ack", "op": "eq", "value": 1}],
+             within_cycles=3)
+    assert r["holds"] is True
+    assert r["vacuous"] is False
+    assert not any("VACUOUS" in w for w in r["warnings"])
+
+
+def test_implication_inconclusive_not_mislabeled_vacuous(tmp_path):
+    """An inconclusive-at-end PASS must NOT be flagged vacuous (no antecedent was
+    satisfied on its own cycle)."""
+    cycles = [{"req": 0, "ack": 0}, {"req": 0, "ack": 0}, {"req": 1, "ack": 0}]
+    r = _run(tmp_path, cycles, _RA_SIGS, mode="implication",
+             antecedent=[{"signal": "top.req", "op": "eq", "value": 1}],
+             consequent=[{"signal": "top.ack", "op": "eq", "value": 1}],
+             within_cycles=3)
+    assert r["holds"] is True
+    assert r["inconclusive_count"] == 1
+    assert r["vacuous"] is False
+
+
 def test_unknown_x_cycle_reported_not_passed(tmp_path):
     cycles = [{"cnt": 1}, {"cnt": "x"}, {"cnt": 2}]
     r = _run(tmp_path, cycles, _CNT_SIGS, mode="always",

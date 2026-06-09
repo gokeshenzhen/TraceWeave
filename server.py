@@ -1857,7 +1857,9 @@ async def list_tools():
                 "a term is {signal, op, value} (op: eq/ne/gt/ge/lt/le/is_x/is_known); a "
                 "predicate is a list of terms (implicit AND — run two calls for OR). Modes: "
                 "always(P), never(P), eventually(P), implication (A |-> B within N "
-                "cycles, the protocol-response template), and sequence (the per-accepted-beat "
+                "cycles, the protocol-response template; set overlap=false for |=> = a "
+                "stability/hold property where B must STILL hold the NEXT cycle, e.g. "
+                "HTRANS/valid held through a wait state), and sequence (the per-accepted-beat "
                 "increment of a signal — address-stride checks like AHB haddr +stride; "
                 "supports modulo for WRAP bursts and restart_when for burst boundaries). "
                 "x/z cycles are reported as "
@@ -1901,6 +1903,7 @@ async def list_tools():
                         "required": ["signal", "value"],
                     },
                     "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A (inclusive). Default 1.", "default": 1},
+                    "overlap": {"type": "boolean", "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.", "default": True},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
                     "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
                     "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace.", "default": -1},
@@ -2657,6 +2660,7 @@ async def _dispatch(name: str, args: dict):
             consequent=args.get("consequent"),
             delta=args.get("delta"),
             within_cycles=args.get("within_cycles", 1),
+            overlap=args.get("overlap", True),
             edge=args.get("edge", "posedge"),
             start_ps=_resolve_time(args.get("start_time_ps", 0)),
             end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),

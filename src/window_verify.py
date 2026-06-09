@@ -45,6 +45,7 @@ def verify_window(
     consequent: list[dict] | None = None,
     delta: dict | None = None,
     within_cycles: int = 1,
+    overlap: bool = True,
     edge: str = "posedge",
     start_ps: int = 0,
     end_ps: int = -1,
@@ -61,8 +62,10 @@ def verify_window(
         "start_ps": int(start_ps),
         "end_ps": int(end_ps),
         "within_cycles": int(within_cycles) if mode == "implication" else None,
+        "overlap": bool(overlap) if mode == "implication" else None,
         "signals": [],
         "holds": False,
+        "vacuous": False,
         "cycles_evaluated": 0,
         "unknown_cycles": 0,
         "antecedent_count": 0,
@@ -94,6 +97,12 @@ def verify_window(
             return result
         if within_cycles < 0:
             result["reason"] = "within_cycles must be >= 0"
+            return result
+        if not overlap and within_cycles < 1:
+            result["reason"] = (
+                "overlap=false (non-overlapping: response window starts the NEXT "
+                "cycle) requires within_cycles >= 1"
+            )
             return result
     else:
         # sequence reuses `predicate` as the accepted-beat gate.
@@ -161,7 +170,7 @@ def verify_window(
     if mode == "implication":
         _eval_implication(
             result, samples, _resolve_set(antecedent), _resolve_set(consequent),
-            within_cycles,
+            within_cycles, overlap,
         )
     elif mode == "sequence":
         _eval_sequence(result, samples, _resolve_set(predicate), _resolve_delta(delta, sig_map))
@@ -178,6 +187,15 @@ def verify_window(
             f"{result['inconclusive_count']} antecedent(s) fired too close to the window "
             "end to confirm a response within the window — reported as inconclusive, "
             "not as violations. Extend the window to check them."
+        )
+    if result.get("vacuous"):
+        warnings.append(
+            f"VACUOUS PASS: all {result['antecedent_count']} antecedent(s) satisfied the "
+            "consequent on the SAME cycle, so within_cycles never mattered — this 'holds' "
+            "does NOT prove the consequent on any LATER cycle and must not be used as "
+            "exclusion evidence. If you meant a stability/hold property ('must STILL hold "
+            "the next cycle', e.g. valid/HTRANS held through a wait state), re-run with "
+            "overlap=false to start the response window at the next cycle."
         )
 
     _attach_cursor(result, cursor_store, wave_path, edge, cursor_name, cursor_note)
@@ -216,14 +234,23 @@ def _eval_simple(result: dict, samples: list[dict], mode: str, terms: list[dict]
 
 def _eval_implication(
     result: dict, samples: list[dict], antecedent: list[dict],
-    consequent: list[dict], within: int,
+    consequent: list[dict], within: int, overlap: bool = True,
 ) -> None:
+    """Overlapping (`|->`, default) vs non-overlapping (`|=>`, overlap=False).
+
+    ``overlap=True`` checks the consequent on the inclusive window [i, i+within]
+    (the antecedent cycle itself may satisfy it). ``overlap=False`` starts at the
+    NEXT cycle, [i+1, i+within] — the right shape for a stability/hold property
+    ("must STILL hold next cycle", e.g. AHB HTRANS held through a wait state),
+    where the antecedent already implies the consequent on its own cycle.
+    """
     n = len(samples)
     result["cycles_evaluated"] = n
     unknown = 0
     ant_count = 0
     violations = 0
     inconclusive = 0
+    responded_same = 0  # satisfied on the antecedent's OWN cycle (overlap only)
     first_violation: dict | None = None
     for i, s in enumerate(samples):
         a = _eval_predicate(antecedent, s["signals"])
@@ -233,11 +260,14 @@ def _eval_implication(
         if not a:
             continue
         ant_count += 1
-        last = i + within  # inclusive response window [i, i+within]
+        start = i if overlap else i + 1  # non-overlapping starts next cycle
+        last = i + within  # inclusive response window end
         found = False
-        for j in range(i, min(last, n - 1) + 1):
+        for j in range(start, min(last, n - 1) + 1):
             if _eval_predicate(consequent, samples[j]["signals"]) is True:
                 found = True
+                if j == i:
+                    responded_same += 1
                 break
         if found:
             continue
@@ -254,6 +284,18 @@ def _eval_implication(
     result["inconclusive_count"] = inconclusive
     result["counterexample"] = first_violation
     result["holds"] = violations == 0
+    # Vacuity guard (overlapping only): if EVERY antecedent satisfied the
+    # consequent on its OWN cycle, the within window never contributed — a PASS
+    # here does NOT prove the consequent on any LATER cycle. The classic trap is
+    # a hold property whose antecedent already implies the consequent (e.g.
+    # antecedent has HTRANS==2 and consequent IS HTRANS==2): it would trivially
+    # hold. Keyed on responded_same==ant_count so an inconclusive-at-end PASS
+    # (which is NOT a same-cycle satisfaction) is never mislabeled vacuous.
+    # Surface it so the verdict is not misread as exclusion evidence; the fix is
+    # overlap=false.
+    result["vacuous"] = bool(
+        overlap and within >= 1 and ant_count > 0 and responded_same == ant_count
+    )
 
 
 def _eval_sequence(result: dict, samples: list[dict], gate: list[dict], delta: dict) -> None:
