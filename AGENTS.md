@@ -34,6 +34,20 @@ Rules:
   and verify the opposite side with waveform evidence before assigning root
   cause; state which sides were checked. See `docs/workflow.md`.
 
+## Debug Discipline
+
+`docs/debug-discipline.md` is the module-type-agnostic debug discipline — a
+reusable, copy-paste prompt for any failure (protocol/bus, datapath/algorithm,
+or control/FSM), not only protocol mismatches. Follow it before assigning a root
+cause. Its through-line: good discipline, not more tool output, is what turns
+correct perception into a correct root cause — so ground every claim in a
+trace/log fact, backtrace the symptom to its originating driver, respect a
+tool's objective exclusions, keep two hypotheses alive and check the opposite
+side, and label uncertainty honestly. The doc holds the canonical five rules,
+maps each to the relevant TraceWeave tools, and specializes "the opposite side"
+per module type; the protocol-specific form of the same discipline lives in
+`docs/workflow.md`.
+
 ## First-Read Files
 
 For any new session, read these files first to build the project map:

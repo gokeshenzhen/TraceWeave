@@ -14,6 +14,7 @@ novas.conf
 novas.rc
 docs/*
 !docs/architecture.md
+!docs/debug-discipline.md
 .vscode/
 .idea/
 *.swp
