@@ -447,6 +447,9 @@ class GetSignalsByCycleResult(SchemaModel):
     num_cycles_returned: int
     capped: bool = False
     truncated: bool
+    resolved_from_time: bool = False
+    requested_start_time_ps: int | None = None
+    requested_end_time_ps: int | None = None
     cycles: list[CycleEntry] = Field(default_factory=list)
     signal_errors: dict[str, str] = Field(default_factory=dict)
 

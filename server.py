@@ -1157,15 +1157,23 @@ async def list_tools():
                     },
                     "start_cycle": {
                         "type": "integer",
-                        "description": "Starting cycle index (0-based). Default: 0",
+                        "description": "Starting cycle index (0-based). Default: 0. Mutually exclusive with start_time_ps.",
                         "default": 0,
                         "minimum": 0,
                     },
                     "num_cycles": {
                         "type": "integer",
-                        "description": f"Number of cycles to sample. Default: 16. The server caps a single query at {MAX_CYCLES_PER_QUERY} cycles.",
+                        "description": f"Number of cycles to sample. Default: 16. The server caps a single query at {MAX_CYCLES_PER_QUERY} cycles. Mutually exclusive with end_time_ps.",
                         "default": 16,
                         "minimum": 0,
+                    },
+                    "start_time_ps": {
+                        "type": _TIMESPEC_TYPE,
+                        "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle." + _TIMESPEC_HINT,
+                    },
+                    "end_time_ps": {
+                        "type": _TIMESPEC_TYPE,
+                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles." + _TIMESPEC_HINT,
                     },
                     "sample_offset_ps": {
                         "type": "integer",
@@ -1175,6 +1183,7 @@ async def list_tools():
                     },
                 },
                 "required": ["wave_path", "clock_path", "signal_paths"],
+                "additionalProperties": False,
             },
         ),
 
@@ -2212,19 +2221,44 @@ async def _dispatch(name: str, args: dict):
         return schemas.SignalsAroundTimeResult.model_validate(result)
 
     elif name == "get_signals_by_cycle":
-        requested_num_cycles = args.get("num_cycles", 16)
-        effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
-        result = get_signals_by_cycle(
-            parser=_get_parser(args["wave_path"]),
-            clock_path=args["clock_path"],
-            signal_paths=args["signal_paths"],
-            edge=args.get("edge", "posedge"),
-            start_cycle=args.get("start_cycle", 0),
-            num_cycles=effective_num_cycles,
-            sample_offset_ps=args.get("sample_offset_ps", 1),
-            requested_num_cycles=requested_num_cycles,
-            capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
-        )
+        start_time_ps = _resolve_time(args["start_time_ps"]) if "start_time_ps" in args else None
+        end_time_ps = _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+        # Two locating axes, one input per axis (reject mixing within an axis).
+        if start_time_ps is not None and "start_cycle" in args:
+            raise ValueError("start_time_ps and start_cycle are mutually exclusive; pass one")
+        if end_time_ps is not None and "num_cycles" in args:
+            raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
+        if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
+            raise ValueError("end_time_ps must be >= start_time_ps")
+        if end_time_ps is not None:
+            # Count derived from the time window; the function applies the cap via
+            # max_cycles since the count is unknown until clock edges resolve.
+            result = get_signals_by_cycle(
+                parser=_get_parser(args["wave_path"]),
+                clock_path=args["clock_path"],
+                signal_paths=args["signal_paths"],
+                edge=args.get("edge", "posedge"),
+                start_cycle=args.get("start_cycle", 0),
+                sample_offset_ps=args.get("sample_offset_ps", 1),
+                start_time_ps=start_time_ps,
+                end_time_ps=end_time_ps,
+                max_cycles=MAX_CYCLES_PER_QUERY,
+            )
+        else:
+            requested_num_cycles = args.get("num_cycles", 16)
+            effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
+            result = get_signals_by_cycle(
+                parser=_get_parser(args["wave_path"]),
+                clock_path=args["clock_path"],
+                signal_paths=args["signal_paths"],
+                edge=args.get("edge", "posedge"),
+                start_cycle=args.get("start_cycle", 0),
+                num_cycles=effective_num_cycles,
+                sample_offset_ps=args.get("sample_offset_ps", 1),
+                requested_num_cycles=requested_num_cycles,
+                capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
+                start_time_ps=start_time_ps,
+            )
         return schemas.GetSignalsByCycleResult.model_validate(result)
 
     elif name == "get_waveform_summary":

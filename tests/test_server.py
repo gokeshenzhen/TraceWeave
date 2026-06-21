@@ -327,6 +327,77 @@ class TestProtocolBundleToolContract:
         assert result["capped"] is True
         assert result["num_cycles_returned"] == 3
 
+    async def test_cycle_query_schema_exposes_time_axes_and_rejects_unknown(self):
+        tools = await server.list_tools()
+        cycle_tool = next(tool for tool in tools if tool.name == "get_signals_by_cycle")
+
+        assert cycle_tool.inputSchema["additionalProperties"] is False
+        assert "start_time_ps" in cycle_tool.inputSchema["properties"]
+        assert "end_time_ps" in cycle_tool.inputSchema["properties"]
+
+    async def test_cycle_query_dispatch_resolves_start_time(self):
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        result = await server._dispatch(
+            "get_signals_by_cycle",
+            {
+                "wave_path": str(fixture),
+                "clock_path": "top_tb.clk",
+                "signal_paths": ["top_tb.data"],
+                "start_time_ps": 1000,
+                "num_cycles": 2,
+            },
+        )
+
+        assert result["resolved_from_time"] is True
+        assert result["requested_start_time_ps"] == 1000
+        assert result["start_cycle"] == 1
+        assert [cycle["time_ps"] for cycle in result["cycles"]] == [1500, 2500]
+
+    async def test_cycle_query_dispatch_resolves_time_window(self):
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        result = await server._dispatch(
+            "get_signals_by_cycle",
+            {
+                "wave_path": str(fixture),
+                "clock_path": "top_tb.clk",
+                "signal_paths": ["top_tb.data"],
+                "start_time_ps": 500,
+                "end_time_ps": 1500,
+            },
+        )
+
+        assert result["num_cycles_returned"] == 2
+        assert result["requested_end_time_ps"] == 1500
+        assert [cycle["time_ps"] for cycle in result["cycles"]] == [500, 1500]
+
+    async def test_cycle_query_dispatch_rejects_mixed_start_axis(self):
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        with pytest.raises(ValueError, match="start_time_ps and start_cycle"):
+            await server._dispatch(
+                "get_signals_by_cycle",
+                {
+                    "wave_path": str(fixture),
+                    "clock_path": "top_tb.clk",
+                    "signal_paths": ["top_tb.data"],
+                    "start_time_ps": 500,
+                    "start_cycle": 1,
+                },
+            )
+
+    async def test_cycle_query_dispatch_rejects_mixed_count_axis(self):
+        fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+        with pytest.raises(ValueError, match="end_time_ps and num_cycles"):
+            await server._dispatch(
+                "get_signals_by_cycle",
+                {
+                    "wave_path": str(fixture),
+                    "clock_path": "top_tb.clk",
+                    "signal_paths": ["top_tb.data"],
+                    "end_time_ps": 1500,
+                    "num_cycles": 2,
+                },
+            )
+
 
 _SCOREBOARD_MISMATCH_LINE = (
     "UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb "

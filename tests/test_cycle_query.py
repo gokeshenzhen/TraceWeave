@@ -116,6 +116,93 @@ def test_get_signals_by_cycle_honors_start_cycle_and_truncates():
     assert [cycle["cycle"] for cycle in result["cycles"]] == [1, 2]
 
 
+def test_get_signals_by_cycle_start_time_snaps_to_edge():
+    # 1000ps falls between edges 500 and 1500 -> snap forward to 1500 (cycle 1).
+    result = get_signals_by_cycle(
+        parser=_parser(),
+        clock_path="top_tb.clk",
+        signal_paths=["top_tb.data"],
+        start_time_ps=1000,
+        num_cycles=2,
+    )
+
+    assert result["resolved_from_time"] is True
+    assert result["requested_start_time_ps"] == 1000
+    assert result["start_cycle"] == 1
+    assert [cycle["time_ps"] for cycle in result["cycles"]] == [1500, 2500]
+    assert result["cycles"][0]["signals"]["top_tb.data"]["dec"] == 2
+
+
+def test_get_signals_by_cycle_start_time_before_first_edge_starts_at_zero():
+    result = get_signals_by_cycle(
+        parser=_parser(),
+        clock_path="top_tb.clk",
+        signal_paths=["top_tb.data"],
+        start_time_ps=100,
+        num_cycles=1,
+    )
+
+    assert result["start_cycle"] == 0
+    assert result["cycles"][0]["time_ps"] == 500
+
+
+def test_get_signals_by_cycle_time_window_counts_edges_inclusive():
+    # [500, 1500] inclusive on both ends -> edges 500 and 1500 -> 2 cycles.
+    result = get_signals_by_cycle(
+        parser=_parser(),
+        clock_path="top_tb.clk",
+        signal_paths=["top_tb.data"],
+        start_time_ps=500,
+        end_time_ps=1500,
+    )
+
+    assert result["resolved_from_time"] is True
+    assert result["requested_end_time_ps"] == 1500
+    assert result["num_cycles_returned"] == 2
+    assert [cycle["time_ps"] for cycle in result["cycles"]] == [500, 1500]
+
+
+def test_get_signals_by_cycle_partial_trailing_period_contributes_no_cycle():
+    # [500, 1400]: the trailing partial period (1400 < next edge 1500) holds no
+    # edge -> only the 500 edge is counted. No fractional-cycle rounding.
+    result = get_signals_by_cycle(
+        parser=_parser(),
+        clock_path="top_tb.clk",
+        signal_paths=["top_tb.data"],
+        start_time_ps=500,
+        end_time_ps=1400,
+    )
+
+    assert result["num_cycles_returned"] == 1
+    assert [cycle["time_ps"] for cycle in result["cycles"]] == [500]
+
+
+def test_get_signals_by_cycle_time_window_respects_max_cycles_cap():
+    result = get_signals_by_cycle(
+        parser=_parser(),
+        clock_path="top_tb.clk",
+        signal_paths=["top_tb.data"],
+        start_time_ps=500,
+        end_time_ps=2500,
+        max_cycles=2,
+    )
+
+    assert result["capped"] is True
+    assert result["num_cycles_requested"] == 3
+    assert result["effective_num_cycles"] == 2
+    assert result["num_cycles_returned"] == 2
+
+
+def test_get_signals_by_cycle_rejects_negative_start_time():
+    with pytest.raises(ValueError, match="start_time_ps"):
+        get_signals_by_cycle(
+            parser=_parser(),
+            clock_path="top_tb.clk",
+            signal_paths=["top_tb.data"],
+            start_time_ps=-1,
+        )
+
+
 def test_get_signals_by_cycle_reports_missing_signal_without_failing():
     result = get_signals_by_cycle(
         parser=_parser(),

@@ -5,7 +5,7 @@ cycle_query.py
 
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from statistics import median
 from typing import Any
 
@@ -20,7 +20,24 @@ def get_signals_by_cycle(
     sample_offset_ps: int = 1,
     requested_num_cycles: int | None = None,
     capped: bool = False,
+    start_time_ps: int | None = None,
+    end_time_ps: int | None = None,
+    max_cycles: int | None = None,
 ) -> dict[str, Any]:
+    """Sample ``signal_paths`` on ``num_cycles`` clock edges from ``start_cycle``.
+
+    Two orthogonal locating axes; pick one per axis (the dispatch layer rejects
+    mixing within an axis):
+
+    * start axis: ``start_cycle`` (index) OR ``start_time_ps`` (ps) — the latter
+      snaps to the first edge at/after the given time (``bisect_left``).
+    * count axis: ``num_cycles`` OR ``end_time_ps`` (ps) — the latter counts every
+      edge in ``[start, end_time_ps]`` (``bisect_right``), so the window is
+      inclusive on both ends and a partial trailing period contributes a cycle
+      iff it actually contains an edge. The count is always an exact edge count,
+      never a fractional-cycle division. ``max_cycles`` caps a time-derived count
+      (sets ``capped``); the slow path stays bounded.
+    """
     if edge not in {"posedge", "negedge"}:
         raise ValueError(f"edge must be 'posedge' or 'negedge', got {edge!r}")
     if start_cycle < 0:
@@ -29,11 +46,28 @@ def get_signals_by_cycle(
         raise ValueError("num_cycles must be >= 0")
     if sample_offset_ps < 0:
         raise ValueError("sample_offset_ps must be >= 0")
+    if start_time_ps is not None and start_time_ps < 0:
+        raise ValueError("start_time_ps must be >= 0")
+    if end_time_ps is not None and end_time_ps < 0:
+        raise ValueError("end_time_ps must be >= 0")
 
     clock_result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
     clock_transitions = clock_result.get("transitions", [])
     _validate_clock_width(parser, clock_path)
     edge_times = _extract_edge_times(clock_transitions, edge)
+
+    resolved_from_time = start_time_ps is not None or end_time_ps is not None
+    if start_time_ps is not None:
+        start_cycle = bisect_left(edge_times, start_time_ps)
+    if end_time_ps is not None:
+        derived = max(0, bisect_right(edge_times, end_time_ps) - start_cycle)
+        requested_num_cycles = derived
+        if max_cycles is not None and derived > max_cycles:
+            num_cycles = max_cycles
+            capped = True
+        else:
+            num_cycles = derived
+
     target_edges = edge_times[start_cycle:start_cycle + num_cycles]
     truncated = len(target_edges) < num_cycles
     original_num_cycles = num_cycles if requested_num_cycles is None else requested_num_cycles
@@ -50,6 +84,9 @@ def get_signals_by_cycle(
         "num_cycles_returned": len(target_edges),
         "capped": capped,
         "truncated": truncated,
+        "resolved_from_time": resolved_from_time,
+        "requested_start_time_ps": start_time_ps,
+        "requested_end_time_ps": end_time_ps,
         "cycles": [],
         "signal_errors": {},
     }
