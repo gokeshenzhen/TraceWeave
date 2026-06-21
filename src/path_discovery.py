@@ -266,10 +266,15 @@ def _classify_directory(root: Path) -> tuple[str, list[dict[str, Any]], list[dic
     local_sim_logs = _search_files([root], SIM_LOG_PATTERNS, 0)
     local_wave_files = _search_files([root], WAVE_PATTERNS, 0)
     child_case_dirs = _find_immediate_case_dirs(root)
-    if local_sim_logs or local_wave_files:
-        return "case_dir", local_sim_logs, local_wave_files, child_case_dirs
+    # Prefix-named nested case dirs (work_*/sim_*/case_*) mark a cases-container:
+    # they outrank loose aggregate logs sitting at the container top (e.g. a
+    # results dir holding both run_*.log/comp_*.log AND work_<case>/ subdirs), so
+    # pointing at such a container classifies as root_dir rather than letting the
+    # loose logs make it look like a single case dir and shadow the real cases.
     if child_case_dirs:
         return "root_dir", local_sim_logs, local_wave_files, child_case_dirs
+    if local_sim_logs or local_wave_files:
+        return "case_dir", local_sim_logs, local_wave_files, child_case_dirs
     return "unknown", local_sim_logs, local_wave_files, child_case_dirs
 
 
@@ -289,16 +294,50 @@ def _resolve_config_entries(base_dir: Path, entries: list[Any], kind: str) -> li
     return _dedupe_sorted(results)
 
 
-def _find_immediate_case_dirs(root: Path) -> list[Path]:
-    matches: list[Path] = []
+def _list_child_dirs(root: Path) -> list[Path]:
     try:
         children = sorted(root.iterdir(), key=lambda path: path.name)
     except OSError:
-        return matches
-    for child in children:
-        if not child.is_dir():
-            continue
-        if _search_files([child], SIM_LOG_PATTERNS, 0) or _search_files([child], WAVE_PATTERNS, 0):
+        return []
+    return [child for child in children if child.is_dir()]
+
+
+def _holds_wave_or_simlog(directory: Path) -> bool:
+    return bool(
+        _search_files([directory], SIM_LOG_PATTERNS, 0)
+        or _search_files([directory], WAVE_PATTERNS, 0)
+    )
+
+
+def _has_case_prefix(name: str) -> bool:
+    return name.lower().startswith(_CASE_PREFIXES)
+
+
+def _find_immediate_case_dirs(root: Path) -> list[Path]:
+    """Enumerate the case directories under ``root``.
+
+    A case directory directly holds a sim log or a waveform. To handle the
+    common results-container layout — ``root/work/work_<case>/dump.fsdb``, where
+    ``work/`` also carries loose aggregate ``run_*.log``/``comp_*.log`` at its
+    top — a child that contains prefix-named (``work_``/``sim_``/``case_``)
+    sub-directories holding waves/logs is treated as a container: its nested
+    per-case dirs are the case dirs, not the container itself. This stops the
+    container's loose aggregate logs from shadowing the real per-case dirs (the
+    failure where pointing at the project root found only ``work/`` and missed
+    every ``work_<case>/`` inside it). The prefix gate keeps a flat case dir's
+    build artifacts (``csrc``/``simv.daidir``/``dump``) from being misread as
+    nested cases, so a real flat case dir still resolves to itself.
+    """
+    matches: list[Path] = []
+    for child in _list_child_dirs(root):
+        nested = [
+            grandchild
+            for grandchild in _list_child_dirs(child)
+            if _has_case_prefix(grandchild.name) and _holds_wave_or_simlog(grandchild)
+        ]
+        if nested:
+            matches.extend(grandchild.resolve() for grandchild in nested)
+        elif _holds_wave_or_simlog(child):
             matches.append(child.resolve())
     return matches
 

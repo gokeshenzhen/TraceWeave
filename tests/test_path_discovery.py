@@ -159,6 +159,83 @@ class TestCaseMatching:
             assert any("Ambiguous case_name 'foo'" in hint for hint in result["hints"])
 
 
+class TestNestedCasesContainer:
+    """A results container (``work/``) that carries loose aggregate logs at its
+    top AND per-case ``work_<case>/`` subdirs must not let the aggregate logs
+    shadow the real per-case dirs (the glm_ahb_repro layout)."""
+
+    def _build_repro_tree(self, root: Path):
+        container = root / "work"
+        # loose aggregate logs directly at the container top (what shadowed the
+        # real cases before the fix)
+        for case in ("rr_test", "burst_test"):
+            _write(container / f"comp_ahb_mtx_{case}.log", "vcs\n")
+            _write(container / f"run_ahb_mtx_{case}.log", "Chronologic VCS\n")
+        # real per-case dirs nested one level down
+        for case in ("rr_test", "burst_test"):
+            case_dir = container / f"work_ahb_mtx_{case}"
+            _write(case_dir / "comp.log", "vcs\n")
+            _write(case_dir / "run.log", "Chronologic VCS\n")
+            _write(case_dir / "ahb_mtx.fsdb", "1" * 4096)
+
+    def test_root_with_case_name_resolves_nested_case_wave(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._build_repro_tree(root)
+
+            result = discover_sim_paths(str(root), "ahb_mtx_rr_test")
+
+            assert result["discovery_mode"] == "root_dir"
+            assert result["case_dir"] == str((root / "work" / "work_ahb_mtx_rr_test").resolve())
+            assert result["wave_files"][0]["path"] == str(
+                (root / "work" / "work_ahb_mtx_rr_test" / "ahb_mtx.fsdb").resolve()
+            )
+            assert result["sim_logs"][0]["path"] == str(
+                (root / "work" / "work_ahb_mtx_rr_test" / "run.log").resolve()
+            )
+
+    def test_root_without_case_name_lists_nested_cases_not_container(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._build_repro_tree(root)
+
+            result = discover_sim_paths(str(root))
+
+            # names carry the prefix-stripped case token (existing behavior)
+            names = {case["name"] for case in result["available_cases"]}
+            assert names == {"ahb_mtx_rr_test", "ahb_mtx_burst_test"}
+            assert "work" not in names
+            dirs = {case["dir"] for case in result["available_cases"]}
+            assert all(d.endswith(("work_ahb_mtx_rr_test", "work_ahb_mtx_burst_test")) for d in dirs)
+
+    def test_pointing_at_container_classifies_as_root_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._build_repro_tree(root)
+
+            result = discover_sim_paths(str(root / "work"), "ahb_mtx_rr_test")
+
+            assert result["discovery_mode"] == "root_dir"
+            assert result["case_dir"] == str((root / "work" / "work_ahb_mtx_rr_test").resolve())
+            assert result["wave_files"][0]["path"].endswith("work_ahb_mtx_rr_test/ahb_mtx.fsdb")
+
+    def test_flat_case_dir_with_build_artifacts_resolves_to_itself(self):
+        # prefix gate guard: csrc/simv.daidir subdirs must not be misread as
+        # nested cases, so a flat case dir still classifies as case_dir.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_dir = Path(tmpdir) / "case0"
+            _write(case_dir / "run.log", "Chronologic VCS\n")
+            _write(case_dir / "top_tb.fsdb", "1" * 4096)
+            _write(case_dir / "csrc" / "foo.c", "int x;\n")
+            (case_dir / "simv.daidir").mkdir(parents=True, exist_ok=True)
+
+            result = discover_sim_paths(str(case_dir))
+
+            assert result["discovery_mode"] == "case_dir"
+            assert result["case_dir"] == str(case_dir.resolve())
+            assert result["wave_files"][0]["path"] == str((case_dir / "top_tb.fsdb").resolve())
+
+
 class TestConfigOverride:
     def test_mcp_yaml_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -187,7 +264,10 @@ class TestConfigOverride:
 
             assert result["config_source"] == ".mcp.yaml"
             assert result["config_root"] == str(verif_root.resolve())
-            assert result["discovery_mode"] == "unknown"
+            # The nested work/work_case0 case dir is now auto-discoverable, so
+            # the directory classifies as a cases-container (root_dir). The
+            # config override still drives the actual paths below regardless.
+            assert result["discovery_mode"] == "root_dir"
             assert result["case_dir"] == str((verif_root / "work" / "work_case0").resolve())
             assert result["compile_logs"][0]["path"] == str(elab_log.resolve())
             assert result["sim_logs"][0]["path"] == str(sim_log.resolve())
