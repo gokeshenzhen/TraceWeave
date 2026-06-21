@@ -405,6 +405,9 @@ class SignalAtTimeResult(SchemaModel):
     time_ps: int
     time_ns: float
     value: dict[str, Any] | None = None
+    # Set when a bare bus name was auto-completed to name[msb:lsb]; carries the
+    # original input so the caller sees the path was resolved.
+    resolved_from: str | None = None
 
 
 class SignalTransitionsResult(SchemaModel):
@@ -426,6 +429,11 @@ class SignalsAroundTimeResult(SchemaModel):
     # the clock edge that settles back within the cycle); the affected signals also
     # carry center_transient / center_settles_to / center_settle_ps. None otherwise.
     transient_note: str | None = None
+    # Bare bus names auto-completed to name[msb:lsb] (original -> resolved). The
+    # signals dict is keyed by the resolved path.
+    resolved_aliases: dict[str, str] = Field(default_factory=dict)
+    # did_you_mean for signals that still could not be resolved (original -> candidates).
+    signal_suggestions: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class CycleEntry(SchemaModel):
@@ -452,6 +460,11 @@ class GetSignalsByCycleResult(SchemaModel):
     requested_end_time_ps: int | None = None
     cycles: list[CycleEntry] = Field(default_factory=list)
     signal_errors: dict[str, str] = Field(default_factory=dict)
+    # Bare bus names auto-completed to name[msb:lsb] (original -> resolved). The
+    # cycle signal maps are keyed by the resolved path.
+    resolved_aliases: dict[str, str] = Field(default_factory=dict)
+    # did_you_mean for signals that still could not be resolved (path -> candidates).
+    signal_suggestions: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AnalyzeFailuresResult(TruncatableResult):

@@ -399,6 +399,98 @@ class TestProtocolBundleToolContract:
             )
 
 
+class _FakeFsdbParser:
+    """Mimics the FSDB backend's signal naming: a bus's canonical path carries a
+    [msb:lsb] suffix, so a bare bus name fails get_signal_width and must be
+    resolved via search_signals (the P4 papercut). Scalars resolve as-is."""
+
+    def __init__(self, table):
+        self._table = dict(table)  # canonical path -> width
+
+    def get_signal_width(self, path):
+        if path in self._table:
+            return self._table[path]
+        raise KeyError(f"Signal not found: '{path}'")
+
+    def search_signals(self, keyword, max_results=100):
+        leaf = keyword.rsplit(".", 1)[-1]
+        results = [
+            {"path": p, "name": p.split(".")[-1], "width": w}
+            for p, w in self._table.items()
+            if leaf in p.split(".")[-1]
+        ]
+        return {"results": results[:max_results]}
+
+    def get_value_at_time(self, path, time_ps):
+        if path not in self._table:
+            raise KeyError(f"Signal not found: '{path}'. Use search_signals first.")
+        return {
+            "signal": path,
+            "time_ps": time_ps,
+            "time_ns": time_ps / 1000,
+            "value": {"bin": "1", "hex": "0x1", "dec": 1},
+        }
+
+
+_FAKE_TABLE = {
+    "tb.u.HADDRM[31:0]": 32,
+    "tb.u.HWRITEM": 1,
+    "tb.u.HRESP[1:0]": 2,
+}
+
+
+class TestBareSignalNameResolution:
+    def test_resolve_signal_list_autocompletes_bus_keeps_scalar(self):
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        resolved, aliases = server._resolve_signal_list(
+            parser, ["tb.u.HADDRM", "tb.u.HWRITEM"]
+        )
+        assert resolved == ["tb.u.HADDRM[31:0]", "tb.u.HWRITEM"]
+        assert aliases == {"tb.u.HADDRM": "tb.u.HADDRM[31:0]"}
+
+    def test_resolve_signal_list_leaves_already_sliced_and_missing(self):
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        resolved, aliases = server._resolve_signal_list(
+            parser, ["tb.u.HADDRM[31:0]", "tb.u.NOPE"]
+        )
+        assert resolved == ["tb.u.HADDRM[31:0]", "tb.u.NOPE"]
+        assert aliases == {}
+
+    def test_suggest_signal_paths_for_bare_bus(self):
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        assert server._suggest_signal_paths(parser, "tb.u.HRESP") == ["tb.u.HRESP[1:0]"]
+
+    def test_suggest_signal_paths_empty_for_unknown_and_sliced(self):
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        assert server._suggest_signal_paths(parser, "tb.u.NOPE") == []
+        assert server._suggest_signal_paths(parser, "tb.u.HADDRM[31:0]") == []
+
+
+@pytest.mark.anyio
+class TestBareSignalNameDispatch:
+    async def test_get_signal_at_time_resolves_bare_bus(self, monkeypatch):
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        monkeypatch.setattr(server, "_get_parser", lambda _p: parser)
+        result = await server._dispatch(
+            "get_signal_at_time",
+            {"wave_path": "x.fsdb", "signal_path": "tb.u.HADDRM", "time_ps": 1000},
+        )
+        assert result["signal"] == "tb.u.HADDRM[31:0]"
+        assert result["resolved_from"] == "tb.u.HADDRM"
+
+    async def test_get_signal_at_time_miss_appends_did_you_mean(self, monkeypatch):
+        # tb.x.HADDRM: scope tb.x is absent so the bare name does not auto-resolve
+        # (no same-scope [..] candidate), but the leaf HADDRM yields a cross-scope
+        # suggestion.
+        parser = _FakeFsdbParser(_FAKE_TABLE)
+        monkeypatch.setattr(server, "_get_parser", lambda _p: parser)
+        with pytest.raises(KeyError, match="did_you_mean.*tb.u.HADDRM"):
+            await server._dispatch(
+                "get_signal_at_time",
+                {"wave_path": "x.fsdb", "signal_path": "tb.x.HADDRM", "time_ps": 1000},
+            )
+
+
 _SCOREBOARD_MISMATCH_LINE = (
     "UVM_ERROR /tmp/top_tb.sv(129) @ 1429.000 ns: uvm_test_top.env.scb "
     "[SCOREBOARD] expected=0x5a, actual=0x58 txn_id=84\n"

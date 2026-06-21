@@ -52,7 +52,7 @@ from src.hierarchy_handles import HandleStore, compute_handle
 from src.timespec import resolve_timespec
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool until the workflow earns that extra surface area.
-from src.verify_condition import diff_first_divergence, period, inspect_handshake
+from src.verify_condition import diff_first_divergence, period, inspect_handshake, _resolve_signal_path
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.handshake_sweep import sweep_handshake_anomalies
 from src.window_verify import verify_window
@@ -749,6 +749,46 @@ def _resolve_time(spec, *, allow_sentinel: bool = False) -> int:
     return resolve_timespec(spec, _cursor_store, allow_sentinel=allow_sentinel)
 
 
+def _resolve_signal_list(parser, paths: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Auto-complete bare bus names to ``name[msb:lsb]`` for a list of paths.
+
+    Returns ``(resolved_paths, aliases)`` where ``aliases`` maps an original
+    path to its resolved form only when it changed. Mirrors the bare-name
+    tolerance the verify/window tools already get via ``_resolve_signal_path``,
+    so the point/cycle value tools accept a bare vector name (the recurring
+    ``HADDRM`` -> ``HADDRM[31:0]`` papercut) instead of returning
+    ``signal_not_found`` per signal.
+    """
+    resolved: list[str] = []
+    aliases: dict[str, str] = {}
+    for path in paths:
+        new_path = _resolve_signal_path(parser, path)
+        resolved.append(new_path)
+        if new_path != path:
+            aliases[path] = new_path
+    return resolved, aliases
+
+
+def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
+    """Best-effort ``did_you_mean`` for a path the parser could not resolve.
+
+    Searches by leaf name and returns full paths, preferring a same-scope
+    bit-sliced match (``<path>[...]``) then any other signal sharing the leaf.
+    Empty when the path already carries a bit-range or the search backend is
+    unavailable."""
+    if not path or "[" in path or not hasattr(parser, "search_signals"):
+        return []
+    leaf = path.rsplit(".", 1)[-1]
+    try:
+        results = parser.search_signals(leaf).get("results", [])
+    except Exception:
+        return []
+    candidates = [r.get("path", "") for r in results if r.get("path")]
+    same_scope = [p for p in candidates if p == path or p.startswith(path + "[")]
+    ordered = same_scope + [p for p in candidates if p not in same_scope]
+    return ordered[:limit]
+
+
 def _get_parser(wave_path: str):
     """Return a cached parser instance to avoid reparsing VCDs or reopening FSDBs."""
     signature = _get_wave_signature(wave_path)
@@ -1036,7 +1076,7 @@ async def list_tools():
                 "properties": {
                     "wave_path":   {"type": "string"},
                     "signal_path": {"type": "string",
-                                    "description": "Full hierarchical path, for example top_tb.dut.s_bits"},
+                                    "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list."},
                     "time_ps":     {"type": _TIMESPEC_TYPE, "description": "Query time." + _TIMESPEC_HINT},
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
@@ -1101,7 +1141,7 @@ async def list_tools():
                 "properties": {
                     "wave_path":     {"type": "string"},
                     "signal_paths":  {"type": "array", "items": {"type": "string"},
-                                      "description": "List of full hierarchical signal paths"},
+                                      "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions."},
                     "center_time_ps": {
                         "type": _TIMESPEC_TYPE,
                         "description": (
@@ -1153,7 +1193,7 @@ async def list_tools():
                     "signal_paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of full hierarchical signal paths to sample",
+                        "description": "List of full hierarchical signal paths to sample. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions.",
                     },
                     "start_cycle": {
                         "type": "integer",
@@ -2187,9 +2227,18 @@ async def _dispatch(name: str, args: dict):
             raise ValueError(f"Unsupported format: .{ext}")
 
     elif name == "get_signal_at_time":
-        result = _get_parser(args["wave_path"]).get_value_at_time(
-            args["signal_path"], _resolve_time(args["time_ps"]),
-        )
+        parser = _get_parser(args["wave_path"])
+        raw_path = args["signal_path"]
+        resolved_path = _resolve_signal_path(parser, raw_path)
+        try:
+            result = parser.get_value_at_time(resolved_path, _resolve_time(args["time_ps"]))
+        except KeyError as exc:
+            suggestions = _suggest_signal_paths(parser, raw_path)
+            if suggestions:
+                raise KeyError(f"{exc} did_you_mean: {', '.join(suggestions)}") from exc
+            raise
+        if resolved_path != raw_path:
+            result["resolved_from"] = raw_path
         return schemas.SignalAtTimeResult.model_validate(result)
 
     elif name == "get_signal_transitions":
@@ -2204,7 +2253,8 @@ async def _dispatch(name: str, args: dict):
         parser = _get_parser(args["wave_path"])
         center_ps = _resolve_time(args["center_time_ps"])
         window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
-        signal_paths = args.get("signal_paths") or []
+        raw_paths = args.get("signal_paths") or []
+        signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
         _validate_signals_around_time_args(
             parser, center_ps, window_ps, signal_paths
         )
@@ -2218,6 +2268,16 @@ async def _dispatch(name: str, args: dict):
         # glitch at the clock edge) so a point sample is not misread as the settled
         # protocol value (e.g. an interconnect mux glitching to idle at each edge).
         annotate_center_transients(result)
+        result["resolved_aliases"] = aliases
+        signals = result.get("signals") or {}
+        suggestions: dict[str, list[str]] = {}
+        for raw_path, resolved_path in zip(raw_paths, signal_paths):
+            entry = signals.get(resolved_path)
+            if isinstance(entry, dict) and entry.get("error"):
+                hits = _suggest_signal_paths(parser, raw_path)
+                if hits:
+                    suggestions[raw_path] = hits
+        result["signal_suggestions"] = suggestions
         return schemas.SignalsAroundTimeResult.model_validate(result)
 
     elif name == "get_signals_by_cycle":
@@ -2230,13 +2290,16 @@ async def _dispatch(name: str, args: dict):
             raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
         if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
             raise ValueError("end_time_ps must be >= start_time_ps")
+        parser = _get_parser(args["wave_path"])
+        raw_paths = args["signal_paths"]
+        signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
         if end_time_ps is not None:
             # Count derived from the time window; the function applies the cap via
             # max_cycles since the count is unknown until clock edges resolve.
             result = get_signals_by_cycle(
-                parser=_get_parser(args["wave_path"]),
+                parser=parser,
                 clock_path=args["clock_path"],
-                signal_paths=args["signal_paths"],
+                signal_paths=signal_paths,
                 edge=args.get("edge", "posedge"),
                 start_cycle=args.get("start_cycle", 0),
                 sample_offset_ps=args.get("sample_offset_ps", 1),
@@ -2248,9 +2311,9 @@ async def _dispatch(name: str, args: dict):
             requested_num_cycles = args.get("num_cycles", 16)
             effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
             result = get_signals_by_cycle(
-                parser=_get_parser(args["wave_path"]),
+                parser=parser,
                 clock_path=args["clock_path"],
-                signal_paths=args["signal_paths"],
+                signal_paths=signal_paths,
                 edge=args.get("edge", "posedge"),
                 start_cycle=args.get("start_cycle", 0),
                 num_cycles=effective_num_cycles,
@@ -2259,6 +2322,13 @@ async def _dispatch(name: str, args: dict):
                 capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
                 start_time_ps=start_time_ps,
             )
+        result["resolved_aliases"] = aliases
+        result["signal_suggestions"] = {
+            path: hits
+            for path in result.get("signal_errors", {})
+            for hits in [_suggest_signal_paths(parser, path)]
+            if hits
+        }
         return schemas.GetSignalsByCycleResult.model_validate(result)
 
     elif name == "get_waveform_summary":
