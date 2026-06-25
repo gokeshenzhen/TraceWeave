@@ -14,10 +14,15 @@ from src.fsdb_parser import FSDBParser
 REAL_FSDB = "/home/robin/Projects/mcp_demo/tb/work/work_my_case0/top_tb.fsdb"
 SIGNAL    = "top_tb.sva_top_inst.s_bits[2:0]"   # 已确认存在
 
-pytestmark = pytest.mark.skipif(
+# 依赖具体信号 SIGNAL 的测试类，需要这个特定 FSDB 才能跑。
+_needs_real_fsdb = pytest.mark.skipif(
     not os.path.exists(REAL_FSDB),
     reason="真实 FSDB 文件不存在，跳过"
 )
+
+# 摘要/时长测试不依赖任何特定信号，可对任意 FSDB 验证；
+# 用 TW_SUMMARY_FSDB 覆盖即可在没有上面那个私有 FSDB 时也能跑。
+SUMMARY_FSDB = os.environ.get("TW_SUMMARY_FSDB", REAL_FSDB)
 
 
 @pytest.fixture(scope="module")
@@ -32,6 +37,7 @@ def parser():
 # 信号搜索
 # ═══════════════════════════════════════════════════════════════════
 
+@_needs_real_fsdb
 class TestSearchSignals:
 
     def test_search_s_bits_found(self, parser):
@@ -70,6 +76,7 @@ class TestSearchSignals:
 # 时刻值查询
 # ═══════════════════════════════════════════════════════════════════
 
+@_needs_real_fsdb
 class TestGetValueAtTime:
 
     def test_value_at_310000ps(self, parser):
@@ -105,6 +112,7 @@ class TestGetValueAtTime:
 # 跳变列表查询
 # ═══════════════════════════════════════════════════════════════════
 
+@_needs_real_fsdb
 class TestGetTransitions:
 
     def test_transitions_in_range(self, parser):
@@ -146,6 +154,7 @@ class TestGetTransitions:
 # 多信号时间窗口查询
 # ═══════════════════════════════════════════════════════════════════
 
+@_needs_real_fsdb
 class TestGetSignalsAroundTime:
 
     def test_center_value_correct(self, parser):
@@ -187,3 +196,49 @@ class TestGetSignalsAroundTime:
         result  = parser.get_signals_around_time(signals, 310000, 5000)
         assert SIGNAL in result["signals"]
         assert "top_tb.nonexistent.sig" in result["signals"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 波形摘要 / 仿真时长（端到端验证 native 全局时间 API）
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.mark.skipif(
+    not os.path.exists(SUMMARY_FSDB),
+    reason="没有可用 FSDB（设置 TW_SUMMARY_FSDB 指向任意 FSDB 即可运行）"
+)
+class TestGetSummary:
+
+    @pytest.fixture(scope="class")
+    def summary_parser(self):
+        p = FSDBParser(SUMMARY_FSDB)
+        yield p
+        p.close()
+
+    def test_duration_is_positive_for_valid_fsdb(self, summary_parser):
+        """一个有效的、含跳变的 FSDB，时长必须为正。
+
+        回归保护：原 native 实现从“最大 idcode 的单个信号”推导结束时间，
+        该信号若是 static/记账信号会让有效 FSDB 报出 0。现已改为优先调用
+        文件级全局 API ffrGetMaxFsdbTag64()。
+        """
+        s = summary_parser.get_summary()
+        assert s["simulation_duration_ps"] > 0
+
+    def test_native_global_end_time_is_positive(self, summary_parser):
+        """直接验证 native 层：全局时间 API 自身就应返回非零，
+        不依赖 Python 侧的逐信号兜底。"""
+        summary_parser._open()
+        end_ps = int(summary_parser._lib.fsdb_get_end_time(summary_parser._handle))
+        assert end_ps > 0
+
+    def test_duration_ns_consistent_with_ps(self, summary_parser):
+        s = summary_parser.get_summary()
+        assert s["simulation_duration_ns"] == s["simulation_duration_ps"] / 1000
+
+    def test_summary_structure(self, summary_parser):
+        s = summary_parser.get_summary()
+        for key in ("file", "format", "simulation_duration_ps",
+                    "simulation_duration_ns", "total_signals",
+                    "top_modules", "sample_signals"):
+            assert key in s
+        assert s["format"] == "FSDB"

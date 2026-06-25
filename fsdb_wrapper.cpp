@@ -648,13 +648,25 @@ fsdb_batch_window_transitions(
     return emitted;
 }
 
-/* ── 获取仿真结束时间（ps）─────────────────────────────────────── */
+/* ── 获取仿真结束时间（ps）─────────────────────────────────────────
+ * 首选 reader 的文件级全局时间 API ffrGetMaxFsdbTag64()，它直接返回整个
+ * FSDB 的最大仿真时间，与具体信号无关。旧实现从“最大 idcode 的单个信号”
+ * 推导结束时间——该信号是任意挑选的，若它恰好是 static/config/testbench
+ * 记账信号（无值变化），就会让一个完全有效的 FSDB 报出 end_ps==0。只有在
+ * 全局 API 不可用（返回 FAILURE）时才退回旧的单信号遍历作为最后兜底。
+ */
 unsigned long long
 fsdb_get_end_time(void *handle)
 {
     if (!handle) return 0;
     FsdbCtx *ctx = (FsdbCtx*)handle;
 
+    /* 首选：文件级全局最大时间 */
+    fsdbTag64 gmax;
+    if (FSDB_RC_SUCCESS == ctx->obj->ffrGetMaxFsdbTag64(&gmax))
+        return _TagToPs(gmax);
+
+    /* 兜底：旧的单信号遍历（全局 API 不可用时） */
     fsdbVarIdcode max_id = ctx->obj->ffrGetMaxVarIdcode();
     if (max_id < FSDB_MIN_VAR_IDCODE) return 0;
 
@@ -666,7 +678,7 @@ fsdb_get_end_time(void *handle)
     if (hdl && hdl->ffrHasIncoreVC()) {
         fsdbTag64 time;
         if (FSDB_RC_SUCCESS == hdl->ffrGetMaxXTag((void*)&time))
-            end_ps = ((unsigned long long)time.H << 32) | time.L;
+            end_ps = _TagToPs(time);
         hdl->ffrFree();
     }
     ctx->obj->ffrUnloadSignals();
