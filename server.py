@@ -945,7 +945,10 @@ async def list_tools():
             name="get_sim_paths",
             description=(
                 "Discover compile logs, simulation logs, and waveform files under a verif directory. "
-                "If case_name is omitted, the tool returns available cases."
+                "If case_name is omitted, the tool returns available cases. "
+                "For non-standard layouts you may pass explicit sim_log / wave_file / compile_log "
+                "paths; any provided field is used as-is and the omitted ones are still auto-discovered "
+                "(a sim_log path also anchors discovery of the matching waveform and compile/elab logs)."
             ),
             inputSchema={
                 "type": "object",
@@ -954,6 +957,14 @@ async def list_tools():
                                    "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif"},
                     "case_name":  {"type": "string",
                                    "description": "Optional case name, for example case0 (matching make SV_CASE=case0)"},
+                    "sim_log": {"type": "string",
+                                "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
+                                               "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case."},
+                    "wave_file": {"type": "string",
+                                  "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered."},
+                    "compile_log": {"type": "string",
+                                    "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
+                                                   "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir."},
                 },
                 "required": ["verif_root"],
             },
@@ -2173,6 +2184,9 @@ async def _dispatch(name: str, args: dict):
         result = discover_sim_paths(
             args["verif_root"],
             args.get("case_name"),
+            sim_log=args.get("sim_log"),
+            wave_file=args.get("wave_file"),
+            compile_log=args.get("compile_log"),
         )
         _update_session_state(name, args, result)
         validated = schemas.SimPathsResult.model_validate(result)

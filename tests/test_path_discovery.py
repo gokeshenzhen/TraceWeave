@@ -236,6 +236,366 @@ class TestNestedCasesContainer:
             assert result["wave_files"][0]["path"] == str((case_dir / "top_tb.fsdb").resolve())
 
 
+class TestSiblingBuildDirCompileLog:
+    """Split-work layout: a case dir holds the sim log + waveform, but the
+    compile/elab logs live in a sibling E_NAME build dir (work/DEF_ELAB/) —
+    not co-located with, and not inside, the case dir."""
+
+    def test_case_dir_finds_compile_log_in_sibling_build_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work = Path(tmpdir) / "work"
+            case_dir = work / "top_test_hello"
+            elab_dir = work / "DEF_ELAB"
+
+            _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+            _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+            _write(elab_dir / "comp.log", "vlogan\n")
+            _write(
+                elab_dir / "elab.log",
+                "Parsing design file 'a.sv'\nTop Level Modules:\n  top\n",
+            )
+            # a non-log build artifact must be ignored
+            _write(elab_dir / "simv", "binary")
+
+            result = discover_sim_paths(str(case_dir))
+
+            assert result["discovery_mode"] == "case_dir"
+            assert result["case_dir"] == str(case_dir.resolve())
+            assert result["sim_logs"][0]["path"] == str((case_dir / "run_sim.log").resolve())
+            assert result["wave_files"][0]["path"].endswith("top_test_hello_000.fsdb")
+
+            comp_paths = {entry["path"] for entry in result["compile_logs"]}
+            assert str((elab_dir / "comp.log").resolve()) in comp_paths
+            assert str((elab_dir / "elab.log").resolve()) in comp_paths
+            # the elaborate-phase log drives next_required_step
+            assert result["next_required_step"]["compile_log"] == str(
+                (elab_dir / "elab.log").resolve()
+            )
+
+    def test_multiple_elab_dirs_all_surface(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work = Path(tmpdir) / "work"
+            case_dir = work / "test_hello"
+            _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+            _write(case_dir / "dump.fsdb", "1" * 4096)
+            for ename in ("DEF_ELAB", "PG_ELAB", "FPGA_ELAB"):
+                _write(work / ename / "elab.log", "Parsing design file 'a.sv'\nTop Level Modules:\n")
+
+            result = discover_sim_paths(str(case_dir))
+
+            comp_paths = {entry["path"] for entry in result["compile_logs"]}
+            for ename in ("DEF_ELAB", "PG_ELAB", "FPGA_ELAB"):
+                assert str((work / ename / "elab.log").resolve()) in comp_paths
+
+    def test_sibling_case_dir_compile_log_not_pulled_in(self):
+        # the structural build-dir gate (no sim/wave) must keep ANOTHER case
+        # dir's own compile log from being attributed to this case
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work = Path(tmpdir) / "work"
+            case_dir = work / "test_a"
+            _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+            _write(case_dir / "dump.fsdb", "1" * 4096)
+
+            other = work / "test_b"  # a real case dir that also carries a comp.log
+            _write(other / "run_sim.log", "Chronologic VCS\n")
+            _write(other / "dump.fsdb", "2" * 4096)
+            _write(other / "comp.log", "vlogan\n")
+
+            elab_dir = work / "DEF_ELAB"
+            _write(elab_dir / "elab.log", "Parsing design file 'a.sv'\nTop Level Modules:\n")
+
+            result = discover_sim_paths(str(case_dir))
+
+            comp_paths = {entry["path"] for entry in result["compile_logs"]}
+            assert str((elab_dir / "elab.log").resolve()) in comp_paths
+            assert str((other / "comp.log").resolve()) not in comp_paths
+
+    def test_parent_top_compile_log_still_preferred(self):
+        # an existing parent-top compile log keeps priority over sibling search
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work = Path(tmpdir) / "work"
+            case_dir = work / "case0"
+            _write(work / "elab.log", "xrun\nxmelab\n")
+            _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+            _write(case_dir / "dump.fsdb", "3" * 4096)
+            _write(work / "DEF_ELAB" / "elab.log", "Parsing design file 'a.sv'\n")
+
+            result = discover_sim_paths(str(case_dir))
+
+            assert [entry["path"] for entry in result["compile_logs"]] == [
+                str((work / "elab.log").resolve())
+            ]
+
+
+class TestExplicitPathOverrides:
+    """Caller supplies explicit sim/wave/compile paths; omitted fields are still
+    auto-discovered, anchored at the directory of the provided sim/wave file."""
+
+    def _split_work_tree(self, tmp):
+        verif = Path(tmp) / "verification"
+        work = verif / "work"
+        case_dir = work / "top_test_hello"
+        elab_dir = work / "DEF_ELAB"
+        _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+        _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+        _write(elab_dir / "comp.log", "vlogan\n")
+        _write(elab_dir / "elab.log", "Parsing design file 'a.sv'\nTop Level Modules:\n")
+        return verif, case_dir, elab_dir
+
+    def test_only_sim_log_discovers_wave_and_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir, elab_dir = self._split_work_tree(tmp)
+
+            result = discover_sim_paths(str(verif), sim_log=str(case_dir / "run_sim.log"))
+
+            assert result["config_source"] == "explicit"
+            assert result["discovery_mode"] == "case_dir"
+            assert result["case_dir"] == str(case_dir.resolve())
+            assert result["sim_logs"][0]["path"] == str((case_dir / "run_sim.log").resolve())
+            assert result["wave_files"][0]["path"].endswith("top_test_hello_000.fsdb")
+            comp = {entry["path"] for entry in result["compile_logs"]}
+            assert str((elab_dir / "elab.log").resolve()) in comp
+            assert result["next_required_step"]["compile_log"] == str(
+                (elab_dir / "elab.log").resolve()
+            )
+
+    def test_sim_and_wave_given_compile_discovered_from_sibling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir, elab_dir = self._split_work_tree(tmp)
+
+            result = discover_sim_paths(
+                str(verif),
+                sim_log=str(case_dir / "run_sim.log"),
+                wave_file=str(case_dir / "top_test_hello_000.fsdb"),
+            )
+
+            assert result["wave_files"][0]["path"].endswith("top_test_hello_000.fsdb")
+            comp = {entry["path"] for entry in result["compile_logs"]}
+            assert str((elab_dir / "elab.log").resolve()) in comp
+
+    def test_all_three_explicit_used_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir, elab_dir = self._split_work_tree(tmp)
+            # distractor elab dir that must NOT win when compile_log is explicit
+            _write(case_dir.parent / "PG_ELAB" / "elab.log", "Parsing design file\n")
+
+            result = discover_sim_paths(
+                str(verif),
+                sim_log=str(case_dir / "run_sim.log"),
+                wave_file=str(case_dir / "top_test_hello_000.fsdb"),
+                compile_log=str(elab_dir / "comp.log"),
+            )
+
+            assert [entry["path"] for entry in result["compile_logs"]] == [
+                str((elab_dir / "comp.log").resolve())
+            ]
+            assert result["compile_logs"][0]["phase"] == "compile"
+
+    def test_explicit_paths_relative_to_verif_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir, _elab_dir = self._split_work_tree(tmp)
+
+            result = discover_sim_paths(
+                str(verif), sim_log="work/top_test_hello/run_sim.log"
+            )
+
+            assert result["sim_logs"][0]["path"] == str((case_dir / "run_sim.log").resolve())
+            assert result["wave_files"][0]["path"].endswith(".fsdb")
+
+    def test_missing_explicit_sim_log_surfaces_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir, _elab_dir = self._split_work_tree(tmp)
+
+            result = discover_sim_paths(str(verif), sim_log=str(case_dir / "nope.log"))
+
+            assert any("does not exist" in hint for hint in result["hints"])
+
+    def test_only_compile_log_without_anchor_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, _case_dir, elab_dir = self._split_work_tree(tmp)
+
+            result = discover_sim_paths(str(verif), compile_log=str(elab_dir / "elab.log"))
+
+            assert result["compile_logs"][0]["path"] == str((elab_dir / "elab.log").resolve())
+            assert result["sim_logs"] == []
+            assert any("anchor simulation log" in hint for hint in result["hints"])
+
+
+class TestWorkContainerDescent:
+    """verif_root whose artifacts live one level down under work/ (the
+    split-work layout: top/verification/work/<case>/, case dir has no
+    work_/sim_/case_ prefix). Discovery descends into the work container
+    before giving up."""
+
+    def _verif_tree(self, tmp):
+        verif = Path(tmp) / "top" / "verification"
+        work = verif / "work"
+        case_dir = work / "top_test_hello"
+        _write(verif / "script" / "makefile", "all:\n")  # a source/script sibling
+        _write(case_dir / "top_test_hello.log", "Chronologic VCS\n")
+        _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+        _write(work / "DEF_ELAB" / "elab.log", "Parsing design file 'a.sv'\nTop Level Modules:\n")
+        return verif, work, case_dir
+
+    def test_descends_into_work_and_resolves_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, work, case_dir = self._verif_tree(tmp)
+
+            result = discover_sim_paths(str(verif), "top_test_hello")
+
+            assert result["discovery_mode"] == "root_dir"
+            assert result["case_dir"] == str(case_dir.resolve())
+            # <case>.log is recognized despite matching no SIM_LOG_PATTERNS
+            assert result["sim_logs"][0]["path"] == str((case_dir / "top_test_hello.log").resolve())
+            assert result["wave_files"][0]["path"].endswith("top_test_hello_000.fsdb")
+            # compile log discovered in the sibling DEF_ELAB build dir
+            assert result["compile_logs"][0]["path"] == str((work / "DEF_ELAB" / "elab.log").resolve())
+            assert any("descended into work container 'work'" in h for h in result["hints"])
+
+    def test_descends_into_work_lists_cases_without_case_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, _work, case_dir = self._verif_tree(tmp)
+
+            result = discover_sim_paths(str(verif))
+
+            assert result["discovery_mode"] == "root_dir"
+            names = {case["name"] for case in result["available_cases"]}
+            assert "top_test_hello" in names
+
+    def test_empty_dir_still_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = discover_sim_paths(tmp)
+            assert result["discovery_mode"] == "unknown"
+
+    def test_work_container_with_no_artifacts_not_followed(self):
+        # a work/ child that holds nothing must not flip discovery_mode
+        with tempfile.TemporaryDirectory() as tmp:
+            verif = Path(tmp) / "verification"
+            (verif / "work" / "empty").mkdir(parents=True)
+            result = discover_sim_paths(str(verif))
+            assert result["discovery_mode"] == "unknown"
+
+    def test_descends_into_symlinked_work(self):
+        # work/ is a symlink to an out-of-tree cache (the real-world setup)
+        with tempfile.TemporaryDirectory() as tmp:
+            verif = Path(tmp) / "top" / "verification"
+            verif.mkdir(parents=True)
+            cache_work = Path(tmp) / "cache" / "work"
+            case_dir = cache_work / "top_test_hello"
+            _write(case_dir / "top_test_hello.log", "Chronologic VCS\n")
+            _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+            _write(cache_work / "DEF_ELAB" / "elab.log", "Parsing design file 'a.sv'\nTop Level Modules:\n")
+            (verif / "work").symlink_to(cache_work)
+
+            result = discover_sim_paths(str(verif), "top_test_hello")
+
+            assert result["discovery_mode"] == "root_dir"
+            assert result["sim_logs"][0]["path"].endswith("top_test_hello.log")
+            assert result["wave_files"][0]["path"].endswith(".fsdb")
+            assert result["compile_logs"][0]["path"].endswith("DEF_ELAB/elab.log")
+
+
+class TestStemNamedSimLog:
+    def test_case_dir_recognizes_dirname_log(self):
+        # pointing straight at the case dir, <case>.log is the sim log
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "top_test_hello"
+            _write(case_dir / "top_test_hello.log", "Chronologic VCS\n")
+            _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+
+            result = discover_sim_paths(str(case_dir))
+
+            assert result["discovery_mode"] == "case_dir"
+            assert result["sim_logs"][0]["path"] == str(
+                (case_dir / "top_test_hello.log").resolve()
+            )
+
+    def test_stem_log_does_not_match_compile_log(self):
+        # a DEF_ELAB build dir must not be misread as a case dir via stem rule
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            _write(work / "DEF_ELAB" / "comp.log", "vlogan\n")
+            case = work / "test_hello"
+            _write(case / "test_hello.log", "Chronologic VCS\n")
+            _write(case / "dump.fsdb", "1" * 4096)
+
+            result = discover_sim_paths(str(work), "test_hello")
+
+            assert result["case_dir"] == str(case.resolve())
+            # DEF_ELAB (comp.log, no DEF_ELAB.log) is the build dir, not a case
+            assert result["compile_logs"][0]["path"] == str((work / "DEF_ELAB" / "comp.log").resolve())
+
+
+class TestExplicitPathRobustResolution:
+    def _verif_tree(self, tmp):
+        # tmp acts as the repo root; verif_root is tmp/top/verification
+        verif = Path(tmp) / "top" / "verification"
+        case_dir = verif / "work" / "top_test_hello"
+        _write(case_dir / "top_test_hello.log", "Chronologic VCS\n")
+        _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+        return verif, case_dir
+
+    def test_relative_to_repo_root_resolves_via_ancestor(self):
+        # user gives a path relative to the repo root (an ancestor of verif_root)
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir = self._verif_tree(tmp)
+            rel = "top/verification/work/top_test_hello/top_test_hello.log"
+
+            result = discover_sim_paths(str(verif), sim_log=rel)
+
+            assert result["discovery_mode"] == "case_dir"
+            assert result["sim_logs"][0]["path"] == str((case_dir / "top_test_hello.log").resolve())
+            assert result["wave_files"][0]["path"].endswith(".fsdb")
+
+    def test_doubled_verif_root_prefix_collapses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir = self._verif_tree(tmp)
+            # the exact mistake from the report: verif_root tail repeated
+            rel = "verification/work/top_test_hello/top_test_hello.log"
+
+            result = discover_sim_paths(str(verif), sim_log=rel)
+
+            assert result["sim_logs"][0]["path"] == str((case_dir / "top_test_hello.log").resolve())
+
+    def test_basename_recovery_when_structure_wrong(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, case_dir = self._verif_tree(tmp)
+            # totally wrong dir structure, but the basename is unique under verif
+            rel = "totally/wrong/top_test_hello.log"
+
+            result = discover_sim_paths(str(verif), sim_log=rel)
+
+            assert result["sim_logs"][0]["path"] == str((case_dir / "top_test_hello.log").resolve())
+            assert any("resolved by basename" in h for h in result["hints"])
+
+    def test_basename_recovery_through_symlinked_work(self):
+        # explicit relative path is wrong, basename recovery must follow the
+        # work/ symlink to find the real file
+        with tempfile.TemporaryDirectory() as tmp:
+            verif = Path(tmp) / "top" / "verification"
+            verif.mkdir(parents=True)
+            cache_work = Path(tmp) / "cache" / "work"
+            case_dir = cache_work / "top_test_hello"
+            _write(case_dir / "top_test_hello.log", "Chronologic VCS\n")
+            _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+            (verif / "work").symlink_to(cache_work)
+
+            result = discover_sim_paths(str(verif), sim_log="bad/path/top_test_hello.log")
+
+            assert result["sim_logs"][0]["path"].endswith("top_test_hello.log")
+            assert any("resolved by basename" in h for h in result["hints"])
+
+    def test_missing_sim_log_emits_anchor_failure_hint_not_compile_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verif, _case_dir = self._verif_tree(tmp)
+
+            result = discover_sim_paths(str(verif), sim_log="nope/missing_xyz.log")
+
+            assert result["discovery_mode"] == "unknown"
+            assert any("Could not anchor discovery" in h for h in result["hints"])
+            assert not any("Only compile_log was provided" in h for h in result["hints"])
+
+
 class TestConfigOverride:
     def test_mcp_yaml_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:

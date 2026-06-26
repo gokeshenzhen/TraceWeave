@@ -21,10 +21,14 @@ from config import (
     MCP_CONFIG_FILE,
     SIM_LOG_PATTERNS,
     WAVE_PATTERNS,
+    WORK_CONTAINER_NAMES,
 )
 from src.compile_log_parser import detect_simulator
 
 
+# Depth bound for basename recovery of a mis-specified explicit path: artifacts
+# live at work/<case>/<file> (depth 2 from verif_root, or 3 via a container).
+_BASENAME_RECOVERY_DEPTH = 3
 _ELABORATE_KEYWORDS = (
     "parsing design file",
     "top level modules",
@@ -42,10 +46,23 @@ _DEFAULT_LOG_PHASE_SCAN_LINES = 50
 _EXTENDED_LOG_PHASE_SCAN_LINES = 300
 
 
-def discover_sim_paths(verif_root: str, case_name: str | None = None) -> dict[str, Any]:
+def discover_sim_paths(
+    verif_root: str,
+    case_name: str | None = None,
+    *,
+    sim_log: str | None = None,
+    wave_file: str | None = None,
+    compile_log: str | None = None,
+) -> dict[str, Any]:
     root = Path(verif_root).expanduser().resolve()
     if not root.is_dir():
         raise NotADirectoryError(f"verif_root is not a directory: {verif_root}")
+
+    # Explicit user-supplied paths take precedence over both .mcp.yaml and
+    # auto-discovery: when the caller already knows a path, use it verbatim and
+    # only auto-discover the fields they left out.
+    if sim_log or wave_file or compile_log:
+        return _discover_from_explicit(root, case_name, sim_log, wave_file, compile_log)
 
     config_match = _load_mcp_config(root)
     if config_match is not None:
@@ -54,28 +71,218 @@ def discover_sim_paths(verif_root: str, case_name: str | None = None) -> dict[st
     return _discover_auto(root, case_name)
 
 
-def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
-    discovery_mode, local_sim_logs, local_wave_files, child_case_dirs = _classify_directory(root)
+def _discover_from_explicit(
+    root: Path,
+    case_name: str | None,
+    sim_log: str | None,
+    wave_file: str | None,
+    compile_log: str | None,
+) -> dict[str, Any]:
+    """Discover paths from user-supplied explicit overrides.
 
-    target_case_dir: Path | None = None
+    Any field the caller provides is used as-is; the fields they omit fall back
+    to auto-discovery anchored at the directory of the provided sim log (or, if
+    no sim log, the provided waveform). So a caller who passes only a sim-log
+    path still gets the waveform and compile/elab logs discovered for them, and
+    a caller who passes a sim log + waveform but no compile/elab log still gets
+    the compile/elab log found in the case dir or a sibling build dir.
+    """
+    hints: list[str] = []
+    sim_path = _resolve_explicit_path(root, sim_log, "sim_log", hints)
+    wave_path = _resolve_explicit_path(root, wave_file, "wave_file", hints)
+    compile_path = _resolve_explicit_path(root, compile_log, "compile_log", hints)
+
+    anchor: Path | None = None
+    if sim_path is not None:
+        anchor = sim_path.parent
+    elif wave_path is not None:
+        anchor = wave_path.parent
+
+    if anchor is not None:
+        sim_logs = (
+            [_explicit_entry(sim_path, "sim")]
+            if sim_path is not None
+            else _sim_logs_in_dir(anchor)
+        )
+        wave_files = (
+            [_explicit_entry(wave_path, "wave")]
+            if wave_path is not None
+            else _search_files([anchor], WAVE_PATTERNS, 0)
+        )
+        if compile_path is not None:
+            compile_logs = [_explicit_entry(compile_path, "compile")]
+        else:
+            compile_logs = _discover_case_compile_logs(anchor, sim_logs)
+        discovery_mode = "case_dir"
+        target_case_dir = anchor
+        if case_name and not _case_name_matches_dir(anchor, case_name):
+            hints.append(
+                f"Requested case_name '{case_name}' does not match the anchored "
+                f"case directory '{anchor.name}'"
+            )
+    else:
+        # No sim/wave path resolved to an existing file, so there is no case dir
+        # to anchor sim/waveform discovery to.
+        compile_logs = (
+            [_explicit_entry(compile_path, "compile")] if compile_path is not None else []
+        )
+        sim_logs = []
+        wave_files = []
+        discovery_mode = "unknown"
+        target_case_dir = None
+        if (sim_log or wave_file) and sim_path is None and wave_path is None:
+            hints.append(
+                "Could not anchor discovery: the provided sim_log/wave_file did not "
+                "resolve to an existing file (see the path hint above)"
+            )
+        elif compile_path is not None:
+            hints.append(
+                "Only compile_log was provided; also pass sim_log (or wave_file) to "
+                "anchor simulation log and waveform discovery"
+            )
+
+    return _build_discovery_result(
+        request_root=root,
+        case_name=case_name,
+        config_source="explicit",
+        config_root=None,
+        discovery_mode=discovery_mode,
+        target_case_dir=target_case_dir,
+        compile_logs=compile_logs,
+        sim_logs=sim_logs,
+        wave_files=wave_files,
+        available_cases=[],
+        hints=hints,
+    )
+
+
+def _resolve_explicit_path(
+    root: Path, value: str | None, label: str, hints: list[str]
+) -> Path | None:
+    """Resolve a user-supplied path robustly.
+
+    An absolute path is used as-is. A relative path is tried against ``root`` and
+    each of its ancestors (nearest first) — this resolves a path given relative
+    to the repo root (an ancestor of verif_root) and transparently collapses a
+    doubled verif_root tail like ``top/verification/top/verification/…``. If no
+    candidate exists, fall back to basename recovery: a unique file with the same
+    name found under verif_root is used (with a hint), ambiguous matches surface
+    a did-you-mean list. A bad path is dropped with a hint rather than raising,
+    so one mistyped override does not sink the whole discovery.
+    """
+    if not value:
+        return None
+    raw = Path(str(value)).expanduser()
+    candidates = _explicit_path_candidates(root, raw)
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_file():
+            return resolved
+
+    recovered = _recover_by_basename(root, raw.name)
+    if len(recovered) == 1:
+        hints.append(
+            f"Provided {label} '{value}' was not found as given; resolved by "
+            f"basename to {recovered[0]}"
+        )
+        return recovered[0]
+    if len(recovered) > 1:
+        listed = ", ".join(str(path) for path in recovered[:5])
+        hints.append(
+            f"Provided {label} '{value}' was not found; multiple files named "
+            f"'{raw.name}' exist: {listed}"
+        )
+        return None
+    hints.append(
+        f"Provided {label} path does not exist (tried {len(candidates)} location"
+        f"{'s' if len(candidates) != 1 else ''}): {value}"
+    )
+    return None
+
+
+def _explicit_path_candidates(root: Path, raw: Path) -> list[Path]:
+    """Base anchors to try for an explicit path. Absolute → itself; relative →
+    verif_root then each ancestor up to the filesystem root, nearest first."""
+    if raw.is_absolute():
+        return [raw]
+    candidates: list[Path] = []
+    base = root
+    while True:
+        candidates.append(base / raw)
+        if base.parent == base:
+            break
+        base = base.parent
+    return candidates
+
+
+def _recover_by_basename(root: Path, name: str) -> list[Path]:
+    """Bounded, symlink-following search under ``root`` for files named ``name``.
+    followlinks=True because the artifact dir (work/) is commonly a symlink; the
+    depth bound keeps a symlink cycle from running away."""
+    if not name:
+        return []
+    matches: list[Path] = []
+    seen: set[str] = set()
+    for path in _iter_files(root, _BASENAME_RECOVERY_DEPTH, followlinks=True):
+        if path.name != name:
+            continue
+        resolved = path.resolve()
+        key = str(resolved)
+        if key not in seen and resolved.is_file():
+            seen.add(key)
+            matches.append(resolved)
+    return matches
+
+
+def _explicit_entry(path: Path, kind: str) -> dict[str, Any]:
+    info = _collect_file_info(path)
+    if kind == "compile":
+        info["phase"] = _detect_log_phase(path)
+    elif kind == "wave":
+        info["format"] = path.suffix.lstrip(".").lower()
+    return info
+
+
+def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
+    classification = _classify_directory(root)
     hints: list[str] = []
 
+    # When verif_root holds no artifacts directly and its immediate children are
+    # source/script dirs, the artifacts often live one level down under a work
+    # container (work/ etc.). Descend into the first such child that reclassifies
+    # to a real case/shared root; all subsequent file ops use that search_root,
+    # while the reported verif_root stays the original request.
+    descended_into: Path | None = None
+    if classification[0] == "unknown":
+        for container in _work_container_children(root):
+            reclassified = _classify_directory(container)
+            if reclassified[0] != "unknown":
+                descended_into = container
+                classification = reclassified
+                break
+
+    discovery_mode, local_sim_logs, local_wave_files, child_case_dirs = classification
+    search_root = descended_into or root
+    if descended_into is not None:
+        hints.append(
+            f"verif_root holds no artifacts directly; descended into work "
+            f"container '{descended_into.name}' to locate them"
+        )
+
+    target_case_dir: Path | None = None
+
     if discovery_mode == "case_dir":
-        target_case_dir = root
+        target_case_dir = search_root
         sim_logs = local_sim_logs
         wave_files = local_wave_files
-        local_compile_logs = _search_files([root], COMPILE_LOG_PATTERNS, 0)
-        parent_compile_logs = _search_files([root.parent], COMPILE_LOG_PATTERNS, 0) if root.parent.is_dir() else []
-        compile_logs = local_compile_logs or parent_compile_logs
-        if not compile_logs:
-            compile_logs = _reuse_mixed_sim_logs(sim_logs)
+        compile_logs = _discover_case_compile_logs(search_root, sim_logs)
         available_cases = []
-        if case_name and not _case_name_matches_dir(root, case_name):
+        if case_name and not _case_name_matches_dir(search_root, case_name):
             hints.append(
-                f"Requested case_name '{case_name}' does not match current case directory '{root.name}'"
+                f"Requested case_name '{case_name}' does not match current case directory '{search_root.name}'"
             )
     elif discovery_mode == "root_dir":
-        root_compile_logs = _search_files([root], COMPILE_LOG_PATTERNS, 0)
+        root_compile_logs = _search_files([search_root], COMPILE_LOG_PATTERNS, 0)
         if case_name:
             matched_case_dirs = _match_case_dirs(child_case_dirs, case_name)
             if len(matched_case_dirs) > 1:
@@ -89,12 +296,12 @@ def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
                 )
             elif len(matched_case_dirs) == 1:
                 target_case_dir = matched_case_dirs[0]
-                sim_logs = _search_files([target_case_dir], SIM_LOG_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
+                sim_logs = _dedupe_sorted(
+                    _search_files([target_case_dir], SIM_LOG_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
+                    + _stem_named_sim_logs(target_case_dir)
+                )
                 wave_files = _search_files([target_case_dir], WAVE_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
-                case_compile_logs = _search_files([target_case_dir], COMPILE_LOG_PATTERNS, 0)
-                compile_logs = root_compile_logs or case_compile_logs
-                if not compile_logs:
-                    compile_logs = _reuse_mixed_sim_logs(sim_logs)
+                compile_logs = root_compile_logs or _discover_case_compile_logs(target_case_dir, sim_logs)
                 available_cases = []
             else:
                 sim_logs = []
@@ -102,7 +309,7 @@ def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
                 compile_logs = root_compile_logs
                 available_cases = []
                 hints.append(
-                    f"No case directory matched case_name '{case_name}' under {root}"
+                    f"No case directory matched case_name '{case_name}' under {search_root}"
                 )
         else:
             compile_logs = root_compile_logs
@@ -110,7 +317,7 @@ def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
             wave_files = []
             available_cases = _describe_case_dirs(child_case_dirs)
     else:
-        compile_logs = _search_files([root], COMPILE_LOG_PATTERNS, 0)
+        compile_logs = _search_files([search_root], COMPILE_LOG_PATTERNS, 0)
         sim_logs = []
         wave_files = []
         available_cases = []
@@ -134,6 +341,17 @@ def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
         available_cases=available_cases,
         hints=hints,
     )
+
+
+def _work_container_children(root: Path) -> list[Path]:
+    """Immediate children of ``root`` whose name marks a conventional work/build
+    container (see WORK_CONTAINER_NAMES). Whether to actually descend is decided
+    by the caller via reclassification, so this only narrows the candidates."""
+    return [
+        child
+        for child in _list_child_dirs(root)
+        if child.name.lower() in WORK_CONTAINER_NAMES
+    ]
 
 
 def _load_mcp_config(start_dir: Path) -> tuple[Path, dict[str, Any]] | None:
@@ -262,8 +480,27 @@ def _build_discovery_result(
     return result
 
 
+def _stem_named_sim_logs(directory: Path) -> list[dict[str, Any]]:
+    """A ``<dirname>.log`` inside a case dir is the simulation log even when its
+    name matches no SIM_LOG_PATTERNS (e.g. ``work/<case>/<case>.log``). Zero-FP:
+    keyed on the file stem equalling the directory name, so it never picks up
+    ``comp.log`` / ``elab.log`` or another case's log."""
+    candidate = directory / f"{directory.name}.log"
+    if candidate.is_file():
+        return [_collect_file_info(candidate)]
+    return []
+
+
+def _sim_logs_in_dir(directory: Path) -> list[dict[str, Any]]:
+    """Simulation logs directly in ``directory`` (depth 0): SIM_LOG_PATTERNS
+    matches plus a ``<dirname>.log`` stem-named sim log."""
+    return _dedupe_sorted(
+        _search_files([directory], SIM_LOG_PATTERNS, 0) + _stem_named_sim_logs(directory)
+    )
+
+
 def _classify_directory(root: Path) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[Path]]:
-    local_sim_logs = _search_files([root], SIM_LOG_PATTERNS, 0)
+    local_sim_logs = _sim_logs_in_dir(root)
     local_wave_files = _search_files([root], WAVE_PATTERNS, 0)
     child_case_dirs = _find_immediate_case_dirs(root)
     # Prefix-named nested case dirs (work_*/sim_*/case_*) mark a cases-container:
@@ -304,7 +541,7 @@ def _list_child_dirs(root: Path) -> list[Path]:
 
 def _holds_wave_or_simlog(directory: Path) -> bool:
     return bool(
-        _search_files([directory], SIM_LOG_PATTERNS, 0)
+        _sim_logs_in_dir(directory)
         or _search_files([directory], WAVE_PATTERNS, 0)
     )
 
@@ -371,7 +608,7 @@ def _case_name_matches_dir(case_dir: Path, case_name: str) -> bool:
 def _describe_case_dirs(case_dirs: list[Path]) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     for directory in case_dirs:
-        sim_logs = _search_files([directory], SIM_LOG_PATTERNS, 0)
+        sim_logs = _sim_logs_in_dir(directory)
         wave_files = _search_files([directory], WAVE_PATTERNS, 0)
         cases.append(
             {
@@ -441,6 +678,66 @@ def _reuse_mixed_sim_logs(sim_logs: list[dict[str, Any]]) -> list[dict[str, Any]
     return []
 
 
+def _discover_case_compile_logs(
+    case_dir: Path, sim_logs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Locate compile/elab logs for a case directory, in priority order.
+
+    ``① case dir → ② parent top → ③ sibling build/elab dir (E_NAME layout) →
+    ④ a mixed sim log reused as a compile log``. The sibling step covers the
+    makefile flow that keeps run artifacts in ``work/<case>/`` and elaboration
+    artifacts in a separate ``work/<E_NAME>/`` sibling, so the compile/elab log
+    is neither inside the case dir nor at the parent top.
+    """
+    local = _search_files([case_dir], COMPILE_LOG_PATTERNS, 0)
+    parent = (
+        _search_files([case_dir.parent], COMPILE_LOG_PATTERNS, 0)
+        if case_dir.parent.is_dir()
+        else []
+    )
+    compile_logs = local or parent
+    if not compile_logs:
+        compile_logs = _discover_sibling_build_compile_logs(case_dir)
+    if not compile_logs:
+        compile_logs = _reuse_mixed_sim_logs(sim_logs)
+    return compile_logs
+
+
+def _is_build_dir(directory: Path) -> bool:
+    """Structural test for an elaboration/build output directory.
+
+    A build dir holds a compile/elab log but no sim log or waveform — the
+    signature that separates an elaboration output dir (e.g. ``work/DEF_ELAB/``)
+    from a sibling case directory, which holds the run log + waveform. ``E_NAME``
+    is configurable (``DEF_ELAB``/``PG_ELAB``/``FPGA_ELAB``/…), so discovery keys
+    on this structure rather than the directory name.
+    """
+    if not _search_files([directory], COMPILE_LOG_PATTERNS, 0):
+        return False
+    return not _holds_wave_or_simlog(directory)
+
+
+def _discover_sibling_build_compile_logs(case_dir: Path) -> list[dict[str, Any]]:
+    """Compile/elab logs from build dirs that are siblings of ``case_dir``.
+
+    Covers the makefile layout where run artifacts live in ``work/<case>/`` and
+    elaboration artifacts live in a separate ``work/<E_NAME>/`` sibling, so the
+    compile/elab log is not co-located with — and not inside — the case dir. A
+    sibling qualifies only if it is a build dir per :func:`_is_build_dir`, which
+    keeps another case directory's own compile log from being pulled in.
+    """
+    parent = case_dir.parent
+    if not parent.is_dir():
+        return []
+    case_dir_resolved = case_dir.resolve()
+    build_dirs = [
+        child
+        for child in _list_child_dirs(parent)
+        if child.resolve() != case_dir_resolved and _is_build_dir(child)
+    ]
+    return _search_files(build_dirs, COMPILE_LOG_PATTERNS, 0)
+
+
 def _detect_simulator_from_logs(
     compile_logs: list[dict[str, Any]], sim_logs: list[dict[str, Any]]
 ) -> str | None:
@@ -454,7 +751,7 @@ def _detect_simulator_from_logs(
 def _discover_cases(verif_root: Path) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     for directory in _iter_dirs(verif_root, CASE_DIR_MAX_DEPTH):
-        sim_logs = _search_files([directory], SIM_LOG_PATTERNS, 0)
+        sim_logs = _sim_logs_in_dir(directory)
         wave_files = _search_files([directory], WAVE_PATTERNS, 0)
         if not sim_logs and not wave_files:
             continue
@@ -557,9 +854,9 @@ def _iter_dirs(root: Path, max_depth: int):
             yield current_path
 
 
-def _iter_files(root: Path, max_depth: int):
+def _iter_files(root: Path, max_depth: int, followlinks: bool = False):
     root_depth = len(root.parts)
-    for current, dirnames, filenames in os.walk(root):
+    for current, dirnames, filenames in os.walk(root, followlinks=followlinks):
         current_path = Path(current)
         depth = len(current_path.parts) - root_depth
         if depth > max_depth:

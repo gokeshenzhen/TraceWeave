@@ -10,13 +10,16 @@ This document defines the recommended tool invocation order for the Waveform MCP
 User: "Help me debug /path/to/verif, case0"
 │
 ▼
-Step 1: get_sim_paths(verif_root, case_name?)
+Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?)
 │  Discover all relevant file paths automatically.
 │  Returns: discovery_mode, case_dir, compile_logs (with phase tag),
 │           sim_logs, wave_files, simulator (auto-detected),
 │           fsdb_runtime, hints, available_cases
 │
 │  Key decisions:
+│  - For a non-standard layout, pass explicit sim_log/wave_file/compile_log:
+│    any supplied field is used as-is, omitted fields are still auto-discovered
+│    (a sim_log path anchors the case dir → finds its wave + compile/elab logs)
 │  - If discovery_mode == "unknown" → stop guessing and follow hints
 │  - If case_name omitted in root_dir mode → check available_cases, ask user to pick one
 │  - If hints contain warnings (empty log, missing wave) → inform user early

@@ -233,7 +233,7 @@ codex mcp list
 
 这是仿真日志与波形调试的默认工作流:
 
-1. 调用 `get_sim_paths(verif_root, case_name?)`。
+1. 调用 `get_sim_paths(verif_root, case_name?)`。对于非标准布局,还可显式传入 `sim_log` / `wave_file` / `compile_log` 路径;给定的字段按原样采用,省略的字段仍会自动发现(`sim_log` 路径还会锚定其所在 case 目录,据此发现对应波形与编译/elab 日志)。
 2. 选择 `phase == "elaborate"` 的编译日志。
 3. 在同一个编译日志上并行运行 `build_tb_hierarchy` 与 `scan_structural_risks`。
 4. 如果有仿真日志,调用 `parse_sim_log`;然后在失败且有波形的运行上调用 `sweep_handshakes` 做一次全设计协议健康扫描(default-flow 步骤,相当于运行期的 `scan_structural_risks`)。
@@ -257,7 +257,7 @@ codex mcp list
 
 ### 路径与层次结构
 
-- `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case
+- `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case。可选的显式 `sim_log` / `wave_file` / `compile_log` 覆盖优先于自动发现,省略的字段仍会被发现(以 `sim_log`/`wave_file` 所在目录为锚点)
 - `build_tb_hierarchy`:服务端构建 testbench 层次结构;返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`hierarchy_handle`)。完整数据通过下方的 handle 工具按需获取。
 - `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式
 

@@ -29,6 +29,24 @@ DISCOVER_MAX_DEPTH_CASE = 1
 DISCOVER_MAX_DEPTH_ROOT = 2
 CASE_DIR_MAX_DEPTH = 3
 
+# Directory names that conventionally hold simulation build/run artifacts one
+# level below a verification root (e.g. makefile flows that set
+# WORK_DIR=$VERI_PATH/work). When get_sim_paths is pointed at a verification
+# root whose immediate children are source/script dirs and whose artifacts live
+# under one of these, discovery descends into it before giving up — but only if
+# that child actually classifies as a case or shared root, so a non-artifact dir
+# of the same name is never followed.
+WORK_CONTAINER_NAMES = (
+    "work",
+    "sim",
+    "sim_work",
+    "work_dir",
+    "csim",
+    "scratch",
+    "rundir",
+    "run_dir",
+)
+
 # ═══════════════════════════════════════════════════════════════════
 # 自定义报错格式配置文件路径
 # ═══════════════════════════════════════════════════════════════════
