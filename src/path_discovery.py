@@ -296,10 +296,9 @@ def _discover_auto(root: Path, case_name: str | None) -> dict[str, Any]:
                 )
             elif len(matched_case_dirs) == 1:
                 target_case_dir = matched_case_dirs[0]
-                sim_logs = _dedupe_sorted(
-                    _search_files([target_case_dir], SIM_LOG_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
-                    + _stem_named_sim_logs(target_case_dir)
-                )
+                sim_logs = _search_files([target_case_dir], SIM_LOG_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
+                if not sim_logs:
+                    sim_logs = _stem_named_sim_logs(target_case_dir)
                 wave_files = _search_files([target_case_dir], WAVE_PATTERNS, DISCOVER_MAX_DEPTH_CASE)
                 compile_logs = root_compile_logs or _discover_case_compile_logs(target_case_dir, sim_logs)
                 available_cases = []
@@ -492,11 +491,20 @@ def _stem_named_sim_logs(directory: Path) -> list[dict[str, Any]]:
 
 
 def _sim_logs_in_dir(directory: Path) -> list[dict[str, Any]]:
-    """Simulation logs directly in ``directory`` (depth 0): SIM_LOG_PATTERNS
-    matches plus a ``<dirname>.log`` stem-named sim log."""
-    return _dedupe_sorted(
-        _search_files([directory], SIM_LOG_PATTERNS, 0) + _stem_named_sim_logs(directory)
-    )
+    """Simulation logs directly in ``directory`` (depth 0).
+
+    Standard SIM_LOG_PATTERNS names win; only when none match do we fall back to
+    a ``<dirname>.log`` stem-named sim log. The precedence matters: a case dir
+    often ships a real ``run_sim.log`` alongside an empty ``<case>.log``
+    placeholder, so the pattern match must take priority or the empty placeholder
+    could shadow the real log (and mislead a downstream parse_sim_log that picks
+    sim_logs[0]). The stem-named form is for flows that name the sim log only
+    ``<case>.log``.
+    """
+    pattern_logs = _search_files([directory], SIM_LOG_PATTERNS, 0)
+    if pattern_logs:
+        return pattern_logs
+    return _stem_named_sim_logs(directory)
 
 
 def _classify_directory(root: Path) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[Path]]:

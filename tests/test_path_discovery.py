@@ -510,6 +510,25 @@ class TestStemNamedSimLog:
                 (case_dir / "top_test_hello.log").resolve()
             )
 
+    def test_real_run_sim_log_wins_over_empty_stem_placeholder(self):
+        # common layout: a real run_sim.log next to an EMPTY <case>.log placeholder
+        # — the standard pattern must win so the empty placeholder never shadows it,
+        # even when the placeholder is newer (would sort first under a merge).
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "top_test_hello"
+            _write(case_dir / "run_sim.log", "Chronologic VCS\n")
+            _write(case_dir / "top_test_hello.log", "")  # empty placeholder
+            _write(case_dir / "top_test_hello_000.fsdb", "1" * 4096)
+            _touch_with_age(case_dir / "run_sim.log", 120)
+            _touch_with_age(case_dir / "top_test_hello.log", 1)  # newer
+
+            result = discover_sim_paths(str(case_dir))
+
+            sim_paths = [entry["path"] for entry in result["sim_logs"]]
+            assert sim_paths == [str((case_dir / "run_sim.log").resolve())]
+            # the empty placeholder is not surfaced at all
+            assert str((case_dir / "top_test_hello.log").resolve()) not in sim_paths
+
     def test_stem_log_does_not_match_compile_log(self):
         # a DEF_ELAB build dir must not be misread as a case dir via stem rule
         with tempfile.TemporaryDirectory() as tmp:
