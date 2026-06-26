@@ -243,7 +243,7 @@ After connecting either client, run a quick end-to-end smoke test:
 
 This is the default workflow for simulation-log and waveform debug:
 
-1. Call `get_sim_paths(verif_root, case_name?)`. For non-standard layouts you may also pass explicit `sim_log` / `wave_file` / `compile_log` paths; any field you supply is used as-is and the omitted ones are still auto-discovered (a `sim_log` path also anchors discovery of the matching waveform and compile/elab logs).
+1. Call `get_sim_paths(verif_root, case_name?)`. For non-standard layouts you may also pass explicit `sim_log` / `wave_file` / `compile_log` paths; any field you supply is used as-is and the omitted ones are still auto-discovered (a `sim_log` path also anchors discovery of the matching waveform and compile/elab logs). An explicit path may be absolute or relative — a relative path is resolved against `verif_root` and each of its ancestors (so a path relative to the repo root also works), and if still not found it is recovered by basename.
 2. Choose the `phase == "elaborate"` compile log.
 3. Run `build_tb_hierarchy` and `scan_structural_risks` in parallel on that same compile log.
 4. If a sim log is present, call `parse_sim_log`; then, on a failing run with a waveform, call `sweep_handshakes` for a one-call whole-design protocol-health scan (a default-flow step, like `scan_structural_risks` at the runtime layer).

@@ -233,7 +233,7 @@ codex mcp list
 
 这是仿真日志与波形调试的默认工作流:
 
-1. 调用 `get_sim_paths(verif_root, case_name?)`。对于非标准布局,还可显式传入 `sim_log` / `wave_file` / `compile_log` 路径;给定的字段按原样采用,省略的字段仍会自动发现(`sim_log` 路径还会锚定其所在 case 目录,据此发现对应波形与编译/elab 日志)。
+1. 调用 `get_sim_paths(verif_root, case_name?)`。对于非标准布局,还可显式传入 `sim_log` / `wave_file` / `compile_log` 路径;给定的字段按原样采用,省略的字段仍会自动发现(`sim_log` 路径还会锚定其所在 case 目录,据此发现对应波形与编译/elab 日志)。显式路径可为绝对或相对——相对路径会按 `verif_root` 及其各级祖先解析(因此相对仓库根的路径也可用),仍找不到时按文件名回收。
 2. 选择 `phase == "elaborate"` 的编译日志。
 3. 在同一个编译日志上并行运行 `build_tb_hierarchy` 与 `scan_structural_risks`。
 4. 如果有仿真日志,调用 `parse_sim_log`;然后在失败且有波形的运行上调用 `sweep_handshakes` 做一次全设计协议健康扫描(default-flow 步骤,相当于运行期的 `scan_structural_risks`)。
