@@ -63,7 +63,14 @@ class VCDParser:
                 sym   = self._resolve(path)
                 trans = self._transitions.get(sym, [])
                 filtered = [(t, v) for t, v in trans if start_ps <= t <= end_ps]
-                pre_window = [(t, v) for t, v in trans if t < start_ps][-extra_transitions:]
+                # extra_transitions=0 must mean ZERO pre-window history: a bare
+                # [-extra_transitions:] slice is the full list when extra is 0
+                # ([-0:] == [0:]), which leaked the entire pre-window history.
+                # The FSDB wrapper already guards `extra_transitions > 0`.
+                if extra_transitions > 0:
+                    pre_window = [(t, v) for t, v in trans if t < start_ps][-extra_transitions:]
+                else:
+                    pre_window = []
                 result[path] = {
                     "value_at_center":       _enrich_value(_value_at(trans, center_ps)),
                     "transitions_in_window": [{"time_ps": t, "time_ns": t / 1000, "value": _enrich_value(v)}

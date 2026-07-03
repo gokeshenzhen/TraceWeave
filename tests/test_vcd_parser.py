@@ -44,6 +44,50 @@ def test_get_signals_around_time_has_pre_window_transitions(tmp_path: Path):
     assert signal["transitions_in_window"][0]["time_ps"] == 10000
 
 
+def test_extra_transitions_zero_returns_no_pre_window_history(tmp_path: Path):
+    """extra_transitions=0 must mean ZERO pre-window entries — the bare
+    [-0:] slice used to leak the ENTIRE pre-window history."""
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+
+    parser = VCDParser(str(wave))
+    result = parser.get_signals_around_time(
+        ["top_tb.clk"], center_ps=12000, window_ps=1000, extra_transitions=0
+    )
+
+    signal = result["signals"]["top_tb.clk"]
+    assert signal["pre_window_transitions"] == []
+    # the window itself is empty here; the centre value must still be present
+    assert signal["value_at_center"]["bin"] == "0"
+
+
+def test_extra_transitions_one_returns_only_most_recent(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+
+    parser = VCDParser(str(wave))
+    result = parser.get_signals_around_time(
+        ["top_tb.clk"], center_ps=12000, window_ps=1000, extra_transitions=1
+    )
+
+    signal = result["signals"]["top_tb.clk"]
+    assert [t["time_ps"] for t in signal["pre_window_transitions"]] == [10000]
+
+
+def test_extra_transitions_default_caps_pre_window(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+
+    parser = VCDParser(str(wave))
+    result = parser.get_signals_around_time(
+        ["top_tb.clk"], center_ps=15000, window_ps=100
+    )
+
+    assert result["extra_transitions"] == 5
+    signal = result["signals"]["top_tb.clk"]
+    assert len(signal["pre_window_transitions"]) <= 5
+
+
 def test_get_value_and_transitions_are_enriched(tmp_path: Path):
     wave = tmp_path / "wave.vcd"
     wave.write_text(VCD_SAMPLE)
