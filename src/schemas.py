@@ -425,6 +425,9 @@ class SignalsAroundTimeResult(SchemaModel):
     extra_transitions: int
     signals: dict[str, Any] = Field(default_factory=dict)
     truncated: bool = False
+    # "values_only" when the per-signal transition lists were stripped server-side
+    # (each signal instead carries window_transition_count); "full" otherwise.
+    return_mode: Literal["full", "values_only"] = "full"
     # Set when a value_at_center is a sub-cycle transient (combinational glitch at
     # the clock edge that settles back within the cycle); the affected signals also
     # carry center_transient / center_settles_to / center_settle_ps. None otherwise.

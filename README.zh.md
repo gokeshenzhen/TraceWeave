@@ -283,7 +283,7 @@ codex mcp list
 - `search_signals`:解析完整层次化信号路径。每条结果还附带 `direction`(`input`/`output`/`inout`/`implicit`/`null`)与 `var_type`(`wire`/`reg`/`integer`/`real`/`parameter`/…),客户端无需额外工具就能在指定 scope 内过滤端口/线网/变量。**FSDB** 两个字段都会填;**VCD** 只填 `var_type`,`direction` 返回 `null`(VCD 格式不编码端口方向)
 - `get_signal_at_time`:查询信号在指定时间点的值
 - `get_signal_transitions`:取出某段时间内信号的所有跳变
-- `get_signals_around_time`:取出失败时间点附近的上下文。若某个 `value_at_center` 是**亚周期瞬变**(时钟边沿的组合毛刺、同一周期内又 settle 回去——如互连 mux 在每个边沿 ~1ns 重置成 idle),会通过 `transient_note` + 逐信号的 `center_transient`/`center_settles_to` 标注出来,避免把边沿采到的毛刺当成稳定的协议值。
+- `get_signals_around_time`:取出失败时间点附近的上下文。若某个 `value_at_center` 是**亚周期瞬变**(时钟边沿的组合毛刺、同一周期内又 settle 回去——如互连 mux 在每个边沿 ~1ns 重置成 idle),会通过 `transient_note` + 逐信号的 `center_transient`/`center_settles_to` 标注出来,避免把边沿采到的毛刺当成稳定的协议值。`return_mode="values_only"` 保留多信号原子采样但剥离转换列表(每个信号只返回 `value_at_center` + `window_transition_count` + 瞬变标注)——适合跨多条 trace 比较同一时刻的紧凑模式。`extra_transitions=0` 严格生效:不返回任何窗口前历史。
 - `get_signals_by_cycle`:按时钟沿逐周期采样信号
 - `get_waveform_summary`:返回波形元数据
 

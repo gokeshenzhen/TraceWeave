@@ -2637,6 +2637,115 @@ class TestDispatchGetSignalsAroundTimeGuards:
         assert fake.called_with is None
 
 
+class _FakeParserValuesOnly(_FakeParserForGuards):
+    """Parser double returning rich per-signal payloads for values_only tests.
+
+    top_tb.dut.data carries a dip-and-return around the centre (1 -> 0 -> 1) so
+    annotate_center_transients fires; the annotation must survive stripping."""
+
+    def get_signals_around_time(self, signal_paths, center_ps, window_ps, extra):
+        self.called_with = (signal_paths, center_ps, window_ps, extra)
+
+        def _v(bit):
+            return {"bin": bit, "hex": bit, "dec": int(bit)}
+
+        def _tr(t, bit):
+            return {"time_ps": t, "time_ns": t / 1000, "value": _v(bit)}
+
+        return {
+            "center_time_ps": center_ps,
+            "center_time_ns": center_ps / 1000,
+            "window_ps": window_ps,
+            "extra_transitions": extra,
+            "signals": {
+                "top_tb.dut.data": {
+                    "value_at_center": _v("0"),
+                    "transitions_in_window": [
+                        _tr(center_ps - 2000, "1"),
+                        _tr(center_ps - 500, "0"),
+                        _tr(center_ps + 500, "1"),
+                    ],
+                    "pre_window_transitions": [_tr(0, "0")],
+                },
+                "top_tb.dut.quiet": {
+                    "value_at_center": _v("1"),
+                    "transitions_in_window": [],
+                    "pre_window_transitions": [],
+                },
+                "top_tb.dut.broken": {"error": "signal_not_found"},
+            },
+            "truncated": False,
+        }
+
+
+@pytest.mark.anyio
+class TestDispatchGetSignalsAroundTimeValuesOnly:
+    _ARGS = {
+        "wave_path": "/tmp/a.fsdb",
+        "signal_paths": ["top_tb.dut.data", "top_tb.dut.quiet", "top_tb.dut.broken"],
+        "center_time_ps": 1_000_000,
+        "window_ps": 4_000,
+    }
+
+    async def test_values_only_strips_transition_lists(self, monkeypatch):
+        fake = _FakeParserValuesOnly(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        result = await server._dispatch(
+            "get_signals_around_time",
+            {**self._ARGS, "return_mode": "values_only"},
+        )
+
+        assert result.return_mode == "values_only"
+        data = result.signals["top_tb.dut.data"]
+        assert "transitions_in_window" not in data
+        assert "pre_window_transitions" not in data
+        assert data["value_at_center"]["bin"] == "0"
+        assert data["window_transition_count"] == 3
+        quiet = result.signals["top_tb.dut.quiet"]
+        assert quiet["window_transition_count"] == 0
+        # error entries pass through untouched
+        assert result.signals["top_tb.dut.broken"] == {"error": "signal_not_found"}
+
+    async def test_values_only_keeps_transient_annotation(self, monkeypatch):
+        """annotate_center_transients runs BEFORE stripping: the dip-and-return
+        flag must survive even though the transitions it was derived from are gone."""
+        fake = _FakeParserValuesOnly(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        result = await server._dispatch(
+            "get_signals_around_time",
+            {**self._ARGS, "return_mode": "values_only"},
+        )
+
+        data = result.signals["top_tb.dut.data"]
+        assert data["center_transient"] is True
+        assert data["center_settles_to"]["bin"] == "1"
+        assert result.transient_note is not None
+
+    async def test_full_mode_is_default_and_keeps_transitions(self, monkeypatch):
+        fake = _FakeParserValuesOnly(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        result = await server._dispatch("get_signals_around_time", dict(self._ARGS))
+
+        assert result.return_mode == "full"
+        data = result.signals["top_tb.dut.data"]
+        assert len(data["transitions_in_window"]) == 3
+        assert len(data["pre_window_transitions"]) == 1
+
+    async def test_unknown_return_mode_rejected_before_parser_call(self, monkeypatch):
+        fake = _FakeParserValuesOnly(clock_period_ps=200_000)
+        monkeypatch.setattr(server, "_get_parser", lambda wave_path: fake)
+
+        with pytest.raises(ValueError, match="return_mode"):
+            await server._dispatch(
+                "get_signals_around_time",
+                {**self._ARGS, "return_mode": "compact"},
+            )
+        assert fake.called_with is None
+
+
 # Two signals identical until #20 (20_000 ps), then b stays high while a falls.
 _DIVERGE_VCD = """\
 $timescale 1ps $end

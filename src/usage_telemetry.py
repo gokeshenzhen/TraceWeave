@@ -47,6 +47,7 @@ _FLAG_WHITELIST = (
     "edge",
     "detail_level",
     "mode",
+    "return_mode",
     "simulator",
     "category",
     "direction",

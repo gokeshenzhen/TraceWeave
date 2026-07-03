@@ -927,6 +927,23 @@ def _validate_signals_around_time_args(
         )
 
 
+def _strip_signals_to_values_only(result: dict) -> None:
+    """return_mode='values_only': drop the per-signal transition lists in place.
+
+    Keeps value_at_center, any transient annotation, and error entries; replaces
+    transitions_in_window with its length (window_transition_count) so activity
+    level stays visible at near-zero cost. annotate_center_transients must run
+    BEFORE this — the transient detection needs the window transitions."""
+    result["return_mode"] = "values_only"
+    for sig in (result.get("signals") or {}).values():
+        if not isinstance(sig, dict) or sig.get("error"):
+            continue
+        window = sig.pop("transitions_in_window", None)
+        sig.pop("pre_window_transitions", None)
+        if window is not None:
+            sig["window_transition_count"] = len(window)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
@@ -1145,7 +1162,15 @@ async def list_tools():
                 "— the result sets `transient_note` and the signal carries "
                 "`center_transient`/`center_settles_to`/`center_settle_ps`. Treat the "
                 "SETTLED value as the protocol value; do not attribute a root cause to "
-                "an edge-sampled value that is flagged transient."
+                "an edge-sampled value that is flagged transient.\n"
+                "\n"
+                "return_mode=\"values_only\" keeps the atomic multi-signal sample but "
+                "strips the transition lists from every signal: each entry carries "
+                "value_at_center + window_transition_count (+ any transient "
+                "annotation, computed before stripping). Use it when you only need "
+                "the values at one instant — e.g. comparing the same time point "
+                "across several traces — instead of paying for transition history "
+                "or falling back to one get_signal_at_time call per signal."
             ),
             inputSchema={
                 "type": "object",
@@ -1173,8 +1198,19 @@ async def list_tools():
                     },
                     "extra_transitions": {
                         "type": "integer",
-                        "description": f"Extra transitions to include before the time window. Default: {DEFAULT_EXTRA_TRANSITIONS}",
+                        "description": f"Extra transitions to include before the time window. Default: {DEFAULT_EXTRA_TRANSITIONS}. 0 means none.",
                         "default": DEFAULT_EXTRA_TRANSITIONS,
+                    },
+                    "return_mode": {
+                        "type": "string",
+                        "enum": ["full", "values_only"],
+                        "default": "full",
+                        "description": (
+                            "values_only drops transitions_in_window/pre_window_transitions "
+                            "from every signal, returning value_at_center + "
+                            "window_transition_count (+ transient annotation). "
+                            "Compact point-sample mode for multi-trace value comparison."
+                        ),
                     },
                 },
                 "required": ["wave_path", "signal_paths", "center_time_ps"],
@@ -2267,6 +2303,11 @@ async def _dispatch(name: str, args: dict):
         parser = _get_parser(args["wave_path"])
         center_ps = _resolve_time(args["center_time_ps"])
         window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
+        return_mode = args.get("return_mode", "full")
+        if return_mode not in ("full", "values_only"):
+            raise ValueError(
+                f"unknown return_mode {return_mode!r}; expected 'full' or 'values_only'"
+            )
         raw_paths = args.get("signal_paths") or []
         signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
         _validate_signals_around_time_args(
@@ -2281,7 +2322,11 @@ async def _dispatch(name: str, args: dict):
         # Flag any value_at_center that is a sub-cycle transient (combinational
         # glitch at the clock edge) so a point sample is not misread as the settled
         # protocol value (e.g. an interconnect mux glitching to idle at each edge).
+        # Must run BEFORE values_only stripping: it needs the window transitions
+        # to detect the dip-and-return signature.
         annotate_center_transients(result)
+        if return_mode == "values_only":
+            _strip_signals_to_values_only(result)
         result["resolved_aliases"] = aliases
         signals = result.get("signals") or {}
         suggestions: dict[str, list[str]] = {}
