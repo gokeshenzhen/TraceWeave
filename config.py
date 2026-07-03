@@ -86,6 +86,9 @@ DEFAULT_LOG_CONTEXT_AFTER = 100
 # search_signals 返回的最大结果数
 SIGNAL_SEARCH_MAX_RESULTS = 100
 
+# search_signals 批量模式（keyword 传列表）单次允许的最大关键词数
+SIGNAL_SEARCH_MAX_KEYWORDS = 16
+
 # get_signal_transitions 单次返回的最大跳变数（dispatch 层截断，保留区间内
 # 最早的 N 条；parser 内部调用方不受影响，仍拿全量）
 TRANSITIONS_MAX_RETURNED = 1000

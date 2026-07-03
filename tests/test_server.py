@@ -2297,6 +2297,76 @@ class TestSignalTransitionsCap:
 
 
 @pytest.mark.anyio
+class TestSearchSignalsBatch:
+    """keyword accepts a list to batch several lookups in one call — the fix
+    for the consecutive keyword-groping chains telemetry surfaced (334/524
+    search calls arrived in runs of >=4). A single string keeps the exact
+    single-search result shape."""
+
+    _FIXTURE = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+
+    async def test_list_keyword_returns_one_entry_per_keyword_in_order(self):
+        result = await server._dispatch(
+            "search_signals",
+            {"wave_path": str(self._FIXTURE),
+             "keyword": ["clk", "data", "no_such_signal_xyz"]},
+        )
+        assert [e.keyword for e in result.batch] == ["clk", "data", "no_such_signal_xyz"]
+        assert any("clk" in m["path"] for m in result.batch[0].results)
+        assert any("data" in m["path"] for m in result.batch[1].results)
+        # A zero-match keyword is a fact entry, never an error.
+        assert result.batch[2].total_matched == 0
+        assert result.batch[2].results == []
+
+    async def test_single_string_keeps_single_search_shape(self):
+        result = await server._dispatch(
+            "search_signals",
+            {"wave_path": str(self._FIXTURE), "keyword": "clk"},
+        )
+        assert isinstance(result, server.schemas.SearchSignalsResult)
+        assert result.keyword == "clk"
+
+    async def test_empty_list_rejected(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            await server._dispatch(
+                "search_signals",
+                {"wave_path": str(self._FIXTURE), "keyword": []},
+            )
+
+    async def test_oversized_list_rejected(self):
+        too_many = [f"kw{i}" for i in range(server.SIGNAL_SEARCH_MAX_KEYWORDS + 1)]
+        with pytest.raises(ValueError, match="max"):
+            await server._dispatch(
+                "search_signals",
+                {"wave_path": str(self._FIXTURE), "keyword": too_many},
+            )
+
+    async def test_fsdb_batch_reuses_one_cached_index(self, monkeypatch):
+        created = []
+
+        class _FakeIndex:
+            def __init__(self, path):
+                created.append(self)
+                self.searched = []
+
+            def search(self, kw, max_r):
+                self.searched.append(kw)
+                return {"keyword": kw, "total_matched": 0, "results": []}
+
+        monkeypatch.setattr(server, "FSDBSignalIndex", _FakeIndex)
+        monkeypatch.setattr(server, "_get_wave_signature", lambda p: ("sig",))
+        monkeypatch.setattr(server, "_fsdb_index_cache", {})
+
+        result = await server._dispatch(
+            "search_signals",
+            {"wave_path": "/tmp/x.fsdb", "keyword": ["a", "b"]},
+        )
+        assert len(created) == 1  # one index build serves the whole batch
+        assert created[0].searched == ["a", "b"]
+        assert [e.keyword for e in result.batch] == ["a", "b"]
+
+
+@pytest.mark.anyio
 class TestPrerequisiteGating:
     async def test_parse_sim_log_blocked_without_get_sim_paths(self, tmp_path):
         log_path = tmp_path / "run.log"

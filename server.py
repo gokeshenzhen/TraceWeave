@@ -36,6 +36,7 @@ from config import (
     FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
+    SIGNAL_SEARCH_MAX_KEYWORDS,
     TRANSITIONS_MAX_RETURNED,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
@@ -1076,6 +1077,9 @@ async def list_tools():
             description=(
                 "Search for signals in a waveform file (FSDB/VCD) and return full hierarchical paths. "
                 "Use this when the client knows a leaf signal name but not the full path. "
+                "keyword accepts a single string OR a list of strings: pass a list to batch several "
+                "lookups in one call (one result entry per keyword, in input order) instead of issuing "
+                "consecutive single-keyword searches. "
                 "Each result also carries `direction` (input/output/inout/implicit/...) and `var_type` "
                 "(wire/reg/integer/real/parameter/memory/...), so callers can filter by port direction "
                 "or language type within a scope by combining a hierarchical keyword with these fields — "
@@ -1089,7 +1093,11 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
-                    "keyword":   {"type": "string", "description": "Signal keyword, for example s_bits, clk, or data"},
+                    "keyword":   {"type": ["string", "array"], "items": {"type": "string"},
+                                  "description": "Signal keyword (for example s_bits, clk, or data), or a list of "
+                                                 f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
+                                                 "lookups in one call — prefer the list form over consecutive "
+                                                 "single-keyword calls"},
                     "max_results": {"type": "integer", "description": "Maximum number of matches to return. Default: 50",
                                     "default": 50},
                 },
@@ -2289,13 +2297,34 @@ async def _dispatch(name: str, args: dict):
                 if cached is not None:
                     _dispose_cached_object(cached[1])
                 _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
-            result = _fsdb_index_cache[wave_path][1].search(keyword, max_r)
-            return schemas.SearchSignalsResult.model_validate(result)
+            index = _fsdb_index_cache[wave_path][1]
+            def _search_one(kw: str) -> dict:
+                return index.search(kw, max_r)
         elif ext == "vcd":
-            result = _get_parser(wave_path).search_signals(keyword, max_r)
-            return schemas.SearchSignalsResult.model_validate(result)
+            parser = _get_parser(wave_path)
+            def _search_one(kw: str) -> dict:
+                return parser.search_signals(kw, max_r)
         else:
             raise ValueError(f"Unsupported format: .{ext}")
+        # Batch mode: a list keyword runs each lookup against the same parser/
+        # index and returns one entry per keyword, collapsing the consecutive
+        # keyword-groping round trips telemetry surfaced into a single call.
+        if isinstance(keyword, list):
+            if not keyword:
+                raise ValueError("keyword list must not be empty")
+            if len(keyword) > SIGNAL_SEARCH_MAX_KEYWORDS:
+                raise ValueError(
+                    f"keyword list has {len(keyword)} entries; "
+                    f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
+                )
+            entries = [_search_one(str(kw)) for kw in keyword]
+            return schemas.SearchSignalsBatchResult.model_validate({
+                "batch": entries,
+                "hint": "One entry per keyword, in input order. Use the full path "
+                        "from each result's path field as the signal_path argument "
+                        "for tools such as get_signal_at_time.",
+            })
+        return schemas.SearchSignalsResult.model_validate(_search_one(keyword))
 
     elif name == "get_signal_at_time":
         parser = _get_parser(args["wave_path"])

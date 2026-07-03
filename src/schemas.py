@@ -394,6 +394,21 @@ class SearchSignalsResult(SchemaModel):
     hint: str | None = None
 
 
+class SearchSignalsBatchEntry(SchemaModel):
+    keyword: str
+    total_matched: int
+    results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SearchSignalsBatchResult(SchemaModel):
+    """search_signals with a list keyword: one entry per keyword, input order,
+    each the same shape as a single search. Exists to collapse the
+    consecutive-search keyword-groping chains telemetry surfaced (334/524
+    calls arrived in runs of >=4) into one round trip."""
+    batch: list[SearchSignalsBatchEntry] = Field(default_factory=list)
+    hint: str | None = None
+
+
 class SignalValue(SchemaModel):
     bin: str | None = None
     hex: str | None = None

@@ -125,6 +125,9 @@ Step 5: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
 ▼
 Step 6: search_signals(wave_path, keyword)
 │  Confirm full hierarchical paths for signals relevant to the error.
+│  `keyword` also accepts a LIST of keywords — batch every stem you plan to
+│  look up into ONE call (one result entry per keyword, in order) instead of
+│  issuing consecutive single-keyword searches.
 │  Returns: matching signals with bit width, `direction`, and `var_type`.
 │    - `direction`: input/output/inout/implicit (FSDB only). VCD always null.
 │    - `var_type` : wire/reg/integer/real/parameter/memory/...
