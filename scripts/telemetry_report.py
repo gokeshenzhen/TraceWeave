@@ -58,10 +58,23 @@ def render(report: dict) -> str:
 
     lines.append("Per-tool (by call count)")
     lines.append("-" * 60)
-    lines.append(f"  {'tool':<34} {'calls':>6} {'ok%':>5} {'sess':>5} {'pres%':>6}")
+    # ok% counts prerequisite blocks as not-ok; the blk column separates them
+    # so a gated tool is not misread as a failing tool.
+    lines.append(f"  {'tool':<34} {'calls':>6} {'ok%':>5} {'blk':>4} {'sess':>5} {'pres%':>6}")
     for tool, t in report["per_tool"].items():
         lines.append(f"  {tool:<34} {t['calls']:>6} {t['ok_rate']*100:>4.0f}% "
+                     f"{t.get('blocked', 0):>4} "
                      f"{t['sessions']:>5} {t['session_presence']*100:>5.0f}%")
+
+    failures = {tool: t["error_codes"] for tool, t in report["per_tool"].items()
+                if t.get("error_codes")}
+    if failures:
+        lines.append("")
+        lines.append("Not-ok calls by error_code (missing_prerequisite = gate, not failure)")
+        lines.append("-" * 60)
+        for tool, codes in failures.items():
+            joined = ", ".join(f"{code}×{n}" for code, n in codes.items())
+            lines.append(f"  {tool:<34} {joined}")
     return "\n".join(lines)
 
 

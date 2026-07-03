@@ -36,6 +36,7 @@ from config import (
     FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
+    TRANSITIONS_MAX_RETURNED,
     DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
@@ -1113,7 +1114,12 @@ async def list_tools():
 
         Tool(
             name="get_signal_transitions",
-            description="Return all transitions for a signal over a time range. FSDB support depends on fsdb_runtime.enabled.",
+            description=(
+                "Return transitions for a signal over a time range (capped at "
+                f"{TRANSITIONS_MAX_RETURNED} by default; truncated=true + hint mark a clipped "
+                "result, transition_count is always the total found). FSDB support depends "
+                "on fsdb_runtime.enabled."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1122,6 +1128,10 @@ async def list_tools():
                     "start_time_ps": {"type": _TIMESPEC_TYPE, "default": 0, "description": "Window start." + _TIMESPEC_HINT},
                     "end_time_ps":   {"type": _TIMESPEC_TYPE, "default": -1,
                                       "description": "-1 means through the end of simulation." + _TIMESPEC_HINT},
+                    "max_transitions": {"type": "integer", "default": TRANSITIONS_MAX_RETURNED,
+                                        "description": "Cap on returned transitions (earliest in range kept). "
+                                                       "Raise explicitly only for deliberate bulk extraction; "
+                                                       "prefer narrowing the time range."},
                 },
                 "required": ["wave_path", "signal_path"],
             },
@@ -2183,16 +2193,26 @@ async def call_tool(name: str, arguments: dict):
     start = time.perf_counter()
     ok = True
     blocked = False
+    error_code = None
     text = ""
     try:
         result = await _dispatch(name, arguments)
         text = _serialize_result(result)
         ok = not isinstance(result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult))
         blocked = isinstance(result, schemas.PrerequisiteBlockResult)
+        if isinstance(result, schemas.PrerequisiteBlockResult):
+            error_code = result.error_code
+        elif isinstance(result, schemas.ToolErrorResult):
+            error_code = result.error_code or "tool_error"
         return [TextContent(type="text", text=text)]
     except Exception as e:
         ok = False
-        text = _serialize_result(_format_error(e))
+        formatted = _format_error(e)
+        # A classification code is a safe scalar (never a path/value); the
+        # exception class name is the fallback so failure telemetry stays
+        # analyzable without guessing from result byte sizes.
+        error_code = formatted.error_code or type(e).__name__
+        text = _serialize_result(formatted)
         return [TextContent(type="text", text=text)]
     finally:
         latency_ms = (time.perf_counter() - start) * 1000.0
@@ -2206,6 +2226,7 @@ async def call_tool(name: str, arguments: dict):
             result_bytes=len(text.encode("utf-8")),
             ok=ok,
             blocked=blocked,
+            error_code=error_code,
             latency_ms=latency_ms,
             case=case,
         )
@@ -2297,6 +2318,20 @@ async def _dispatch(name: str, args: dict):
             _resolve_time(args.get("start_time_ps", 0)),
             _resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
         )
+        # Cap at the dispatch layer only: internal callers of parser
+        # .get_transitions() still see the full list. Telemetry showed a
+        # single uncapped call returning 8.9MB into the model context.
+        max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
+        if max_transitions < 1:
+            raise ValueError("max_transitions must be >= 1")
+        transitions = result.get("transitions") or []
+        if len(transitions) > max_transitions:
+            result["transitions"] = transitions[:max_transitions]
+            result["truncated"] = True
+            result["hint"] = (
+                f"showing the first {max_transitions} of {len(transitions)} transitions; "
+                "narrow [start_time_ps, end_time_ps] or raise max_transitions explicitly"
+            )
         return schemas.SignalTransitionsResult.model_validate(result)
 
     elif name == "get_signals_around_time":

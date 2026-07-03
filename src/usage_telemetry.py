@@ -20,6 +20,8 @@ Design constraints
 * **Local-only.** Appends to a JSONL file under the cache dir. No network.
 * **Low-signal payload.** We log argument *keys* and a small whitelist of
   scalar decision flags, never argument values or paths (noise + privacy).
+  Failed calls additionally carry a classification `error_code` (a code or
+  exception class name, never the message — messages can embed paths).
 * **Session = a get_sim_paths anchor.** The workflow always starts at
   get_sim_paths, so a new case identity opens a new logical session. The server
   calls `note_session()` from its get_sim_paths handler.
@@ -116,6 +118,7 @@ def record_call(
     result_bytes: int,
     ok: bool,
     blocked: bool = False,
+    error_code: str | None = None,
     latency_ms: float | None = None,
     case: str | None = None,
 ) -> None:
@@ -140,6 +143,10 @@ def record_call(
             "result_bytes": int(result_bytes),
             "latency_ms": round(latency_ms, 1) if latency_ms is not None else None,
         }
+        # A classification code, never a message (messages can embed paths).
+        # Omitted on success to keep the line slim.
+        if error_code is not None:
+            record["error_code"] = str(error_code)
         path = config.telemetry_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
@@ -209,12 +216,18 @@ def aggregate(records: Iterable[dict]) -> dict:
         sess["tools"].add(tool)
         sess["features"].add(feature)
 
-        t = per_tool.setdefault(tool, {"calls": 0, "ok": 0, "blocked": 0, "bytes": 0, "sessions": set()})
+        t = per_tool.setdefault(
+            tool,
+            {"calls": 0, "ok": 0, "blocked": 0, "bytes": 0, "sessions": set(), "error_codes": {}},
+        )
         t["calls"] += 1
         t["ok"] += 1 if rec.get("ok") else 0
         t["blocked"] += 1 if rec.get("blocked") else 0
         t["bytes"] += int(rec.get("result_bytes") or 0)
         t["sessions"].add(sid)
+        if not rec.get("ok"):
+            code = rec.get("error_code") or "(unrecorded)"
+            t["error_codes"][code] = t["error_codes"].get(code, 0) + 1
 
         feature_sessions.setdefault(feature, set()).add(sid)
 
@@ -229,6 +242,7 @@ def aggregate(records: Iterable[dict]) -> dict:
             "sessions": len(t["sessions"]),
             "session_presence": round(len(t["sessions"]) / total_sessions, 3) if total_sessions else 0.0,
             "total_bytes": t["bytes"],
+            "error_codes": dict(sorted(t["error_codes"].items(), key=lambda kv: -kv[1])),
         }
 
     tracked = {}

@@ -414,8 +414,12 @@ class SignalTransitionsResult(SchemaModel):
     signal: str
     start_ps: int
     end_ps: int
+    # Total transitions found in [start_ps, end_ps] — NOT len(transitions):
+    # the returned list is capped at max_transitions (earliest kept).
     transition_count: int
     transitions: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+    hint: str | None = None
 
 
 class SignalsAroundTimeResult(SchemaModel):

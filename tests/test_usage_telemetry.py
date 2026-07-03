@@ -38,6 +38,22 @@ def test_record_call_appends_jsonl(tmp_path, monkeypatch):
     assert rec["session_id"]
 
 
+def test_record_call_error_code_written_on_failure_only(tmp_path, monkeypatch):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call("get_signal_at_time", {}, result_bytes=80, ok=False,
+                    error_code="KeyError")
+    mod.record_call("get_signal_at_time", {}, result_bytes=120, ok=True)
+
+    failed, succeeded = [json.loads(l) for l in log.read_text().splitlines()]
+    assert failed["error_code"] == "KeyError"
+    # Success lines stay slim: no error_code key at all.
+    assert "error_code" not in succeeded
+
+
 def test_opt_out_writes_nothing(tmp_path, monkeypatch):
     log = tmp_path / "telemetry" / "usage.jsonl"
     monkeypatch.setattr(config, "TELEMETRY_ENABLED", False)
@@ -110,3 +126,21 @@ def test_aggregate_buckets_missing_session():
     records = [{"tool": "period", "ok": True, "result_bytes": 10}]
     report = ut.aggregate(records)
     assert report["total_sessions"] == 1  # synthetic "(none)" bucket
+
+
+def test_aggregate_counts_error_codes_for_failures_only():
+    records = [
+        {"session_id": "s1", "tool": "explain_signal_driver", "ok": False,
+         "blocked": True, "error_code": "missing_prerequisite", "result_bytes": 300},
+        {"session_id": "s1", "tool": "explain_signal_driver", "ok": False,
+         "blocked": True, "error_code": "missing_prerequisite", "result_bytes": 300},
+        {"session_id": "s1", "tool": "explain_signal_driver", "ok": True, "result_bytes": 900},
+        # pre-error_code record: bucketed as "(unrecorded)", never dropped
+        {"session_id": "s1", "tool": "parse_sim_log", "ok": False, "result_bytes": 200},
+    ]
+    report = ut.aggregate(records)
+
+    esd = report["per_tool"]["explain_signal_driver"]
+    assert esd["error_codes"] == {"missing_prerequisite": 2}
+    assert esd["blocked"] == 2
+    assert report["per_tool"]["parse_sim_log"]["error_codes"] == {"(unrecorded)": 1}

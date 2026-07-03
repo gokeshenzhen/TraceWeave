@@ -292,7 +292,7 @@ All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or 
 
 - `search_signals`: Resolve full hierarchical signal paths. Each result also carries `direction` (`input`/`output`/`inout`/`implicit`/`null`) and `var_type` (`wire`/`reg`/`integer`/`real`/`parameter`/…), so clients can filter ports/nets/variables in a chosen scope without a separate tool. **FSDB** populates both fields; **VCD** populates only `var_type` and returns `direction: null` (the VCD format does not encode port direction)
 - `get_signal_at_time`: Query a signal value at a specific timestamp
-- `get_signal_transitions`: Retrieve transitions for a signal over time
+- `get_signal_transitions`: Retrieve transitions for a signal over time. Returns at most `max_transitions` entries (default 1000, earliest in range kept); a clipped result sets `truncated: true` + a `hint`, and `transition_count` always reports the total found — narrow the time range or raise `max_transitions` explicitly for bulk extraction
 - `get_signals_around_time`: Retrieve context around a failure timestamp. Flags a `value_at_center` that is a **sub-cycle transient** (a combinational glitch at the clock edge that settles back within the same cycle — e.g. an interconnect mux re-settling to idle for ~1ns) via `transient_note` + per-signal `center_transient`/`center_settles_to`, so an edge-sampled glitch is not misread as the settled protocol value. `return_mode="values_only"` keeps the atomic multi-signal sample but strips the transition lists (each signal returns `value_at_center` + `window_transition_count` + any transient annotation) — the compact shape for comparing one time point across several traces. `extra_transitions=0` is honored strictly: zero pre-window history.
 - `get_signals_by_cycle`: Sample signals cycle-by-cycle on a clock edge
 - `get_waveform_summary`: Return waveform metadata
@@ -328,7 +328,7 @@ For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` —
 
 ### Usage telemetry
 
-TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, and a session id anchored to each `get_sim_paths` case. It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-on; set `TRACEWEAVE_TELEMETRY=0` to disable. Summarize with `python scripts/telemetry_report.py`.
+TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-on; set `TRACEWEAVE_TELEMETRY=0` to disable. Summarize with `python scripts/telemetry_report.py`.
 
 ## Testing
 

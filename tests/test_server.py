@@ -2216,6 +2216,85 @@ class TestCallToolErrors:
         parsed = ToolErrorResult.model_validate(payload)
         assert parsed.error == "boom"
 
+    async def test_telemetry_receives_error_code_on_exception(self):
+        seen = {}
+
+        def spy(tool, args, **kw):
+            seen.update(kw, tool=tool)
+
+        with patch("server._dispatch", side_effect=ValueError("boom")), \
+             patch.object(server.usage_telemetry, "record_call", spy):
+            await server.call_tool("search_signals", {"wave_path": "/tmp/a.vcd", "keyword": "sig"})
+
+        # Exception class name is the fallback classification code so failure
+        # telemetry is analyzable without guessing from result byte sizes.
+        assert seen["error_code"] == "ValueError"
+        assert seen["ok"] is False
+
+    async def test_telemetry_error_code_none_on_success(self):
+        seen = {}
+
+        def spy(tool, args, **kw):
+            seen.update(kw, tool=tool)
+
+        with patch("server._dispatch", return_value={"keyword": "sig", "total_matched": 0, "results": []}), \
+             patch.object(server.usage_telemetry, "record_call", spy):
+            await server.call_tool("search_signals", {"wave_path": "/tmp/a.vcd", "keyword": "sig"})
+
+        assert seen["error_code"] is None
+        assert seen["ok"] is True
+
+
+@pytest.mark.anyio
+class TestSignalTransitionsCap:
+    """get_signal_transitions caps the returned list at the dispatch layer
+    (telemetry showed a single uncapped call returning 8.9MB); internal
+    callers of parser.get_transitions() still see the full list."""
+
+    _FIXTURE = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
+
+    async def test_schema_exposes_max_transitions_default(self):
+        tools = await server.list_tools()
+        tool = next(t for t in tools if t.name == "get_signal_transitions")
+        assert tool.inputSchema["properties"]["max_transitions"]["default"] == \
+            server.TRANSITIONS_MAX_RETURNED
+
+    async def test_under_cap_is_untouched(self):
+        result = await server._dispatch(
+            "get_signal_transitions",
+            {"wave_path": str(self._FIXTURE), "signal_path": "top_tb.clk"},
+        )
+        assert result.truncated is False
+        assert result.hint is None
+        assert result.transition_count == len(result.transitions)
+
+    async def test_explicit_cap_truncates_keeps_earliest_and_hints(self):
+        full = await server._dispatch(
+            "get_signal_transitions",
+            {"wave_path": str(self._FIXTURE), "signal_path": "top_tb.clk"},
+        )
+        assert full.transition_count > 2  # fixture precondition
+
+        capped = await server._dispatch(
+            "get_signal_transitions",
+            {"wave_path": str(self._FIXTURE), "signal_path": "top_tb.clk",
+             "max_transitions": 2},
+        )
+        assert capped.truncated is True
+        assert len(capped.transitions) == 2
+        # transition_count stays the TOTAL found, not the returned length.
+        assert capped.transition_count == full.transition_count
+        assert capped.transitions == full.transitions[:2]
+        assert "max_transitions" in capped.hint
+
+    async def test_rejects_nonpositive_cap(self):
+        with pytest.raises(ValueError, match="max_transitions"):
+            await server._dispatch(
+                "get_signal_transitions",
+                {"wave_path": str(self._FIXTURE), "signal_path": "top_tb.clk",
+                 "max_transitions": 0},
+            )
+
 
 @pytest.mark.anyio
 class TestPrerequisiteGating:

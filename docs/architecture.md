@@ -329,7 +329,10 @@ actually used on real workloads, and in what fraction of debug sessions?*
 - Each line records: timestamp, `session_id`, `case` (case-dir basename),
   tool name, **argument keys + a small whitelist of scalar flags** (never
   argument values or paths — noise + privacy), `ok`/`blocked`, `result_bytes`
-  (a token proxy), and `latency_ms`.
+  (a token proxy), and `latency_ms`. Failed calls additionally carry a
+  classification `error_code` (a code such as `missing_prerequisite` or the
+  exception class name — never the message, which can embed paths), so
+  failure telemetry is analyzable without guessing from byte sizes.
 - **A session = a `get_sim_paths` case.** The get_sim_paths handler calls
   `note_session(identity)`; a new case identity mints a new `session_id`,
   re-discovering the same case keeps it. This makes "sessions in which a
