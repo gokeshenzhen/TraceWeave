@@ -48,7 +48,53 @@ struct FsdbCtx {
     std::string                       scope_stack;   /* 当前遍历路径 */
     std::vector<std::string>          scope_parts;
     bool                              tree_done;
+    /* FSDB 时间刻度。FSDB tag 存的是 tick 计数而非 ps：
+     *   真实时间 = tick × scale
+     * scale 来自文件头 ffrGetScaleUnit()（如 "100fs"/"1ps"/"1ns"）。
+     * 换算系数以 fs 整数存（fs/tick），sub-ps 刻度（100fs = 0.1ps）不会像
+     * 整数 ps 那样被截成 0。
+     * 0 = 刻度读不到/无法解析——所有时间型入口拒绝服务（返回
+     * FSDB_ERR_SCALE_UNKNOWN），绝不静默假设 1 tick == 1 ps。 */
+    unsigned long long                scale_fs;
+    char                              scale_unit[32]; /* 原始刻度字符串，"" = 未知 */
 };
+
+/* 时间刻度未知时所有时间型接口的错误码（-1 参数、-2 信号未找到、-3 句柄失败已占用） */
+#define FSDB_ERR_SCALE_UNKNOWN (-4)
+#define FS_PER_PS 1000ULL
+
+/* 解析 ffrGetScaleUnit() 返回的刻度字符串（"100fs"/"1ps"/"1ns"…）为
+ * fs/tick。无数字前缀按 1 处理（"ps" == "1ps"）；单位不认识或结果非正
+ * 返回 0（未知）。 */
+static unsigned long long
+_ParseScaleFs(const char *scale_unit)
+{
+    if (!scale_unit || !*scale_unit) return 0;
+
+    char *endp = NULL;
+    double num = strtod(scale_unit, &endp);
+    if (endp == scale_unit) num = 1.0;        /* 无数字前缀 */
+    while (*endp == ' ' || *endp == '\t') endp++;
+
+    char unit[8];
+    size_t n = 0;
+    for (; endp[n] && n + 1 < sizeof(unit); n++)
+        unit[n] = (char)tolower((unsigned char)endp[n]);
+    unit[n] = '\0';
+
+    double mult;
+    if      (0 == strcmp(unit, "fs")) mult = 1.0;
+    else if (0 == strcmp(unit, "ps")) mult = 1e3;
+    else if (0 == strcmp(unit, "ns")) mult = 1e6;
+    else if (0 == strcmp(unit, "us")) mult = 1e9;
+    else if (0 == strcmp(unit, "ms")) mult = 1e12;
+    else if (0 == strcmp(unit, "s"))  mult = 1e15;
+    else return 0;
+
+    double fs = num * mult;
+    if (fs < 1.0 || fs > 9e18) return 0;
+    return (unsigned long long)(fs + 0.5);
+}
 
 /* ─── 树回调：建立信号路径索引 ────────────────────────────────────── */
 
@@ -140,19 +186,36 @@ _VCToStr(byte_T *vc_ptr, uint_T bit_size, uint_T bpb)
     return "?";
 }
 
+/* ── tick↔ps 换算的唯一收口 ──────────────────────────────────────────
+ * 所有时间转换必须走这两个 helper；任何绕过它们的手写 <<32| 都是回归。
+ * 调用前必须保证 ctx->scale_fs != 0（各入口先检查并返回
+ * FSDB_ERR_SCALE_UNKNOWN）。
+ *
+ * 取整方向是一对契约：
+ *   输入 ps→tick 用 floor —— ffrGotoXTag 是 at-or-before 语义，floor 保持
+ *   "取 T 时刻及之前的值" 精确；
+ *   输出 tick→ps 用 ceil  —— sub-ps 刻度下跳变可能落在非整数 ps（如
+ *   ...897.9 ps），向上取整保证「拿工具报告的跳变时间戳回查，必落在跳变
+ *   之后、取到新值」；floor 会落在跳变之前取到旧值（隐蔽 off-by-one）。
+ *   对 1ps 及更粗的刻度两个方向都精确无损。 */
+
 static fsdbTag64
-_ToTag(unsigned long long time_ps)
+_ToTag(const FsdbCtx *ctx, unsigned long long time_ps)
 {
+    unsigned __int128 fs = (unsigned __int128)time_ps * FS_PER_PS;
+    unsigned long long tick = (unsigned long long)(fs / ctx->scale_fs);
     fsdbTag64 tag;
-    tag.H = (uint_T)(time_ps >> 32);
-    tag.L = (uint_T)(time_ps & 0xFFFFFFFF);
+    tag.H = (uint_T)(tick >> 32);
+    tag.L = (uint_T)(tick & 0xFFFFFFFF);
     return tag;
 }
 
 static unsigned long long
-_TagToPs(const fsdbTag64 &tag)
+_TagToPs(const FsdbCtx *ctx, const fsdbTag64 &tag)
 {
-    return ((unsigned long long)tag.H << 32) | tag.L;
+    unsigned long long tick = ((unsigned long long)tag.H << 32) | tag.L;
+    unsigned __int128 fs = (unsigned __int128)tick * ctx->scale_fs;
+    return (unsigned long long)((fs + FS_PER_PS - 1) / FS_PER_PS);
 }
 
 static bool
@@ -216,6 +279,16 @@ fsdb_open(const char *fname)
     FsdbCtx *ctx = new FsdbCtx();
     ctx->obj       = obj;
     ctx->tree_done = false;
+
+    /* 从文件头读时间刻度（运行时真值，绝不写死 1ps）。读不到 → scale_fs=0，
+     * 时间型接口一律拒绝服务而不是返回错位的数值。 */
+    ctx->scale_unit[0] = '\0';
+    str_T su = obj->ffrGetScaleUnit();
+    if (su && su[0]) {
+        strncpy(ctx->scale_unit, su, sizeof(ctx->scale_unit) - 1);
+        ctx->scale_unit[sizeof(ctx->scale_unit) - 1] = '\0';
+    }
+    ctx->scale_fs = _ParseScaleFs(ctx->scale_unit);
 
     obj->ffrSetTreeCBFunc(_TreeCB, ctx);
     obj->ffrReadScopeVarTree();
@@ -289,6 +362,7 @@ fsdb_get_value_at_time(void *handle, const char *signal_path,
 {
     if (!handle || !signal_path || !out_val) return -1;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
 
     auto it = ctx->path_to_sig.find(std::string(signal_path));
     if (it == ctx->path_to_sig.end()) return -2;   /* 信号未找到 */
@@ -307,10 +381,7 @@ fsdb_get_value_at_time(void *handle, const char *signal_path,
         return -3;
     }
 
-    /* 构造 fsdbTag64 时间戳（time_ps 直接作为 L，H=0，适合 < 2^32 ps） */
-    fsdbTag64 tag;
-    tag.H = (uint_T)(time_ps >> 32);
-    tag.L = (uint_T)(time_ps & 0xFFFFFFFF);
+    fsdbTag64 tag = _ToTag(ctx, time_ps);
 
     std::string result = "x";
 
@@ -344,6 +415,7 @@ fsdb_get_transitions(void *handle, const char *signal_path,
 {
     if (!handle || !signal_path || !out_buf) return -1;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
 
     auto it = ctx->path_to_sig.find(std::string(signal_path));
     if (it == ctx->path_to_sig.end()) return -2;
@@ -366,9 +438,7 @@ fsdb_get_transitions(void *handle, const char *signal_path,
 
     if (hdl->ffrHasIncoreVC()) {
         /* 跳到 start_ps */
-        fsdbTag64 start_tag;
-        start_tag.H = (uint_T)(start_ps >> 32);
-        start_tag.L = (uint_T)(start_ps & 0xFFFFFFFF);
+        fsdbTag64 start_tag = _ToTag(ctx, start_ps);
         hdl->ffrGotoXTag((void*)&start_tag);
 
         do {
@@ -377,8 +447,7 @@ fsdb_get_transitions(void *handle, const char *signal_path,
             hdl->ffrGetXTag(&time);
             hdl->ffrGetVC(&vc_ptr);
 
-            unsigned long long t_ps =
-                ((unsigned long long)time.H << 32) | time.L;
+            unsigned long long t_ps = _TagToPs(ctx, time);
             if (end_ps != (unsigned long long)-1 && t_ps > end_ps)
                 break;
 
@@ -417,6 +486,7 @@ fsdb_get_multi_signals_around_time(
 {
     if (!handle || !signal_paths || signal_count < 0 || !out_buf) return -1;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
     out_buf[0] = '\0';
 
     std::vector<SigInfo*> valid_sigs;
@@ -464,7 +534,7 @@ fsdb_get_multi_signals_around_time(
 
         std::string value_at_center = "?";
         if (hdl->ffrHasIncoreVC()) {
-            fsdbTag64 center_tag = _ToTag(center_ps);
+            fsdbTag64 center_tag = _ToTag(ctx, center_ps);
             if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&center_tag)) {
                 byte_T *vc_ptr = NULL;
                 if (FSDB_RC_SUCCESS == hdl->ffrGetVC(&vc_ptr) && vc_ptr) {
@@ -484,14 +554,14 @@ fsdb_get_multi_signals_around_time(
         }
 
         if (hdl->ffrHasIncoreVC()) {
-            fsdbTag64 start_tag = _ToTag(start_ps);
+            fsdbTag64 start_tag = _ToTag(ctx, start_ps);
             if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&start_tag)) {
                 do {
                     fsdbTag64 time;
                     byte_T *vc_ptr = NULL;
                     hdl->ffrGetXTag(&time);
                     hdl->ffrGetVC(&vc_ptr);
-                    unsigned long long t_ps = _TagToPs(time);
+                    unsigned long long t_ps = _TagToPs(ctx, time);
                     if (t_ps > end_ps) break;
                     std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
                     if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
@@ -511,7 +581,7 @@ fsdb_get_multi_signals_around_time(
         }
 
         if (hdl->ffrHasIncoreVC() && extra_transitions > 0) {
-            fsdbTag64 start_tag = _ToTag(start_ps);
+            fsdbTag64 start_tag = _ToTag(ctx, start_ps);
             if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&start_tag)) {
                 for (int n = 0; n < extra_transitions; n++) {
                     if (FSDB_RC_SUCCESS != hdl->ffrGotoPrevVC()) break;
@@ -519,7 +589,7 @@ fsdb_get_multi_signals_around_time(
                     byte_T *vc_ptr = NULL;
                     hdl->ffrGetXTag(&time);
                     hdl->ffrGetVC(&vc_ptr);
-                    unsigned long long t_ps = _TagToPs(time);
+                    unsigned long long t_ps = _TagToPs(ctx, time);
                     std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
                     if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
                         break;
@@ -570,6 +640,7 @@ fsdb_batch_window_transitions(
 {
     if (!handle || !signal_paths || signal_count < 0 || !out_buf || buf_size <= 0) return -1;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
     out_buf[0] = '\0';
     int pos = 0;
     bool truncated = false;
@@ -629,7 +700,7 @@ fsdb_batch_window_transitions(
         if (!vc_ptr) continue;
 
         fsdbTag64 *tag64 = (fsdbTag64*)&xtag;
-        unsigned long long t_ps = ((unsigned long long)tag64->H << 32) | tag64->L;
+        unsigned long long t_ps = _TagToPs(ctx, *tag64);
         if (t_ps < start_ps) continue;
         if (t_ps > end_ps) break;
 
@@ -660,11 +731,13 @@ fsdb_get_end_time(void *handle)
 {
     if (!handle) return 0;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    /* 刻度未知无法换算；返回 0，Python 层依据 scale_unit=unknown 报警 */
+    if (ctx->scale_fs == 0) return 0;
 
     /* 首选：文件级全局最大时间 */
     fsdbTag64 gmax;
     if (FSDB_RC_SUCCESS == ctx->obj->ffrGetMaxFsdbTag64(&gmax))
-        return _TagToPs(gmax);
+        return _TagToPs(ctx, gmax);
 
     /* 兜底：旧的单信号遍历（全局 API 不可用时） */
     fsdbVarIdcode max_id = ctx->obj->ffrGetMaxVarIdcode();
@@ -678,7 +751,7 @@ fsdb_get_end_time(void *handle)
     if (hdl && hdl->ffrHasIncoreVC()) {
         fsdbTag64 time;
         if (FSDB_RC_SUCCESS == hdl->ffrGetMaxXTag((void*)&time))
-            end_ps = _TagToPs(time);
+            end_ps = _TagToPs(ctx, time);
         hdl->ffrFree();
     }
     ctx->obj->ffrUnloadSignals();
@@ -692,6 +765,25 @@ fsdb_get_signal_count(void *handle)
     if (!handle) return 0;
     FsdbCtx *ctx = (FsdbCtx*)handle;
     return (int)ctx->path_to_sig.size();
+}
+
+/* ── 读取时间刻度 ────────────────────────────────────────────────────
+ * 返回 fs/tick 换算系数（0 = 刻度读不到/无法解析）；out_buf 写入文件头
+ * 原始刻度字符串（如 "100fs"），未知时写 "unknown"。
+ * Python 层用它把刻度暴露在 get_waveform_summary 中，任何人可一眼核对
+ * 工具认成的单位。 */
+unsigned long long
+fsdb_get_scale_info(void *handle, char *out_buf, int buf_size)
+{
+    if (out_buf && buf_size > 0) out_buf[0] = '\0';
+    if (!handle) return 0;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (out_buf && buf_size > 0) {
+        const char *s = ctx->scale_unit[0] ? ctx->scale_unit : "unknown";
+        strncpy(out_buf, s, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+    }
+    return ctx->scale_fs;
 }
 
 } /* extern "C" */

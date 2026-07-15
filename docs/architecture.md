@@ -119,7 +119,14 @@ Verification
   get_tb_class_hierarchy, dump_tb_section) as pure functions over a
   resolved full hierarchy dict.
 - `src/fsdb_parser.py` is the Python/native boundary and resolves FSDB runtime
-  from repo-local links first, then `VERDI_HOME`.
+  from repo-local links first, then `VERDI_HOME`. Time contract at this
+  boundary: FSDB tags are tick counts, real time = tick × header scale
+  (`ffrGetScaleUnit()`, read once at `fsdb_open`). All tick↔ps conversion is
+  collared in two `fsdb_wrapper.cpp` helpers (`_ToTag` floor / `_TagToPs`
+  ceil, integer-fs base), so every timestamp crossing into Python is real
+  picoseconds. Unknown scale → time-based calls refuse
+  (`FSDB_ERR_SCALE_UNKNOWN`) rather than assume 1ps; `get_waveform_summary`
+  exposes `scale_unit`/`scale_fs_per_tick` for self-check.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single

@@ -82,6 +82,8 @@ class FSDBBatchReader:
             buf,
             _BUF_SIZE,
         )
+        if rc == -4:
+            raise self._parser._scale_unknown_error()
         if rc < 0:
             raise RuntimeError(f"fsdb_batch_window_transitions failed, rc={rc}")
         text = buf.value.decode()

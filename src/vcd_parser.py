@@ -13,7 +13,11 @@ class VCDParser:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self._parsed          = False
-        self._timescale_ps    = 1
+        # fs per VCD time unit. Integer fs (not integer ps) so a sub-ps
+        # $timescale like 100fs stays exact instead of truncating to 0 and
+        # collapsing every timestamp to t=0.
+        self._timescale_fs    = 1000        # default 1ps when no $timescale
+        self._timescale_raw   = None        # raw $timescale text, e.g. "100fs"
         self._signals: dict   = {}          # symbol → {path, width}
         self._path_to_sym: dict = {}        # full_path → symbol
         self._transitions: dict = {}        # symbol → [(time_ps, value)]
@@ -98,7 +102,9 @@ class VCDParser:
         return {
             "file":                   self.file_path,
             "format":                 "VCD",
-            "timescale_ps":           self._timescale_ps,
+            "timescale_ps":           self._timescale_fs / 1000,
+            "scale_unit":             self._timescale_raw or "1ps(assumed)",
+            "scale_fs_per_tick":      self._timescale_fs,
             "simulation_duration_ps": self._end_time_ps,
             "simulation_duration_ns": self._end_time_ps / 1000,
             "total_signals":          len(self._signals),
@@ -162,7 +168,8 @@ class VCDParser:
         # timescale
         ts = re.search(r'\$timescale\s+(.*?)\s*\$end', content, re.DOTALL)
         if ts:
-            self._timescale_ps = _parse_timescale(ts.group(1).strip())
+            self._timescale_raw = ts.group(1).strip()
+            self._timescale_fs = _parse_timescale_fs(self._timescale_raw)
 
         scope_stack   = []
         current_ps    = 0
@@ -195,7 +202,12 @@ class VCDParser:
                 i += 6
             elif tok.startswith("#"):
                 try:
-                    current_ps = int(tok[1:]) * self._timescale_ps
+                    # ceil to ps, matching the FSDB wrapper's convention: a
+                    # sub-ps transition time is reported as the next integer
+                    # ps, so querying at a reported timestamp always lands
+                    # at-or-after the transition. Exact for >=1ps timescales.
+                    ticks = int(tok[1:])
+                    current_ps = (ticks * self._timescale_fs + 999) // 1000
                     self._end_time_ps = max(self._end_time_ps, current_ps)
                 except ValueError:
                     pass
@@ -255,17 +267,23 @@ def _enrich_value(binary_str: str | None) -> dict | None:
     return result
 
 
-def _parse_timescale(ts_str: str) -> int:
+def _parse_timescale_fs(ts_str: str) -> int:
+    """Parse a $timescale directive into integer fs per time unit.
+
+    Integer fs is the internal base unit: integer ps would truncate a sub-ps
+    timescale like 100fs to 0 and multiply every timestamp by zero. "s" must
+    stay last so "fs"/"ps"/"ns"/"us"/"ms" match their own suffix first.
+    """
     ts_str = ts_str.strip().replace(" ", "")
-    units  = {"fs": 0.001, "ps": 1, "ns": 1000, "us": 1_000_000,
-               "ms": 1_000_000_000, "s": 1_000_000_000_000}
+    units  = {"fs": 1, "ps": 1000, "ns": 1_000_000, "us": 10**9,
+               "ms": 10**12, "s": 10**15}
     for unit, mult in units.items():
         if ts_str.endswith(unit):
             try:
-                return int(float(ts_str[:-len(unit)]) * mult)
+                return round(float(ts_str[:-len(unit)]) * mult)
             except ValueError:
                 pass
-    return 1
+    return 1000
 
 
 def _signal_rank(path: str, keyword: str) -> int:

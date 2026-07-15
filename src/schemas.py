@@ -379,7 +379,14 @@ class DiffResult(SchemaModel):
 class WaveformSummaryResult(SchemaModel):
     file: str
     format: str
-    timescale_ps: int | None = None
+    timescale_ps: float | None = None
+    # Time-scale self-check: the scale the parser read from the waveform
+    # header ("100fs"/"1ps"/"1ns"; "unknown" when unreadable) and the derived
+    # fs-per-tick conversion factor (0 = unknown). Timestamps in all tool
+    # output are real picoseconds converted with this factor.
+    scale_unit: str | None = None
+    scale_fs_per_tick: int | None = None
+    scale_warning: str | None = None
     simulation_duration_ps: int
     simulation_duration_ns: float
     total_signals: int

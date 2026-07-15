@@ -168,3 +168,70 @@ def test_summary_uses_transition_end_time_fallback(tmp_path: Path):
     summary = parser.get_summary()
 
     assert summary["simulation_duration_ps"] == 15000
+
+
+# ── 跨 timescale 回归（sub-ps 刻度曾把 timescale_ps 截成 0，所有时间戳坍缩到 0）──
+
+def _scaled_vcd(timescale: str) -> str:
+    return f"""\
+$timescale {timescale} $end
+$scope module top_tb $end
+$var reg 8 ! data $end
+$upscope $end
+$enddefinitions $end
+#0
+b00000000 !
+#1000
+b10101010 !
+#1001
+b11001100 !
+"""
+
+
+def test_sub_ps_timescale_100fs(tmp_path: Path):
+    """100fs/tick: tick 1000 = 100000 fs = 100 ps real time. The old integer-ps
+    timescale (int(0.1) == 0) multiplied every timestamp by zero."""
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(_scaled_vcd("100fs"))
+
+    parser = VCDParser(str(wave))
+    summary = parser.get_summary()
+    assert summary["scale_fs_per_tick"] == 100
+    assert summary["scale_unit"] == "100fs"
+    assert summary["timescale_ps"] == 0.1
+    assert summary["simulation_duration_ps"] == 101  # ceil(1001 * 0.1)
+
+    r = parser.get_transitions("top_tb.data")
+    assert [t["time_ps"] for t in r["transitions"]] == [0, 100, 101]
+    # external ground-truth ps input must hit the real instant
+    assert parser.get_value_at_time("top_tb.data", 100)["value"]["bin"] == "10101010"
+    assert parser.get_value_at_time("top_tb.data", 99)["value"]["bin"] == "00000000"
+    # reported-timestamp roundtrip returns the post-transition value
+    for t in r["transitions"]:
+        back = parser.get_value_at_time("top_tb.data", t["time_ps"])
+        assert back["value"]["bin"] == t["value"]["bin"]
+
+
+def test_super_ps_timescale_1ns(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(_scaled_vcd("1ns"))
+
+    parser = VCDParser(str(wave))
+    summary = parser.get_summary()
+    assert summary["scale_fs_per_tick"] == 1_000_000
+    assert summary["timescale_ps"] == 1000
+    assert summary["simulation_duration_ps"] == 1_001_000
+
+    r = parser.get_transitions("top_tb.data")
+    assert [t["time_ps"] for t in r["transitions"]] == [0, 1_000_000, 1_001_000]
+
+
+def test_missing_timescale_assumes_1ps_and_says_so(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    vcd = _scaled_vcd("1ps").replace("$timescale 1ps $end\n", "")
+    wave.write_text(vcd)
+
+    parser = VCDParser(str(wave))
+    summary = parser.get_summary()
+    assert summary["scale_fs_per_tick"] == 1000
+    assert summary["scale_unit"] == "1ps(assumed)"

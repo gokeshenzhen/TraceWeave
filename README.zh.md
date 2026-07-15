@@ -285,7 +285,7 @@ codex mcp list
 - `get_signal_transitions`:取出某段时间内信号的跳变。单次最多返回 `max_transitions` 条(默认 1000,保留区间内最早的);被截断时置 `truncated: true` 并附 `hint`,`transition_count` 始终是区间内的总数——需要批量导出时收窄时间区间或显式调大 `max_transitions`
 - `get_signals_around_time`:取出失败时间点附近的上下文。若某个 `value_at_center` 是**亚周期瞬变**(时钟边沿的组合毛刺、同一周期内又 settle 回去——如互连 mux 在每个边沿 ~1ns 重置成 idle),会通过 `transient_note` + 逐信号的 `center_transient`/`center_settles_to` 标注出来,避免把边沿采到的毛刺当成稳定的协议值。`return_mode="values_only"` 保留多信号原子采样但剥离转换列表(每个信号只返回 `value_at_center` + `window_transition_count` + 瞬变标注)——适合跨多条 trace 比较同一时刻的紧凑模式。`extra_transitions=0` 严格生效:不返回任何窗口前历史。
 - `get_signals_by_cycle`:按时钟沿逐周期采样信号
-- `get_waveform_summary`:返回波形元数据
+- `get_waveform_summary`:返回波形元数据。内含时间刻度自检字段:`scale_unit`(从波形文件头读出的刻度,如 `100fs`/`1ps`/`1ns`;读不到时为 `unknown`)与 `scale_fs_per_tick`——所有工具输出的时间戳都是按该系数换算后的真实皮秒,绝不是文件内部的 tick 计数。刻度读不到时 summary 附带 `scale_warning`,且该波形上所有时间型查询都会明确报错,绝不静默假设 1ps 刻度
 
 ### 游标与验证原语
 

@@ -130,6 +130,22 @@ def _setup(lib):
     lib.fsdb_get_signal_count.restype  = ctypes.c_int
     lib.fsdb_get_signal_count.argtypes = [ctypes.c_void_p]
 
+    # unsigned long long fsdb_get_scale_info(void*, char*, int)
+    # An old .so without this symbol also lacks tick↔ps scale conversion: it
+    # silently treats 1 FSDB tick as 1 ps and misaligns every timestamp on any
+    # non-1ps-scale FSDB. Refuse to run against it instead of returning
+    # plausible-but-wrong times.
+    try:
+        lib.fsdb_get_scale_info.restype  = ctypes.c_uint64
+        lib.fsdb_get_scale_info.argtypes = [ctypes.c_void_p,
+                                            ctypes.c_char_p, ctypes.c_int]
+    except AttributeError:
+        raise RuntimeError(
+            "libfsdb_wrapper.so is outdated: missing fsdb_get_scale_info "
+            "(FSDB time-scale support). Rebuild it with `bash build_wrapper.sh` "
+            "and reconnect the MCP server."
+        )
+
 
 _BUF_SIZE = 64 * 1024 * 1024
 
@@ -140,6 +156,8 @@ class FSDBParser:
         self._lib    = None
         self._handle = None
         self._buf    = None
+        self._scale_unit = None   # raw header string, e.g. "100fs"; "unknown" if unreadable
+        self._scale_fs   = None   # fs per FSDB tick; 0 = unknown
 
     def _open(self):
         if self._handle:
@@ -150,6 +168,17 @@ class FSDBParser:
         if not handle:
             raise RuntimeError(f"Unable to open FSDB: {self.file_path}")
         self._handle = handle
+        unit_buf = ctypes.create_string_buffer(64)
+        self._scale_fs = int(self._lib.fsdb_get_scale_info(handle, unit_buf, 64))
+        self._scale_unit = unit_buf.value.decode() or "unknown"
+
+    def _scale_unknown_error(self) -> RuntimeError:
+        return RuntimeError(
+            f"FSDB time scale is unreadable (header scale unit: {self._scale_unit!r}) "
+            f"for {self.file_path}; refusing the time-based query because timestamps "
+            "cannot be converted between ps and FSDB ticks. Silently assuming 1 tick "
+            "== 1 ps would return misaligned values."
+        )
 
     def close(self):
         if self._handle and self._lib:
@@ -179,6 +208,8 @@ class FSDBParser:
             raise KeyError(
                 f"Signal not found: '{signal_path}'. Use search_signals to confirm the full path first."
             )
+        if rc == -4:
+            raise self._scale_unknown_error()
         if rc < 0:
             raise RuntimeError(f"fsdb_get_value_at_time failed, rc={rc}")
         return {
@@ -200,6 +231,8 @@ class FSDBParser:
         )
         if rc == -2:
             raise KeyError(f"Signal not found: '{signal_path}'")
+        if rc == -4:
+            raise self._scale_unknown_error()
         if rc < 0:
             raise RuntimeError(f"fsdb_get_transitions failed, rc={rc}")
         transitions = _parse_trans_buf(buf.value.decode())
@@ -239,6 +272,8 @@ class FSDBParser:
             buf,
             _BUF_SIZE,
         )
+        if rc == -4:
+            raise self._scale_unknown_error()
         if rc < 0:
             raise RuntimeError(f"fsdb_get_multi_signals_around_time failed, rc={rc}")
         return _parse_multi_signal_buf(
@@ -265,15 +300,27 @@ class FSDBParser:
                         end_ps = max(end_ps, transitions[-1]["time_ps"])
         except Exception:
             pass
-        return {
+        summary = {
             "file":                   self.file_path,
             "format":                 "FSDB",
+            # Self-check fields: which time scale the tool read from the FSDB
+            # header and the conversion factor it derived. Anyone can verify at
+            # a glance that timestamps are interpreted in the right unit.
+            "scale_unit":             self._scale_unit,
+            "scale_fs_per_tick":      self._scale_fs,
             "simulation_duration_ps": end_ps,
             "simulation_duration_ns": end_ps / 1000,
             "total_signals":          count,
             "top_modules":            top_modules,
             "sample_signals":         sample_signals,
         }
+        if not self._scale_fs:
+            summary["scale_warning"] = (
+                "FSDB time scale is unreadable; duration is unavailable and all "
+                "time-based queries on this waveform will be refused rather than "
+                "silently assuming 1 tick == 1 ps."
+            )
+        return summary
 
     def search_signals(self, keyword: str,
                        max_results: int = SIGNAL_SEARCH_MAX_RESULTS) -> dict:
