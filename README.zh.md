@@ -137,6 +137,8 @@ export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
 bash scripts/setup_fsdb.sh
 ```
 
+> **git pull 之后**:`libfsdb_wrapper.so` 是本地构建产物,不入库。若拉取的更新改动了 `fsdb_wrapper.cpp`,首次 FSDB 查询会报 *"libfsdb_wrapper.so is outdated"* —— 重跑 `bash build_wrapper.sh` 并重连 MCP server 即可。这是有意的 fail-loud 设计:过期的 wrapper 可能静默返回错位的时间戳。
+
 验证运行时与 wrapper 是否能正确加载。该脚本不依赖 `$VERDI_HOME`,在已具备仓库本地产物的任何主机上都可以运行:
 
 ```bash

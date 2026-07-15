@@ -145,6 +145,12 @@ export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
 bash scripts/setup_fsdb.sh
 ```
 
+> **After `git pull`**: `libfsdb_wrapper.so` is built locally, not tracked in
+> git. If a pulled update changed `fsdb_wrapper.cpp`, the first FSDB query
+> fails with a *"libfsdb_wrapper.so is outdated"* error — rebuild with
+> `bash build_wrapper.sh` and reconnect the MCP server. This is deliberately
+> fail-loud: an outdated wrapper could silently return misaligned timestamps.
+
 Verify the runtime and wrapper load correctly. This script does **not**
 require `$VERDI_HOME` and is safe to run on any host that already has the
 repo-local artefacts:
