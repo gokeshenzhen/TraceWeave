@@ -81,6 +81,7 @@ For any new session, read these files first to build the project map:
 27. `src/cursor_store.py`
 28. `src/timespec.py`
 29. `src/verify_condition.py`
+30. `src/cancellation.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -110,11 +111,13 @@ If the task involves behavior validation or regression checks, also read:
 - `tests/test_schemas.py`
 - `tests/test_problem_hints.py`
 - `tests/test_server.py`
+- `tests/test_server_concurrency.py`
 - `tests/test_diagnostic_snapshot.py`
 
 ## Repository Focus
 
 - `server.py` is the composition root and MCP entry point.
+- `src/cancellation.py` + `server._run_in_wave_thread`: wave-touching tool bodies (signal queries, search, summary, x-trace, period/diff, suggest/sweep/inspect, verify_window, reconstruct_transactions) are synchronous CPU-bound scans, so `_dispatch` offloads them to a worker thread — the event loop stays free (no head-of-line blocking of light calls behind a heavy sweep) and client cancellation can actually be delivered. Parser access is serialized by wave locks acquired INSIDE the worker: one global lock for ALL FSDB work (the Verdi ffr API makes no thread-safety promise even across handles), a per-path lock for VCD; `diff_first_divergence` takes both paths' locks in a stable global order (no deadlock). Cancellation is cooperative: cancelling the request task (client `notifications/cancelled` or disconnect) arms a per-call `threading.Event`, and the scan loops in `cycle_query`/`handshake_sweep`/`verify_condition`/`window_verify`/`txn_reconstruct` hit `check_cancelled()` stride checkpoints (`CANCEL_CHECK_STRIDE`) so an abandoned multi-minute sweep stops at the next checkpoint instead of running to completion; a call cancelled while still queued on a wave lock gives up without ever touching the parser. Loop-side dispatch state (`_result_cache`/`_session_state`/provenance) is still written only on the event-loop thread — the worker computes, the loop remains the single writer. Regression coverage: `tests/test_server_concurrency.py`.
 - `src/path_discovery.py` owns compile/sim/wave path discovery.
 - `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction.
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.

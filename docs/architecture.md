@@ -38,6 +38,7 @@ Waveform backends
   src/fsdb_signal_index.py
   src/cycle_query.py
   src/waveform_batch.py           # FSDB+VCD batch reader (time-window)
+  src/cancellation.py             # cooperative cancel checkpoints for worker-thread scans
 
 Extended analysis capabilities
   src/structural_scanner.py
@@ -73,6 +74,26 @@ Verification
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there.
+- Wave-touching tool bodies (`get_signal_*`, `get_signals_*`, `search_signals`,
+  `get_waveform_summary`, `trace_x_source`, `period`/`diff_first_divergence`,
+  `suggest_*`, `sweep_handshakes`, `inspect_handshake`, `verify_window`,
+  `reconstruct_transactions`) are synchronous and CPU-bound, so `_dispatch`
+  runs them in a worker thread via `_run_in_wave_thread` instead of inline in
+  the async coroutine — otherwise one heavy scan starves the event loop
+  (head-of-line blocking of every queued request) and client cancellation can
+  never be delivered. Parser access is serialized by wave locks acquired
+  inside the worker: one global lock for ALL FSDB work (the Verdi ffr API
+  makes no thread-safety promise even across handles), a per-path lock for
+  VCD. Cancellation is cooperative (`src/cancellation.py`): the dispatch layer
+  arms a per-call `threading.Event` when the request task is cancelled
+  (client `notifications/cancelled` or disconnect), and the scan loops in
+  `cycle_query` / `handshake_sweep` / `verify_condition` / `window_verify` /
+  `txn_reconstruct` call `check_cancelled()` at stride checkpoints so an
+  abandoned multi-minute sweep stops promptly instead of running to
+  completion. A call cancelled while still queued on a wave lock gives up
+  without ever touching the parser. Loop-side state (`_result_cache`,
+  `_session_state`, provenance) is still written only on the event-loop
+  thread; the worker computes, the loop remains the single writer.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.

@@ -34,6 +34,7 @@ from __future__ import annotations
 from statistics import mean, median
 from typing import Any, Callable
 
+from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _hs_repr, _hs_truth, _resolve_signal_path
@@ -254,6 +255,8 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
                 target["data_complete"] = True
 
     for idx, s in enumerate(samples):
+        if not idx % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         sig = s["signals"]
         t = s["time_ps"]
 

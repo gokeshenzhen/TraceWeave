@@ -118,6 +118,7 @@ TraceWeave/
     ├── handshake_suggest.py      # suggest_handshakes / suggest_protocol_bundles
     ├── handshake_sweep.py        # sweep_handshakes: whole-design handshake anomaly sweep
     ├── txn_reconstruct.py        # reconstruct_transactions: id-correlated transaction layer
+    ├── cancellation.py           # Cooperative cancellation for worker-thread waveform scans
     └── usage_telemetry.py        # Local-only per-call usage telemetry (opt-out)
 ```
 

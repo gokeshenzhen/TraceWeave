@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _resolve_signal_path
@@ -211,6 +212,8 @@ def _eval_simple(result: dict, samples: list[dict], mode: str, terms: list[dict]
     first_false: dict | None = None
     unknown = 0
     for idx, s in enumerate(samples):
+        if not idx % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         r = _eval_predicate(terms, s["signals"])
         if r is None:
             unknown += 1
@@ -253,6 +256,8 @@ def _eval_implication(
     responded_same = 0  # satisfied on the antecedent's OWN cycle (overlap only)
     first_violation: dict | None = None
     for i, s in enumerate(samples):
+        if not i % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         a = _eval_predicate(antecedent, s["signals"])
         if a is None:
             unknown += 1
@@ -326,6 +331,8 @@ def _eval_sequence(result: dict, samples: list[dict], gate: list[dict], delta: d
     prev_val: int | None = None
     prev_idx: int | None = None
     for i, s in enumerate(samples):
+        if not i % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         sigs = s["signals"]
         g = _eval_predicate(gate, sigs)
         if g is None:

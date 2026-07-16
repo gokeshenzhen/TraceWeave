@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from src.cancellation import check_cancelled
 from src.cursor_store import CursorStore
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.verify_condition import inspect_handshake
@@ -318,6 +319,9 @@ def sweep_handshake_anomalies(
     interfaces: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for nb in to_inspect:
+        # Per-interface cancellation checkpoint: an abandoned whole-design
+        # sweep stops at the next interface instead of finishing all of them.
+        check_cancelled()
         base = {"scope": nb["scope"], "valid": nb["valid"] or "", "ready": nb["ready"] or ""}
         if not nb.get("clock"):
             skipped.append({**base, "reason": "no clock found in scope/ancestors"})

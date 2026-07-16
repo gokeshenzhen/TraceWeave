@@ -111,6 +111,7 @@ TraceWeave/
     ├── handshake_suggest.py      # suggest_handshakes / suggest_protocol_bundles
     ├── handshake_sweep.py        # sweep_handshakes:全设计握手异常扫描
     ├── txn_reconstruct.py        # reconstruct_transactions:id 关联的事务层
+    ├── cancellation.py           # worker 线程波形扫描的协作取消检查点
     └── usage_telemetry.py        # 仅本地的逐调用使用遥测(可关闭)
 ```
 

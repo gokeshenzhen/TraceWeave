@@ -12,12 +12,16 @@ This server provides waveform-debug workflow tools, including:
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import hashlib
 import json
 import sys
 import os
+import threading
 import time
+
+import anyio
+import anyio.to_thread
 
 # Ensure the TraceWeave repo root is on the Python path.
 sys.path.insert(0, os.path.dirname(__file__))
@@ -42,6 +46,8 @@ from config import (
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
 )
+import src.cancellation as cancellation
+from src.cancellation import OperationCancelled
 from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
@@ -789,6 +795,94 @@ def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
     same_scope = [p for p in candidates if p == path or p.startswith(path + "[")]
     ordered = same_scope + [p for p in candidates if p not in same_scope]
     return ordered[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Blocking-work offload (event-loop protection)
+# ---------------------------------------------------------------------------
+# Waveform tool bodies are synchronous and CPU-bound (FSDB/VCD scans). Run
+# inline in the async dispatcher they block the event loop: one heavy sweep
+# starves every queued request (head-of-line blocking) and client cancellation
+# can never be delivered because the coroutine never yields. Every
+# wave-touching dispatch branch therefore runs its body in a worker thread via
+# _run_in_wave_thread.
+#
+# Locking: the single-threaded loop used to serialize all tool bodies, which
+# is the only reason parser access needed no locks. Worker threads reintroduce
+# concurrency, so parser access is serialized explicitly. The Verdi ffr API
+# makes no thread-safety promise even across handles, so ALL FSDB work shares
+# one global lock; VCD parsers are pure-Python per-instance state, so a
+# per-path lock suffices. Locks are threading.Lock acquired INSIDE the worker
+# thread: an abandoned (cancelled) worker keeps holding its lock until the
+# next cooperative checkpoint unwinds it, so a newly queued call can never
+# race the abandoned one on the same parser. Lock waits poll so a call
+# cancelled while still queued gives up without ever touching the parser.
+
+_FSDB_WAVE_LOCK = threading.Lock()
+_vcd_wave_locks: dict[str, threading.Lock] = {}
+_vcd_wave_locks_guard = threading.Lock()
+_WAVE_LOCK_POLL_S = 0.2
+
+
+def _wave_locks_for(wave_paths: Sequence[str]) -> list[threading.Lock]:
+    """Deduped locks for the given wave paths, in a stable global order.
+
+    Sorting by key gives every call the same acquisition order, so two calls
+    touching overlapping path sets (diff_first_divergence a/b) cannot
+    deadlock.
+    """
+    keyed: dict[str, threading.Lock] = {}
+    for path in wave_paths:
+        path = str(path)
+        if path.lower().endswith(".fsdb"):
+            keyed["\x00fsdb_global"] = _FSDB_WAVE_LOCK
+        else:
+            with _vcd_wave_locks_guard:
+                keyed[path] = _vcd_wave_locks.setdefault(path, threading.Lock())
+    return [keyed[key] for key in sorted(keyed)]
+
+
+async def _run_in_wave_thread(wave_paths: str | Sequence[str], fn: Callable):
+    """Run a synchronous wave-touching tool body in a worker thread.
+
+    - The event loop stays free: light calls no longer queue behind a heavy
+      scan on another interface/path.
+    - Client cancellation propagates: ``abandon_on_cancel=True`` resumes the
+      request task immediately; the worker observes the armed cancel event at
+      its next ``cancellation.check_cancelled()`` checkpoint and unwinds.
+    - Per-wave locks (global for FSDB) keep parser access serialized exactly
+      as the single-threaded loop used to.
+    """
+    if isinstance(wave_paths, str):
+        wave_paths = [wave_paths]
+    cancel_event = threading.Event()
+    locks = _wave_locks_for(wave_paths)
+
+    def _worker():
+        token = cancellation.push_cancel_event(cancel_event)
+        acquired: list[threading.Lock] = []
+        try:
+            for lock in locks:
+                while not lock.acquire(timeout=_WAVE_LOCK_POLL_S):
+                    if cancel_event.is_set():
+                        raise OperationCancelled(
+                            "tool call cancelled while waiting for wave lock"
+                        )
+                acquired.append(lock)
+            cancellation.check_cancelled()
+            return fn()
+        finally:
+            for lock in reversed(acquired):
+                lock.release()
+            cancellation.pop_cancel_event(token)
+
+    try:
+        return await anyio.to_thread.run_sync(_worker, abandon_on_cancel=True)
+    except anyio.get_cancelled_exc_class():
+        # Arm the checkpoint so the abandoned worker stops computing instead
+        # of running a multi-minute scan nobody is listening to.
+        cancel_event.set()
+        raise
 
 
 def _get_parser(wave_path: str):
@@ -2213,6 +2307,12 @@ async def call_tool(name: str, arguments: dict):
         elif isinstance(result, schemas.ToolErrorResult):
             error_code = result.error_code or "tool_error"
         return [TextContent(type="text", text=text)]
+    except anyio.get_cancelled_exc_class():
+        # Client abandoned the request; the finally block still records the
+        # call so cancelled work is visible in telemetry.
+        ok = False
+        error_code = "cancelled"
+        raise
     except Exception as e:
         ok = False
         formatted = _format_error(e)
@@ -2289,174 +2389,193 @@ async def _dispatch(name: str, args: dict):
         wave_path  = args["wave_path"]
         keyword    = args["keyword"]
         max_r      = args.get("max_results", 50)
-        ext = wave_path.lower().rsplit(".", 1)[-1]
-        if ext == "fsdb":
-            signature = _get_wave_signature(wave_path)
-            cached = _fsdb_index_cache.get(wave_path)
-            if cached is None or cached[0] != signature:
-                if cached is not None:
-                    _dispose_cached_object(cached[1])
-                _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
-            index = _fsdb_index_cache[wave_path][1]
-            def _search_one(kw: str) -> dict:
-                return index.search(kw, max_r)
-        elif ext == "vcd":
-            parser = _get_parser(wave_path)
-            def _search_one(kw: str) -> dict:
-                return parser.search_signals(kw, max_r)
-        else:
-            raise ValueError(f"Unsupported format: .{ext}")
-        # Batch mode: a list keyword runs each lookup against the same parser/
-        # index and returns one entry per keyword, collapsing the consecutive
-        # keyword-groping round trips telemetry surfaced into a single call.
-        if isinstance(keyword, list):
-            if not keyword:
-                raise ValueError("keyword list must not be empty")
-            if len(keyword) > SIGNAL_SEARCH_MAX_KEYWORDS:
-                raise ValueError(
-                    f"keyword list has {len(keyword)} entries; "
-                    f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
-                )
-            entries = [_search_one(str(kw)) for kw in keyword]
-            return schemas.SearchSignalsBatchResult.model_validate({
-                "batch": entries,
-                "hint": "One entry per keyword, in input order. Use the full path "
-                        "from each result's path field as the signal_path argument "
-                        "for tools such as get_signal_at_time.",
-            })
-        return schemas.SearchSignalsResult.model_validate(_search_one(keyword))
+
+        def _work():
+            ext = wave_path.lower().rsplit(".", 1)[-1]
+            if ext == "fsdb":
+                signature = _get_wave_signature(wave_path)
+                cached = _fsdb_index_cache.get(wave_path)
+                if cached is None or cached[0] != signature:
+                    if cached is not None:
+                        _dispose_cached_object(cached[1])
+                    _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
+                index = _fsdb_index_cache[wave_path][1]
+                def _search_one(kw: str) -> dict:
+                    return index.search(kw, max_r)
+            elif ext == "vcd":
+                parser = _get_parser(wave_path)
+                def _search_one(kw: str) -> dict:
+                    return parser.search_signals(kw, max_r)
+            else:
+                raise ValueError(f"Unsupported format: .{ext}")
+            # Batch mode: a list keyword runs each lookup against the same parser/
+            # index and returns one entry per keyword, collapsing the consecutive
+            # keyword-groping round trips telemetry surfaced into a single call.
+            if isinstance(keyword, list):
+                if not keyword:
+                    raise ValueError("keyword list must not be empty")
+                if len(keyword) > SIGNAL_SEARCH_MAX_KEYWORDS:
+                    raise ValueError(
+                        f"keyword list has {len(keyword)} entries; "
+                        f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
+                    )
+                entries = [_search_one(str(kw)) for kw in keyword]
+                return schemas.SearchSignalsBatchResult.model_validate({
+                    "batch": entries,
+                    "hint": "One entry per keyword, in input order. Use the full path "
+                            "from each result's path field as the signal_path argument "
+                            "for tools such as get_signal_at_time.",
+                })
+            return schemas.SearchSignalsResult.model_validate(_search_one(keyword))
+
+        return await _run_in_wave_thread(wave_path, _work)
 
     elif name == "get_signal_at_time":
-        parser = _get_parser(args["wave_path"])
-        raw_path = args["signal_path"]
-        resolved_path = _resolve_signal_path(parser, raw_path)
-        try:
-            result = parser.get_value_at_time(resolved_path, _resolve_time(args["time_ps"]))
-        except KeyError as exc:
-            suggestions = _suggest_signal_paths(parser, raw_path)
-            if suggestions:
-                raise KeyError(f"{exc} did_you_mean: {', '.join(suggestions)}") from exc
-            raise
-        if resolved_path != raw_path:
-            result["resolved_from"] = raw_path
-        return schemas.SignalAtTimeResult.model_validate(result)
+        def _work():
+            parser = _get_parser(args["wave_path"])
+            raw_path = args["signal_path"]
+            resolved_path = _resolve_signal_path(parser, raw_path)
+            try:
+                result = parser.get_value_at_time(resolved_path, _resolve_time(args["time_ps"]))
+            except KeyError as exc:
+                suggestions = _suggest_signal_paths(parser, raw_path)
+                if suggestions:
+                    raise KeyError(f"{exc} did_you_mean: {', '.join(suggestions)}") from exc
+                raise
+            if resolved_path != raw_path:
+                result["resolved_from"] = raw_path
+            return schemas.SignalAtTimeResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signal_transitions":
-        result = _get_parser(args["wave_path"]).get_transitions(
-            args["signal_path"],
-            _resolve_time(args.get("start_time_ps", 0)),
-            _resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-        )
-        # Cap at the dispatch layer only: internal callers of parser
-        # .get_transitions() still see the full list. Telemetry showed a
-        # single uncapped call returning 8.9MB into the model context.
-        max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
-        if max_transitions < 1:
-            raise ValueError("max_transitions must be >= 1")
-        transitions = result.get("transitions") or []
-        if len(transitions) > max_transitions:
-            result["transitions"] = transitions[:max_transitions]
-            result["truncated"] = True
-            result["hint"] = (
-                f"showing the first {max_transitions} of {len(transitions)} transitions; "
-                "narrow [start_time_ps, end_time_ps] or raise max_transitions explicitly"
+        def _work():
+            result = _get_parser(args["wave_path"]).get_transitions(
+                args["signal_path"],
+                _resolve_time(args.get("start_time_ps", 0)),
+                _resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
             )
-        return schemas.SignalTransitionsResult.model_validate(result)
+            # Cap at the dispatch layer only: internal callers of parser
+            # .get_transitions() still see the full list. Telemetry showed a
+            # single uncapped call returning 8.9MB into the model context.
+            max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
+            if max_transitions < 1:
+                raise ValueError("max_transitions must be >= 1")
+            transitions = result.get("transitions") or []
+            if len(transitions) > max_transitions:
+                result["transitions"] = transitions[:max_transitions]
+                result["truncated"] = True
+                result["hint"] = (
+                    f"showing the first {max_transitions} of {len(transitions)} transitions; "
+                    "narrow [start_time_ps, end_time_ps] or raise max_transitions explicitly"
+                )
+            return schemas.SignalTransitionsResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_around_time":
-        parser = _get_parser(args["wave_path"])
-        center_ps = _resolve_time(args["center_time_ps"])
-        window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
-        return_mode = args.get("return_mode", "full")
-        if return_mode not in ("full", "values_only"):
-            raise ValueError(
-                f"unknown return_mode {return_mode!r}; expected 'full' or 'values_only'"
+        def _work():
+            parser = _get_parser(args["wave_path"])
+            center_ps = _resolve_time(args["center_time_ps"])
+            window_ps = int(args.get("window_ps", DEFAULT_WAVE_WINDOW_PS))
+            return_mode = args.get("return_mode", "full")
+            if return_mode not in ("full", "values_only"):
+                raise ValueError(
+                    f"unknown return_mode {return_mode!r}; expected 'full' or 'values_only'"
+                )
+            raw_paths = args.get("signal_paths") or []
+            signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
+            _validate_signals_around_time_args(
+                parser, center_ps, window_ps, signal_paths
             )
-        raw_paths = args.get("signal_paths") or []
-        signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
-        _validate_signals_around_time_args(
-            parser, center_ps, window_ps, signal_paths
-        )
-        result = parser.get_signals_around_time(
-            signal_paths,
-            center_ps,
-            window_ps,
-            args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
-        )
-        # Flag any value_at_center that is a sub-cycle transient (combinational
-        # glitch at the clock edge) so a point sample is not misread as the settled
-        # protocol value (e.g. an interconnect mux glitching to idle at each edge).
-        # Must run BEFORE values_only stripping: it needs the window transitions
-        # to detect the dip-and-return signature.
-        annotate_center_transients(result)
-        if return_mode == "values_only":
-            _strip_signals_to_values_only(result)
-        result["resolved_aliases"] = aliases
-        signals = result.get("signals") or {}
-        suggestions: dict[str, list[str]] = {}
-        for raw_path, resolved_path in zip(raw_paths, signal_paths):
-            entry = signals.get(resolved_path)
-            if isinstance(entry, dict) and entry.get("error"):
-                hits = _suggest_signal_paths(parser, raw_path)
-                if hits:
-                    suggestions[raw_path] = hits
-        result["signal_suggestions"] = suggestions
-        return schemas.SignalsAroundTimeResult.model_validate(result)
+            result = parser.get_signals_around_time(
+                signal_paths,
+                center_ps,
+                window_ps,
+                args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
+            )
+            # Flag any value_at_center that is a sub-cycle transient (combinational
+            # glitch at the clock edge) so a point sample is not misread as the settled
+            # protocol value (e.g. an interconnect mux glitching to idle at each edge).
+            # Must run BEFORE values_only stripping: it needs the window transitions
+            # to detect the dip-and-return signature.
+            annotate_center_transients(result)
+            if return_mode == "values_only":
+                _strip_signals_to_values_only(result)
+            result["resolved_aliases"] = aliases
+            signals = result.get("signals") or {}
+            suggestions: dict[str, list[str]] = {}
+            for raw_path, resolved_path in zip(raw_paths, signal_paths):
+                entry = signals.get(resolved_path)
+                if isinstance(entry, dict) and entry.get("error"):
+                    hits = _suggest_signal_paths(parser, raw_path)
+                    if hits:
+                        suggestions[raw_path] = hits
+            result["signal_suggestions"] = suggestions
+            return schemas.SignalsAroundTimeResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_by_cycle":
-        start_time_ps = _resolve_time(args["start_time_ps"]) if "start_time_ps" in args else None
-        end_time_ps = _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
-        # Two locating axes, one input per axis (reject mixing within an axis).
-        if start_time_ps is not None and "start_cycle" in args:
-            raise ValueError("start_time_ps and start_cycle are mutually exclusive; pass one")
-        if end_time_ps is not None and "num_cycles" in args:
-            raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
-        if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
-            raise ValueError("end_time_ps must be >= start_time_ps")
-        parser = _get_parser(args["wave_path"])
-        raw_paths = args["signal_paths"]
-        signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
-        if end_time_ps is not None:
-            # Count derived from the time window; the function applies the cap via
-            # max_cycles since the count is unknown until clock edges resolve.
-            result = get_signals_by_cycle(
-                parser=parser,
-                clock_path=args["clock_path"],
-                signal_paths=signal_paths,
-                edge=args.get("edge", "posedge"),
-                start_cycle=args.get("start_cycle", 0),
-                sample_offset_ps=args.get("sample_offset_ps", 1),
-                start_time_ps=start_time_ps,
-                end_time_ps=end_time_ps,
-                max_cycles=MAX_CYCLES_PER_QUERY,
-            )
-        else:
-            requested_num_cycles = args.get("num_cycles", 16)
-            effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
-            result = get_signals_by_cycle(
-                parser=parser,
-                clock_path=args["clock_path"],
-                signal_paths=signal_paths,
-                edge=args.get("edge", "posedge"),
-                start_cycle=args.get("start_cycle", 0),
-                num_cycles=effective_num_cycles,
-                sample_offset_ps=args.get("sample_offset_ps", 1),
-                requested_num_cycles=requested_num_cycles,
-                capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
-                start_time_ps=start_time_ps,
-            )
-        result["resolved_aliases"] = aliases
-        result["signal_suggestions"] = {
-            path: hits
-            for path in result.get("signal_errors", {})
-            for hits in [_suggest_signal_paths(parser, path)]
-            if hits
-        }
-        return schemas.GetSignalsByCycleResult.model_validate(result)
+        def _work():
+            start_time_ps = _resolve_time(args["start_time_ps"]) if "start_time_ps" in args else None
+            end_time_ps = _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+            # Two locating axes, one input per axis (reject mixing within an axis).
+            if start_time_ps is not None and "start_cycle" in args:
+                raise ValueError("start_time_ps and start_cycle are mutually exclusive; pass one")
+            if end_time_ps is not None and "num_cycles" in args:
+                raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
+            if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
+                raise ValueError("end_time_ps must be >= start_time_ps")
+            parser = _get_parser(args["wave_path"])
+            raw_paths = args["signal_paths"]
+            signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
+            if end_time_ps is not None:
+                # Count derived from the time window; the function applies the cap via
+                # max_cycles since the count is unknown until clock edges resolve.
+                result = get_signals_by_cycle(
+                    parser=parser,
+                    clock_path=args["clock_path"],
+                    signal_paths=signal_paths,
+                    edge=args.get("edge", "posedge"),
+                    start_cycle=args.get("start_cycle", 0),
+                    sample_offset_ps=args.get("sample_offset_ps", 1),
+                    start_time_ps=start_time_ps,
+                    end_time_ps=end_time_ps,
+                    max_cycles=MAX_CYCLES_PER_QUERY,
+                )
+            else:
+                requested_num_cycles = args.get("num_cycles", 16)
+                effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
+                result = get_signals_by_cycle(
+                    parser=parser,
+                    clock_path=args["clock_path"],
+                    signal_paths=signal_paths,
+                    edge=args.get("edge", "posedge"),
+                    start_cycle=args.get("start_cycle", 0),
+                    num_cycles=effective_num_cycles,
+                    sample_offset_ps=args.get("sample_offset_ps", 1),
+                    requested_num_cycles=requested_num_cycles,
+                    capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
+                    start_time_ps=start_time_ps,
+                )
+            result["resolved_aliases"] = aliases
+            result["signal_suggestions"] = {
+                path: hits
+                for path in result.get("signal_errors", {})
+                for hits in [_suggest_signal_paths(parser, path)]
+                if hits
+            }
+            return schemas.GetSignalsByCycleResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_waveform_summary":
-        result = _get_parser(args["wave_path"]).get_summary()
-        return schemas.WaveformSummaryResult.model_validate(result)
+        def _work():
+            result = _get_parser(args["wave_path"]).get_summary()
+            return schemas.WaveformSummaryResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
@@ -2753,17 +2872,21 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "trace_x_source":
         simulator = _resolve_session_simulator(args)
-        result = trace_x_source(
-            wave_path=args["wave_path"],
-            signal_path=args["signal_path"],
-            time_ps=_resolve_time(args["time_ps"]),
-            compile_log=args["compile_log"],
-            parser=_get_parser(args["wave_path"]),
-            top_hint=args.get("top_hint"),
-            max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
-            simulator=simulator,
-        )
-        return schemas.TraceXSourceResult.model_validate(result)
+
+        def _work():
+            result = trace_x_source(
+                wave_path=args["wave_path"],
+                signal_path=args["signal_path"],
+                time_ps=_resolve_time(args["time_ps"]),
+                compile_log=args["compile_log"],
+                parser=_get_parser(args["wave_path"]),
+                top_hint=args.get("top_hint"),
+                max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
+                simulator=simulator,
+            )
+            return schemas.TraceXSourceResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "cursor_set":
         ref = _cursor_store.set(
@@ -2786,149 +2909,178 @@ async def _dispatch(name: str, args: dict):
         })
 
     elif name == "diff_first_divergence":
-        result = diff_first_divergence(
-            get_parser=_get_parser,
-            wave_path_a=args["wave_path_a"],
-            signal_a=args["signal_a"],
-            wave_path_b=args["wave_path_b"],
-            signal_b=args["signal_b"],
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            cursor_store=_cursor_store,
-            cursor_name=args.get("cursor_name"),
-            cursor_note=args.get("cursor_note"),
+        def _work():
+            result = diff_first_divergence(
+                get_parser=_get_parser,
+                wave_path_a=args["wave_path_a"],
+                signal_a=args["signal_a"],
+                wave_path_b=args["wave_path_b"],
+                signal_b=args["signal_b"],
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                cursor_store=_cursor_store,
+                cursor_name=args.get("cursor_name"),
+                cursor_note=args.get("cursor_note"),
+            )
+            return schemas.DiffFirstDivergenceResult.model_validate(result)
+
+        return await _run_in_wave_thread(
+            [args["wave_path_a"], args["wave_path_b"]], _work
         )
-        return schemas.DiffFirstDivergenceResult.model_validate(result)
 
     elif name == "period":
-        result = period(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            signal=args["signal"],
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            edge=args.get("edge", "posedge"),
-            tolerance_frac=args.get("tolerance_frac", 0.05),
-            cursor_store=_cursor_store,
-            cursor_name=args.get("cursor_name"),
-            cursor_note=args.get("cursor_note"),
-        )
-        return schemas.PeriodResult.model_validate(result)
+        def _work():
+            result = period(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                signal=args["signal"],
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                edge=args.get("edge", "posedge"),
+                tolerance_frac=args.get("tolerance_frac", 0.05),
+                cursor_store=_cursor_store,
+                cursor_name=args.get("cursor_name"),
+                cursor_note=args.get("cursor_note"),
+            )
+            return schemas.PeriodResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_handshakes":
-        result = suggest_handshakes(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            scope=args.get("scope"),
-            max_candidates=args.get("max_candidates", 8),
-        )
-        return schemas.SuggestHandshakesResult.model_validate(result)
+        def _work():
+            result = suggest_handshakes(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                scope=args.get("scope"),
+                max_candidates=args.get("max_candidates", 8),
+            )
+            return schemas.SuggestHandshakesResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_protocol_bundles":
-        result = suggest_protocol_bundles(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            protocol=args["protocol"],
-            scope=args.get("scope"),
-            max_candidates=args.get("max_candidates", 8),
-        )
-        return schemas.SuggestProtocolBundlesResult.model_validate(result)
+        def _work():
+            result = suggest_protocol_bundles(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                protocol=args["protocol"],
+                scope=args.get("scope"),
+                max_candidates=args.get("max_candidates", 8),
+            )
+            return schemas.SuggestProtocolBundlesResult.model_validate(result)
+
+        return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "sweep_handshakes":
-        result = sweep_handshake_anomalies(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            scope=args.get("scope"),
-            edge=args.get("edge", "posedge"),
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            max_wait_cycles=args.get("max_wait_cycles", 16),
-            max_interfaces=args.get("max_interfaces", 64),
-            cursor_store=_cursor_store,
-        )
-        validated = schemas.HandshakeSweepResult.model_validate(result)
+        def _work():
+            result = sweep_handshake_anomalies(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                scope=args.get("scope"),
+                edge=args.get("edge", "posedge"),
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                max_wait_cycles=args.get("max_wait_cycles", 16),
+                max_interfaces=args.get("max_interfaces", 64),
+                cursor_store=_cursor_store,
+            )
+            return schemas.HandshakeSweepResult.model_validate(result)
+
+        # Result-cache/provenance writes stay on the event-loop thread: the
+        # worker thread computes, the loop remains the single writer of
+        # dispatch-level session state.
+        validated = await _run_in_wave_thread(args["wave_path"], _work)
         _result_cache["sweep_handshakes"] = validated
         _result_provenance["sweep_handshakes"] = _build_result_provenance(name, args, validated)
         return validated
 
     elif name == "inspect_handshake":
-        result = inspect_handshake(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            clock=args["clock"],
-            valid=args.get("valid"),
-            valid_htrans=args.get("valid_htrans"),
-            htrans_rule=args.get("htrans_rule", "active"),
-            ready=args["ready"],
-            payload=args.get("payload"),
-            hwrite=args.get("hwrite"),
-            write_data=args.get("write_data"),
-            edge=args.get("edge", "posedge"),
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            max_wait_cycles=args.get("max_wait_cycles", 16),
-            check_payload_hold=args.get("check_payload_hold", True),
-            check_valid_hold=args.get("check_valid_hold", True),
-            active_high=args.get("active_high", True),
-            cursor_store=_cursor_store,
-            cursor_name=args.get("cursor_name"),
-            cursor_note=args.get("cursor_note"),
-        )
+        def _work():
+            return inspect_handshake(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                clock=args["clock"],
+                valid=args.get("valid"),
+                valid_htrans=args.get("valid_htrans"),
+                htrans_rule=args.get("htrans_rule", "active"),
+                ready=args["ready"],
+                payload=args.get("payload"),
+                hwrite=args.get("hwrite"),
+                write_data=args.get("write_data"),
+                edge=args.get("edge", "posedge"),
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                max_wait_cycles=args.get("max_wait_cycles", 16),
+                check_payload_hold=args.get("check_payload_hold", True),
+                check_valid_hold=args.get("check_valid_hold", True),
+                active_high=args.get("active_high", True),
+                cursor_store=_cursor_store,
+                cursor_name=args.get("cursor_name"),
+                cursor_note=args.get("cursor_note"),
+            )
+
+        result = await _run_in_wave_thread(args["wave_path"], _work)
         return schemas.HandshakeInspectResult.model_validate(result)
 
     elif name == "verify_window":
-        result = verify_window(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            clock=args["clock"],
-            mode=args["mode"],
-            predicate=args.get("predicate"),
-            antecedent=args.get("antecedent"),
-            consequent=args.get("consequent"),
-            delta=args.get("delta"),
-            within_cycles=args.get("within_cycles", 1),
-            overlap=args.get("overlap", True),
-            edge=args.get("edge", "posedge"),
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            cursor_store=_cursor_store,
-            cursor_name=args.get("cursor_name"),
-            cursor_note=args.get("cursor_note"),
-        )
+        def _work():
+            return verify_window(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                clock=args["clock"],
+                mode=args["mode"],
+                predicate=args.get("predicate"),
+                antecedent=args.get("antecedent"),
+                consequent=args.get("consequent"),
+                delta=args.get("delta"),
+                within_cycles=args.get("within_cycles", 1),
+                overlap=args.get("overlap", True),
+                edge=args.get("edge", "posedge"),
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                cursor_store=_cursor_store,
+                cursor_name=args.get("cursor_name"),
+                cursor_note=args.get("cursor_note"),
+            )
+
+        result = await _run_in_wave_thread(args["wave_path"], _work)
         return schemas.WindowVerifyResult.model_validate(result)
 
     elif name == "reconstruct_transactions":
-        result = reconstruct_transactions(
-            get_parser=_get_parser,
-            wave_path=args["wave_path"],
-            clock=args["clock"],
-            req_valid=args["req_valid"],
-            req_ready=args["req_ready"],
-            req_id=args.get("req_id"),
-            req_fields=args.get("req_fields"),
-            req_len=args.get("req_len"),
-            cmp_valid=args["cmp_valid"],
-            cmp_ready=args["cmp_ready"],
-            cmp_id=args.get("cmp_id"),
-            cmp_last=args.get("cmp_last"),
-            cmp_fields=args.get("cmp_fields"),
-            data_valid=args.get("data_valid"),
-            data_ready=args.get("data_ready"),
-            data_last=args.get("data_last"),
-            data_fields=args.get("data_fields"),
-            reset=args.get("reset"),
-            reset_active_low=args.get("reset_active_low", True),
-            capture_beats=args.get("capture_beats", False),
-            edge=args.get("edge", "posedge"),
-            start_ps=_resolve_time(args.get("start_time_ps", 0)),
-            end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-            active_high=args.get("active_high", True),
-            timeout_cycles=args.get("timeout_cycles"),
-            max_transactions=args.get("max_transactions", 256),
-            cursor_store=_cursor_store,
-            cursor_name=args.get("cursor_name"),
-            cursor_note=args.get("cursor_note"),
-        )
+        def _work():
+            return reconstruct_transactions(
+                get_parser=_get_parser,
+                wave_path=args["wave_path"],
+                clock=args["clock"],
+                req_valid=args["req_valid"],
+                req_ready=args["req_ready"],
+                req_id=args.get("req_id"),
+                req_fields=args.get("req_fields"),
+                req_len=args.get("req_len"),
+                cmp_valid=args["cmp_valid"],
+                cmp_ready=args["cmp_ready"],
+                cmp_id=args.get("cmp_id"),
+                cmp_last=args.get("cmp_last"),
+                cmp_fields=args.get("cmp_fields"),
+                data_valid=args.get("data_valid"),
+                data_ready=args.get("data_ready"),
+                data_last=args.get("data_last"),
+                data_fields=args.get("data_fields"),
+                reset=args.get("reset"),
+                reset_active_low=args.get("reset_active_low", True),
+                capture_beats=args.get("capture_beats", False),
+                edge=args.get("edge", "posedge"),
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                active_high=args.get("active_high", True),
+                timeout_cycles=args.get("timeout_cycles"),
+                max_transactions=args.get("max_transactions", 256),
+                cursor_store=_cursor_store,
+                cursor_name=args.get("cursor_name"),
+                cursor_note=args.get("cursor_note"),
+            )
+
+        result = await _run_in_wave_thread(args["wave_path"], _work)
         return schemas.TxnReconstructResult.model_validate(result)
 
     elif name in {

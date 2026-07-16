@@ -9,6 +9,8 @@ from bisect import bisect_left, bisect_right
 from statistics import median
 from typing import Any
 
+from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
+
 
 def get_signals_by_cycle(
     parser,
@@ -178,6 +180,7 @@ def _sample_signals_at_edges(
     sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
 
     for signal_path in signal_paths:
+        check_cancelled()
         try:
             transitions_result = parser.get_transitions(
                 signal_path,
@@ -202,7 +205,9 @@ def _validate_clock_width(parser, clock_path: str) -> None:
 def _extract_edge_times(transitions: list[dict[str, Any]], edge: str) -> list[int]:
     edge_times: list[int] = []
     prev_val: int | None = None
-    for transition in transitions:
+    for index, transition in enumerate(transitions):
+        if not index % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         value = transition.get("value") or {}
         cur_val = value.get("dec")
         if cur_val not in {0, 1}:
@@ -238,7 +243,9 @@ def _sample_signal_values(
     fallback_value = None
     sampled_values: list[dict[str, Any]] = []
 
-    for sample_time in sample_times:
+    for sample_index, sample_time in enumerate(sample_times):
+        if not sample_index % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         index = bisect_right(transition_times, sample_time) - 1
         if index >= 0:
             value = transitions[index].get("value")

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorRef, CursorStore
 from .cycle_query import sample_signals_on_edges
 
@@ -261,7 +262,9 @@ def _edge_times(transitions, edge: str) -> list[int]:
         raise ValueError(f"unknown edge mode: {edge!r}")
 
     times: list[int] = []
-    for item in transitions:
+    for index, item in enumerate(transitions):
+        if not index % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         t = int(item["time_ps"])
         if want is None:
             times.append(t)
@@ -628,6 +631,8 @@ def _walk_first_divergence(
     na, nb = len(events_a), len(events_b)
     events_seen = 0
     while ia < na or ib < nb:
+        if not events_seen % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         ta = events_a[ia][0] if ia < na else None
         tb = events_b[ib][0] if ib < nb else None
         if ta is None:
@@ -1020,7 +1025,9 @@ def inspect_handshake(
         stall_cycles = 0
         stall_begin = None
 
-    for s in samples:
+    for cycle_index, s in enumerate(samples):
+        if not cycle_index % CANCEL_CHECK_STRIDE:
+            check_cancelled()
         sig = s["signals"]
         if use_htrans:
             v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
