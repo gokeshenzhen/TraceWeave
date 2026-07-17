@@ -3,9 +3,10 @@
 Waveform tool bodies run in worker threads (``server._run_in_wave_thread``)
 so a heavy scan cannot starve the asyncio event loop. Python cannot preempt
 a running thread, so cancellation is cooperative: the server arms a
-``threading.Event`` per call and sets it when the client abandons the
-request; long scan loops call :func:`check_cancelled` at checkpoints and
-bail out with :class:`OperationCancelled`.
+``threading.Event`` per call and sets it when the client abandons the request
+or a higher-priority query preempts a background scan; long scan loops call
+:func:`check_cancelled` at checkpoints and bail out with
+:class:`OperationCancelled`.
 
 The event travels via a ``ContextVar`` set inside the worker thread, so
 library code (``cycle_query``, ``handshake_sweep``, ``verify_condition``)
@@ -28,7 +29,7 @@ _cancel_event: ContextVar[threading.Event | None] = ContextVar(
 
 
 class OperationCancelled(Exception):
-    """The in-flight tool call was abandoned by the client; stop computing."""
+    """The in-flight tool call was cancelled or cooperatively preempted."""
 
 
 def push_cancel_event(event: threading.Event) -> Token:
@@ -40,11 +41,11 @@ def pop_cancel_event(token: Token) -> None:
 
 
 def check_cancelled() -> None:
-    """Checkpoint: raise :class:`OperationCancelled` if this call was abandoned.
+    """Checkpoint: raise when this call was cancelled or preempted.
 
     One ContextVar read plus one Event read when armed; a no-op when the
     caller is not running under ``_run_in_wave_thread``.
     """
     event = _cancel_event.get()
     if event is not None and event.is_set():
-        raise OperationCancelled("tool call cancelled by client")
+        raise OperationCancelled("tool call cancelled or preempted")

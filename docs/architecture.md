@@ -91,7 +91,12 @@ Verification
   `txn_reconstruct` call `check_cancelled()` at stride checkpoints so an
   abandoned multi-minute sweep stops promptly instead of running to
   completion. A call cancelled while still queued on a wave lock gives up
-  without ever touching the parser. Loop-side state (`_result_cache`,
+  without ever touching the parser. A client-side read timeout is not
+  guaranteed to emit an MCP cancellation notification, so an interactive
+  FSDB call waiting behind background `sweep_handshakes` also arms the sweep's
+  cooperative cancel event. The sweep releases the global lock at its next
+  checkpoint and the interactive call proceeds; FFR access remains globally
+  serialized and never overlaps. Loop-side state (`_result_cache`,
   `_session_state`, provenance) is still written only on the event-loop
   thread; the worker computes, the loop remains the single writer.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and

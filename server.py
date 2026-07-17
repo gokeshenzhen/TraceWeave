@@ -817,11 +817,24 @@ def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
 # next cooperative checkpoint unwinds it, so a newly queued call can never
 # race the abandoned one on the same parser. Lock waits poll so a call
 # cancelled while still queued gives up without ever touching the parser.
+#
+# A client-side timeout is not necessarily an MCP cancellation notification
+# (the Python SDK's read timeout, for example, only stops waiting locally).
+# Therefore a background whole-design FSDB sweep can otherwise keep the global
+# lock long after its caller has gone away. The lock remains global for FFR
+# safety, but it is priority-aware: an interactive FSDB query waiting behind a
+# background sweep arms that sweep's existing cooperative cancel event. The
+# sweep releases the lock at its next checkpoint, then the light query runs;
+# FFR calls never overlap.
 
 _FSDB_WAVE_LOCK = threading.Lock()
+_FSDB_ACTIVE_GUARD = threading.Lock()
+_FSDB_ACTIVE: tuple[threading.Event, int] | None = None
 _vcd_wave_locks: dict[str, threading.Lock] = {}
 _vcd_wave_locks_guard = threading.Lock()
 _WAVE_LOCK_POLL_S = 0.2
+_WAVE_PRIORITY_BACKGROUND = 0
+_WAVE_PRIORITY_INTERACTIVE = 1
 
 
 def _wave_locks_for(wave_paths: Sequence[str]) -> list[threading.Lock]:
@@ -842,7 +855,40 @@ def _wave_locks_for(wave_paths: Sequence[str]) -> list[threading.Lock]:
     return [keyed[key] for key in sorted(keyed)]
 
 
-async def _run_in_wave_thread(wave_paths: str | Sequence[str], fn: Callable):
+def _preempt_lower_priority_fsdb(
+    waiter_event: threading.Event,
+    waiter_priority: int,
+) -> None:
+    """Ask a lower-priority FSDB lock holder to stop at its next checkpoint."""
+    with _FSDB_ACTIVE_GUARD:
+        active = _FSDB_ACTIVE
+        if (
+            active is not None
+            and active[0] is not waiter_event
+            and active[1] < waiter_priority
+        ):
+            active[0].set()
+
+
+def _set_active_fsdb(event: threading.Event, priority: int) -> None:
+    global _FSDB_ACTIVE
+    with _FSDB_ACTIVE_GUARD:
+        _FSDB_ACTIVE = (event, priority)
+
+
+def _clear_active_fsdb(event: threading.Event) -> None:
+    global _FSDB_ACTIVE
+    with _FSDB_ACTIVE_GUARD:
+        if _FSDB_ACTIVE is not None and _FSDB_ACTIVE[0] is event:
+            _FSDB_ACTIVE = None
+
+
+async def _run_in_wave_thread(
+    wave_paths: str | Sequence[str],
+    fn: Callable,
+    *,
+    priority: int = _WAVE_PRIORITY_INTERACTIVE,
+):
     """Run a synchronous wave-touching tool body in a worker thread.
 
     - The event loop stays free: light calls no longer queue behind a heavy
@@ -852,26 +898,46 @@ async def _run_in_wave_thread(wave_paths: str | Sequence[str], fn: Callable):
       its next ``cancellation.check_cancelled()`` checkpoint and unwinds.
     - Per-wave locks (global for FSDB) keep parser access serialized exactly
       as the single-threaded loop used to.
+    - An interactive FSDB call waiting behind a background call requests
+      cooperative preemption. This preserves global FFR serialization while
+      preventing an abandoned whole-design sweep from monopolising the lock.
     """
     if isinstance(wave_paths, str):
         wave_paths = [wave_paths]
     cancel_event = threading.Event()
+    has_fsdb = any(str(path).lower().endswith(".fsdb") for path in wave_paths)
+    # Request preemption before waiting for a worker-thread slot. A saturated
+    # AnyIO limiter must not prevent an interactive request from signalling the
+    # background holder it is meant to displace. The worker repeats this check
+    # while waiting for the actual lock to close the acquire/register race.
+    if has_fsdb:
+        _preempt_lower_priority_fsdb(cancel_event, priority)
     locks = _wave_locks_for(wave_paths)
 
     def _worker():
         token = cancellation.push_cancel_event(cancel_event)
         acquired: list[threading.Lock] = []
+        owns_fsdb = False
         try:
             for lock in locks:
+                if lock is _FSDB_WAVE_LOCK:
+                    _preempt_lower_priority_fsdb(cancel_event, priority)
                 while not lock.acquire(timeout=_WAVE_LOCK_POLL_S):
                     if cancel_event.is_set():
                         raise OperationCancelled(
                             "tool call cancelled while waiting for wave lock"
                         )
+                    if lock is _FSDB_WAVE_LOCK:
+                        _preempt_lower_priority_fsdb(cancel_event, priority)
                 acquired.append(lock)
+                if lock is _FSDB_WAVE_LOCK:
+                    owns_fsdb = True
+                    _set_active_fsdb(cancel_event, priority)
             cancellation.check_cancelled()
             return fn()
         finally:
+            if owns_fsdb:
+                _clear_active_fsdb(cancel_event)
             for lock in reversed(acquired):
                 lock.release()
             cancellation.pop_cancel_event(token)
@@ -2989,7 +3055,9 @@ async def _dispatch(name: str, args: dict):
         # Result-cache/provenance writes stay on the event-loop thread: the
         # worker thread computes, the loop remains the single writer of
         # dispatch-level session state.
-        validated = await _run_in_wave_thread(args["wave_path"], _work)
+        validated = await _run_in_wave_thread(
+            args["wave_path"], _work, priority=_WAVE_PRIORITY_BACKGROUND
+        )
         _result_cache["sweep_handshakes"] = validated
         _result_provenance["sweep_handshakes"] = _build_result_provenance(name, args, validated)
         return validated

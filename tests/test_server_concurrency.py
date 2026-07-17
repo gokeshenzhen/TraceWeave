@@ -6,6 +6,7 @@
 # 这些测试钉住修复后的行为:
 #   - 重波形调用在飞时,轻调用不排队
 #   - 同一波形路径(以及所有 FSDB)上的调用保持串行,parser 不被并发访问
+#   - 轻量 FSDB 查询可协作抢占仍持有全局锁的后台 sweep,但 FFR 调用不重叠
 #   - 请求任务被取消后,worker 在下一个协作检查点停止计算
 #   - 还在排队等锁时被取消的调用,从不触碰 parser
 
@@ -61,6 +62,30 @@ class TestWaveLocks:
         second = server._wave_locks_for(["/a/x.fsdb", "/b/y.vcd"])
         assert first == second
 
+    def test_interactive_priority_preempts_background_fsdb_holder(self):
+        holder_event = threading.Event()
+        waiter_event = threading.Event()
+        server._set_active_fsdb(holder_event, server._WAVE_PRIORITY_BACKGROUND)
+        try:
+            server._preempt_lower_priority_fsdb(
+                waiter_event, server._WAVE_PRIORITY_INTERACTIVE
+            )
+            assert holder_event.is_set()
+        finally:
+            server._clear_active_fsdb(holder_event)
+
+    def test_equal_priority_does_not_preempt_fsdb_holder(self):
+        holder_event = threading.Event()
+        waiter_event = threading.Event()
+        server._set_active_fsdb(holder_event, server._WAVE_PRIORITY_INTERACTIVE)
+        try:
+            server._preempt_lower_priority_fsdb(
+                waiter_event, server._WAVE_PRIORITY_INTERACTIVE
+            )
+            assert not holder_event.is_set()
+        finally:
+            server._clear_active_fsdb(holder_event)
+
 
 class TestCheckCancelled:
     def test_noop_without_armed_event(self):
@@ -80,6 +105,23 @@ class TestCheckCancelled:
 
 @pytest.mark.anyio
 class TestEventLoopNotBlocked:
+    async def test_sweep_dispatch_uses_background_priority(self, monkeypatch):
+        class DispatchReached(Exception):
+            pass
+
+        async def capture_run(wave_paths, fn, *, priority):
+            assert wave_paths == "/fake/wave.fsdb"
+            assert priority == server._WAVE_PRIORITY_BACKGROUND
+            raise DispatchReached
+
+        monkeypatch.setattr(server, "_check_prerequisites", lambda name, args: None)
+        monkeypatch.setattr(server, "_run_in_wave_thread", capture_run)
+
+        with pytest.raises(DispatchReached):
+            await server._dispatch(
+                "sweep_handshakes", {"wave_path": "/fake/wave.fsdb"}
+            )
+
     async def test_light_call_completes_while_heavy_wave_call_in_flight(self, monkeypatch):
         started = threading.Event()
         release = threading.Event()
