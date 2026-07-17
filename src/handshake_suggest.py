@@ -23,7 +23,11 @@ accept a derived ``psel && penable`` valid expression yet.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Callable
+
+from src import operation_metrics
+from src.cancellation import OperationCancelled, check_cancelled
 
 # Role vocabulary, aligned with analyzer._ROLE_KEYWORDS["handshake"].
 VALID_MARKERS = ("valid", "vld", "req")
@@ -217,6 +221,30 @@ _PROTOCOL_GATHER_KEYWORDS = {
 }
 
 
+def _search_signals(
+    parser: Any,
+    keyword: str,
+    *,
+    max_results: int | None = None,
+) -> dict[str, Any]:
+    """Run one discovery search with cancellation checks and safe timings.
+
+    Native search is synchronous, so cancellation raised while it is running is
+    observed immediately after that call returns. The keyword is never recorded.
+    """
+    check_cancelled()
+    started = time.perf_counter()
+    try:
+        if max_results is None:
+            result = parser.search_signals(keyword)
+        else:
+            result = parser.search_signals(keyword, max_results=max_results)
+    finally:
+        operation_metrics.record_search((time.perf_counter() - started) * 1000.0)
+    check_cancelled()
+    return result
+
+
 def suggest_handshakes(
     *,
     get_parser: Callable[[str], Any],
@@ -238,7 +266,9 @@ def suggest_handshakes(
     # Pass 1: gather handshake + clock candidates by role keyword.
     for kw in _GATHER_KEYWORDS:
         try:
-            _add(parser.search_signals(kw).get("results", []))
+            _add(_search_signals(parser, kw).get("results", []))
+        except OperationCancelled:
+            raise
         except Exception:
             continue
 
@@ -256,10 +286,13 @@ def suggest_handshakes(
         if scope_path and scope_path not in searched_scopes:
             searched_scopes.add(scope_path)
             try:
-                _add(parser.search_signals(scope_path, max_results=512).get("results", []))
+                _add(_search_signals(parser, scope_path, max_results=512).get("results", []))
+            except OperationCancelled:
+                raise
             except Exception:
                 pass
 
+    check_cancelled()
     bundles = propose_handshake_bundles(list(sigs.values()), scope=scope)
     return {
         "wave_path": wave_path,
@@ -274,7 +307,9 @@ def _probe_present(parser: Any, token: str, scope: str | None) -> bool:
     """True if a signal whose leaf is exactly ``token`` (or ``*_token``/``*.token``)
     exists under ``scope``. Pure name-existence fact via search_signals."""
     try:
-        results = parser.search_signals(token).get("results", [])
+        results = _search_signals(parser, token).get("results", [])
+    except OperationCancelled:
+        raise
     except Exception:
         return False
     for r in results:
@@ -621,10 +656,13 @@ def suggest_protocol_bundles(
 
     for kw in _PROTOCOL_GATHER_KEYWORDS[protocol]:
         try:
-            _add(parser.search_signals(kw).get("results", []))
+            _add(_search_signals(parser, kw).get("results", []))
+        except OperationCancelled:
+            raise
         except Exception:
             continue
 
+    check_cancelled()
     bundles = propose_protocol_bundles(list(sigs.values()), protocol=protocol, scope=scope)
     candidates = bundles[:max_candidates]
     return {

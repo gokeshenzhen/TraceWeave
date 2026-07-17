@@ -2244,6 +2244,26 @@ class TestCallToolErrors:
         assert seen["error_code"] is None
         assert seen["ok"] is True
 
+    async def test_telemetry_receives_operation_diagnostics(self):
+        seen = {}
+
+        async def dispatch_with_metrics(name, args):
+            server.operation_metrics.set_value("sweep_phase", "discover_ahb")
+            server.operation_metrics.set_value("search_count", 4)
+            return {"candidate_count": 0, "candidates": []}
+
+        def spy(tool, args, **kw):
+            seen.update(kw, tool=tool)
+
+        with patch("server._dispatch", side_effect=dispatch_with_metrics), \
+             patch.object(server.usage_telemetry, "record_call", spy):
+            await server.call_tool("sweep_handshakes", {"wave_path": "/tmp/a.vcd"})
+
+        assert seen["diagnostics"] == {
+            "sweep_phase": "discover_ahb",
+            "search_count": 4,
+        }
+
 
 @pytest.mark.anyio
 class TestSignalTransitionsCap:

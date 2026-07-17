@@ -10,8 +10,14 @@ from __future__ import annotations
 
 import itertools
 import string
+import threading
 from pathlib import Path
 
+import pytest
+
+import src.cancellation as cancellation
+import src.handshake_sweep as handshake_sweep
+from src.cancellation import OperationCancelled
 from src.cursor_store import CursorStore
 from src.handshake_sweep import (
     _compute_finding_summary,
@@ -577,3 +583,30 @@ def test_finding_summary_top_scopes_deduped_and_top_level_rendered():
     ]
     summary = _compute_finding_summary(interfaces)
     assert summary["top_scopes"] == ["(top)", "hdl_top.m1"]  # deduped, top-level kept
+
+
+def test_sweep_stops_between_discovery_families(monkeypatch):
+    event = threading.Event()
+    ahb_called = False
+
+    def cancel_after_valid_ready(**kwargs):
+        event.set()
+        return {"candidate_count": 0, "candidates": [], "reason": "none"}
+
+    def unexpected_ahb(**kwargs):
+        nonlocal ahb_called
+        ahb_called = True
+        raise AssertionError("AHB discovery should not start after cancellation")
+
+    monkeypatch.setattr(handshake_sweep, "suggest_handshakes", cancel_after_valid_ready)
+    monkeypatch.setattr(handshake_sweep, "suggest_protocol_bundles", unexpected_ahb)
+    token = cancellation.push_cancel_event(event)
+    try:
+        with pytest.raises(OperationCancelled):
+            sweep_handshake_anomalies(
+                get_parser=lambda _: object(), wave_path="/w/a.fsdb"
+            )
+    finally:
+        cancellation.pop_cancel_event(token)
+
+    assert ahb_called is False

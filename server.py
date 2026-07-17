@@ -47,6 +47,7 @@ from config import (
     get_fsdb_runtime_info,
 )
 import src.cancellation as cancellation
+import src.operation_metrics as operation_metrics
 from src.cancellation import OperationCancelled
 from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
@@ -829,7 +830,9 @@ def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
 
 _FSDB_WAVE_LOCK = threading.Lock()
 _FSDB_ACTIVE_GUARD = threading.Lock()
-_FSDB_ACTIVE: tuple[threading.Event, int] | None = None
+_FSDB_ACTIVE: tuple[
+    threading.Event, int, operation_metrics.OperationMetrics | None
+] | None = None
 _vcd_wave_locks: dict[str, threading.Lock] = {}
 _vcd_wave_locks_guard = threading.Lock()
 _WAVE_LOCK_POLL_S = 0.2
@@ -867,13 +870,18 @@ def _preempt_lower_priority_fsdb(
             and active[0] is not waiter_event
             and active[1] < waiter_priority
         ):
+            operation_metrics.mark_preemption_requested(active[2])
             active[0].set()
 
 
-def _set_active_fsdb(event: threading.Event, priority: int) -> None:
+def _set_active_fsdb(
+    event: threading.Event,
+    priority: int,
+    metrics: operation_metrics.OperationMetrics | None = None,
+) -> None:
     global _FSDB_ACTIVE
     with _FSDB_ACTIVE_GUARD:
-        _FSDB_ACTIVE = (event, priority)
+        _FSDB_ACTIVE = (event, priority, metrics)
 
 
 def _clear_active_fsdb(event: threading.Event) -> None:
@@ -905,6 +913,7 @@ async def _run_in_wave_thread(
     if isinstance(wave_paths, str):
         wave_paths = [wave_paths]
     cancel_event = threading.Event()
+    call_metrics = operation_metrics.current()
     has_fsdb = any(str(path).lower().endswith(".fsdb") for path in wave_paths)
     # Request preemption before waiting for a worker-thread slot. A saturated
     # AnyIO limiter must not prevent an interactive request from signalling the
@@ -918,12 +927,21 @@ async def _run_in_wave_thread(
         token = cancellation.push_cancel_event(cancel_event)
         acquired: list[threading.Lock] = []
         owns_fsdb = False
+        lock_wait_started = time.perf_counter()
+        lock_wait_recorded = False
         try:
             for lock in locks:
                 if lock is _FSDB_WAVE_LOCK:
                     _preempt_lower_priority_fsdb(cancel_event, priority)
                 while not lock.acquire(timeout=_WAVE_LOCK_POLL_S):
                     if cancel_event.is_set():
+                        operation_metrics.set_value(
+                            "wave_lock_wait_ms",
+                            (time.perf_counter() - lock_wait_started) * 1000.0,
+                            call_metrics,
+                        )
+                        lock_wait_recorded = True
+                        operation_metrics.mark_cancel_observed()
                         raise OperationCancelled(
                             "tool call cancelled while waiting for wave lock"
                         )
@@ -932,10 +950,22 @@ async def _run_in_wave_thread(
                 acquired.append(lock)
                 if lock is _FSDB_WAVE_LOCK:
                     owns_fsdb = True
-                    _set_active_fsdb(cancel_event, priority)
+                    _set_active_fsdb(cancel_event, priority, call_metrics)
+            operation_metrics.set_value(
+                "wave_lock_wait_ms",
+                (time.perf_counter() - lock_wait_started) * 1000.0,
+                call_metrics,
+            )
+            lock_wait_recorded = True
             cancellation.check_cancelled()
             return fn()
         finally:
+            if not lock_wait_recorded:
+                operation_metrics.set_value(
+                    "wave_lock_wait_ms",
+                    (time.perf_counter() - lock_wait_started) * 1000.0,
+                    call_metrics,
+                )
             if owns_fsdb:
                 _clear_active_fsdb(cancel_event)
             for lock in reversed(acquired):
@@ -2359,6 +2389,8 @@ async def list_tools():
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
     start = time.perf_counter()
+    metrics = operation_metrics.OperationMetrics()
+    metrics_token = operation_metrics.push(metrics)
     ok = True
     blocked = False
     error_code = None
@@ -2394,16 +2426,20 @@ async def call_tool(name: str, arguments: dict):
         sim_state = _session_state.get("get_sim_paths")
         if isinstance(sim_state, dict) and sim_state.get("case_dir"):
             case = os.path.basename(str(sim_state["case_dir"]).rstrip("/"))
-        usage_telemetry.record_call(
-            name,
-            arguments,
-            result_bytes=len(text.encode("utf-8")),
-            ok=ok,
-            blocked=blocked,
-            error_code=error_code,
-            latency_ms=latency_ms,
-            case=case,
-        )
+        try:
+            usage_telemetry.record_call(
+                name,
+                arguments,
+                result_bytes=len(text.encode("utf-8")),
+                ok=ok,
+                blocked=blocked,
+                error_code=error_code,
+                latency_ms=latency_ms,
+                case=case,
+                diagnostics=operation_metrics.snapshot(metrics),
+            )
+        finally:
+            operation_metrics.pop(metrics_token)
 
 
 async def _dispatch(name: str, args: dict):

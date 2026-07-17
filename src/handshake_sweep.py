@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from src import operation_metrics
 from src.cancellation import check_cancelled
 from src.cursor_store import CursorStore
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
@@ -287,14 +288,22 @@ def sweep_handshake_anomalies(
     # scanned: its candidates carry no inspect_handshake args (they need a derived
     # psel&&penable valid that inspect_handshake doesn't accept yet), so they would
     # only land in `skipped`.
-    vr = suggest_handshakes(
-        get_parser=get_parser, wave_path=wave_path, scope=scope,
-        max_candidates=max_interfaces,
-    )
-    ahb = suggest_protocol_bundles(
-        get_parser=get_parser, wave_path=wave_path, protocol="ahb", scope=scope,
-        max_candidates=max_interfaces,
-    )
+    check_cancelled()
+    with operation_metrics.timed_phase(
+        "discover_valid_ready", "discover_valid_ready_ms"
+    ):
+        vr = suggest_handshakes(
+            get_parser=get_parser, wave_path=wave_path, scope=scope,
+            max_candidates=max_interfaces,
+        )
+    check_cancelled()
+    with operation_metrics.timed_phase("discover_ahb", "discover_ahb_ms"):
+        ahb = suggest_protocol_bundles(
+            get_parser=get_parser, wave_path=wave_path, protocol="ahb", scope=scope,
+            max_candidates=max_interfaces,
+        )
+    check_cancelled()
+    operation_metrics.set_value("sweep_phase", "inspect_interfaces")
     # Drop clocking-block scopes (TB sampling mirrors of a parent interface, no own
     # clock) BEFORE counting/inspecting, so they neither inflate discovered_count nor
     # land in `skipped` and pull coverage to 'degraded'. The real interface (parent)
@@ -451,6 +460,7 @@ def sweep_handshake_anomalies(
     elif coverage_status == "degraded":
         note = coverage_warnings[0] if note is None else f"{coverage_warnings[0]} | {note}"
 
+    operation_metrics.set_value("sweep_phase", "complete")
     return {
         "wave_path": wave_path,
         "scope": scope,

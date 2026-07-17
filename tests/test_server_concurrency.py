@@ -17,7 +17,7 @@ import anyio
 import pytest
 
 import server
-from src import cancellation
+from src import cancellation, operation_metrics
 from src.cancellation import OperationCancelled
 
 
@@ -65,12 +65,21 @@ class TestWaveLocks:
     def test_interactive_priority_preempts_background_fsdb_holder(self):
         holder_event = threading.Event()
         waiter_event = threading.Event()
-        server._set_active_fsdb(holder_event, server._WAVE_PRIORITY_BACKGROUND)
+        metrics = operation_metrics.OperationMetrics()
+        server._set_active_fsdb(
+            holder_event, server._WAVE_PRIORITY_BACKGROUND, metrics
+        )
         try:
             server._preempt_lower_priority_fsdb(
                 waiter_event, server._WAVE_PRIORITY_INTERACTIVE
             )
             assert holder_event.is_set()
+            token = operation_metrics.push(metrics)
+            try:
+                operation_metrics.mark_cancel_observed()
+            finally:
+                operation_metrics.pop(token)
+            assert operation_metrics.snapshot(metrics)["preemption_to_cancel_ms"] >= 0
         finally:
             server._clear_active_fsdb(holder_event)
 

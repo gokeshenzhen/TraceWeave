@@ -39,6 +39,7 @@ Waveform backends
   src/cycle_query.py
   src/waveform_batch.py           # FSDB+VCD batch reader (time-window)
   src/cancellation.py             # cooperative cancel checkpoints for worker-thread scans
+  src/operation_metrics.py        # privacy-safe lock/discovery/cancel timings
 
 Extended analysis capabilities
   src/structural_scanner.py
@@ -88,9 +89,14 @@ Verification
   arms a per-call `threading.Event` when the request task is cancelled
   (client `notifications/cancelled` or disconnect), and the scan loops in
   `cycle_query` / `handshake_sweep` / `verify_condition` / `window_verify` /
-  `txn_reconstruct` call `check_cancelled()` at stride checkpoints so an
-  abandoned multi-minute sweep stops promptly instead of running to
-  completion. A call cancelled while still queued on a wave lock gives up
+  `txn_reconstruct` call `check_cancelled()` at stride checkpoints. Handshake
+  discovery also checks immediately before and after every `search_signals`
+  call and between its valid/ready and AHB phases; `OperationCancelled` is
+  explicitly re-raised rather than swallowed by best-effort discovery error
+  handling. Thus an abandoned multi-minute sweep stops at the next Python
+  checkpoint. A synchronous native search cannot yet be interrupted from
+  inside that call; cancellation is observed as soon as it returns. A call
+  cancelled while still queued on a wave lock gives up
   without ever touching the parser. A client-side read timeout is not
   guaranteed to emit an MCP cancellation notification, so an interactive
   FSDB call waiting behind background `sweep_handshakes` also arms the sweep's
@@ -365,7 +371,11 @@ actually used on real workloads, and in what fraction of debug sessions?*
   (a token proxy), and `latency_ms`. Failed calls additionally carry a
   classification `error_code` (a code such as `missing_prerequisite` or the
   exception class name — never the message, which can embed paths), so
-  failure telemetry is analyzable without guessing from byte sizes.
+  failure telemetry is analyzable without guessing from byte sizes. Long wave
+  operations additionally attach a strictly whitelisted `diagnostics` block:
+  wave-lock wait, fixed sweep phase, aggregate search count/total/max duration,
+  discovery phase durations, and preemption-to-cancel latency. It never records
+  waveform paths, scopes, search keywords, signal names, or values.
 - **A session = a `get_sim_paths` case.** The get_sim_paths handler calls
   `note_session(identity)`; a new case identity mints a new `session_id`,
   re-discovering the same case keeps it. This makes "sessions in which a

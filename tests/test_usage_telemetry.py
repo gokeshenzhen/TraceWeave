@@ -54,6 +54,53 @@ def test_record_call_error_code_written_on_failure_only(tmp_path, monkeypatch):
     assert "error_code" not in succeeded
 
 
+def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call(
+        "sweep_handshakes",
+        {"wave_path": "/secret/design.fsdb"},
+        result_bytes=10,
+        ok=False,
+        diagnostics={
+            "sweep_phase": "discover_ahb",
+            "search_count": 7,
+            "search_total_ms": 123.4,
+            "signal_path": "top.secret",
+            "scope": "top.customer_block",
+            "keyword": "customer_signal",
+            "wave_lock_wait_ms": "top.secret_wait",
+        },
+    )
+
+    rec = json.loads(log.read_text())
+    assert rec["diagnostics"] == {
+        "sweep_phase": "discover_ahb",
+        "search_count": 7,
+        "search_total_ms": 123.4,
+    }
+    assert "/secret/design.fsdb" not in log.read_text()
+    assert "top.secret" not in log.read_text()
+    assert "top.secret_wait" not in log.read_text()
+
+
+def test_record_call_rejects_non_fixed_phase_label(tmp_path, monkeypatch):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call(
+        "sweep_handshakes", {}, result_bytes=1, ok=False,
+        diagnostics={"sweep_phase": "top.customer_secret"},
+    )
+
+    assert "diagnostics" not in json.loads(log.read_text())
+
+
 def test_opt_out_writes_nothing(tmp_path, monkeypatch):
     log = tmp_path / "telemetry" / "usage.jsonl"
     monkeypatch.setattr(config, "TELEMETRY_ENABLED", False)

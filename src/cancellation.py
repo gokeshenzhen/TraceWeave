@@ -19,6 +19,8 @@ from __future__ import annotations
 import threading
 from contextvars import ContextVar, Token
 
+from . import operation_metrics
+
 # Checkpoint stride for inner scan loops: cheap enough to keep cancellation
 # latency sub-second while adding no measurable per-iteration cost.
 CANCEL_CHECK_STRIDE = 4096
@@ -48,4 +50,5 @@ def check_cancelled() -> None:
     """
     event = _cancel_event.get()
     if event is not None and event.is_set():
+        operation_metrics.mark_cancel_observed()
         raise OperationCancelled("tool call cancelled or preempted")

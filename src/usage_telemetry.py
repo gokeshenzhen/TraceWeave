@@ -57,6 +57,23 @@ _FLAG_WHITELIST = (
 
 _SCALAR_TYPES = (str, int, float, bool)
 
+# Privacy-safe operation diagnostics. Values are timings/counts plus one fixed
+# phase label; paths, scopes, signal names and search keywords are never accepted.
+_DIAGNOSTIC_WHITELIST = {
+    "wave_lock_wait_ms",
+    "preemption_to_cancel_ms",
+    "sweep_phase",
+    "discover_valid_ready_ms",
+    "discover_ahb_ms",
+    "search_count",
+    "search_total_ms",
+    "search_max_ms",
+}
+_DIAGNOSTIC_PHASES = {
+    "discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"
+}
+_DIAGNOSTIC_NUMERIC_FIELDS = _DIAGNOSTIC_WHITELIST - {"sweep_phase"}
+
 # Tools grouped under a logical "feature" for reporting. Anything not listed
 # reports under its own name.
 PRIMITIVE_GROUPS: dict[str, str] = {
@@ -121,6 +138,7 @@ def record_call(
     error_code: str | None = None,
     latency_ms: float | None = None,
     case: str | None = None,
+    diagnostics: dict | None = None,
 ) -> None:
     """Append one JSONL line describing a completed tool call.
 
@@ -147,6 +165,18 @@ def record_call(
         # Omitted on success to keep the line slim.
         if error_code is not None:
             record["error_code"] = str(error_code)
+        safe_diagnostics = {
+            str(key): value
+            for key, value in (diagnostics or {}).items()
+            if key in _DIAGNOSTIC_WHITELIST and isinstance(value, _SCALAR_TYPES)
+            and (key != "sweep_phase" or value in _DIAGNOSTIC_PHASES)
+            and (
+                key not in _DIAGNOSTIC_NUMERIC_FIELDS
+                or (not isinstance(value, bool) and isinstance(value, (int, float)))
+            )
+        }
+        if safe_diagnostics:
+            record["diagnostics"] = safe_diagnostics
         path = config.telemetry_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)

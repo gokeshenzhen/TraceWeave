@@ -6,6 +6,12 @@ The pairing/clock/payload logic is a pure function over a flat
 
 from __future__ import annotations
 
+import threading
+
+import pytest
+
+import src.cancellation as cancellation
+from src.cancellation import OperationCancelled
 from src.handshake_suggest import (
     _empty_result_reason,
     _inspect_handshake_relay,
@@ -430,3 +436,41 @@ def test_suggest_protocol_bundles_wrapper_attaches_inspect_relay():
     assert 'hwrite="tb.mst_HWRITE"' in res["next_step"]
     assert 'write_data="tb.mst_HWDATA[31:0]"' in res["next_step"]
     assert 'ready="tb.mst_HREADYOUT"' in res["next_step"]
+
+
+# --- cooperative cancellation during discovery -----------------------------
+
+
+def test_suggest_handshakes_observes_cancel_after_current_search():
+    event = threading.Event()
+    calls: list[str] = []
+
+    class _CancellingParser:
+        def search_signals(self, keyword, max_results=100):
+            calls.append(keyword)
+            event.set()
+            return {"results": []}
+
+    token = cancellation.push_cancel_event(event)
+    try:
+        with pytest.raises(OperationCancelled):
+            suggest_handshakes(
+                get_parser=lambda _: _CancellingParser(), wave_path="/w/a.fsdb"
+            )
+    finally:
+        cancellation.pop_cancel_event(token)
+
+    assert len(calls) == 1
+
+
+def test_suggest_protocol_bundles_does_not_swallow_cancel():
+    class _CancellingParser:
+        def search_signals(self, keyword, max_results=100):
+            raise OperationCancelled("cancelled in parser")
+
+    with pytest.raises(OperationCancelled):
+        suggest_protocol_bundles(
+            get_parser=lambda _: _CancellingParser(),
+            wave_path="/w/a.fsdb",
+            protocol="ahb",
+        )
