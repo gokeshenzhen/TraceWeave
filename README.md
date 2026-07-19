@@ -142,7 +142,7 @@ Enable FSDB support (links the Verdi runtime into the repo and builds
 
 ```bash
 # Example only — replace with your site's Verdi install path
-export VERDI_HOME=<verdi-install>
+export VERDI_HOME=/path/to/verdi
 bash scripts/setup_fsdb.sh
 ```
 
@@ -226,7 +226,7 @@ env = {
   SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com",
   LM_LICENSE_FILE     = "xxxx@s-license-server.example.com",
   CDS_LICENSE_FILE    = "xxxx@c-license.example.com",
-  LD_LIBRARY_PATH = "<library-ath>",
+  LD_LIBRARY_PATH = "<library-path>",
   PATH            = "<path>"
 }
 ```
