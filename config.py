@@ -161,12 +161,13 @@ def _default_cache_root() -> Path:
 TRACEWEAVE_CACHE_ROOT = _default_cache_root()
 KDB_CACHE_SUBDIR = "kdb"
 
-# Passive usage telemetry. Default on, local-only (no network). Appends one
+# Passive usage telemetry. Default off, local-only (no network). When enabled,
+# appends one
 # JSONL line per tool call under <cache>/telemetry/usage.jsonl so we can later
 # quantify how often the auto-debug primitives (cursor/period/diff_first_
 # divergence) actually get used on real workloads, instead of guessing.
-# Opt out with TRACEWEAVE_TELEMETRY=0.
-TELEMETRY_ENABLED = _env_flag("TRACEWEAVE_TELEMETRY", True)
+# Opt in with TRACEWEAVE_TELEMETRY=1.
+TELEMETRY_ENABLED = _env_flag("TRACEWEAVE_TELEMETRY", False)
 TELEMETRY_SUBDIR = "telemetry"
 TELEMETRY_FILENAME = "usage.jsonl"
 

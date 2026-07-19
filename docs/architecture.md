@@ -395,5 +395,5 @@ actually used on real workloads, and in what fraction of debug sessions?*
   per-session distributions, tracked-feature presence) backing the offline
   `scripts/telemetry_report.py` CLI; it is deliberately NOT an MCP tool.
 
-`TELEMETRY_ENABLED` defaults to True. Opt out with `TRACEWEAVE_TELEMETRY=0`
-(or `false`/`no`/`off`). Telemetry is local-only; nothing is sent anywhere.
+`TELEMETRY_ENABLED` defaults to False. Opt in with `TRACEWEAVE_TELEMETRY=1`
+(or `true`/`yes`/`on`). Telemetry is local-only; nothing is sent anywhere.

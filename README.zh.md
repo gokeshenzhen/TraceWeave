@@ -326,7 +326,7 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 
 ### 使用遥测
 
-TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。默认开启;设置 `TRACEWEAVE_TELEMETRY=0` 可关闭。用 `python scripts/telemetry_report.py` 汇总。
+启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。默认关闭;设置 `TRACEWEAVE_TELEMETRY=1` 可启用。用 `python scripts/telemetry_report.py` 汇总。
 
 ## 测试
 

@@ -3,6 +3,9 @@ and the pure aggregation function backing scripts/telemetry_report.py."""
 
 import importlib
 import json
+import os
+import subprocess
+import sys
 
 import config
 import src.usage_telemetry as ut
@@ -12,6 +15,26 @@ def _reset_module():
     # Module holds process-global session state; reload to isolate tests.
     importlib.reload(ut)
     return ut
+
+
+def _telemetry_enabled_in_fresh_process(value=None):
+    env = os.environ.copy()
+    if value is None:
+        env.pop("TRACEWEAVE_TELEMETRY", None)
+    else:
+        env["TRACEWEAVE_TELEMETRY"] = value
+    output = subprocess.check_output(
+        [sys.executable, "-c", "import config; print(config.TELEMETRY_ENABLED)"],
+        cwd=config.REPO_ROOT,
+        env=env,
+        text=True,
+    )
+    return output.strip()
+
+
+def test_telemetry_defaults_off_and_can_be_enabled_explicitly():
+    assert _telemetry_enabled_in_fresh_process() == "False"
+    assert _telemetry_enabled_in_fresh_process("1") == "True"
 
 
 def test_record_call_appends_jsonl(tmp_path, monkeypatch):

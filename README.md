@@ -341,7 +341,7 @@ For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` —
 
 ### Usage telemetry
 
-TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-on; set `TRACEWEAVE_TELEMETRY=0` to disable. Summarize with `python scripts/telemetry_report.py`.
+When enabled, TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-off; set `TRACEWEAVE_TELEMETRY=1` to enable it. Summarize with `python scripts/telemetry_report.py`.
 
 ## Testing
 
