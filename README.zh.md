@@ -169,7 +169,7 @@ Claude Code 与 Codex 都不会把你交互式 shell 的环境变量带入 spawn
   "mcpServers": {
     "TraceWeave": {
       "command": "python3.11",
-      "args": ["<TRACEWEAVE_HOME>server.py"],
+      "args": ["<TRACEWEAVE_HOME>/server.py"],
       "env": {
         "VERDI_HOME": "<verdi-install>",
         "NOVAS_HOME": "<verdi-install>",
@@ -201,7 +201,7 @@ claude mcp list
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
-args = ["<TRACEWEAVE_HOME>server.py"]
+args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 env = {
   VERDI_HOME      = "<verdi-install>",

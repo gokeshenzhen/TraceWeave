@@ -183,7 +183,7 @@ Add this to `~/.claude.json`:
   "mcpServers": {
     "TraceWeave": {
       "command": "python3.11",
-      "args": ["<TRACEWEAVE_HOME>server.py"],
+      "args": ["<TRACEWEAVE_HOME>/server.py"],
       "env": {
         "VERDI_HOME": "<verdi-install>",
         "NOVAS_HOME": "<verdi-install>",
@@ -215,7 +215,7 @@ Same idea as Claude Code — list everything explicitly. Add to `~/.codex/config
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
-args = ["<TRACEWEAVE_HOME>server.py"]
+args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 env = {
   VERDI_HOME      = "<verdi-install>",
