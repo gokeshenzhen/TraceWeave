@@ -92,8 +92,10 @@ Step 4: sweep_handshakes(wave_path, ...)
 │      it is not a protocol pass. Follow suggested_next_actions, usually retry
 │      without scope or with a parent/interface scope.
 │    * coverage_status="truncated" or "degraded" means partial coverage; do not
-│      call the protocol clean from flagged_count=0. Follow suggested_next_actions
-│      to complete the sweep.
+│      call the protocol clean from flagged_count=0. This includes native FSDB
+│      transition-prefix truncation (`transition_truncated_count > 0`); narrow
+│      the time window for a complete targeted check. Follow any available
+│      suggested_next_actions to complete interface coverage.
 │    * coverage_status="complete" and flagged_count=0 means all interfaces are clean.
 │  - Global findings (flagged interfaces) are facts to correlate against the symptom,
 │    not root-cause verdicts. Findings on one channel/interface may be unrelated to

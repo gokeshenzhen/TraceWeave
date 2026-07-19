@@ -105,6 +105,11 @@ Verification
   serialized and never overlaps. Loop-side state (`_result_cache`,
   `_session_state`, provenance) is still written only on the event-loop
   thread; the worker computes, the loop remains the single writer.
+  Privacy-safe operation metrics make full-sweep cost attributable without
+  recording project identities: discovery/search timing, total sweep time,
+  planned/attempted/completed interface counts, unique clock/signal counts,
+  aggregate/max inspect time, clock-vs-signal transition read count/total/max,
+  edge-extraction/value-sampling time, and transition-truncated interface count.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.
@@ -157,7 +162,11 @@ Verification
   collared in two `fsdb_wrapper.cpp` helpers (`_ToTag` floor / `_TagToPs`
   ceil, integer-fs base), so every timestamp crossing into Python is real
   picoseconds. Unknown scale → time-based calls refuse
-  (`FSDB_ERR_SCALE_UNKNOWN`) rather than assume 1ps; `get_waveform_summary`
+  (`FSDB_ERR_SCALE_UNKNOWN`) rather than assume 1ps. Native text buffers also
+  reserve space for an
+  `@TRUNCATED` receipt. `get_transitions` propagates that receipt through
+  edge sampling and handshake inspection; a sweep with any partial transition
+  prefix cannot report `coverage_status="complete"`. `get_waveform_summary`
   exposes `scale_unit`/`scale_fs_per_tick` for self-check.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same

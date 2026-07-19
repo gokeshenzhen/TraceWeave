@@ -73,6 +73,13 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
             "scope": "top.customer_block",
             "keyword": "customer_signal",
             "wave_lock_wait_ms": "top.secret_wait",
+            "sweep_interfaces_planned": 64,
+            "sweep_interfaces_completed": 3,
+            "sweep_inspect_total_ms": 456.7,
+            "sweep_clock_read_count": 3,
+            "sweep_clock_read_total_ms": 300.0,
+            "sweep_signal_read_count": 12,
+            "sweep_signal_read_total_ms": 150.0,
         },
     )
 
@@ -81,6 +88,13 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
         "sweep_phase": "discover_ahb",
         "search_count": 7,
         "search_total_ms": 123.4,
+        "sweep_interfaces_planned": 64,
+        "sweep_interfaces_completed": 3,
+        "sweep_inspect_total_ms": 456.7,
+        "sweep_clock_read_count": 3,
+        "sweep_clock_read_total_ms": 300.0,
+        "sweep_signal_read_count": 12,
+        "sweep_signal_read_total_ms": 150.0,
     }
     assert "/secret/design.fsdb" not in log.read_text()
     assert "top.secret" not in log.read_text()

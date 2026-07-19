@@ -17,6 +17,7 @@ import pytest
 
 import src.cancellation as cancellation
 import src.handshake_sweep as handshake_sweep
+from src import operation_metrics
 from src.cancellation import OperationCancelled
 from src.cursor_store import CursorStore
 from src.handshake_sweep import (
@@ -322,6 +323,48 @@ def test_full_coverage_not_truncated(tmp_path):
     assert res["truncated"] is False
     assert res["coverage_status"] == "complete"
     assert res["discovered_count"] == res["interface_count"] == 3
+
+
+def test_native_transition_truncation_degrades_coverage_and_is_measured(
+    tmp_path, monkeypatch
+):
+    real_inspect = inspect_handshake
+
+    def truncated_inspect(**kwargs):
+        result = real_inspect(**kwargs)
+        result["transition_data_truncated"] = True
+        result["transition_signals_truncated"] = [kwargs["clock"]]
+        result["coverage"]["transition_data_truncated"] = True
+        result["coverage"]["transition_signals_truncated"] = 1
+        return result
+
+    monkeypatch.setattr(handshake_sweep, "inspect_handshake", truncated_inspect)
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        res = _sweep(tmp_path, _multi_stage_vcd(["1", "1"]), max_wait_cycles=4)
+    finally:
+        operation_metrics.pop(token)
+
+    assert res["coverage_status"] == "degraded"
+    assert res["transition_truncated_count"] == 2
+    assert res["flagged_count"] == 0
+    assert "not a clean-protocol conclusion" in res["coverage_warnings"][0]
+    assert all(row["transition_data_truncated"] for row in res["interfaces"])
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_interfaces_planned"] == 2
+    assert snapshot["sweep_interfaces_attempted"] == 2
+    assert snapshot["sweep_interfaces_completed"] == 2
+    assert snapshot["sweep_unique_clocks"] == 2
+    assert snapshot["sweep_transition_truncated_interfaces"] == 2
+    assert snapshot["sweep_clock_read_count"] == 2
+    assert snapshot["sweep_signal_read_count"] == 4
+    assert snapshot["sweep_clock_read_total_ms"] >= 0
+    assert snapshot["sweep_signal_read_total_ms"] >= 0
+    assert snapshot["sweep_edge_extract_total_ms"] >= 0
+    assert snapshot["sweep_value_sample_total_ms"] >= 0
+    assert snapshot["sweep_inspect_total_ms"] >= 0
+    assert snapshot["sweep_inspect_max_ms"] >= 0
 
 
 def test_facts_exposed_and_note_disclaims_verdict(tmp_path):

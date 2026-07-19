@@ -2265,6 +2265,28 @@ class TestCallToolErrors:
         }
 
 
+def test_native_transition_prefix_is_an_explicit_lower_bound():
+    result = server._prepare_signal_transitions_result(
+        {
+            "signal": "top.clk",
+            "start_ps": 0,
+            "end_ps": -1,
+            "transition_count": 2,
+            "transitions": [
+                {"time_ps": 0, "value": {"bin": "0", "dec": 0}},
+                {"time_ps": 10, "value": {"bin": "1", "dec": 1}},
+            ],
+            "truncated": True,
+            "transition_count_is_lower_bound": True,
+        },
+        max_transitions=1000,
+    )
+
+    assert result.truncated is True
+    assert result.transition_count_is_lower_bound is True
+    assert "lower bound" in result.hint
+
+
 @pytest.mark.anyio
 class TestSignalTransitionsCap:
     """get_signal_transitions caps the returned list at the dispatch layer
@@ -2314,7 +2336,6 @@ class TestSignalTransitionsCap:
                 {"wave_path": str(self._FIXTURE), "signal_path": "top_tb.clk",
                  "max_transitions": 0},
             )
-
 
 @pytest.mark.anyio
 class TestSearchSignalsBatch:

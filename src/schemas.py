@@ -441,6 +441,7 @@ class SignalTransitionsResult(SchemaModel):
     transition_count: int
     transitions: list[dict[str, Any]] = Field(default_factory=list)
     truncated: bool = False
+    transition_count_is_lower_bound: bool = False
     hint: str | None = None
 
 
@@ -911,6 +912,10 @@ class HandshakeCoverage(SchemaModel):
     # offset one cycle from the address-phase valid).
     write_data_hold_requested: bool = False
     write_data_hold_checked: bool = False
+    # A bounded native transition read returned only a prefix. Existing check
+    # booleans still describe what ran, but the facts are partial.
+    transition_data_truncated: bool = False
+    transition_signals_truncated: int = 0
 
 
 class HandshakeInspectResult(SchemaModel):
@@ -954,6 +959,8 @@ class HandshakeInspectResult(SchemaModel):
     # None for a literal-valid interface, where every metric is faithful as-is.
     protocol_semantics: dict[str, str] | None = None
     payload_unresolved: list[str] = Field(default_factory=list)
+    transition_data_truncated: bool = False
+    transition_signals_truncated: list[str] = Field(default_factory=list)
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     unknown_sample_cycles: int = 0
     findings: list[HandshakeFinding] = Field(default_factory=list)
@@ -1066,6 +1073,8 @@ class SweptInterface(SchemaModel):
     # `flags` and the sort for ahb rows so it never reads as an anomaly.
     ready_without_valid_cycles: int = 0
     unknown_sample_cycles: int = 0
+    transition_data_truncated: bool = False
+    transition_signals_truncated: list[str] = Field(default_factory=list)
 
 
 class SweptSkip(SchemaModel):
@@ -1103,6 +1112,7 @@ class HandshakeSweepResult(SchemaModel):
     discovered_count: int = 0
     interface_count: int = 0
     flagged_count: int = 0
+    transition_truncated_count: int = 0
     truncated: bool = False
     # Coverage facts for interpreting flagged_count. In particular,
     # zero_coverage means no protocol interfaces were checked, so flagged_count=0

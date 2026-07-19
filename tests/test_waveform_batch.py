@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.vcd_parser import VCDParser
 from src.waveform_batch import (
+    _parse_batch_buf,
     VCDBatchReader,
     WaveformBatchReader,
     make_batch_reader,
@@ -77,3 +78,15 @@ def test_make_batch_reader_fsdb_returns_fsdb_impl():
     from src.waveform_batch import FSDBBatchReader
     reader = make_batch_reader("/no/such/file.fsdb")
     assert isinstance(reader, FSDBBatchReader)
+
+
+def test_batch_parser_keeps_truncation_receipt_out_of_transition_rows():
+    result = _parse_batch_buf(
+        "@SIGNAL\ttop.clk\t1\n0\ttop.clk\t0\n@TRUNCATED\n",
+        ["top.clk"], 0, 100, truncated=True,
+    )
+
+    assert result["truncated"] is True
+    assert result["transitions"] == [
+        {"time_ps": 0, "signal": "top.clk", "value": "0"}
+    ]

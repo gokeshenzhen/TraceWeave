@@ -25,6 +25,23 @@ _PUBLIC_FIELDS = {
     "search_count",
     "search_total_ms",
     "search_max_ms",
+    "sweep_total_ms",
+    "sweep_interfaces_planned",
+    "sweep_interfaces_attempted",
+    "sweep_interfaces_completed",
+    "sweep_unique_clocks",
+    "sweep_unique_signals",
+    "sweep_inspect_total_ms",
+    "sweep_inspect_max_ms",
+    "sweep_transition_truncated_interfaces",
+    "sweep_clock_read_count",
+    "sweep_clock_read_total_ms",
+    "sweep_clock_read_max_ms",
+    "sweep_signal_read_count",
+    "sweep_signal_read_total_ms",
+    "sweep_signal_read_max_ms",
+    "sweep_edge_extract_total_ms",
+    "sweep_value_sample_total_ms",
 }
 _PUBLIC_PHASES = {"discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"}
 _PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase"}
@@ -73,6 +90,79 @@ def record_search(duration_ms: float) -> None:
         metrics.values["search_max_ms"] = max(
             float(metrics.values.get("search_max_ms", 0.0)), duration_ms
         )
+
+
+def record_sweep_interface(
+    duration_ms: float,
+    *,
+    completed: bool,
+    transition_truncated: bool = False,
+) -> None:
+    """Record one inspect attempt without retaining interface identity.
+
+    The aggregate is intentionally limited to counts and timings: no scope,
+    signal name, waveform path, or sampled value can enter telemetry.
+    """
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        metrics.values["sweep_interfaces_attempted"] = (
+            int(metrics.values.get("sweep_interfaces_attempted", 0)) + 1
+        )
+        metrics.values["sweep_inspect_total_ms"] = (
+            float(metrics.values.get("sweep_inspect_total_ms", 0.0)) + duration_ms
+        )
+        metrics.values["sweep_inspect_max_ms"] = max(
+            float(metrics.values.get("sweep_inspect_max_ms", 0.0)), duration_ms
+        )
+        if completed:
+            metrics.values["sweep_interfaces_completed"] = (
+                int(metrics.values.get("sweep_interfaces_completed", 0)) + 1
+            )
+        if transition_truncated:
+            metrics.values["sweep_transition_truncated_interfaces"] = (
+                int(metrics.values.get("sweep_transition_truncated_interfaces", 0)) + 1
+            )
+
+
+def record_sweep_transition_read(kind: str, duration_ms: float) -> None:
+    """Aggregate a clock/signal native read while a full sweep is active."""
+    if kind not in {"clock", "signal"}:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        prefix = f"sweep_{kind}_read"
+        metrics.values[f"{prefix}_count"] = (
+            int(metrics.values.get(f"{prefix}_count", 0)) + 1
+        )
+        metrics.values[f"{prefix}_total_ms"] = (
+            float(metrics.values.get(f"{prefix}_total_ms", 0.0)) + duration_ms
+        )
+        metrics.values[f"{prefix}_max_ms"] = max(
+            float(metrics.values.get(f"{prefix}_max_ms", 0.0)), duration_ms
+        )
+
+
+def add_sweep_cpu_timing(kind: str, duration_ms: float) -> None:
+    """Aggregate fixed-label Python-side sweep work; reject arbitrary labels."""
+    field = {
+        "edge_extract": "sweep_edge_extract_total_ms",
+        "value_sample": "sweep_value_sample_total_ms",
+    }.get(kind)
+    if field is None:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values[field] = float(metrics.values.get(field, 0.0)) + duration_ms
 
 
 @contextmanager

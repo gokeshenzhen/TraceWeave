@@ -68,6 +68,23 @@ _DIAGNOSTIC_WHITELIST = {
     "search_count",
     "search_total_ms",
     "search_max_ms",
+    "sweep_total_ms",
+    "sweep_interfaces_planned",
+    "sweep_interfaces_attempted",
+    "sweep_interfaces_completed",
+    "sweep_unique_clocks",
+    "sweep_unique_signals",
+    "sweep_inspect_total_ms",
+    "sweep_inspect_max_ms",
+    "sweep_transition_truncated_interfaces",
+    "sweep_clock_read_count",
+    "sweep_clock_read_total_ms",
+    "sweep_clock_read_max_ms",
+    "sweep_signal_read_count",
+    "sweep_signal_read_total_ms",
+    "sweep_signal_read_max_ms",
+    "sweep_edge_extract_total_ms",
+    "sweep_value_sample_total_ms",
 }
 _DIAGNOSTIC_PHASES = {
     "discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"

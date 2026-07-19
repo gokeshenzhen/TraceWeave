@@ -88,3 +88,11 @@ def test_get_signal_width_raises_keyerror_when_signal_missing(monkeypatch):
 
     with pytest.raises(KeyError, match="Signal not found"):
         parser.get_signal_width("top_tb.missing.clk")
+
+
+def test_transition_parser_detects_native_truncation_receipt():
+    text = "0\t0\n10\t1\n@TRUNCATED\n"
+
+    assert fsdb_parser._buffer_was_truncated(text) is True
+    assert len(fsdb_parser._parse_trans_buf(text)) == 2
+    assert fsdb_parser._buffer_was_truncated("0\t0\n10\t1\n") is False

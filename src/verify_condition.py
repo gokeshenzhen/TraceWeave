@@ -840,6 +840,10 @@ def inspect_handshake(
         start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
     signal_errors = sampled.get("signal_errors", {})
+    transition_signals_truncated = list(
+        sampled.get("transition_signals_truncated", [])
+    )
+    transition_data_truncated = bool(transition_signals_truncated)
     payload_unresolved = [p for p in payload if p in signal_errors]
     resolved_payload = [p for p in payload if p not in signal_errors]
     warnings: list[str] = []
@@ -864,6 +868,10 @@ def inspect_handshake(
         # AHB write data-phase hold: needs hwrite + write_data; data-phase window.
         "write_data_hold_requested": bool(want_write_data_hold),
         "write_data_hold_checked": False,
+        # Native transition reads are bounded. If any returned only a prefix,
+        # every check below is partial even though it still ran on that prefix.
+        "transition_data_truncated": transition_data_truncated,
+        "transition_signals_truncated": len(transition_signals_truncated),
     }
 
     result: dict[str, Any] = {
@@ -898,6 +906,8 @@ def inspect_handshake(
         # see coverage.write_data_hold_checked.
         "write_data_hold_violations": 0,
         "payload_unresolved": payload_unresolved,
+        "transition_data_truncated": transition_data_truncated,
+        "transition_signals_truncated": transition_signals_truncated,
         "coverage": coverage,
         # protocol_semantics: an AHB-only "receipt" stating which of this result's
         # own metrics are faithful vs suppressed, so the surface reads as all-true-
@@ -914,6 +924,13 @@ def inspect_handshake(
         "warnings": warnings,
         "signal_errors": signal_errors,
     }
+
+    if transition_data_truncated:
+        warnings.append(
+            "TRANSITION DATA TRUNCATED: the native buffer returned only a prefix "
+            f"for {len(transition_signals_truncated)} sampled signal(s). Findings "
+            "and zero counts cover only that prefix; this is not complete coverage."
+        )
 
     # A missing valid/ready signal makes the whole check meaningless.
     valid_role = "valid_htrans" if use_htrans else "valid"
@@ -1433,6 +1450,8 @@ def _handshake_input_error(
         "ready_without_valid_cycles": 0, "payload_hold_violations": 0,
         "payload_hold_checked": False, "valid_deassert_violations": 0,
         "payload_unresolved": [],
+        "transition_data_truncated": False,
+        "transition_signals_truncated": [],
         "coverage": _empty_handshake_coverage(),
         "unknown_sample_cycles": 0, "findings": [],
         "violating_signal": None, "attribution": _empty_attribution(),
@@ -1455,6 +1474,11 @@ def _empty_handshake_coverage() -> dict[str, Any]:
         "payload_signals_unresolved": 0,
         "valid_hold_requested": False,
         "valid_hold_checked": False,
+        "x_while_valid_checked": False,
+        "write_data_hold_requested": False,
+        "write_data_hold_checked": False,
+        "transition_data_truncated": False,
+        "transition_signals_truncated": 0,
     }
 
 

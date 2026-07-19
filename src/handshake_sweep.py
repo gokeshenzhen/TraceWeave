@@ -22,6 +22,7 @@ Reads existing waveforms only — does NOT rerun simulation.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 from src import operation_metrics
@@ -40,6 +41,7 @@ _FACT_KEYS = (
     "payload_hold_violations", "valid_deassert_violations",
     "x_while_valid_violations", "write_data_hold_violations",
     "ready_without_valid_cycles", "unknown_sample_cycles",
+    "transition_data_truncated", "transition_signals_truncated",
     "coverage",
 )
 
@@ -325,8 +327,41 @@ def sweep_handshake_anomalies(
     truncated = discovered > len(normalized) or len(normalized) > max_interfaces
     to_inspect = normalized[:max_interfaces]
 
+    unique_clocks = {str(nb["clock"]) for nb in to_inspect if nb.get("clock")}
+    unique_signals: set[str] = set()
+    for nb in to_inspect:
+        unique_signals.update(
+            str(path)
+            for path in (nb.get("clock"), nb.get("valid"), nb.get("ready"))
+            if path
+        )
+        unique_signals.update(str(path) for path in nb.get("payload", []) if path)
+        unique_signals.update(
+            str(nb["inspect_kwargs"][key])
+            for key in ("hwrite", "write_data")
+            if nb["inspect_kwargs"].get(key)
+        )
+    operation_metrics.set_value("sweep_interfaces_planned", len(to_inspect))
+    operation_metrics.set_value("sweep_unique_clocks", len(unique_clocks))
+    operation_metrics.set_value("sweep_unique_signals", len(unique_signals))
+    operation_metrics.set_value("sweep_interfaces_attempted", 0)
+    operation_metrics.set_value("sweep_interfaces_completed", 0)
+    operation_metrics.set_value("sweep_inspect_total_ms", 0.0)
+    operation_metrics.set_value("sweep_inspect_max_ms", 0.0)
+    operation_metrics.set_value("sweep_transition_truncated_interfaces", 0)
+    operation_metrics.set_value("sweep_clock_read_count", 0)
+    operation_metrics.set_value("sweep_clock_read_total_ms", 0.0)
+    operation_metrics.set_value("sweep_clock_read_max_ms", 0.0)
+    operation_metrics.set_value("sweep_signal_read_count", 0)
+    operation_metrics.set_value("sweep_signal_read_total_ms", 0.0)
+    operation_metrics.set_value("sweep_signal_read_max_ms", 0.0)
+    operation_metrics.set_value("sweep_edge_extract_total_ms", 0.0)
+    operation_metrics.set_value("sweep_value_sample_total_ms", 0.0)
+    operation_metrics.set_value("_sweep_active", True)
+
     interfaces: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    transition_truncated_count = 0
     for nb in to_inspect:
         # Per-interface cancellation checkpoint: an abandoned whole-design
         # sweep stops at the next interface instead of finishing all of them.
@@ -335,14 +370,28 @@ def sweep_handshake_anomalies(
         if not nb.get("clock"):
             skipped.append({**base, "reason": "no clock found in scope/ancestors"})
             continue
-        res = inspect_handshake(
-            get_parser=get_parser, wave_path=wave_path,
-            clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
-            edge=edge, start_ps=start_ps, end_ps=end_ps,
-            max_wait_cycles=max_wait_cycles,
-            cursor_store=None,  # the sweep sets ONE cursor, not one per interface
-            **nb["inspect_kwargs"],
-        )
+        inspect_started = time.perf_counter()
+        res: dict[str, Any] | None = None
+        try:
+            res = inspect_handshake(
+                get_parser=get_parser, wave_path=wave_path,
+                clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
+                edge=edge, start_ps=start_ps, end_ps=end_ps,
+                max_wait_cycles=max_wait_cycles,
+                cursor_store=None,  # the sweep sets ONE cursor, not one per interface
+                **nb["inspect_kwargs"],
+            )
+        finally:
+            operation_metrics.record_sweep_interface(
+                (time.perf_counter() - inspect_started) * 1000.0,
+                completed=res is not None,
+                transition_truncated=bool(
+                    res and res.get("transition_data_truncated")
+                ),
+            )
+        assert res is not None
+        if res.get("transition_data_truncated"):
+            transition_truncated_count += 1
         if res.get("reason"):
             skipped.append({**base, "reason": res["reason"]})
             continue
@@ -421,7 +470,10 @@ def sweep_handshake_anomalies(
                 )
             )
         coverage_warnings.append(warning)
-    elif truncated:
+    else:
+        coverage_status = "complete"
+
+    if truncated:
         coverage_status = "truncated"
         coverage_warnings.append(
             f"COVERAGE TRUNCATED: {discovered} interfaces discovered but only "
@@ -440,25 +492,31 @@ def sweep_handshake_anomalies(
                 max_interfaces=max_interfaces,
             )
         )
-    elif skipped:
-        coverage_status = "degraded"
+    if transition_truncated_count:
+        if coverage_status == "complete":
+            coverage_status = "degraded"
+        coverage_warnings.append(
+            "COVERAGE DEGRADED: native transition data was truncated for "
+            f"{transition_truncated_count} inspected interface(s). Findings and "
+            "zero counts cover only returned prefixes; flagged_count=0 is not a "
+            "clean-protocol conclusion. Narrow the time window for a complete "
+            "targeted check until bounded-memory streaming is available."
+        )
+
+    if skipped:
+        if coverage_status == "complete":
+            coverage_status = "degraded"
         coverage_warnings.append(
             "COVERAGE DEGRADED: one or more discovered handshake interfaces could "
             "not be inspected; see skipped. flagged_count=0 only covers inspected rows."
         )
-    else:
-        coverage_status = "complete"
 
     finding_summary = _compute_finding_summary(interfaces) if n_flagged > 0 else None
 
     note = _SORT_DESC if interfaces else None
-    if truncated:
-        warn = coverage_warnings[0]
-        note = warn if note is None else f"{warn} | {note}"
-    elif coverage_status == "zero_coverage":
-        note = coverage_warnings[0]
-    elif coverage_status == "degraded":
-        note = coverage_warnings[0] if note is None else f"{coverage_warnings[0]} | {note}"
+    if coverage_warnings:
+        warnings_note = " | ".join(coverage_warnings)
+        note = warnings_note if note is None else f"{warnings_note} | {note}"
 
     operation_metrics.set_value("sweep_phase", "complete")
     return {
@@ -470,6 +528,7 @@ def sweep_handshake_anomalies(
         "discovered_count": discovered,
         "interface_count": len(interfaces),
         "flagged_count": n_flagged,
+        "transition_truncated_count": transition_truncated_count,
         "truncated": truncated,
         "coverage_status": coverage_status,
         "coverage_warnings": coverage_warnings,

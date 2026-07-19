@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from src.cycle_query import annotate_center_transients, get_signals_by_cycle
+from src.cycle_query import (
+    annotate_center_transients,
+    get_signals_by_cycle,
+    sample_signals_on_edges,
+)
 from src.vcd_parser import VCDParser
 
 
@@ -350,3 +354,35 @@ def test_get_signals_by_cycle_does_not_swallow_backend_runtime_error():
             signal_paths=["top_tb.data"],
             num_cycles=1,
         )
+
+
+def test_edge_sampler_propagates_transition_prefix_truncation():
+    class TruncatedParser:
+        def get_signal_width(self, signal_path: str) -> int:
+            return 1
+
+        def get_transitions(self, signal_path: str, start_ps: int = 0, end_ps: int = -1):
+            if signal_path == "top.clk":
+                return {
+                    "truncated": True,
+                    "transitions": [
+                        {"time_ps": 0, "value": {"bin": "0", "dec": 0}},
+                        {"time_ps": 10, "value": {"bin": "1", "dec": 1}},
+                    ],
+                }
+            return {
+                "truncated": True,
+                "transitions": [
+                    {"time_ps": 0, "value": {"bin": "1", "dec": 1}},
+                ],
+            }
+
+        def get_value_at_time(self, signal_path: str, time_ps: int):
+            return {"value": {"bin": "1", "dec": 1}}
+
+    result = sample_signals_on_edges(
+        TruncatedParser(), "top.clk", ["top.valid"], start_ps=0, end_ps=20
+    )
+
+    assert result["transition_data_truncated"] is True
+    assert result["transition_signals_truncated"] == ["top.clk", "top.valid"]

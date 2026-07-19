@@ -1000,6 +1000,38 @@ def _get_parser(wave_path: str):
     return parser
 
 
+def _prepare_signal_transitions_result(
+    result: dict, max_transitions: int
+) -> schemas.SignalTransitionsResult:
+    """Apply the public return cap while preserving native-prefix honesty."""
+    if max_transitions < 1:
+        raise ValueError("max_transitions must be >= 1")
+    transitions = result.get("transitions") or []
+    native_truncated = bool(result.get("transition_count_is_lower_bound"))
+    if len(transitions) > max_transitions:
+        result["transitions"] = transitions[:max_transitions]
+        result["truncated"] = True
+        if native_truncated:
+            result["hint"] = (
+                f"showing the first {max_transitions} of at least "
+                f"{len(transitions)} transitions; native output also reached "
+                "its buffer limit, so transition_count is a lower bound. "
+                "Narrow [start_time_ps, end_time_ps]."
+            )
+        else:
+            result["hint"] = (
+                f"showing the first {max_transitions} of {len(transitions)} transitions; "
+                "narrow [start_time_ps, end_time_ps] or raise max_transitions explicitly"
+            )
+    elif native_truncated:
+        result["hint"] = (
+            "native output reached its buffer limit; transitions contains only "
+            "a prefix and transition_count is a lower bound. Narrow "
+            "[start_time_ps, end_time_ps] for complete data."
+        )
+    return schemas.SignalTransitionsResult.model_validate(result)
+
+
 def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
     """Best-effort clock auto-detect, cached on the parser instance."""
     cached = getattr(parser, "_cached_clock_info", None)
@@ -2133,6 +2165,8 @@ async def list_tools():
                 "round-trips into one. Always interpret flagged_count together with "
                 "coverage_status: zero_coverage means no protocol interfaces were "
                 "checked and is NOT a pass; truncated/degraded means partial coverage. "
+                "FSDB native transition-buffer truncation is propagated per row and "
+                "forces degraded coverage; zero findings then cover only returned prefixes. "
                 "Returns FACTS, not a root-cause verdict; re-rank as the symptom "
                 "warrants. Reads existing waveforms only."
             ),
@@ -2561,17 +2595,7 @@ async def _dispatch(name: str, args: dict):
             # .get_transitions() still see the full list. Telemetry showed a
             # single uncapped call returning 8.9MB into the model context.
             max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
-            if max_transitions < 1:
-                raise ValueError("max_transitions must be >= 1")
-            transitions = result.get("transitions") or []
-            if len(transitions) > max_transitions:
-                result["transitions"] = transitions[:max_transitions]
-                result["truncated"] = True
-                result["hint"] = (
-                    f"showing the first {max_transitions} of {len(transitions)} transitions; "
-                    "narrow [start_time_ps, end_time_ps] or raise max_transitions explicitly"
-                )
-            return schemas.SignalTransitionsResult.model_validate(result)
+            return _prepare_signal_transitions_result(result, max_transitions)
 
         return await _run_in_wave_thread(args["wave_path"], _work)
 
@@ -3075,18 +3099,24 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "sweep_handshakes":
         def _work():
-            result = sweep_handshake_anomalies(
-                get_parser=_get_parser,
-                wave_path=args["wave_path"],
-                scope=args.get("scope"),
-                edge=args.get("edge", "posedge"),
-                start_ps=_resolve_time(args.get("start_time_ps", 0)),
-                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-                max_wait_cycles=args.get("max_wait_cycles", 16),
-                max_interfaces=args.get("max_interfaces", 64),
-                cursor_store=_cursor_store,
-            )
-            return schemas.HandshakeSweepResult.model_validate(result)
+            started = time.perf_counter()
+            try:
+                result = sweep_handshake_anomalies(
+                    get_parser=_get_parser,
+                    wave_path=args["wave_path"],
+                    scope=args.get("scope"),
+                    edge=args.get("edge", "posedge"),
+                    start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                    end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                    max_wait_cycles=args.get("max_wait_cycles", 16),
+                    max_interfaces=args.get("max_interfaces", 64),
+                    cursor_store=_cursor_store,
+                )
+                return schemas.HandshakeSweepResult.model_validate(result)
+            finally:
+                operation_metrics.set_value(
+                    "sweep_total_ms", (time.perf_counter() - started) * 1000.0
+                )
 
         # Result-cache/provenance writes stay on the event-loop thread: the
         # worker thread computes, the loop remains the single writer of

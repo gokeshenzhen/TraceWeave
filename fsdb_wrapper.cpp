@@ -223,16 +223,18 @@ _AppendText(char *out_buf, int buf_size, int &pos,
             const std::string &text, bool &truncated)
 {
     if (truncated) return false;
+    const char *marker = "@TRUNCATED\n";
+    int marker_len = (int)strlen(marker);
     int len = (int)text.size();
-    if (pos + len + 1 >= buf_size) {
-        const char *marker = "@TRUNCATED\n";
-        int marker_len = (int)strlen(marker);
-        if (buf_size > marker_len) {
-            int marker_pos = buf_size - marker_len - 1;
-            if (marker_pos < 0) marker_pos = 0;
-            memcpy(out_buf + marker_pos, marker, marker_len);
-            out_buf[marker_pos + marker_len] = '\0';
-            pos = marker_pos + marker_len;
+    /* Always reserve enough tail room for a parseable truncation receipt. This
+     * avoids the old failure mode where the marker was written near the end of
+     * the allocation, after stale bytes beyond `pos`, so ctypes stopped at the
+     * earlier NUL and Python never saw it. */
+    if (pos + len + marker_len + 1 > buf_size) {
+        if (pos + marker_len + 1 <= buf_size) {
+            memcpy(out_buf + pos, marker, marker_len);
+            pos += marker_len;
+            out_buf[pos] = '\0';
         } else if (buf_size > 0) {
             out_buf[buf_size - 1] = '\0';
         }
@@ -433,8 +435,9 @@ fsdb_get_transitions(void *handle, const char *signal_path,
         return -3;
     }
 
-    int   count = 0;
-    int   pos   = 0;
+    int   count     = 0;
+    int   pos       = 0;
+    bool  truncated = false;
 
     if (hdl->ffrHasIncoreVC()) {
         /* 跳到 start_ps */
@@ -452,16 +455,8 @@ fsdb_get_transitions(void *handle, const char *signal_path,
                 break;
 
             std::string val = _VCToStr(vc_ptr, bsize, bpb);
-            /* Build the line with std::string, not a fixed stack buffer: a wide
-             * bus (e.g. 1024-bit AXI wdata) renders to >512 chars, and a fixed
-             * buffer would truncate the line and drop the trailing '\n', gluing
-             * every transition into one and silently defeating downstream
-             * value-at-edge sampling (payload-hold checks). */
-            std::string line = std::to_string(t_ps) + "\t" + val + "\n";
-            int len = (int)line.size();
-            if (pos + len + 1 >= buf_size) break;
-            memcpy(out_buf + pos, line.data(), len);
-            pos += len;
+            if (!_AppendTransitionLine(
+                    out_buf, buf_size, pos, t_ps, val, truncated)) break;
             count++;
         } while (FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
     }

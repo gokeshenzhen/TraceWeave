@@ -235,13 +235,19 @@ class FSDBParser:
             raise self._scale_unknown_error()
         if rc < 0:
             raise RuntimeError(f"fsdb_get_transitions failed, rc={rc}")
-        transitions = _parse_trans_buf(buf.value.decode())
+        text = buf.value.decode()
+        transitions = _parse_trans_buf(text)
+        native_truncated = _buffer_was_truncated(text)
         return {
             "signal":           signal_path,
             "start_ps":         start_ps,
             "end_ps":           end_ps,
             "transition_count": len(transitions),
             "transitions":      transitions,
+            # Native output is bounded by the shared buffer. A true value means
+            # this is only a prefix and must never support a clean/full verdict.
+            "truncated":        native_truncated,
+            "transition_count_is_lower_bound": native_truncated,
         }
 
     def get_signals_around_time(self, signal_paths: list,
@@ -399,6 +405,11 @@ def _parse_trans_buf(text: str) -> list:
         except ValueError:
             pass
     return result
+
+
+def _buffer_was_truncated(text: str) -> bool:
+    """Return whether native output contains its standalone truncation receipt."""
+    return text.startswith("@TRUNCATED\n") or "\n@TRUNCATED\n" in text
 
 
 def _parse_multi_signal_buf(

@@ -18,7 +18,7 @@ import ctypes
 from bisect import bisect_left
 from typing import Any, Protocol, runtime_checkable
 
-from .fsdb_parser import FSDBParser, _BUF_SIZE
+from .fsdb_parser import FSDBParser, _BUF_SIZE, _buffer_was_truncated
 from .vcd_parser import VCDParser
 
 
@@ -87,7 +87,10 @@ class FSDBBatchReader:
         if rc < 0:
             raise RuntimeError(f"fsdb_batch_window_transitions failed, rc={rc}")
         text = buf.value.decode()
-        return _parse_batch_buf(text, signals, start_ps, end_ps, truncated=(rc == 0 and len(text) >= _BUF_SIZE - 1))
+        return _parse_batch_buf(
+            text, signals, start_ps, end_ps,
+            truncated=_buffer_was_truncated(text),
+        )
 
 
 def _parse_batch_buf(

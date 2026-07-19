@@ -46,3 +46,58 @@ def test_preemption_latency_is_published_only_after_cancel_observed():
     snapshot = operation_metrics.snapshot(metrics)
     assert snapshot["preemption_to_cancel_ms"] >= 0
     assert "_preemption_requested_at" not in snapshot
+
+
+def test_sweep_interface_metrics_are_aggregate_and_privacy_safe():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.set_value("sweep_interfaces_planned", 3)
+        operation_metrics.set_value("sweep_unique_clocks", 1)
+        operation_metrics.set_value("sweep_unique_signals", 9)
+        operation_metrics.record_sweep_interface(12.25, completed=True)
+        operation_metrics.record_sweep_interface(
+            7.75, completed=True, transition_truncated=True
+        )
+        operation_metrics.record_sweep_interface(4.0, completed=False)
+        operation_metrics.set_value("interface_name", "top.customer.secret")
+    finally:
+        operation_metrics.pop(token)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "sweep_interfaces_planned": 3,
+        "sweep_unique_clocks": 1,
+        "sweep_unique_signals": 9,
+        "sweep_interfaces_attempted": 3,
+        "sweep_inspect_total_ms": 24.0,
+        "sweep_inspect_max_ms": 12.2,
+        "sweep_interfaces_completed": 2,
+        "sweep_transition_truncated_interfaces": 1,
+    }
+
+
+def test_sweep_subphase_timings_require_fixed_labels_and_active_sweep():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.record_sweep_transition_read("clock", 99.0)
+        operation_metrics.set_value("_sweep_active", True)
+        operation_metrics.record_sweep_transition_read("clock", 2.0)
+        operation_metrics.record_sweep_transition_read("signal", 5.0)
+        operation_metrics.record_sweep_transition_read("top.secret", 1000.0)
+        operation_metrics.add_sweep_cpu_timing("edge_extract", 1.5)
+        operation_metrics.add_sweep_cpu_timing("value_sample", 3.5)
+        operation_metrics.add_sweep_cpu_timing("top.secret", 1000.0)
+    finally:
+        operation_metrics.pop(token)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "sweep_clock_read_count": 1,
+        "sweep_clock_read_total_ms": 2.0,
+        "sweep_clock_read_max_ms": 2.0,
+        "sweep_signal_read_count": 1,
+        "sweep_signal_read_total_ms": 5.0,
+        "sweep_signal_read_max_ms": 5.0,
+        "sweep_edge_extract_total_ms": 1.5,
+        "sweep_value_sample_total_ms": 3.5,
+    }

@@ -5,11 +5,13 @@ cycle_query.py
 
 from __future__ import annotations
 
+import time
 from bisect import bisect_left, bisect_right
 from statistics import median
 from typing import Any
 
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
+from . import operation_metrics
 
 
 def get_signals_by_cycle(
@@ -95,7 +97,7 @@ def get_signals_by_cycle(
     if not target_edges:
         return result
 
-    per_cycle_signals, signal_errors = _sample_signals_at_edges(
+    per_cycle_signals, signal_errors, _ = _sample_signals_at_edges(
         parser, signal_paths, target_edges, sample_offset_ps
     )
     result["signal_errors"] = signal_errors
@@ -136,13 +138,33 @@ def sample_signals_on_edges(
     if sample_offset_ps < 0:
         raise ValueError("sample_offset_ps must be >= 0")
 
-    clock_result = parser.get_transitions(clock_path, start_ps=start_ps, end_ps=end_ps)
+    clock_read_started = time.perf_counter()
+    try:
+        clock_result = parser.get_transitions(
+            clock_path, start_ps=start_ps, end_ps=end_ps
+        )
+    finally:
+        operation_metrics.record_sweep_transition_read(
+            "clock", (time.perf_counter() - clock_read_started) * 1000.0
+        )
     _validate_clock_width(parser, clock_path)
-    edge_times = _extract_edge_times(clock_result.get("transitions", []), edge)
+    edge_extract_started = time.perf_counter()
+    try:
+        edge_times = _extract_edge_times(clock_result.get("transitions", []), edge)
+    finally:
+        operation_metrics.add_sweep_cpu_timing(
+            "edge_extract", (time.perf_counter() - edge_extract_started) * 1000.0
+        )
 
-    per_edge_signals, signal_errors = _sample_signals_at_edges(
+    per_edge_signals, signal_errors, signal_transition_truncations = _sample_signals_at_edges(
         parser, signal_paths, edge_times, sample_offset_ps
     )
+    transition_signals_truncated = []
+    if clock_result.get("truncated"):
+        transition_signals_truncated.append(clock_path)
+    for signal_path in signal_transition_truncations:
+        if signal_path not in transition_signals_truncated:
+            transition_signals_truncated.append(signal_path)
     return {
         "clock_path": clock_path,
         "edge": edge,
@@ -154,6 +176,8 @@ def sample_signals_on_edges(
             for edge_time, signals in zip(edge_times, per_edge_signals)
         ],
         "signal_errors": signal_errors,
+        "transition_data_truncated": bool(transition_signals_truncated),
+        "transition_signals_truncated": transition_signals_truncated,
     }
 
 
@@ -162,7 +186,7 @@ def _sample_signals_at_edges(
     signal_paths: list[str],
     target_edges: list[int],
     sample_offset_ps: int,
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
+) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """Sample each signal at ``edge + offset`` for the given edge times.
 
     Shared by ``get_signals_by_cycle`` and ``sample_signals_on_edges``. A
@@ -172,8 +196,9 @@ def _sample_signals_at_edges(
     """
     per_edge_signals: list[dict[str, Any]] = [dict() for _ in target_edges]
     signal_errors: dict[str, str] = {}
+    transition_signals_truncated: list[str] = []
     if not target_edges:
-        return per_edge_signals, signal_errors
+        return per_edge_signals, signal_errors, transition_signals_truncated
 
     range_start = target_edges[0]
     range_end = target_edges[-1] + sample_offset_ps + 1
@@ -182,18 +207,34 @@ def _sample_signals_at_edges(
     for signal_path in signal_paths:
         check_cancelled()
         try:
-            transitions_result = parser.get_transitions(
-                signal_path,
-                start_ps=range_start,
-                end_ps=range_end,
-            )
+            signal_read_started = time.perf_counter()
+            try:
+                transitions_result = parser.get_transitions(
+                    signal_path,
+                    start_ps=range_start,
+                    end_ps=range_end,
+                )
+            finally:
+                operation_metrics.record_sweep_transition_read(
+                    "signal", (time.perf_counter() - signal_read_started) * 1000.0
+                )
+            if transitions_result.get("truncated"):
+                transition_signals_truncated.append(signal_path)
             transitions = transitions_result.get("transitions", [])
-            sampled_values = _sample_signal_values(parser, signal_path, transitions, sample_times)
+            value_sample_started = time.perf_counter()
+            try:
+                sampled_values = _sample_signal_values(
+                    parser, signal_path, transitions, sample_times
+                )
+            finally:
+                operation_metrics.add_sweep_cpu_timing(
+                    "value_sample", (time.perf_counter() - value_sample_started) * 1000.0
+                )
             for index, value in enumerate(sampled_values):
                 per_edge_signals[index][signal_path] = value
         except KeyError as exc:
             signal_errors[signal_path] = str(exc)
-    return per_edge_signals, signal_errors
+    return per_edge_signals, signal_errors, transition_signals_truncated
 
 
 def _validate_clock_width(parser, clock_path: str) -> None:
