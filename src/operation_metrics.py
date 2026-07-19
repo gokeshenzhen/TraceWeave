@@ -42,6 +42,8 @@ _PUBLIC_FIELDS = {
     "sweep_signal_read_max_ms",
     "sweep_edge_extract_total_ms",
     "sweep_value_sample_total_ms",
+    "sweep_clock_reuse_hits",
+    "sweep_signal_reuse_hits",
 }
 _PUBLIC_PHASES = {"discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"}
 _PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase"}
@@ -163,6 +165,23 @@ def add_sweep_cpu_timing(kind: str, duration_ms: float) -> None:
         if metrics.values.get("_sweep_active") is not True:
             return
         metrics.values[field] = float(metrics.values.get(field, 0.0)) + duration_ms
+
+
+def record_sweep_reuse_hit(kind: str) -> None:
+    """Count fixed-kind cache reuse without retaining signal identity."""
+    field = {
+        "clock": "sweep_clock_reuse_hits",
+        "signal": "sweep_signal_reuse_hits",
+    }.get(kind)
+    if field is None:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values[field] = int(metrics.values.get(field, 0)) + 1
 
 
 @contextmanager

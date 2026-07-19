@@ -71,6 +71,40 @@ def _multi_stage_vcd(ready_by_stage, *, n_cycles: int = 30, with_clock: bool = T
     return "\n".join(header + body) + "\n"
 
 
+def _shared_clock_vcd(ready_by_stage, *, n_cycles: int = 30) -> str:
+    """Several child interfaces using one ancestor clock."""
+    ids = iter(string.ascii_letters)
+    header = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$var wire 1 ! clk $end",
+    ]
+    valid_ids: list[str] = []
+    ready_ids: list[str] = []
+    for index, _ in enumerate(ready_by_stage):
+        valid_id = next(ids)
+        ready_id = next(ids)
+        valid_ids.append(valid_id)
+        ready_ids.append(ready_id)
+        header.extend(
+            [
+                f"$scope module u{index} $end",
+                f"$var wire 1 {valid_id} in_valid $end",
+                f"$var wire 1 {ready_id} in_ready $end",
+                "$upscope $end",
+            ]
+        )
+    header.extend(["$upscope $end", "$enddefinitions $end"])
+    body = ["#0", "0!"]
+    for valid_id, ready_id, ready in zip(valid_ids, ready_ids, ready_by_stage):
+        body.extend([f"1{valid_id}", f"{ready}{ready_id}"])
+    level = 0
+    for tick in range(1, n_cycles * 2):
+        level ^= 1
+        body.extend([f"#{tick * 10}", f"{level}!"])
+    return "\n".join([*header, *body]) + "\n"
+
+
 def _single_stage_vcd(ready_seq, *, n_cycles: int = 30) -> str:
     """One scope top with clk/valid/ready; ready_seq is a list of (cycle, value)
     so a stall can recover partway through."""
@@ -323,6 +357,32 @@ def test_full_coverage_not_truncated(tmp_path):
     assert res["truncated"] is False
     assert res["coverage_status"] == "complete"
     assert res["discovered_count"] == res["interface_count"] == 3
+
+
+def test_full_sweep_reuses_one_ancestor_clock_without_changing_facts(tmp_path):
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        res = _sweep(
+            tmp_path, _shared_clock_vcd(["1", "0", "1"]), max_wait_cycles=4
+        )
+    finally:
+        operation_metrics.pop(token)
+
+    assert res["coverage_status"] == "complete"
+    assert res["interface_count"] == 3
+    assert res["flagged_count"] == 1
+    assert res["interfaces"][0]["valid"] == "top.u1.in_valid"
+    assert res["interfaces"][0]["ended_in_stall"] is True
+    clean = [row for row in res["interfaces"] if not row["flags"]]
+    assert len(clean) == 2
+    assert all(row["transfer_count"] > 0 for row in clean)
+
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_unique_clocks"] == 1
+    assert snapshot["sweep_clock_read_count"] == 1
+    assert snapshot["sweep_clock_reuse_hits"] == 2
+    assert snapshot["sweep_signal_read_count"] == 6
 
 
 def test_native_transition_truncation_degrades_coverage_and_is_measured(

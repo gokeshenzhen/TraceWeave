@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorRef, CursorStore
-from .cycle_query import sample_signals_on_edges
+from .cycle_query import EdgeSamplingSession, sample_signals_on_edges
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +735,8 @@ def inspect_handshake(
     cursor_store: CursorStore | None = None,
     cursor_name: str | None = None,
     cursor_note: str | None = None,
+    _sampling_session: EdgeSamplingSession | None = None,
+    _resolution_cache: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Classify a valid/ready handshake cycle-by-cycle and surface protocol
     facts an LLM cannot get from a transition dump or a scoreboard log.
@@ -820,24 +822,37 @@ def inspect_handshake(
     # [msb:lsb] suffix (common on FSDB: 'top.addr' -> 'top.addr[7:0]'). This
     # removes the most common footgun where a payload signal silently fails to
     # resolve and the hold check then looks "clean".
-    clock = _resolve_signal_path(parser, clock)
-    ready = _resolve_signal_path(parser, ready)
-    valid_signal = _resolve_signal_path(parser, valid_htrans if use_htrans else valid)
+    def resolve(path: str) -> str:
+        check_cancelled()
+        if _resolution_cache is None:
+            resolved = _resolve_signal_path(parser, path)
+        else:
+            if path not in _resolution_cache:
+                _resolution_cache[path] = _resolve_signal_path(parser, path)
+            resolved = _resolution_cache[path]
+        if _sampling_session is not None:
+            _sampling_session.bind_signal_alias(path, resolved)
+        return resolved
+
+    clock = resolve(clock)
+    ready = resolve(ready)
+    valid_signal = resolve(valid_htrans if use_htrans else valid)
     valid_source = f"htrans:{htrans_rule}" if use_htrans else "signal"
-    payload = [_resolve_signal_path(parser, p) for p in payload_in]
+    payload = [resolve(p) for p in payload_in]
 
     # AHB write data-phase hold (G3): HWDATA must stay stable while HREADY is low
     # during a *write* data phase. This is a different window than the address-phase
     # payload-hold (the data phase trails the htrans-derived valid by one cycle), so
     # it needs HWRITE (to qualify writes) and the HWDATA bus, supplied separately.
     want_write_data_hold = use_htrans and hwrite is not None and write_data is not None
-    hwrite_sig = _resolve_signal_path(parser, hwrite) if want_write_data_hold else None
-    wdata_sig = _resolve_signal_path(parser, write_data) if want_write_data_hold else None
+    hwrite_sig = resolve(hwrite) if want_write_data_hold else None
+    wdata_sig = resolve(write_data) if want_write_data_hold else None
     extra_signals = [s for s in (hwrite_sig, wdata_sig) if s]
 
     sampled = sample_signals_on_edges(
         parser, clock, [valid_signal, ready, *payload, *extra_signals],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
+        sampling_session=_sampling_session,
     )
     signal_errors = sampled.get("signal_errors", {})
     transition_signals_truncated = list(

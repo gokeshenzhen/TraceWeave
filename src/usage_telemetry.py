@@ -85,6 +85,8 @@ _DIAGNOSTIC_WHITELIST = {
     "sweep_signal_read_max_ms",
     "sweep_edge_extract_total_ms",
     "sweep_value_sample_total_ms",
+    "sweep_clock_reuse_hits",
+    "sweep_signal_reuse_hits",
 }
 _DIAGNOSTIC_PHASES = {
     "discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"

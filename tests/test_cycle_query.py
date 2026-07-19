@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 
+import src.cancellation as cancellation
+from src import operation_metrics
+from src.cancellation import OperationCancelled
 from src.cycle_query import (
+    EdgeSamplingSession,
     annotate_center_transients,
     get_signals_by_cycle,
     sample_signals_on_edges,
@@ -386,3 +391,159 @@ def test_edge_sampler_propagates_transition_prefix_truncation():
 
     assert result["transition_data_truncated"] is True
     assert result["transition_signals_truncated"] == ["top.clk", "top.valid"]
+
+
+class _CountingSamplingParser:
+    def __init__(self):
+        self.calls: dict[str, int] = {}
+        self.values = {
+            "top.clk": [
+                {"time_ps": 0, "value": {"bin": "0", "dec": 0}},
+                {"time_ps": 10, "value": {"bin": "1", "dec": 1}},
+                {"time_ps": 20, "value": {"bin": "0", "dec": 0}},
+                {"time_ps": 30, "value": {"bin": "1", "dec": 1}},
+            ],
+            "top.v0": [{"time_ps": 0, "value": {"bin": "1", "dec": 1}}],
+            "top.v1": [{"time_ps": 0, "value": {"bin": "1", "dec": 1}}],
+            "top.shared_ready": [
+                {"time_ps": 0, "value": {"bin": "1", "dec": 1}}
+            ],
+        }
+
+    def get_signal_width(self, signal_path: str) -> int:
+        return 1
+
+    def get_transitions(self, signal_path: str, start_ps: int = 0, end_ps: int = -1):
+        self.calls[signal_path] = self.calls.get(signal_path, 0) + 1
+        return {"transitions": self.values[signal_path], "truncated": False}
+
+    def get_value_at_time(self, signal_path: str, time_ps: int):
+        return {"value": self.values[signal_path][0]["value"]}
+
+
+def test_sampling_session_reuses_clock_and_shared_signal_then_evicts():
+    parser = _CountingSamplingParser()
+    session = EdgeSamplingSession(
+        clock_path="top.clk",
+        start_ps=0,
+        end_ps=40,
+        edge="posedge",
+        sample_offset_ps=1,
+        signal_use_counts={"top.v0": 1, "top.v1": 1, "top.shared_ready": 2},
+    )
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    operation_metrics.set_value("_sweep_active", True)
+    try:
+        first = sample_signals_on_edges(
+            parser, "top.clk", ["top.v0", "top.shared_ready"],
+            start_ps=0, end_ps=40, sampling_session=session,
+        )
+        second = sample_signals_on_edges(
+            parser, "top.clk", ["top.v1", "top.shared_ready"],
+            start_ps=0, end_ps=40, sampling_session=session,
+        )
+    finally:
+        operation_metrics.pop(token)
+
+    assert first["samples"][0]["signals"]["top.shared_ready"]["dec"] == 1
+    assert second["samples"][0]["signals"]["top.shared_ready"]["dec"] == 1
+    assert parser.calls == {
+        "top.clk": 1,
+        "top.v0": 1,
+        "top.shared_ready": 1,
+        "top.v1": 1,
+    }
+    assert session._signal_transition_cache == {}
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_clock_reuse_hits"] == 1
+    assert snapshot["sweep_signal_reuse_hits"] == 1
+
+
+def test_sampling_session_checks_cancellation_before_cached_clock_reuse():
+    parser = _CountingSamplingParser()
+    session = EdgeSamplingSession(
+        clock_path="top.clk", start_ps=0, end_ps=40,
+        edge="posedge", sample_offset_ps=1,
+    )
+    sample_signals_on_edges(
+        parser, "top.clk", ["top.v0"],
+        start_ps=0, end_ps=40, sampling_session=session,
+    )
+    event = threading.Event()
+    token = cancellation.push_cancel_event(event)
+    event.set()
+    try:
+        with pytest.raises(OperationCancelled):
+            sample_signals_on_edges(
+                parser, "top.clk", ["top.v1"],
+                start_ps=0, end_ps=40, sampling_session=session,
+            )
+    finally:
+        cancellation.pop_cancel_event(token)
+
+    assert parser.calls["top.clk"] == 1
+
+
+def test_sampling_session_accepts_consistent_resolved_fsdb_path_aliases():
+    parser = _CountingSamplingParser()
+    parser.values["top.clk[0:0]"] = parser.values.pop("top.clk")
+    parser.values["top.ready[0:0]"] = parser.values.pop("top.shared_ready")
+    session = EdgeSamplingSession(
+        clock_path="top.clk", start_ps=0, end_ps=40,
+        edge="posedge", sample_offset_ps=1,
+        signal_use_counts={"top.ready": 2},
+    )
+    session.bind_signal_alias("top.ready", "top.ready[0:0]")
+
+    for _ in range(2):
+        sample_signals_on_edges(
+            parser, "top.clk[0:0]", ["top.ready[0:0]"],
+            start_ps=0, end_ps=40, sampling_session=session,
+        )
+
+    assert parser.calls["top.clk[0:0]"] == 1
+    assert parser.calls["top.ready[0:0]"] == 1
+    assert session._signal_transition_cache == {}
+
+
+def test_sampling_session_propagates_cached_clock_truncation_to_all_consumers():
+    class TruncatedClockParser(_CountingSamplingParser):
+        def get_transitions(
+            self, signal_path: str, start_ps: int = 0, end_ps: int = -1
+        ):
+            result = super().get_transitions(signal_path, start_ps, end_ps)
+            result["truncated"] = signal_path == "top.clk"
+            return result
+
+    parser = TruncatedClockParser()
+    session = EdgeSamplingSession(
+        clock_path="top.clk", start_ps=0, end_ps=40,
+        edge="posedge", sample_offset_ps=1,
+    )
+
+    first = sample_signals_on_edges(
+        parser, "top.clk", ["top.v0"], start_ps=0, end_ps=40,
+        sampling_session=session,
+    )
+    second = sample_signals_on_edges(
+        parser, "top.clk", ["top.v1"], start_ps=0, end_ps=40,
+        sampling_session=session,
+    )
+
+    assert first["transition_data_truncated"] is True
+    assert second["transition_data_truncated"] is True
+    assert first["transition_signals_truncated"] == ["top.clk"]
+    assert second["transition_signals_truncated"] == ["top.clk"]
+    assert parser.calls["top.clk"] == 1
+
+
+def test_edge_sampler_dedupes_duplicate_signal_within_one_interface():
+    parser = _CountingSamplingParser()
+    result = sample_signals_on_edges(
+        parser, "top.clk", ["top.shared_ready", "top.shared_ready"],
+        start_ps=0, end_ps=40,
+    )
+
+    assert result["signal_errors"] == {}
+    assert parser.calls["top.shared_ready"] == 1

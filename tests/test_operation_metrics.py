@@ -88,6 +88,9 @@ def test_sweep_subphase_timings_require_fixed_labels_and_active_sweep():
         operation_metrics.add_sweep_cpu_timing("edge_extract", 1.5)
         operation_metrics.add_sweep_cpu_timing("value_sample", 3.5)
         operation_metrics.add_sweep_cpu_timing("top.secret", 1000.0)
+        operation_metrics.record_sweep_reuse_hit("clock")
+        operation_metrics.record_sweep_reuse_hit("signal")
+        operation_metrics.record_sweep_reuse_hit("top.secret")
     finally:
         operation_metrics.pop(token)
 
@@ -100,4 +103,6 @@ def test_sweep_subphase_timings_require_fixed_labels_and_active_sweep():
         "sweep_signal_read_max_ms": 5.0,
         "sweep_edge_extract_total_ms": 1.5,
         "sweep_value_sample_total_ms": 3.5,
+        "sweep_clock_reuse_hits": 1,
+        "sweep_signal_reuse_hits": 1,
     }

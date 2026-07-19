@@ -23,10 +23,12 @@ Reads existing waveforms only — does NOT rerun simulation.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from collections import Counter
+from typing import Any, Callable, Iterator
 
 from src import operation_metrics
 from src.cancellation import check_cancelled
+from src.cycle_query import EdgeSamplingSession
 from src.cursor_store import CursorStore
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.verify_condition import inspect_handshake
@@ -44,6 +46,54 @@ _FACT_KEYS = (
     "transition_data_truncated", "transition_signals_truncated",
     "coverage",
 )
+
+
+def _interface_sample_signals(bundle: dict[str, Any]) -> tuple[str, ...]:
+    """Signals one normalized bundle asks inspect_handshake to sample."""
+    paths = [bundle.get("valid"), bundle.get("ready"), *bundle.get("payload", [])]
+    paths.extend(
+        bundle.get("inspect_kwargs", {}).get(key)
+        for key in ("hwrite", "write_data")
+    )
+    return tuple(dict.fromkeys(str(path) for path in paths if path))
+
+
+def _iter_clock_grouped_work(
+    bundles: list[dict[str, Any]],
+    *,
+    edge: str,
+    start_ps: int,
+    end_ps: int,
+) -> Iterator[tuple[dict[str, Any], EdgeSamplingSession | None]]:
+    """Yield bundles grouped by clock with one bounded session per group.
+
+    The generator is deliberate: after a clock group's last bundle is yielded,
+    its session (including the clock transition list) becomes unreachable before
+    the next group's session is populated. We never retain every design clock in
+    memory at once.
+    """
+    groups: dict[str | None, list[dict[str, Any]]] = {}
+    for bundle in bundles:
+        groups.setdefault(bundle.get("clock"), []).append(bundle)
+
+    for clock, members in groups.items():
+        if not clock:
+            for bundle in members:
+                yield bundle, None
+            continue
+        signal_uses: Counter[str] = Counter()
+        for bundle in members:
+            signal_uses.update(set(_interface_sample_signals(bundle)))
+        session = EdgeSamplingSession(
+            clock_path=clock,
+            start_ps=start_ps,
+            end_ps=end_ps,
+            edge=edge,
+            sample_offset_ps=1,
+            signal_use_counts=dict(signal_uses),
+        )
+        for bundle in members:
+            yield bundle, session
 
 
 def _is_clocking_block_scope(scope: str) -> bool:
@@ -357,12 +407,17 @@ def sweep_handshake_anomalies(
     operation_metrics.set_value("sweep_signal_read_max_ms", 0.0)
     operation_metrics.set_value("sweep_edge_extract_total_ms", 0.0)
     operation_metrics.set_value("sweep_value_sample_total_ms", 0.0)
+    operation_metrics.set_value("sweep_clock_reuse_hits", 0)
+    operation_metrics.set_value("sweep_signal_reuse_hits", 0)
     operation_metrics.set_value("_sweep_active", True)
 
     interfaces: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     transition_truncated_count = 0
-    for nb in to_inspect:
+    resolution_cache: dict[str, str] = {}
+    for nb, sampling_session in _iter_clock_grouped_work(
+        to_inspect, edge=edge, start_ps=start_ps, end_ps=end_ps
+    ):
         # Per-interface cancellation checkpoint: an abandoned whole-design
         # sweep stops at the next interface instead of finishing all of them.
         check_cancelled()
@@ -379,6 +434,8 @@ def sweep_handshake_anomalies(
                 edge=edge, start_ps=start_ps, end_ps=end_ps,
                 max_wait_cycles=max_wait_cycles,
                 cursor_store=None,  # the sweep sets ONE cursor, not one per interface
+                _sampling_session=sampling_session,
+                _resolution_cache=resolution_cache,
                 **nb["inspect_kwargs"],
             )
         finally:

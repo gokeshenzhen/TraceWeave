@@ -103,6 +103,8 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
             "sweep_clock_read_total_ms": 300.0,
             "sweep_signal_read_count": 12,
             "sweep_signal_read_total_ms": 150.0,
+            "sweep_clock_reuse_hits": 61,
+            "sweep_signal_reuse_hits": 4,
         },
     )
 
@@ -118,6 +120,8 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
         "sweep_clock_read_total_ms": 300.0,
         "sweep_signal_read_count": 12,
         "sweep_signal_read_total_ms": 150.0,
+        "sweep_clock_reuse_hits": 61,
+        "sweep_signal_reuse_hits": 4,
     }
     assert "/secret/design.fsdb" not in log.read_text()
     assert "top.secret" not in log.read_text()

@@ -14,6 +14,183 @@ from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from . import operation_metrics
 
 
+class EdgeSamplingSession:
+    """Bounded reuse state for a group of inspections on one shared clock.
+
+    A full sweep creates one session per clock group and consumes that group
+    before moving to the next. The high-activity clock transition list and its
+    extracted edge/sample-time vectors therefore exist only once per group.
+
+    Signal transition results are cached only when the sweep says a signal is
+    used by more than one interface. A small reference count evicts each cached
+    result immediately after its last consumer, so unique payload buses never
+    accumulate and shared buses have a bounded lifetime.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+        signal_use_counts: dict[str, int] | None = None,
+    ):
+        self.clock_path = clock_path
+        self.start_ps = int(start_ps)
+        self.end_ps = int(end_ps)
+        self.edge = edge
+        self.sample_offset_ps = int(sample_offset_ps)
+        self._signal_uses_remaining = dict(signal_use_counts or {})
+        self._signal_transition_cache: dict[
+            tuple[str, int, int], dict[str, Any]
+        ] = {}
+        self._bound_clock_path: str | None = None
+        self._clock_result: dict[str, Any] | None = None
+        self._edge_times: list[int] | None = None
+        self._sample_times: list[int] | None = None
+        self._clock_period_ps: int | None = None
+
+    def _check_compatible(
+        self,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+    ) -> None:
+        actual_window = (
+            int(start_ps), int(end_ps), edge, int(sample_offset_ps)
+        )
+        expected_window = (
+            self.start_ps, self.end_ps, self.edge, self.sample_offset_ps
+        )
+        if actual_window != expected_window:
+            raise ValueError(
+                "EdgeSamplingSession reused with incompatible clock/window/edge"
+            )
+        # Discovery can return an unsuffixed FSDB path while inspect_handshake
+        # resolves it to the native ``name[msb:lsb]`` spelling. Bind the first
+        # resolved path and require every later consumer in this raw-clock group
+        # to resolve identically.
+        if self._bound_clock_path is None:
+            self._bound_clock_path = clock_path
+        elif clock_path != self._bound_clock_path:
+            raise ValueError(
+                "EdgeSamplingSession reused with an incompatible resolved clock"
+            )
+
+    def bind_signal_alias(self, original_path: str, resolved_path: str) -> None:
+        """Move a discovery-path refcount to its resolved parser spelling."""
+        if original_path == resolved_path:
+            return
+        remaining = self._signal_uses_remaining.pop(original_path, 0)
+        if remaining:
+            self._signal_uses_remaining[resolved_path] = (
+                int(self._signal_uses_remaining.get(resolved_path, 0)) + remaining
+            )
+
+    def clock_context(
+        self,
+        parser: Any,
+        *,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+    ) -> tuple[dict[str, Any], list[int], list[int], int | None]:
+        self._check_compatible(
+            clock_path, start_ps, end_ps, edge, sample_offset_ps
+        )
+        check_cancelled()
+        if self._clock_result is not None:
+            operation_metrics.record_sweep_reuse_hit("clock")
+            assert self._edge_times is not None
+            assert self._sample_times is not None
+            return (
+                self._clock_result,
+                self._edge_times,
+                self._sample_times,
+                self._clock_period_ps,
+            )
+
+        self._clock_result = _read_sweep_transition_result(
+            parser, clock_path, start_ps, end_ps, kind="clock"
+        )
+        _validate_clock_width(parser, clock_path)
+        edge_extract_started = time.perf_counter()
+        try:
+            self._edge_times = _extract_edge_times(
+                self._clock_result.get("transitions", []), edge
+            )
+        finally:
+            operation_metrics.add_sweep_cpu_timing(
+                "edge_extract",
+                (time.perf_counter() - edge_extract_started) * 1000.0,
+            )
+        self._sample_times = [
+            edge_time + sample_offset_ps for edge_time in self._edge_times
+        ]
+        self._clock_period_ps = _compute_clock_period_ps(self._edge_times)
+        return (
+            self._clock_result,
+            self._edge_times,
+            self._sample_times,
+            self._clock_period_ps,
+        )
+
+    def signal_transitions(
+        self,
+        parser: Any,
+        signal_path: str,
+        start_ps: int,
+        end_ps: int,
+    ) -> dict[str, Any]:
+        check_cancelled()
+        key = (signal_path, int(start_ps), int(end_ps))
+        remaining = int(self._signal_uses_remaining.get(signal_path, 1))
+        try:
+            cached = self._signal_transition_cache.get(key)
+            if cached is not None:
+                operation_metrics.record_sweep_reuse_hit("signal")
+                return cached
+            result = _read_sweep_transition_result(
+                parser, signal_path, start_ps, end_ps, kind="signal"
+            )
+            if remaining > 1:
+                self._signal_transition_cache[key] = result
+            return result
+        finally:
+            if signal_path in self._signal_uses_remaining:
+                remaining -= 1
+                if remaining <= 0:
+                    self._signal_uses_remaining.pop(signal_path, None)
+                    self._signal_transition_cache.pop(key, None)
+                else:
+                    self._signal_uses_remaining[signal_path] = remaining
+
+
+def _read_sweep_transition_result(
+    parser: Any,
+    signal_path: str,
+    start_ps: int,
+    end_ps: int,
+    *,
+    kind: str,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        return parser.get_transitions(
+            signal_path, start_ps=start_ps, end_ps=end_ps
+        )
+    finally:
+        operation_metrics.record_sweep_transition_read(
+            kind, (time.perf_counter() - started) * 1000.0
+        )
+
+
 def get_signals_by_cycle(
     parser,
     clock_path: str,
@@ -122,6 +299,7 @@ def sample_signals_on_edges(
     end_ps: int = -1,
     edge: str = "posedge",
     sample_offset_ps: int = 1,
+    sampling_session: EdgeSamplingSession | None = None,
 ) -> dict[str, Any]:
     """Sample ``signal_paths`` on every ``clock_path`` edge inside a *time
     window* (as opposed to ``get_signals_by_cycle``, which slices by cycle
@@ -138,26 +316,43 @@ def sample_signals_on_edges(
     if sample_offset_ps < 0:
         raise ValueError("sample_offset_ps must be >= 0")
 
-    clock_read_started = time.perf_counter()
-    try:
-        clock_result = parser.get_transitions(
-            clock_path, start_ps=start_ps, end_ps=end_ps
+    check_cancelled()
+    if sampling_session is not None:
+        clock_result, edge_times, sample_times, clock_period_ps = (
+            sampling_session.clock_context(
+                parser,
+                clock_path=clock_path,
+                start_ps=start_ps,
+                end_ps=end_ps,
+                edge=edge,
+                sample_offset_ps=sample_offset_ps,
+            )
         )
-    finally:
-        operation_metrics.record_sweep_transition_read(
-            "clock", (time.perf_counter() - clock_read_started) * 1000.0
+    else:
+        clock_result = _read_sweep_transition_result(
+            parser, clock_path, start_ps, end_ps, kind="clock"
         )
-    _validate_clock_width(parser, clock_path)
-    edge_extract_started = time.perf_counter()
-    try:
-        edge_times = _extract_edge_times(clock_result.get("transitions", []), edge)
-    finally:
-        operation_metrics.add_sweep_cpu_timing(
-            "edge_extract", (time.perf_counter() - edge_extract_started) * 1000.0
-        )
+        _validate_clock_width(parser, clock_path)
+        edge_extract_started = time.perf_counter()
+        try:
+            edge_times = _extract_edge_times(
+                clock_result.get("transitions", []), edge
+            )
+        finally:
+            operation_metrics.add_sweep_cpu_timing(
+                "edge_extract",
+                (time.perf_counter() - edge_extract_started) * 1000.0,
+            )
+        sample_times = [edge_time + sample_offset_ps for edge_time in edge_times]
+        clock_period_ps = _compute_clock_period_ps(edge_times)
 
     per_edge_signals, signal_errors, signal_transition_truncations = _sample_signals_at_edges(
-        parser, signal_paths, edge_times, sample_offset_ps
+        parser,
+        signal_paths,
+        edge_times,
+        sample_offset_ps,
+        sample_times=sample_times,
+        sampling_session=sampling_session,
     )
     transition_signals_truncated = []
     if clock_result.get("truncated"):
@@ -169,7 +364,7 @@ def sample_signals_on_edges(
         "clock_path": clock_path,
         "edge": edge,
         "sample_offset_ps": sample_offset_ps,
-        "clock_period_ps": _compute_clock_period_ps(edge_times),
+        "clock_period_ps": clock_period_ps,
         "total_edges_found": len(edge_times),
         "samples": [
             {"time_ps": edge_time, "time_ns": edge_time / 1000, "signals": signals}
@@ -186,6 +381,9 @@ def _sample_signals_at_edges(
     signal_paths: list[str],
     target_edges: list[int],
     sample_offset_ps: int,
+    *,
+    sample_times: list[int] | None = None,
+    sampling_session: EdgeSamplingSession | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """Sample each signal at ``edge + offset`` for the given edge times.
 
@@ -202,21 +400,26 @@ def _sample_signals_at_edges(
 
     range_start = target_edges[0]
     range_end = target_edges[-1] + sample_offset_ps + 1
-    sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+    if sample_times is None:
+        sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
 
-    for signal_path in signal_paths:
+    # AHB may surface HWRITE both as address payload and as the write-data
+    # qualifier. Sampling it twice is pure duplicate work and the per-edge dict
+    # would overwrite the first value with the same second value anyway.
+    for signal_path in dict.fromkeys(signal_paths):
         check_cancelled()
         try:
-            signal_read_started = time.perf_counter()
-            try:
-                transitions_result = parser.get_transitions(
-                    signal_path,
-                    start_ps=range_start,
-                    end_ps=range_end,
+            if sampling_session is not None:
+                transitions_result = sampling_session.signal_transitions(
+                    parser, signal_path, range_start, range_end
                 )
-            finally:
-                operation_metrics.record_sweep_transition_read(
-                    "signal", (time.perf_counter() - signal_read_started) * 1000.0
+            else:
+                transitions_result = _read_sweep_transition_result(
+                    parser,
+                    signal_path,
+                    range_start,
+                    range_end,
+                    kind="signal",
                 )
             if transitions_result.get("truncated"):
                 transition_signals_truncated.append(signal_path)

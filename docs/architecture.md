@@ -109,7 +109,28 @@ Verification
   recording project identities: discovery/search timing, total sweep time,
   planned/attempted/completed interface counts, unique clock/signal counts,
   aggregate/max inspect time, clock-vs-signal transition read count/total/max,
-  edge-extraction/value-sampling time, and transition-truncated interface count.
+  edge-extraction/value-sampling time, shared-clock/shared-signal reuse-hit
+  counts, and transition-truncated interface count.
+- A full `sweep_handshakes` does not independently reread and re-extract the
+  same clock for every interface. `handshake_sweep` groups discovered bundles
+  by clock and creates one private `EdgeSamplingSession` per group;
+  `cycle_query` reads the clock transitions, extracts edges, and builds sample
+  times once, then reuses them for every interface in that group. Signals used
+  by more than one interface are also reused, with a remaining-consumer count
+  that evicts each transition list immediately after its final consumer.
+  Unique payload signals are never retained. Groups are consumed one at a time,
+  so the implementation does not keep all design clocks in memory. This is an
+  internal execution optimization: MCP inputs/results, coverage semantics,
+  cancellation checkpoints, and the process-global FSDB lock are unchanged.
+  `scripts/benchmark_sweep_shared_clock.py` is the reproducible structural
+  benchmark for this path. On a warmed generated VCD with 32 independent
+  valid/ready interfaces, one shared clock, 20,000 cycles, and three repeats,
+  the same workload measured 28,492.5 ms median before grouping and 13,986.8 ms
+  after (50.9% lower). Clock reads/edge extractions fell from 32 to 1; maximum
+  incremental `tracemalloc` peak changed from 32.45 to 33.13 MiB (+0.68 MiB,
+  +2.1%). This validates the repeated-clock optimization, not a 5-minute promise
+  for a proprietary FSDB whose native signal reads may have a different cost
+  profile.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.
