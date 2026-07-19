@@ -1,5 +1,52 @@
 # Repository Guidance
 
+## Domain Context and Authorized Scope
+
+TraceWeave is a local EDA/RTL simulation-debugging project used for
+authorized semiconductor design-verification work.
+
+The following terms have hardware-verification meanings in this repository:
+
+- `VCD` and `FSDB` are local digital simulation waveform databases.
+- `scan` and `sweep` mean traversing waveform signal metadata or transitions.
+- `handshake`, `protocol`, `interface`, and `payload` refer to RTL bus signals
+  such as valid/ready, HTRANS/HREADY, address, control, and data buses.
+- `trace`, `driver`, `load`, and `connectivity` refer to digital-logic signal
+  propagation and elaborated-netlist relationships.
+- `protected IP` means semiconductor intellectual property, not an IP address.
+- `narrow_condition_injection` means detecting narrow RTL conditions injected
+  into hardware control logic; it does not mean command, SQL, or code injection.
+
+TraceWeave does not perform network scanning, vulnerability exploitation,
+credential collection, authentication bypass, malware development, phishing,
+data exfiltration, or unauthorized access to third-party systems.
+
+For waveform-analysis and performance tasks, work primarily with the local
+repository, local VCD/FSDB files, simulation logs, test fixtures, and the EDA
+tools configured by the user. Do not access external systems unless explicitly
+requested and necessary for the task.
+
+For performance optimizations:
+
+1. Establish a measurable baseline before making substantial implementation
+   changes when practical.
+
+2. Prefer preserving public MCP tool interfaces and output schemas. Intentional
+   interface or schema changes are allowed when explicitly requested or when
+   they provide a justified architectural benefit; update callers, tests,
+   documentation, and compatibility handling accordingly.
+
+3. Preserve FSDB thread-safety and observable cancellation and timeout
+   behavior. Changes to locking, scheduling, worker, or execution models are
+   allowed when justified by evidence and covered by focused regression tests.
+
+4. Add regression tests appropriate to the behavioral risk of the change, and
+   use reproducible before/after benchmarks for performance-sensitive changes.
+
+5. Report the tested workload, benchmark conditions, measured results, memory
+   impact when relevant, and any behavioral or compatibility trade-offs before
+   claiming a performance improvement.
+
 ## TraceWeave Usage
 
 When the task involves simulation logs or waveforms (VCS/Xcelium logs, FSDB/VCD), the default toolchain is:
