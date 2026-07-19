@@ -134,7 +134,7 @@ pip install mcp pyyaml --user
 
 ```bash
 # 示例 —— 请替换为你所在站点的 Verdi 安装路径
-export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
+export VERDI_HOME=<verdi-install>
 bash scripts/setup_fsdb.sh
 ```
 
@@ -153,7 +153,7 @@ bash scripts/verify_fsdb.sh
 任何支持 stdio 传输的 MCP 客户端都能连接本服务器。最小配置:
 
 - command:`python3.11`
-- args:`["/home/robin/Projects/mcp/TraceWeave/server.py"]`
+- args:`["<TRACEWEAVE_HOME>/server.py"]`
 - env:如果需要 FSDB,提供仓库本地 `third_party/verdi_runtime/linux64` 或者 `VERDI_HOME`
 
 如果客户端支持 server instructions,可以直接遵循内置工作流;否则参考下方手动工作流。
@@ -169,18 +169,18 @@ Claude Code 与 Codex 都不会把你交互式 shell 的环境变量带入 spawn
   "mcpServers": {
     "TraceWeave": {
       "command": "python3.11",
-      "args": ["/home/robin/Projects/mcp/TraceWeave/server.py"],
+      "args": ["<TRACEWEAVE_HOME>server.py"],
       "env": {
-        "VERDI_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
-        "NOVAS_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
-        "VCS_HOME": "/tools/synopsys/vcs/V-2023.12-SP2",
-        "XLM_ROOT": "/tools/cadence/XCELIUM2603",
-        "CDS_INST_DIR": "/tools/cadence/XCELIUM2603",
-        "SNPSLMD_LICENSE_FILE": "27000@synopsys-license.example.com",
-        "LM_LICENSE_FILE": "5280@license-server.example.com",
-        "CDS_LICENSE_FILE": "5280@cadence-license.example.com",
-        "LD_LIBRARY_PATH": "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
-        "PATH": "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+        "VERDI_HOME": "<verdi-install>",
+        "NOVAS_HOME": "<verdi-install>",
+        "VCS_HOME": "<vcs-install>",
+        "XLM_ROOT": "<xcelium-install>",
+        "CDS_INST_DIR": "<xcelium-install>",
+        "SNPSLMD_LICENSE_FILE": "xxxx@s-license.example.com",
+        "LM_LICENSE_FILE": "xxxx@s-license-server.example.com",
+        "CDS_LICENSE_FILE": "xxxx@c-license.example.com",
+        "LD_LIBRARY_PATH": "<library-path>",
+        "PATH": "<path>"
       }
     }
   }
@@ -201,19 +201,19 @@ claude mcp list
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
-args = ["/home/robin/Projects/mcp/TraceWeave/server.py"]
-cwd = "/home/robin/Projects/mcp/TraceWeave"
+args = ["<TRACEWEAVE_HOME>server.py"]
+cwd = "<TRACEWEAVE_HOME>"
 env = {
-  VERDI_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
-  NOVAS_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
-  VCS_HOME        = "/tools/synopsys/vcs/V-2023.12-SP2",
-  XLM_ROOT        = "/tools/cadence/XCELIUM2603",
-  CDS_INST_DIR    = "/tools/cadence/XCELIUM2603",
-  SNPSLMD_LICENSE_FILE = "27000@synopsys-license.example.com",
-  LM_LICENSE_FILE     = "28000@license-server.example.com",
-  CDS_LICENSE_FILE    = "28000@cadence-license.example.com",
-  LD_LIBRARY_PATH = "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
-  PATH            = "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+  VERDI_HOME      = "<verdi-install>",
+  NOVAS_HOME      = "<verdi-install>",
+  VCS_HOME        = "<vcs-install>",
+  XLM_ROOT        = "<xcelium-install>",
+  CDS_INST_DIR    = "<xcelium-install>",
+  SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com",
+  LM_LICENSE_FILE     = "xxxx@s-license-server.example.com",
+  CDS_LICENSE_FILE    = "xxxx@c-license.example.com",
+  LD_LIBRARY_PATH = "<library-ath>",
+  PATH            = "<path>"
 }
 ```
 

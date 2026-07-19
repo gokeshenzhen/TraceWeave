@@ -142,7 +142,7 @@ Enable FSDB support (links the Verdi runtime into the repo and builds
 
 ```bash
 # Example only — replace with your site's Verdi install path
-export VERDI_HOME=/tools/synopsys/verdi/O-2018.09-SP2-11
+export VERDI_HOME=<verdi-install>
 bash scripts/setup_fsdb.sh
 ```
 
@@ -167,7 +167,7 @@ bash scripts/verify_fsdb.sh
 Any MCP client that supports stdio transport can connect to this server. The minimum configuration is:
 
 - command: `python3.11`
-- args: `["/home/robin/Projects/mcp/TraceWeave/server.py"]`
+- args: `["<TRACEWEAVE_HOME>/server.py"]`
 - env: provide either repo-local `third_party/verdi_runtime/linux64` or `VERDI_HOME` if FSDB support is required
 
 If the client supports server instructions, it can follow the built-in workflow directly. Otherwise, use the workflow below.
@@ -183,18 +183,18 @@ Add this to `~/.claude.json`:
   "mcpServers": {
     "TraceWeave": {
       "command": "python3.11",
-      "args": ["/home/robin/Projects/mcp/TraceWeave/server.py"],
+      "args": ["<TRACEWEAVE_HOME>server.py"],
       "env": {
-        "VERDI_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
-        "NOVAS_HOME": "/tools/synopsys/verdi/V-2023.12-SP2",
-        "VCS_HOME": "/tools/synopsys/vcs/V-2023.12-SP2",
-        "XLM_ROOT": "/tools/cadence/XCELIUM2603",
-        "CDS_INST_DIR": "/tools/cadence/XCELIUM2603",
-        "SNPSLMD_LICENSE_FILE": "27000@synopsys-license.example.com",
-        "LM_LICENSE_FILE": "5280@license-server.example.com",
-        "CDS_LICENSE_FILE": "5280@cadence-license.example.com",
-        "LD_LIBRARY_PATH": "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
-        "PATH": "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+        "VERDI_HOME": "<verdi-install>",
+        "NOVAS_HOME": "<verdi-install>",
+        "VCS_HOME": "<vcs-install>",
+        "XLM_ROOT": "<xcelium-install>",
+        "CDS_INST_DIR": "<xcelium-install>",
+        "SNPSLMD_LICENSE_FILE": "xxxx@s-license.example.com",
+        "LM_LICENSE_FILE": "xxxx@s-license-server.example.com",
+        "CDS_LICENSE_FILE": "xxxx@c-license.example.com",
+        "LD_LIBRARY_PATH": "<library-path>",
+        "PATH": "<path>"
       }
     }
   }
@@ -215,19 +215,19 @@ Same idea as Claude Code — list everything explicitly. Add to `~/.codex/config
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
-args = ["/home/robin/Projects/mcp/TraceWeave/server.py"]
-cwd = "/home/robin/Projects/mcp/TraceWeave"
+args = ["<TRACEWEAVE_HOME>server.py"]
+cwd = "<TRACEWEAVE_HOME>"
 env = {
-  VERDI_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
-  NOVAS_HOME      = "/tools/synopsys/verdi/V-2023.12-SP2",
-  VCS_HOME        = "/tools/synopsys/vcs/V-2023.12-SP2",
-  XLM_ROOT        = "/tools/cadence/XCELIUM2603",
-  CDS_INST_DIR    = "/tools/cadence/XCELIUM2603",
-  SNPSLMD_LICENSE_FILE = "27000@synopsys-license.example.com",
-  LM_LICENSE_FILE     = "28000@license-server.example.com",
-  CDS_LICENSE_FILE    = "28000@cadence-license.example.com",
-  LD_LIBRARY_PATH = "/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/IUS/LINUX64:/tools/synopsys/verdi/V-2023.12-SP2/share/PLI/VCS/LINUX64",
-  PATH            = "/tools/synopsys/verdi/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/bin:/tools/synopsys/vcs/V-2023.12-SP2/amd64/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+  VERDI_HOME      = "<verdi-install>",
+  NOVAS_HOME      = "<verdi-install>",
+  VCS_HOME        = "<vcs-install>",
+  XLM_ROOT        = "<xcelium-install>",
+  CDS_INST_DIR    = "<xcelium-install>",
+  SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com",
+  LM_LICENSE_FILE     = "xxxx@s-license-server.example.com",
+  CDS_LICENSE_FILE    = "xxxx@c-license.example.com",
+  LD_LIBRARY_PATH = "<library-ath>",
+  PATH            = "<path>"
 }
 ```
 

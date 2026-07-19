@@ -2,29 +2,23 @@
 
 ## Domain Context and Authorized Scope
 
-TraceWeave is a local EDA/RTL simulation-debugging project used for
-authorized semiconductor design-verification work.
+TraceWeave is a local EDA/RTL simulation-debugging project for semiconductor
+designs and simulation artifacts that the user owns or is authorized to analyze.
 
-The following terms have hardware-verification meanings in this repository:
+`VCD` and `FSDB` are local digital simulation waveform databases.
 
-- `VCD` and `FSDB` are local digital simulation waveform databases.
-- `scan` and `sweep` mean traversing waveform signal metadata or transitions.
-- `handshake`, `protocol`, `interface`, and `payload` refer to RTL bus signals
-  such as valid/ready, HTRANS/HREADY, address, control, and data buses.
-- `trace`, `driver`, `load`, and `connectivity` refer to digital-logic signal
-  propagation and elaborated-netlist relationships.
-- `protected IP` means semiconductor intellectual property, not an IP address.
-- `narrow_condition_injection` means detecting narrow RTL conditions injected
-  into hardware control logic; it does not mean command, SQL, or code injection.
+In this repository, terms such as `scan`, `sweep`, `handshake`, `protocol`,
+`interface`, `payload`, `trace`, `driver`, `load`, and `connectivity` refer to
+digital-logic signals, bus behavior, waveform transitions, and elaborated-netlist
+relationships.
 
-TraceWeave does not perform network scanning, vulnerability exploitation,
-credential collection, authentication bypass, malware development, phishing,
-data exfiltration, or unauthorized access to third-party systems.
+`protected IP` means semiconductor intellectual property.
+`narrow_condition_injection` is an RTL structural-analysis category for
+control-logic conditions.
 
-For waveform-analysis and performance tasks, work primarily with the local
-repository, local VCD/FSDB files, simulation logs, test fixtures, and the EDA
-tools configured by the user. Do not access external systems unless explicitly
-requested and necessary for the task.
+Repository tasks are limited to local source code, local waveform and log files,
+test fixtures, and locally configured EDA tools. Do not access unrelated external
+systems or resources.
 
 For performance optimizations:
 
