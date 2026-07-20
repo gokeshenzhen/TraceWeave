@@ -105,6 +105,12 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
             "sweep_signal_read_total_ms": 150.0,
             "sweep_clock_reuse_hits": 61,
             "sweep_signal_reuse_hits": 4,
+            "sweep_native_group_count": 35,
+            "sweep_native_load_total_ms": 8000.0,
+            "sweep_native_transition_count": 1234,
+            "sweep_rss_peak_kib": 456789,
+            "sweep_result_bytes": 9876,
+            "native_group_path": "top.secret",
         },
     )
 
@@ -122,6 +128,11 @@ def test_record_call_diagnostics_are_strictly_whitelisted(tmp_path, monkeypatch)
         "sweep_signal_read_total_ms": 150.0,
         "sweep_clock_reuse_hits": 61,
         "sweep_signal_reuse_hits": 4,
+        "sweep_native_group_count": 35,
+        "sweep_native_load_total_ms": 8000.0,
+        "sweep_native_transition_count": 1234,
+        "sweep_rss_peak_kib": 456789,
+        "sweep_result_bytes": 9876,
     }
     assert "/secret/design.fsdb" not in log.read_text()
     assert "top.secret" not in log.read_text()

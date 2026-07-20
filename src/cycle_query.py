@@ -46,6 +46,7 @@ class EdgeSamplingSession:
         self._signal_transition_cache: dict[
             tuple[str, int, int], dict[str, Any]
         ] = {}
+        self._cached_transition_count = 0
         self._bound_clock_path: str | None = None
         self._clock_result: dict[str, Any] | None = None
         self._edge_times: list[int] | None = None
@@ -161,13 +162,22 @@ class EdgeSamplingSession:
             )
             if remaining > 1:
                 self._signal_transition_cache[key] = result
+                self._cached_transition_count += len(result.get("transitions", []))
+                operation_metrics.record_sweep_cache_peak(
+                    len(self._signal_transition_cache),
+                    self._cached_transition_count,
+                )
             return result
         finally:
             if signal_path in self._signal_uses_remaining:
                 remaining -= 1
                 if remaining <= 0:
                     self._signal_uses_remaining.pop(signal_path, None)
-                    self._signal_transition_cache.pop(key, None)
+                    evicted = self._signal_transition_cache.pop(key, None)
+                    if evicted is not None:
+                        self._cached_transition_count -= len(
+                            evicted.get("transitions", [])
+                        )
                 else:
                     self._signal_uses_remaining[signal_path] = remaining
 
@@ -353,6 +363,9 @@ def sample_signals_on_edges(
         sample_offset_ps,
         sample_times=sample_times,
         sampling_session=sampling_session,
+    )
+    operation_metrics.record_sweep_sampling_shape(
+        len(edge_times), len(dict.fromkeys(signal_paths))
     )
     transition_signals_truncated = []
     if clock_result.get("truncated"):

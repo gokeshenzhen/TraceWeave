@@ -2259,10 +2259,10 @@ class TestCallToolErrors:
              patch.object(server.usage_telemetry, "record_call", spy):
             await server.call_tool("sweep_handshakes", {"wave_path": "/tmp/a.vcd"})
 
-        assert seen["diagnostics"] == {
-            "sweep_phase": "discover_ahb",
-            "search_count": 4,
-        }
+        assert seen["diagnostics"]["sweep_phase"] == "discover_ahb"
+        assert seen["diagnostics"]["search_count"] == 4
+        assert seen["diagnostics"]["sweep_result_serialize_ms"] >= 0
+        assert seen["diagnostics"]["sweep_result_bytes"] > 0
 
 
 def test_native_transition_prefix_is_an_explicit_lower_bound():

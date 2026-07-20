@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import string
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -713,3 +714,52 @@ def test_sweep_stops_between_discovery_families(monkeypatch):
         cancellation.pop_cancel_event(token)
 
     assert ahb_called is False
+
+
+def test_sweep_cancellation_inside_clock_group_releases_native_group(
+    tmp_path, monkeypatch
+):
+    wave_path = _write(tmp_path, _shared_clock_vcd(["1", "1"]))
+    parser = VCDParser(wave_path)
+    event = threading.Event()
+    entered = 0
+    exited = 0
+    inspect_calls = 0
+    real_inspect = inspect_handshake
+
+    @contextmanager
+    def tracked_transition_group(_paths):
+        nonlocal entered, exited
+        entered += 1
+        try:
+            yield True
+        finally:
+            exited += 1
+
+    def cancel_after_first_interface(**kwargs):
+        nonlocal inspect_calls
+        inspect_calls += 1
+        result = real_inspect(**kwargs)
+        event.set()
+        return result
+
+    monkeypatch.setattr(
+        parser, "transition_group", tracked_transition_group, raising=False
+    )
+    monkeypatch.setattr(
+        handshake_sweep, "inspect_handshake", cancel_after_first_interface
+    )
+    token = cancellation.push_cancel_event(event)
+    try:
+        with pytest.raises(OperationCancelled):
+            sweep_handshake_anomalies(
+                get_parser=lambda _: parser,
+                wave_path=wave_path,
+                max_wait_cycles=4,
+            )
+    finally:
+        cancellation.pop_cancel_event(token)
+
+    assert inspect_calls == 1
+    assert entered == 1
+    assert exited == 1

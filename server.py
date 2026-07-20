@@ -2431,7 +2431,16 @@ async def call_tool(name: str, arguments: dict):
     text = ""
     try:
         result = await _dispatch(name, arguments)
+        serialize_started = time.perf_counter()
         text = _serialize_result(result)
+        if name == "sweep_handshakes":
+            operation_metrics.set_value(
+                "sweep_result_serialize_ms",
+                (time.perf_counter() - serialize_started) * 1000.0,
+            )
+            operation_metrics.set_value(
+                "sweep_result_bytes", len(text.encode("utf-8"))
+            )
         ok = not isinstance(result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult))
         blocked = isinstance(result, schemas.PrerequisiteBlockResult)
         if isinstance(result, schemas.PrerequisiteBlockResult):

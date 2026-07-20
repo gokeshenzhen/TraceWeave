@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from contextlib import nullcontext
 from typing import Any, Callable, Iterator
 
 from src import operation_metrics
@@ -31,7 +32,7 @@ from src.cancellation import check_cancelled
 from src.cycle_query import EdgeSamplingSession
 from src.cursor_store import CursorStore
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
-from src.verify_condition import inspect_handshake
+from src.verify_condition import _resolve_signal_path, inspect_handshake
 
 DEFAULT_MAX_INTERFACES = 64
 
@@ -58,14 +59,14 @@ def _interface_sample_signals(bundle: dict[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(path) for path in paths if path))
 
 
-def _iter_clock_grouped_work(
+def _iter_clock_groups(
     bundles: list[dict[str, Any]],
     *,
     edge: str,
     start_ps: int,
     end_ps: int,
-) -> Iterator[tuple[dict[str, Any], EdgeSamplingSession | None]]:
-    """Yield bundles grouped by clock with one bounded session per group.
+) -> Iterator[tuple[list[dict[str, Any]], EdgeSamplingSession | None]]:
+    """Yield one member list and bounded sampling session per clock.
 
     The generator is deliberate: after a clock group's last bundle is yielded,
     its session (including the clock transition list) becomes unreachable before
@@ -78,8 +79,7 @@ def _iter_clock_grouped_work(
 
     for clock, members in groups.items():
         if not clock:
-            for bundle in members:
-                yield bundle, None
+            yield members, None
             continue
         signal_uses: Counter[str] = Counter()
         for bundle in members:
@@ -92,8 +92,7 @@ def _iter_clock_grouped_work(
             sample_offset_ps=1,
             signal_use_counts=dict(signal_uses),
         )
-        for bundle in members:
-            yield bundle, session
+        yield members, session
 
 
 def _is_clocking_block_scope(scope: str) -> bool:
@@ -333,6 +332,8 @@ def sweep_handshake_anomalies(
     Returns a comparative fact table sorted by ``_sort_key``. Registers exactly
     ONE cursor, at the top interface's longest-stall begin, when that interface
     shows any anomaly flag (so a follow-up call can jump straight there)."""
+    operation_metrics.set_value("_sweep_active", True)
+    operation_metrics.record_sweep_rss(phase="start")
     # Discover BOTH families: valid/ready (A-class: AXI / generic / req-ack, via
     # suggest_handshakes) AND AHB (no literal valid, via suggest_protocol_bundles).
     # Each returns empty on a design that lacks it, so running both is safe and
@@ -409,67 +410,139 @@ def sweep_handshake_anomalies(
     operation_metrics.set_value("sweep_value_sample_total_ms", 0.0)
     operation_metrics.set_value("sweep_clock_reuse_hits", 0)
     operation_metrics.set_value("sweep_signal_reuse_hits", 0)
-    operation_metrics.set_value("_sweep_active", True)
+    for metric_name in (
+        "sweep_native_group_count",
+        "sweep_native_group_signal_total",
+        "sweep_native_group_signal_max",
+        "sweep_native_group_fallback_count",
+        "sweep_native_group_unsupported_count",
+        "sweep_native_group_oversized_count",
+        "sweep_native_group_begin_error_count",
+        "sweep_native_profiled_read_count",
+        "sweep_native_transition_count",
+        "sweep_native_output_bytes",
+        "sweep_native_truncated_calls",
+        "sweep_cached_signal_results_peak",
+        "sweep_cached_transition_count_peak",
+        "sweep_sample_edges_total",
+        "sweep_sample_edges_max",
+        "sweep_sample_values_total",
+        "sweep_sample_values_max",
+    ):
+        operation_metrics.set_value(metric_name, 0)
+    for metric_name in (
+        "sweep_native_lookup_total_ms",
+        "sweep_native_add_signal_total_ms",
+        "sweep_native_load_total_ms",
+        "sweep_native_load_max_ms",
+        "sweep_native_create_handle_total_ms",
+        "sweep_native_seek_total_ms",
+        "sweep_native_traverse_format_total_ms",
+        "sweep_native_free_handle_total_ms",
+        "sweep_native_unload_total_ms",
+        "sweep_result_build_ms",
+    ):
+        operation_metrics.set_value(metric_name, 0.0)
 
     interfaces: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     transition_truncated_count = 0
     resolution_cache: dict[str, str] = {}
-    for nb, sampling_session in _iter_clock_grouped_work(
+    parser: Any | None = None
+    for group_members, sampling_session in _iter_clock_groups(
         to_inspect, edge=edge, start_ps=start_ps, end_ps=end_ps
     ):
-        # Per-interface cancellation checkpoint: an abandoned whole-design
-        # sweep stops at the next interface instead of finishing all of them.
         check_cancelled()
-        base = {"scope": nb["scope"], "valid": nb["valid"] or "", "ready": nb["ready"] or ""}
-        if not nb.get("clock"):
-            skipped.append({**base, "reason": "no clock found in scope/ancestors"})
-            continue
-        inspect_started = time.perf_counter()
-        res: dict[str, Any] | None = None
-        try:
-            res = inspect_handshake(
-                get_parser=get_parser, wave_path=wave_path,
-                clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
-                edge=edge, start_ps=start_ps, end_ps=end_ps,
-                max_wait_cycles=max_wait_cycles,
-                cursor_store=None,  # the sweep sets ONE cursor, not one per interface
-                _sampling_session=sampling_session,
-                _resolution_cache=resolution_cache,
-                **nb["inspect_kwargs"],
-            )
-        finally:
-            operation_metrics.record_sweep_interface(
-                (time.perf_counter() - inspect_started) * 1000.0,
-                completed=res is not None,
-                transition_truncated=bool(
-                    res and res.get("transition_data_truncated")
+        group_paths: list[str] = []
+        if sampling_session is not None:
+            if parser is None:
+                parser = get_parser(wave_path)
+            raw_paths = [
+                group_members[0].get("clock"),
+                *(
+                    path
+                    for member in group_members
+                    for path in _interface_sample_signals(member)
                 ),
-            )
-        assert res is not None
-        if res.get("transition_data_truncated"):
-            transition_truncated_count += 1
-        if res.get("reason"):
-            skipped.append({**base, "reason": res["reason"]})
-            continue
-        # Carry side attribution only for one-sided rows (payload-hold / premature
-        # deassertion → valid_driver side). A clean or two-sided-stall row leaves
-        # it None so the table is not bloated with empty blocks.
-        attribution = res.get("attribution") or {}
-        row_attribution = attribution if attribution.get("violating_side") else None
-        interfaces.append({
-            "scope": nb["scope"],
-            "clock": nb["clock"],
-            "valid": nb["valid"],
-            "ready": nb["ready"],
-            "kind": nb["kind"],
-            "payload": nb["payload"],
-            "confidence": nb["confidence"],
-            "flags": _flags(res, nb["kind"]),
-            "attribution": row_attribution,
-            **{k: res.get(k) for k in _FACT_KEYS},
-        })
+            ]
+            for raw_path in dict.fromkeys(
+                str(path) for path in raw_paths if path
+            ):
+                if raw_path not in resolution_cache:
+                    resolution_cache[raw_path] = _resolve_signal_path(
+                        parser, raw_path
+                    )
+                group_paths.append(resolution_cache[raw_path])
 
+        transition_group = getattr(parser, "transition_group", None)
+        group_context = (
+            transition_group(group_paths)
+            if transition_group is not None and group_paths
+            else nullcontext(False)
+        )
+        with group_context:
+            for nb in group_members:
+                # Per-interface cancellation checkpoint: an abandoned whole-design
+                # sweep stops at the next interface instead of finishing all of them.
+                check_cancelled()
+                base = {
+                    "scope": nb["scope"], "valid": nb["valid"] or "",
+                    "ready": nb["ready"] or "",
+                }
+                if not nb.get("clock"):
+                    skipped.append({
+                        **base, "reason": "no clock found in scope/ancestors"
+                    })
+                    continue
+                inspect_started = time.perf_counter()
+                res: dict[str, Any] | None = None
+                try:
+                    assert parser is not None
+                    res = inspect_handshake(
+                        get_parser=lambda _: parser, wave_path=wave_path,
+                        clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
+                        edge=edge, start_ps=start_ps, end_ps=end_ps,
+                        max_wait_cycles=max_wait_cycles,
+                        cursor_store=None,  # the sweep sets ONE cursor, not one per interface
+                        _sampling_session=sampling_session,
+                        _resolution_cache=resolution_cache,
+                        **nb["inspect_kwargs"],
+                    )
+                finally:
+                    operation_metrics.record_sweep_interface(
+                        (time.perf_counter() - inspect_started) * 1000.0,
+                        completed=res is not None,
+                        transition_truncated=bool(
+                            res and res.get("transition_data_truncated")
+                        ),
+                    )
+                assert res is not None
+                if res.get("transition_data_truncated"):
+                    transition_truncated_count += 1
+                if res.get("reason"):
+                    skipped.append({**base, "reason": res["reason"]})
+                    continue
+                # Carry side attribution only for one-sided rows (payload-hold /
+                # premature deassertion → valid_driver side).
+                attribution = res.get("attribution") or {}
+                row_attribution = (
+                    attribution if attribution.get("violating_side") else None
+                )
+                interfaces.append({
+                    "scope": nb["scope"],
+                    "clock": nb["clock"],
+                    "valid": nb["valid"],
+                    "ready": nb["ready"],
+                    "kind": nb["kind"],
+                    "payload": nb["payload"],
+                    "confidence": nb["confidence"],
+                    "flags": _flags(res, nb["kind"]),
+                    "attribution": row_attribution,
+                    **{k: res.get(k) for k in _FACT_KEYS},
+                })
+        operation_metrics.record_sweep_rss(phase="sample")
+
+    result_build_started = time.perf_counter()
     interfaces.sort(key=_sort_key)
 
     cursor = None
@@ -576,7 +649,7 @@ def sweep_handshake_anomalies(
         note = warnings_note if note is None else f"{warnings_note} | {note}"
 
     operation_metrics.set_value("sweep_phase", "complete")
-    return {
+    result = {
         "wave_path": wave_path,
         "scope": scope,
         "edge": edge,
@@ -597,3 +670,9 @@ def sweep_handshake_anomalies(
         "note": note,
         "reason": reason,
     }
+    operation_metrics.set_value(
+        "sweep_result_build_ms",
+        (time.perf_counter() - result_build_started) * 1000.0,
+    )
+    operation_metrics.record_sweep_rss(phase="end")
+    return result

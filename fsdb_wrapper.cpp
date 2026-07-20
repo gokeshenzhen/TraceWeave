@@ -15,6 +15,7 @@
 #endif
 
 #include "ffrAPI.h"
+#include <chrono>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,7 @@
 #define TRUE 1
 #endif
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -57,7 +59,45 @@ struct FsdbCtx {
      * FSDB_ERR_SCALE_UNKNOWN），绝不静默假设 1 tick == 1 ps。 */
     unsigned long long                scale_fs;
     char                              scale_unit[32]; /* 原始刻度字符串，"" = 未知 */
+    bool                              transition_group_active;
+    std::set<fsdbVarIdcode>           transition_group_ids;
 };
+
+/* Optional profiling receipt for transition reads. All fields are numeric and
+ * contain no path/value identity, so Python may safely aggregate them into
+ * operation telemetry. Durations use steady-clock nanoseconds. Keep this ABI
+ * append-only; Python checks symbol presence and falls back to the legacy API
+ * when an older wrapper is installed. */
+struct FsdbTransitionProfileV1 {
+    unsigned long long lookup_ns;
+    unsigned long long add_signal_ns;
+    unsigned long long load_ns;
+    unsigned long long create_handle_ns;
+    unsigned long long seek_ns;
+    unsigned long long traverse_format_ns;
+    unsigned long long free_handle_ns;
+    unsigned long long unload_ns;
+    unsigned long long transition_count;
+    unsigned long long output_bytes;
+    int                truncated;
+};
+
+struct FsdbTransitionGroupProfileV1 {
+    unsigned long long lookup_ns;
+    unsigned long long add_signal_ns;
+    unsigned long long load_ns;
+    unsigned long long unload_ns;
+    unsigned long long signal_count;
+};
+
+typedef std::chrono::steady_clock _ProfileClock;
+
+static unsigned long long
+_ElapsedNs(_ProfileClock::time_point begin, _ProfileClock::time_point end)
+{
+    return (unsigned long long)
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count();
+}
 
 /* 时间刻度未知时所有时间型接口的错误码（-1 参数、-2 信号未找到、-3 句柄失败已占用） */
 #define FSDB_ERR_SCALE_UNKNOWN (-4)
@@ -281,6 +321,7 @@ fsdb_open(const char *fname)
     FsdbCtx *ctx = new FsdbCtx();
     ctx->obj       = obj;
     ctx->tree_done = false;
+    ctx->transition_group_active = false;
 
     /* 从文件头读时间刻度（运行时真值，绝不写死 1ps）。读不到 → scale_fs=0，
      * 时间型接口一律拒绝服务而不是返回错位的数值。 */
@@ -309,6 +350,11 @@ fsdb_close(void *handle)
 {
     if (!handle) return;
     FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->transition_group_active) {
+        ctx->obj->ffrUnloadSignals();
+        ctx->transition_group_active = false;
+        ctx->transition_group_ids.clear();
+    }
     ctx->obj->ffrClose();
     delete ctx;
 }
@@ -404,34 +450,48 @@ fsdb_get_value_at_time(void *handle, const char *signal_path,
     return 0;
 }
 
-/* ── 获取信号所有跳变（start_ps ~ end_ps，-1 表示到结尾）────────────
- * 结果写入 out_buf，格式：
- *   <time_ps>\t<value>\n
- * 返回跳变条数，-1 失败，-2 信号未找到
- * ---------------------------------------------------------------- */
-int
-fsdb_get_transitions(void *handle, const char *signal_path,
-                     unsigned long long start_ps,
-                     unsigned long long end_ps,
-                     char *out_buf, int buf_size)
+static int
+_GetTransitionsImpl(
+    FsdbCtx *ctx,
+    SigInfo *sig,
+    unsigned long long start_ps,
+    unsigned long long end_ps,
+    char *out_buf,
+    int buf_size,
+    bool already_loaded,
+    FsdbTransitionProfileV1 *profile
+)
 {
-    if (!handle || !signal_path || !out_buf) return -1;
-    FsdbCtx *ctx = (FsdbCtx*)handle;
-    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
+    if (!ctx || !sig || !out_buf || buf_size <= 0) return -1;
 
-    auto it = ctx->path_to_sig.find(std::string(signal_path));
-    if (it == ctx->path_to_sig.end()) return -2;
+    fsdbVarIdcode idcode = sig->idcode;
+    if (already_loaded) {
+        if (!ctx->transition_group_active ||
+            ctx->transition_group_ids.find(idcode) == ctx->transition_group_ids.end())
+            return -5;
+    } else {
+        _ProfileClock::time_point begin = _ProfileClock::now();
+        ctx->obj->ffrAddToSignalList(idcode);
+        _ProfileClock::time_point added = _ProfileClock::now();
+        ctx->obj->ffrLoadSignals();
+        _ProfileClock::time_point loaded = _ProfileClock::now();
+        if (profile) {
+            profile->add_signal_ns = _ElapsedNs(begin, added);
+            profile->load_ns = _ElapsedNs(added, loaded);
+        }
+    }
 
-    fsdbVarIdcode idcode = it->second.idcode;
-    uint_T        bpb    = it->second.bytes_per_bit;
-    uint_T        bsize  = it->second.bit_size;
-
-    ctx->obj->ffrAddToSignalList(idcode);
-    ctx->obj->ffrLoadSignals();
-
+    _ProfileClock::time_point create_begin = _ProfileClock::now();
     ffrVCTrvsHdl hdl = ctx->obj->ffrCreateVCTraverseHandle(idcode);
+    _ProfileClock::time_point create_end = _ProfileClock::now();
+    if (profile) profile->create_handle_ns = _ElapsedNs(create_begin, create_end);
     if (!hdl) {
-        ctx->obj->ffrUnloadSignals();
+        if (!already_loaded) {
+            _ProfileClock::time_point unload_begin = _ProfileClock::now();
+            ctx->obj->ffrUnloadSignals();
+            if (profile)
+                profile->unload_ns = _ElapsedNs(unload_begin, _ProfileClock::now());
+        }
         return -3;
     }
 
@@ -440,10 +500,13 @@ fsdb_get_transitions(void *handle, const char *signal_path,
     bool  truncated = false;
 
     if (hdl->ffrHasIncoreVC()) {
-        /* 跳到 start_ps */
         fsdbTag64 start_tag = _ToTag(ctx, start_ps);
+        _ProfileClock::time_point seek_begin = _ProfileClock::now();
         hdl->ffrGotoXTag((void*)&start_tag);
+        _ProfileClock::time_point seek_end = _ProfileClock::now();
+        if (profile) profile->seek_ns = _ElapsedNs(seek_begin, seek_end);
 
+        _ProfileClock::time_point traverse_begin = _ProfileClock::now();
         do {
             fsdbTag64  time;
             byte_T    *vc_ptr = NULL;
@@ -454,17 +517,153 @@ fsdb_get_transitions(void *handle, const char *signal_path,
             if (end_ps != (unsigned long long)-1 && t_ps > end_ps)
                 break;
 
-            std::string val = _VCToStr(vc_ptr, bsize, bpb);
+            std::string val = _VCToStr(
+                vc_ptr, sig->bit_size, sig->bytes_per_bit);
             if (!_AppendTransitionLine(
                     out_buf, buf_size, pos, t_ps, val, truncated)) break;
             count++;
         } while (FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
+        if (profile)
+            profile->traverse_format_ns =
+                _ElapsedNs(traverse_begin, _ProfileClock::now());
     }
 
     out_buf[pos] = '\0';
+    _ProfileClock::time_point free_begin = _ProfileClock::now();
     hdl->ffrFree();
-    ctx->obj->ffrUnloadSignals();
+    _ProfileClock::time_point free_end = _ProfileClock::now();
+    if (profile) profile->free_handle_ns = _ElapsedNs(free_begin, free_end);
+    if (!already_loaded) {
+        _ProfileClock::time_point unload_begin = _ProfileClock::now();
+        ctx->obj->ffrUnloadSignals();
+        if (profile)
+            profile->unload_ns = _ElapsedNs(unload_begin, _ProfileClock::now());
+    }
+    if (profile) {
+        profile->transition_count = (unsigned long long)count;
+        profile->output_bytes = (unsigned long long)pos;
+        profile->truncated = truncated ? 1 : 0;
+    }
     return count;
+}
+
+/* ── 获取信号所有跳变（start_ps ~ end_ps，-1 表示到结尾）────────────
+ * 结果写入 out_buf，格式：
+ *   <time_ps>\t<value>\n
+ * 返回跳变条数，-1 失败，-2 信号未找到
+ * ---------------------------------------------------------------- */
+int
+fsdb_get_transitions_profiled(void *handle, const char *signal_path,
+                              unsigned long long start_ps,
+                              unsigned long long end_ps,
+                              char *out_buf, int buf_size,
+                              FsdbTransitionProfileV1 *profile)
+{
+    if (profile) memset(profile, 0, sizeof(*profile));
+    if (!handle || !signal_path || !out_buf || buf_size <= 0) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
+
+    _ProfileClock::time_point lookup_begin = _ProfileClock::now();
+    auto it = ctx->path_to_sig.find(std::string(signal_path));
+    _ProfileClock::time_point lookup_end = _ProfileClock::now();
+    if (profile) profile->lookup_ns = _ElapsedNs(lookup_begin, lookup_end);
+    if (it == ctx->path_to_sig.end()) return -2;
+    return _GetTransitionsImpl(
+        ctx, &it->second, start_ps, end_ps, out_buf, buf_size, false, profile);
+}
+
+int
+fsdb_get_transitions(void *handle, const char *signal_path,
+                     unsigned long long start_ps,
+                     unsigned long long end_ps,
+                     char *out_buf, int buf_size)
+{
+    return fsdb_get_transitions_profiled(
+        handle, signal_path, start_ps, end_ps, out_buf, buf_size, NULL);
+}
+
+/* Load a bounded group once, then let Python request each signal independently
+ * through its existing reusable 64 MiB per-call buffer. This avoids per-signal
+ * Load/Unload while preserving the legacy output/truncation contract. */
+int
+fsdb_begin_transition_group(void *handle, const char **signal_paths,
+                            int signal_count,
+                            FsdbTransitionGroupProfileV1 *profile)
+{
+    if (profile) memset(profile, 0, sizeof(*profile));
+    if (!handle || !signal_paths || signal_count <= 0) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
+    if (ctx->transition_group_active) return -5;
+
+    std::vector<fsdbVarIdcode> ids;
+    ids.reserve((size_t)signal_count);
+    _ProfileClock::time_point lookup_begin = _ProfileClock::now();
+    for (int i = 0; i < signal_count; i++) {
+        if (!signal_paths[i]) return -1;
+        auto it = ctx->path_to_sig.find(std::string(signal_paths[i]));
+        if (it == ctx->path_to_sig.end()) return -2;
+        ids.push_back(it->second.idcode);
+    }
+    _ProfileClock::time_point lookup_end = _ProfileClock::now();
+
+    _ProfileClock::time_point add_begin = _ProfileClock::now();
+    for (size_t i = 0; i < ids.size(); i++)
+        ctx->obj->ffrAddToSignalList(ids[i]);
+    _ProfileClock::time_point add_end = _ProfileClock::now();
+    ctx->obj->ffrLoadSignals();
+    _ProfileClock::time_point load_end = _ProfileClock::now();
+
+    ctx->transition_group_ids.clear();
+    ctx->transition_group_ids.insert(ids.begin(), ids.end());
+    ctx->transition_group_active = true;
+    if (profile) {
+        profile->lookup_ns = _ElapsedNs(lookup_begin, lookup_end);
+        profile->add_signal_ns = _ElapsedNs(add_begin, add_end);
+        profile->load_ns = _ElapsedNs(add_end, load_end);
+        profile->signal_count = (unsigned long long)ids.size();
+    }
+    return signal_count;
+}
+
+int
+fsdb_get_loaded_transitions(void *handle, const char *signal_path,
+                            unsigned long long start_ps,
+                            unsigned long long end_ps,
+                            char *out_buf, int buf_size,
+                            FsdbTransitionProfileV1 *profile)
+{
+    if (profile) memset(profile, 0, sizeof(*profile));
+    if (!handle || !signal_path || !out_buf || buf_size <= 0) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
+
+    _ProfileClock::time_point lookup_begin = _ProfileClock::now();
+    auto it = ctx->path_to_sig.find(std::string(signal_path));
+    _ProfileClock::time_point lookup_end = _ProfileClock::now();
+    if (profile) profile->lookup_ns = _ElapsedNs(lookup_begin, lookup_end);
+    if (it == ctx->path_to_sig.end()) return -2;
+    return _GetTransitionsImpl(
+        ctx, &it->second, start_ps, end_ps, out_buf, buf_size, true, profile);
+}
+
+int
+fsdb_end_transition_group(void *handle,
+                          FsdbTransitionGroupProfileV1 *profile)
+{
+    if (profile) memset(profile, 0, sizeof(*profile));
+    if (!handle) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    if (!ctx->transition_group_active) return 0;
+    _ProfileClock::time_point unload_begin = _ProfileClock::now();
+    ctx->obj->ffrUnloadSignals();
+    _ProfileClock::time_point unload_end = _ProfileClock::now();
+    ctx->transition_group_active = false;
+    ctx->transition_group_ids.clear();
+    if (profile)
+        profile->unload_ns = _ElapsedNs(unload_begin, unload_end);
+    return 0;
 }
 
 int

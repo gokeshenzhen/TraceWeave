@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, Mapping
 
 
 _PUBLIC_FIELDS = {
@@ -44,6 +44,39 @@ _PUBLIC_FIELDS = {
     "sweep_value_sample_total_ms",
     "sweep_clock_reuse_hits",
     "sweep_signal_reuse_hits",
+    "sweep_native_group_count",
+    "sweep_native_group_signal_total",
+    "sweep_native_group_signal_max",
+    "sweep_native_group_fallback_count",
+    "sweep_native_group_unsupported_count",
+    "sweep_native_group_oversized_count",
+    "sweep_native_group_begin_error_count",
+    "sweep_native_profiled_read_count",
+    "sweep_native_lookup_total_ms",
+    "sweep_native_add_signal_total_ms",
+    "sweep_native_load_total_ms",
+    "sweep_native_load_max_ms",
+    "sweep_native_create_handle_total_ms",
+    "sweep_native_seek_total_ms",
+    "sweep_native_traverse_format_total_ms",
+    "sweep_native_free_handle_total_ms",
+    "sweep_native_unload_total_ms",
+    "sweep_native_transition_count",
+    "sweep_native_output_bytes",
+    "sweep_native_truncated_calls",
+    "sweep_rss_start_kib",
+    "sweep_rss_peak_kib",
+    "sweep_rss_end_kib",
+    "sweep_rss_peak_delta_kib",
+    "sweep_cached_signal_results_peak",
+    "sweep_cached_transition_count_peak",
+    "sweep_sample_edges_total",
+    "sweep_sample_edges_max",
+    "sweep_sample_values_total",
+    "sweep_sample_values_max",
+    "sweep_result_build_ms",
+    "sweep_result_serialize_ms",
+    "sweep_result_bytes",
 }
 _PUBLIC_PHASES = {"discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"}
 _PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase"}
@@ -182,6 +215,199 @@ def record_sweep_reuse_hit(kind: str) -> None:
         if metrics.values.get("_sweep_active") is not True:
             return
         metrics.values[field] = int(metrics.values.get(field, 0)) + 1
+
+
+def _ns_to_ms(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value) / 1_000_000.0
+
+
+def record_sweep_native_group_begin(profile: Mapping[str, object]) -> None:
+    """Aggregate one identity-free native group-load receipt."""
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        signal_count = int(profile.get("signal_count", 0) or 0)
+        metrics.values["sweep_native_group_count"] = (
+            int(metrics.values.get("sweep_native_group_count", 0)) + 1
+        )
+        metrics.values["sweep_native_group_signal_total"] = (
+            int(metrics.values.get("sweep_native_group_signal_total", 0))
+            + signal_count
+        )
+        metrics.values["sweep_native_group_signal_max"] = max(
+            int(metrics.values.get("sweep_native_group_signal_max", 0)),
+            signal_count,
+        )
+        _add_native_duration_locked(metrics, "lookup", profile.get("lookup_ns"))
+        _add_native_duration_locked(
+            metrics, "add_signal", profile.get("add_signal_ns")
+        )
+        load_ms = _add_native_duration_locked(
+            metrics, "load", profile.get("load_ns")
+        )
+        metrics.values["sweep_native_load_max_ms"] = max(
+            float(metrics.values.get("sweep_native_load_max_ms", 0.0)), load_ms
+        )
+
+
+def record_sweep_native_group_end(profile: Mapping[str, object]) -> None:
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        _add_native_duration_locked(metrics, "unload", profile.get("unload_ns"))
+
+
+def record_sweep_native_transition(profile: Mapping[str, object]) -> None:
+    """Aggregate one profiled transition call without its signal identity."""
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values["sweep_native_profiled_read_count"] = (
+            int(metrics.values.get("sweep_native_profiled_read_count", 0)) + 1
+        )
+        for name in (
+            "lookup", "add_signal", "load", "create_handle", "seek",
+            "traverse_format", "free_handle", "unload",
+        ):
+            duration_ms = _add_native_duration_locked(
+                metrics, name, profile.get(f"{name}_ns")
+            )
+            if name == "load":
+                metrics.values["sweep_native_load_max_ms"] = max(
+                    float(metrics.values.get("sweep_native_load_max_ms", 0.0)),
+                    duration_ms,
+                )
+        metrics.values["sweep_native_transition_count"] = (
+            int(metrics.values.get("sweep_native_transition_count", 0))
+            + int(profile.get("transition_count", 0) or 0)
+        )
+        metrics.values["sweep_native_output_bytes"] = (
+            int(metrics.values.get("sweep_native_output_bytes", 0))
+            + int(profile.get("output_bytes", 0) or 0)
+        )
+        if int(profile.get("truncated", 0) or 0):
+            metrics.values["sweep_native_truncated_calls"] = (
+                int(metrics.values.get("sweep_native_truncated_calls", 0)) + 1
+            )
+
+
+def _add_native_duration_locked(
+    metrics: OperationMetrics, name: str, value_ns: object
+) -> float:
+    duration_ms = _ns_to_ms(value_ns)
+    field = f"sweep_native_{name}_total_ms"
+    metrics.values[field] = float(metrics.values.get(field, 0.0)) + duration_ms
+    return duration_ms
+
+
+def record_sweep_native_group_fallback(reason: str) -> None:
+    """Count a fixed fallback reason; arbitrary labels are rejected."""
+    reason_field = {
+        "unsupported": "sweep_native_group_unsupported_count",
+        "oversized": "sweep_native_group_oversized_count",
+        "begin_error": "sweep_native_group_begin_error_count",
+    }.get(reason)
+    if reason_field is None:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values["sweep_native_group_fallback_count"] = (
+            int(metrics.values.get("sweep_native_group_fallback_count", 0)) + 1
+        )
+        metrics.values[reason_field] = int(metrics.values.get(reason_field, 0)) + 1
+
+
+def record_sweep_cache_peak(entries: int, transitions: int) -> None:
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values["sweep_cached_signal_results_peak"] = max(
+            int(metrics.values.get("sweep_cached_signal_results_peak", 0)),
+            int(entries),
+        )
+        metrics.values["sweep_cached_transition_count_peak"] = max(
+            int(metrics.values.get("sweep_cached_transition_count_peak", 0)),
+            int(transitions),
+        )
+
+
+def record_sweep_sampling_shape(edge_count: int, signal_count: int) -> None:
+    metrics = current()
+    if metrics is None:
+        return
+    edge_count = max(0, int(edge_count))
+    value_count = edge_count * max(0, int(signal_count))
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values["sweep_sample_edges_total"] = (
+            int(metrics.values.get("sweep_sample_edges_total", 0)) + edge_count
+        )
+        metrics.values["sweep_sample_edges_max"] = max(
+            int(metrics.values.get("sweep_sample_edges_max", 0)), edge_count
+        )
+        metrics.values["sweep_sample_values_total"] = (
+            int(metrics.values.get("sweep_sample_values_total", 0)) + value_count
+        )
+        metrics.values["sweep_sample_values_max"] = max(
+            int(metrics.values.get("sweep_sample_values_max", 0)), value_count
+        )
+
+
+def read_process_rss_kib() -> int | None:
+    """Return current Linux RSS without retaining process/environment identity."""
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def record_sweep_rss(*, phase: str) -> None:
+    if phase not in {"start", "sample", "end"}:
+        return
+    rss_kib = read_process_rss_kib()
+    if rss_kib is None:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        if phase == "start":
+            metrics.values["sweep_rss_start_kib"] = rss_kib
+        metrics.values["sweep_rss_peak_kib"] = max(
+            int(metrics.values.get("sweep_rss_peak_kib", 0)), rss_kib
+        )
+        if phase == "end":
+            metrics.values["sweep_rss_end_kib"] = rss_kib
+            start = metrics.values.get("sweep_rss_start_kib")
+            if isinstance(start, int):
+                metrics.values["sweep_rss_peak_delta_kib"] = max(
+                    0, int(metrics.values["sweep_rss_peak_kib"]) - start
+                )
 
 
 @contextmanager

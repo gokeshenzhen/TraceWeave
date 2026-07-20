@@ -6,6 +6,9 @@ The public API matches vcd_parser.py.
 
 import ctypes
 import os
+from contextlib import contextmanager
+from typing import Iterator
+
 from config import (
     DEFAULT_EXTRA_TRANSITIONS,
     FSDB_REQUIRED_LIBS,
@@ -13,6 +16,7 @@ from config import (
     get_fsdb_runtime_info,
     SIGNAL_SEARCH_MAX_RESULTS,
 )
+from . import operation_metrics
 
 # Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
@@ -31,6 +35,36 @@ _FSDB_VAR_TYPE = {
     12: "tri0", 13: "tri1", 14: "wand", 15: "wire", 16: "wor",
     17: "memory",
 }
+
+
+class _NativeTransitionProfileV1(ctypes.Structure):
+    _fields_ = [
+        ("lookup_ns", ctypes.c_uint64),
+        ("add_signal_ns", ctypes.c_uint64),
+        ("load_ns", ctypes.c_uint64),
+        ("create_handle_ns", ctypes.c_uint64),
+        ("seek_ns", ctypes.c_uint64),
+        ("traverse_format_ns", ctypes.c_uint64),
+        ("free_handle_ns", ctypes.c_uint64),
+        ("unload_ns", ctypes.c_uint64),
+        ("transition_count", ctypes.c_uint64),
+        ("output_bytes", ctypes.c_uint64),
+        ("truncated", ctypes.c_int),
+    ]
+
+
+class _NativeTransitionGroupProfileV1(ctypes.Structure):
+    _fields_ = [
+        ("lookup_ns", ctypes.c_uint64),
+        ("add_signal_ns", ctypes.c_uint64),
+        ("load_ns", ctypes.c_uint64),
+        ("unload_ns", ctypes.c_uint64),
+        ("signal_count", ctypes.c_uint64),
+    ]
+
+
+def _profile_dict(profile: ctypes.Structure) -> dict[str, int]:
+    return {name: int(getattr(profile, name)) for name, _ in profile._fields_}
 
 
 def _load_wrapper():
@@ -102,6 +136,39 @@ def _setup(lib):
                                           ctypes.c_uint64, ctypes.c_uint64,
                                           ctypes.c_char_p, ctypes.c_int]
 
+    # Optional P2 group-load/profiling ABI. Older wrappers remain usable: the
+    # parser falls back to fsdb_get_transitions and records an aggregate
+    # unsupported fallback receipt during a full sweep.
+    try:
+        lib.fsdb_get_transitions_profiled.restype = ctypes.c_int
+        lib.fsdb_get_transitions_profiled.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p,
+            ctypes.c_uint64, ctypes.c_uint64,
+            ctypes.c_char_p, ctypes.c_int,
+            ctypes.POINTER(_NativeTransitionProfileV1),
+        ]
+        lib.fsdb_begin_transition_group.restype = ctypes.c_int
+        lib.fsdb_begin_transition_group.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_char_p), ctypes.c_int,
+            ctypes.POINTER(_NativeTransitionGroupProfileV1),
+        ]
+        lib.fsdb_get_loaded_transitions.restype = ctypes.c_int
+        lib.fsdb_get_loaded_transitions.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p,
+            ctypes.c_uint64, ctypes.c_uint64,
+            ctypes.c_char_p, ctypes.c_int,
+            ctypes.POINTER(_NativeTransitionProfileV1),
+        ]
+        lib.fsdb_end_transition_group.restype = ctypes.c_int
+        lib.fsdb_end_transition_group.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(_NativeTransitionGroupProfileV1),
+        ]
+        lib._traceweave_has_transition_group = True
+    except AttributeError:
+        lib._traceweave_has_transition_group = False
+
     # int fsdb_get_multi_signals_around_time(
     #     void*, const char**, int, uint64, uint64, int, char*, int)
     lib.fsdb_get_multi_signals_around_time.restype = ctypes.c_int
@@ -148,6 +215,21 @@ def _setup(lib):
 
 
 _BUF_SIZE = 64 * 1024 * 1024
+# A group keeps every selected signal resident in the native FFR layer until
+# the context exits. Keep the default deliberately conservative for multi-GB
+# waves; larger groups can be opted into after inspecting the RSS telemetry.
+_DEFAULT_TRANSITION_GROUP_MAX_SIGNALS = 16
+
+
+def _transition_group_limit() -> int:
+    try:
+        requested = int(os.environ.get(
+            "TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS",
+            str(_DEFAULT_TRANSITION_GROUP_MAX_SIGNALS),
+        ))
+    except ValueError:
+        return _DEFAULT_TRANSITION_GROUP_MAX_SIGNALS
+    return min(256, max(1, requested))
 
 
 class FSDBParser:
@@ -158,6 +240,7 @@ class FSDBParser:
         self._buf    = None
         self._scale_unit = None   # raw header string, e.g. "100fs"; "unknown" if unreadable
         self._scale_fs   = None   # fs per FSDB tick; 0 = unknown
+        self._transition_group_active = False
 
     def _open(self):
         if self._handle:
@@ -182,6 +265,12 @@ class FSDBParser:
 
     def close(self):
         if self._handle and self._lib:
+            if getattr(self, "_transition_group_active", False):
+                profile = _NativeTransitionGroupProfileV1()
+                self._lib.fsdb_end_transition_group(
+                    self._handle, ctypes.byref(profile)
+                )
+                self._transition_group_active = False
             self._lib.fsdb_close(self._handle)
             self._handle = None
 
@@ -224,11 +313,28 @@ class FSDBParser:
         self._open()
         buf = self._get_buf()
         end = ctypes.c_uint64(0xFFFFFFFFFFFFFFFF if end_ps == -1 else end_ps)
-        rc  = self._lib.fsdb_get_transitions(
-            self._handle, signal_path.encode(),
-            ctypes.c_uint64(start_ps), end,
-            buf, _BUF_SIZE
-        )
+        profile = None
+        if getattr(self._lib, "_traceweave_has_transition_group", False):
+            profile = _NativeTransitionProfileV1()
+            native_fn = (
+                self._lib.fsdb_get_loaded_transitions
+                if self._transition_group_active
+                else self._lib.fsdb_get_transitions_profiled
+            )
+            rc = native_fn(
+                self._handle, signal_path.encode(),
+                ctypes.c_uint64(start_ps), end,
+                buf, _BUF_SIZE, ctypes.byref(profile),
+            )
+            operation_metrics.record_sweep_native_transition(
+                _profile_dict(profile)
+            )
+        else:
+            rc = self._lib.fsdb_get_transitions(
+                self._handle, signal_path.encode(),
+                ctypes.c_uint64(start_ps), end,
+                buf, _BUF_SIZE
+            )
         if rc == -2:
             raise KeyError(f"Signal not found: '{signal_path}'")
         if rc == -4:
@@ -249,6 +355,59 @@ class FSDBParser:
             "truncated":        native_truncated,
             "transition_count_is_lower_bound": native_truncated,
         }
+
+    @contextmanager
+    def transition_group(self, signal_paths: list[str]) -> Iterator[bool]:
+        """Load a bounded signal group once while preserving per-signal output.
+
+        Yields whether the optimized native path is active. Unsupported/large/
+        failed groups fall back before touching FFR group state, so callers can
+        continue using ordinary ``get_transitions`` unchanged.
+        """
+        self._open()
+        paths = list(dict.fromkeys(str(path) for path in signal_paths if path))
+        if not paths:
+            yield False
+            return
+        if not getattr(self._lib, "_traceweave_has_transition_group", False):
+            operation_metrics.record_sweep_native_group_fallback("unsupported")
+            yield False
+            return
+        if len(paths) > _transition_group_limit():
+            operation_metrics.record_sweep_native_group_fallback("oversized")
+            yield False
+            return
+
+        encoded = [path.encode() for path in paths]
+        c_paths = (ctypes.c_char_p * len(encoded))(*encoded)
+        begin_profile = _NativeTransitionGroupProfileV1()
+        rc = self._lib.fsdb_begin_transition_group(
+            self._handle, c_paths, len(encoded), ctypes.byref(begin_profile)
+        )
+        if rc < 0:
+            operation_metrics.record_sweep_native_group_fallback("begin_error")
+            yield False
+            return
+
+        self._transition_group_active = True
+        operation_metrics.record_sweep_native_group_begin(
+            _profile_dict(begin_profile)
+        )
+        operation_metrics.record_sweep_rss(phase="sample")
+        try:
+            yield True
+        finally:
+            # Capture the group's loaded high-water before FFR unload, then the
+            # caller samples again after the context to observe retention.
+            operation_metrics.record_sweep_rss(phase="sample")
+            end_profile = _NativeTransitionGroupProfileV1()
+            self._lib.fsdb_end_transition_group(
+                self._handle, ctypes.byref(end_profile)
+            )
+            self._transition_group_active = False
+            operation_metrics.record_sweep_native_group_end(
+                _profile_dict(end_profile)
+            )
 
     def get_signals_around_time(self, signal_paths: list,
                                 center_ps: int, window_ps: int = 500,

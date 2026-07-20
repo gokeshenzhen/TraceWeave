@@ -110,7 +110,12 @@ Verification
   planned/attempted/completed interface counts, unique clock/signal counts,
   aggregate/max inspect time, clock-vs-signal transition read count/total/max,
   edge-extraction/value-sampling time, shared-clock/shared-signal reuse-hit
-  counts, and transition-truncated interface count.
+  counts, and transition-truncated interface count. The FSDB path additionally
+  reports aggregate native lookup/load/seek/traverse/unload phases, group-load
+  use/fallback counts, transition/output volume, sampling shape, cache peaks,
+  result build/serialization cost, and process RSS start/peak/end. All fields
+  are numeric or fixed-label aggregates; paths, scopes, signal names, values,
+  and search keywords are never recorded.
 - A full `sweep_handshakes` does not independently reread and re-extract the
   same clock for every interface. `handshake_sweep` groups discovered bundles
   by clock and creates one private `EdgeSamplingSession` per group;
@@ -131,6 +136,30 @@ Verification
   +2.1%). This validates the repeated-clock optimization, not a 5-minute promise
   for a proprietary FSDB whose native signal reads may have a different cost
   profile.
+- For FSDB clock groups, `FSDBParser.transition_group()` uses an optional native
+  ABI to add the group's resolved signals once, call `ffrLoadSignals()` once,
+  read each signal independently through the existing reusable 64 MiB per-call
+  output buffer, and unload in a `finally` block. This removes repeated
+  per-signal load/unload without adopting the multi-signal batch output format
+  or changing truncation receipts. The default
+  native group limit is 16 signals to bound resident FFR data on multi-GB waves;
+  `TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS` can set 1..256 after RSS review. Oversized
+  groups, begin failures, and older wrappers automatically use the legacy
+  per-signal path. Cancellation between interfaces unwinds the context before
+  releasing the process-global FSDB lock. On the bundled warmed wide-bus FSDB
+  fixture (7 signals, 50 load/read/unload iterations per repeat, 7 alternating
+  repeats), the grouped median was 23.644 ms versus 25.773 ms legacy (8.3%
+  lower), with identical transition counts and truncation receipts. This
+  validates the mechanism only; the one-run metrics are required to judge a
+  proprietary workload.
+- `scripts/benchmark_sweep_fsdb_group.py` compares complete sweep results while
+  alternating forced-legacy and grouped runs, and emits aggregates only. On a
+  local 34,874-byte AHB repro FSDB (634 signals, four discovered interfaces,
+  7 repeats), both paths returned byte-equivalent fact tables with complete
+  coverage and no transition truncation. The grouped median was 48.405 ms
+  versus 51.433 ms legacy (5.9% lower); all four groups activated, with at most
+  9 signals per group and no fallback. This is a protocol/compatibility sample,
+  not evidence about multi-GB scaling.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.
@@ -188,7 +217,10 @@ Verification
   `@TRUNCATED` receipt. `get_transitions` propagates that receipt through
   edge sampling and handshake inspection; a sweep with any partial transition
   prefix cannot report `coverage_status="complete"`. `get_waveform_summary`
-  exposes `scale_unit`/`scale_fs_per_tick` for self-check.
+  exposes `scale_unit`/`scale_fs_per_tick` for self-check. The transition-group
+  ABI is optional and detected by symbol presence, so an old locally built
+  wrapper remains functional through the legacy path; rebuilding the wrapper
+  and reconnecting the server is required to activate group loading.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single

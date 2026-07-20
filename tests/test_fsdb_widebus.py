@@ -23,8 +23,9 @@ from pathlib import Path
 
 import pytest
 
-from src import verify_condition as vc
+from src import handshake_sweep, operation_metrics, verify_condition as vc
 from src.fsdb_parser import FSDBParser, get_fsdb_runtime_info
+from src.handshake_sweep import sweep_handshake_anomalies
 
 FIXTURE = Path(__file__).parent / "fixtures" / "wide_bus.fsdb"
 
@@ -68,6 +69,90 @@ def test_wide_bus_value_at_time_not_truncated(parser):
     assert v30["hex"] != v60["hex"]
     # top byte preserved (0x5a..); a dropped LSB would shift it to 0x2d..
     assert v30["hex"].startswith("0x5a")
+
+
+def test_group_loaded_transitions_are_byte_equivalent(parser):
+    """One native load for several signals must preserve each signal's legacy
+    independent-buffer transition result, including the 1024-bit payload."""
+    signals = ["tb.aclk", "tb.vld1", "tb.rdy1", "tb.dat1[1023:0]"]
+    expected = {path: parser.get_transitions(path) for path in signals}
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    operation_metrics.set_value("_sweep_active", True)
+    try:
+        with parser.transition_group(signals) as active:
+            assert active is True
+            actual = {path: parser.get_transitions(path) for path in signals}
+    finally:
+        operation_metrics.pop(token)
+
+    assert actual == expected
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_native_group_count"] == 1
+    assert snapshot["sweep_native_group_signal_total"] == len(signals)
+    assert snapshot["sweep_native_profiled_read_count"] == len(signals)
+    assert snapshot["sweep_native_transition_count"] > 0
+    assert snapshot["sweep_native_output_bytes"] > 0
+
+
+def test_full_sweep_uses_one_native_group_for_shared_clock(parser, monkeypatch):
+    candidates = [
+        {
+            "scope": "tb", "clock": "tb.aclk",
+            "valid": f"tb.vld{index}", "ready": f"tb.rdy{index}",
+            "payload": [
+                f"tb.dat{index}[{'63:0' if index == 3 else '1023:0'}]"
+            ],
+            "confidence": "high",
+        }
+        for index in (1, 2, 3)
+    ]
+    monkeypatch.setattr(
+        handshake_sweep,
+        "suggest_handshakes",
+        lambda **kwargs: {
+            "candidate_count": len(candidates), "candidates": candidates,
+            "reason": None,
+        },
+    )
+    monkeypatch.setattr(
+        handshake_sweep,
+        "suggest_protocol_bundles",
+        lambda **kwargs: {"candidate_count": 0, "candidates": [], "reason": None},
+    )
+
+    # First force the safe oversized fallback, then compare the complete sweep
+    # result with the native group path. This guards the fact table and coverage
+    # contract, not merely individual transition lists.
+    monkeypatch.setenv("TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS", "1")
+    legacy_result = sweep_handshake_anomalies(
+        get_parser=lambda _: parser,
+        wave_path=str(FIXTURE),
+        max_interfaces=8,
+    )
+    monkeypatch.setenv("TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS", "16")
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        result = sweep_handshake_anomalies(
+            get_parser=lambda _: parser,
+            wave_path=str(FIXTURE),
+            max_interfaces=8,
+        )
+    finally:
+        operation_metrics.pop(token)
+
+    assert result == legacy_result
+    assert result["coverage_status"] == "complete"
+    assert result["interface_count"] == 3
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_unique_clocks"] == 1
+    assert snapshot["sweep_native_group_count"] == 1
+    assert snapshot["sweep_native_group_fallback_count"] == 0
+    assert snapshot["sweep_native_profiled_read_count"] == 10
+    assert snapshot["sweep_clock_read_count"] == 1
+    assert snapshot["sweep_signal_read_count"] == 9
+    assert snapshot["sweep_native_transition_count"] > 0
 
 
 def test_inspect_handshake_payload_hold_on_wide_bus(parser):

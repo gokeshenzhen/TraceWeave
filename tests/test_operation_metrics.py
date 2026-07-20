@@ -106,3 +106,61 @@ def test_sweep_subphase_timings_require_fixed_labels_and_active_sweep():
         "sweep_clock_reuse_hits": 1,
         "sweep_signal_reuse_hits": 1,
     }
+
+
+def test_native_group_metrics_are_aggregate_and_fixed_label_only(monkeypatch):
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    operation_metrics.set_value("_sweep_active", True)
+    monkeypatch.setattr(operation_metrics, "read_process_rss_kib", lambda: 100)
+    try:
+        operation_metrics.record_sweep_native_group_begin({
+            "signal_count": 4,
+            "lookup_ns": 1_000_000,
+            "add_signal_ns": 2_000_000,
+            "load_ns": 3_000_000,
+        })
+        operation_metrics.record_sweep_native_transition({
+            "create_handle_ns": 4_000_000,
+            "seek_ns": 5_000_000,
+            "traverse_format_ns": 6_000_000,
+            "free_handle_ns": 7_000_000,
+            "transition_count": 8,
+            "output_bytes": 9,
+            "truncated": 1,
+        })
+        operation_metrics.record_sweep_native_group_end({
+            "unload_ns": 10_000_000,
+        })
+        operation_metrics.record_sweep_native_group_fallback("unsupported")
+        operation_metrics.record_sweep_native_group_fallback("top.secret")
+        operation_metrics.record_sweep_cache_peak(2, 20)
+        operation_metrics.record_sweep_sampling_shape(10, 4)
+        operation_metrics.record_sweep_sampling_shape(5, 2)
+        operation_metrics.record_sweep_rss(phase="start")
+        monkeypatch.setattr(operation_metrics, "read_process_rss_kib", lambda: 160)
+        operation_metrics.record_sweep_rss(phase="end")
+    finally:
+        operation_metrics.pop(token)
+
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_native_group_count"] == 1
+    assert snapshot["sweep_native_group_signal_total"] == 4
+    assert snapshot["sweep_native_load_total_ms"] == 3.0
+    assert snapshot["sweep_native_traverse_format_total_ms"] == 6.0
+    assert snapshot["sweep_native_unload_total_ms"] == 10.0
+    assert snapshot["sweep_native_transition_count"] == 8
+    assert snapshot["sweep_native_output_bytes"] == 9
+    assert snapshot["sweep_native_truncated_calls"] == 1
+    assert snapshot["sweep_native_group_fallback_count"] == 1
+    assert snapshot["sweep_native_group_unsupported_count"] == 1
+    assert snapshot["sweep_cached_signal_results_peak"] == 2
+    assert snapshot["sweep_cached_transition_count_peak"] == 20
+    assert snapshot["sweep_sample_edges_total"] == 15
+    assert snapshot["sweep_sample_edges_max"] == 10
+    assert snapshot["sweep_sample_values_total"] == 50
+    assert snapshot["sweep_sample_values_max"] == 40
+    assert snapshot["sweep_rss_start_kib"] == 100
+    assert snapshot["sweep_rss_peak_kib"] == 160
+    assert snapshot["sweep_rss_end_kib"] == 160
+    assert snapshot["sweep_rss_peak_delta_kib"] == 60
