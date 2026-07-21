@@ -19,11 +19,29 @@ need to compose multiple checks in one expression.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
+from . import operation_metrics
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorRef, CursorStore
 from .cycle_query import EdgeSamplingSession, sample_signals_on_edges
+
+
+class _SignalColumnView:
+    """Reusable dict-like view over one edge of compact signal columns."""
+
+    __slots__ = ("columns", "index")
+
+    def __init__(self, columns: dict[str, list[Any]]) -> None:
+        self.columns = columns
+        self.index = 0
+
+    def get(self, signal_path: str, default: Any = None) -> Any:
+        column = self.columns.get(signal_path)
+        if column is None or self.index >= len(column):
+            return default
+        return column[self.index]
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +755,7 @@ def inspect_handshake(
     cursor_note: str | None = None,
     _sampling_session: EdgeSamplingSession | None = None,
     _resolution_cache: dict[str, str] | None = None,
+    _compact_sampling: bool = False,
 ) -> dict[str, Any]:
     """Classify a valid/ready handshake cycle-by-cycle and surface protocol
     facts an LLM cannot get from a transition dump or a scoreboard log.
@@ -853,6 +872,7 @@ def inspect_handshake(
         parser, clock, [valid_signal, ready, *payload, *extra_signals],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
         sampling_session=_sampling_session,
+        compact=_compact_sampling,
     )
     signal_errors = sampled.get("signal_errors", {})
     transition_signals_truncated = list(
@@ -900,7 +920,10 @@ def inspect_handshake(
         "start_ps": int(start_ps),
         "end_ps": int(end_ps),
         "active_high": active_high,
-        "sample_count": len(sampled.get("samples", [])),
+        "sample_count": (
+            len(sampled.get("edge_times", []))
+            if _compact_sampling else len(sampled.get("samples", []))
+        ),
         "transfer_count": 0,
         "stall_count": 0,
         "max_stall_cycles": 0,
@@ -973,7 +996,10 @@ def inspect_handshake(
         )
 
     samples = sampled.get("samples", [])
-    if not samples:
+    compact_edge_times = sampled.get("edge_times", [])
+    compact_columns = sampled.get("signal_columns", {})
+    sample_count = len(compact_edge_times) if _compact_sampling else len(samples)
+    if not sample_count:
         result["reason"] = (
             f"no {edge} edges of clock {clock!r} in the window — cannot sample a handshake"
         )
@@ -1037,6 +1063,16 @@ def inspect_handshake(
     stall_cycles = 0
     stall_payload: dict[str, Any] = {}
     stall_valid_repr: str | None = None
+    column_view = _SignalColumnView(compact_columns)
+
+    # Fused AHB write-data state. This used to be a second complete pass over
+    # the sampled rows; keeping the independent state machine inside the main
+    # cycle loop preserves its phase semantics without rereading every sample.
+    wd_findings: list[dict[str, Any]] = []
+    wd_count = 0
+    wd_outstanding_write: bool | None = None
+    wd_phase_open = False
+    wd_latched: Any = None
 
     def _close_stall(end_ps_val: int | None) -> None:
         nonlocal in_stall, stall_cycles, stall_begin
@@ -1057,15 +1093,64 @@ def inspect_handshake(
         stall_cycles = 0
         stall_begin = None
 
-    for cycle_index, s in enumerate(samples):
+    protocol_scan_started = time.perf_counter()
+    for cycle_index in range(sample_count):
         if not cycle_index % CANCEL_CHECK_STRIDE:
             check_cancelled()
-        sig = s["signals"]
+        if _compact_sampling:
+            column_view.index = cycle_index
+            sig = column_view
+            sample_time_ps = compact_edge_times[cycle_index]
+        else:
+            sig = samples[cycle_index]["signals"]
+            sample_time_ps = samples[cycle_index]["time_ps"]
         if use_htrans:
             v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
         else:
             v = _hs_truth(sig.get(valid_signal), active_high)
         r = _hs_truth(sig.get(ready), active_high)
+
+        if do_write_data_hold:
+            # This is byte-for-byte the state transition order of the former
+            # _ahb_write_data_hold pass: inspect the live data phase first,
+            # then advance it from the address accepted on this edge.
+            wd_htr = _ahb_valid_truth(sig.get(valid_signal), "active")
+            wd_hw = _hs_truth(sig.get(hwrite_sig), active_high)
+            wd_value = sig.get(wdata_sig)
+            if wd_outstanding_write is True:
+                if not wd_phase_open:
+                    wd_phase_open = True
+                    wd_latched = wd_value
+                elif (
+                    _hs_known(wd_latched)
+                    and _hs_known(wd_value)
+                    and wd_value != wd_latched
+                ):
+                    wd_count += 1
+                    if len(wd_findings) < max_findings:
+                        wd_findings.append({
+                            "type": "write_data_hold_violation",
+                            "severity": "error",
+                            "time_ps": sample_time_ps,
+                            "signal": wdata_sig,
+                            "from_value": _hs_repr(wd_latched),
+                            "to_value": _hs_repr(wd_value),
+                        })
+                    wd_latched = wd_value
+            else:
+                wd_phase_open = False
+                wd_latched = None
+
+            if r is True:
+                wd_phase_open = False
+                wd_latched = None
+                wd_outstanding_write = (
+                    (wd_hw is True) if wd_htr is True else None
+                )
+            elif r is None:
+                wd_outstanding_write = None
+                wd_phase_open = False
+                wd_latched = None
 
         # Wait-state hold: if the previous edge left us stalled (valid high,
         # ready low) the beat must persist until accepted. A known-low valid
@@ -1079,7 +1164,7 @@ def inspect_handshake(
                 findings.append({
                     "type": "premature_valid_deassertion",
                     "severity": "error",
-                    "time_ps": s["time_ps"],
+                    "time_ps": sample_time_ps,
                     "signal": valid_signal,
                     "from_value": stall_valid_repr,
                     "to_value": _hs_repr(sig.get(valid_signal)),
@@ -1107,7 +1192,7 @@ def inspect_handshake(
                             findings.append({
                                 "type": "x_while_valid",
                                 "severity": "error",
-                                "time_ps": s["time_ps"],
+                                "time_ps": sample_time_ps,
                                 "signal": p,
                                 "from_value": _hs_repr(sig.get(valid_signal)),
                                 "to_value": _hs_repr(sig.get(p)),
@@ -1119,20 +1204,20 @@ def inspect_handshake(
 
         if v is None or r is None:
             result["unknown_sample_cycles"] += 1
-            _close_stall(s["time_ps"])
+            _close_stall(sample_time_ps)
             continue
 
         if v and r:
             result["transfer_count"] += 1
-            _close_stall(s["time_ps"])
+            _close_stall(sample_time_ps)
         elif r and not v:
             result["ready_without_valid_cycles"] += 1
-            _close_stall(s["time_ps"])
+            _close_stall(sample_time_ps)
         elif v and not r:
             result["stall_count"] += 1
             if not in_stall:
                 in_stall = True
-                stall_begin = s["time_ps"]
+                stall_begin = sample_time_ps
                 stall_cycles = 1
                 stall_payload = {p: sig.get(p) for p in resolved_payload}
                 stall_valid_repr = _hs_repr(sig.get(valid_signal))
@@ -1148,7 +1233,7 @@ def inspect_handshake(
                                 findings.append({
                                     "type": "payload_hold_violation",
                                     "severity": "error",
-                                    "time_ps": s["time_ps"],
+                                    "time_ps": sample_time_ps,
                                     "signal": p,
                                     "from_value": _hs_repr(prev),
                                     "to_value": _hs_repr(cur),
@@ -1158,7 +1243,7 @@ def inspect_handshake(
                             # reported, not every cycle of an ongoing mismatch.
                             stall_payload[p] = cur
         else:  # not v and not r — idle
-            _close_stall(s["time_ps"])
+            _close_stall(sample_time_ps)
 
     # Flush a stall still open at the window edge. A stall that is still open
     # when the window ends is the deadlock signature: valid asserted, ready
@@ -1168,19 +1253,19 @@ def inspect_handshake(
     if in_stall:
         result["ended_in_stall"] = True
         result["final_stall_cycles"] = stall_cycles
-        _close_stall(samples[-1]["time_ps"])
-
-    # AHB write data-phase hold pass (G3): a separate sweep over the same samples,
-    # because the data phase trails the address-phase htrans valid by one cycle.
-    if do_write_data_hold:
-        # Independent finding budget: a noisy premature-deassertion interface must
-        # not starve write-data-hold of its witnesses (and thus its higher-priority
-        # attribution/cursor). The sweep echoes only counts, so the larger findings
-        # list matters only to a direct inspect_handshake caller.
-        wd_count, wd_findings = _ahb_write_data_hold(
-            samples, valid_signal, ready, hwrite_sig, wdata_sig, active_high,
-            max_findings,
+        last_sample_time_ps = (
+            compact_edge_times[-1]
+            if _compact_sampling else samples[-1]["time_ps"]
         )
+        _close_stall(last_sample_time_ps)
+    operation_metrics.add_sweep_execution_timing(
+        "protocol_scan",
+        (time.perf_counter() - protocol_scan_started) * 1000.0,
+    )
+
+    # AHB write data-phase hold findings have an independent budget so other
+    # noisy finding classes cannot hide their witnesses.
+    if do_write_data_hold:
         result["write_data_hold_violations"] = wd_count
         findings.extend(wd_findings)
 

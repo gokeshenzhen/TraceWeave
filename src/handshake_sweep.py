@@ -95,6 +95,89 @@ def _iter_clock_groups(
         yield members, session
 
 
+def _chunk_oversized_clock_unit(
+    unit: dict[str, Any], limit: int
+) -> list[dict[str, Any]]:
+    """Split one clock unit at interface boundaries without splitting a row."""
+    chunks: list[dict[str, Any]] = []
+    current_members: list[dict[str, Any]] = []
+    current_paths: set[str] = set(unit.get("clock_paths", ()))
+    first_chunk = True
+
+    def flush() -> None:
+        nonlocal current_members, current_paths, first_chunk
+        if not current_members:
+            return
+        chunks.append({
+            "members": current_members,
+            "session": unit["session"],
+            "paths": tuple(sorted(current_paths)),
+            "clock_count": 1 if first_chunk else 0,
+            "chunked": True,
+        })
+        first_chunk = False
+        current_members = []
+        # The shared sampling session already owns the clock transition/edge
+        # vectors after its first chunk, so later native groups need not load it.
+        current_paths = set()
+
+    for member, member_paths in zip(unit["members"], unit["member_paths"]):
+        candidate = current_paths | set(member_paths)
+        if current_members and len(candidate) > limit:
+            flush()
+            candidate = set(member_paths)
+        current_members.append(member)
+        current_paths = candidate
+        # If one interface alone exceeds the bound, keep it intact and let the
+        # parser's existing honest fallback handle only that interface.
+        if len(current_paths) > limit:
+            flush()
+    flush()
+    return chunks
+
+
+def _pack_clock_units(
+    units: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    """Deterministic bounded first-fit packing of complete clock units."""
+    packs: list[dict[str, Any]] = []
+    regular: list[dict[str, Any]] = []
+    for unit in units:
+        if len(unit["paths"]) > limit:
+            packs.extend(_chunk_oversized_clock_unit(unit, limit))
+        else:
+            regular.append(unit)
+
+    for unit in regular:
+        unit_paths = set(unit["paths"])
+        destination = None
+        for pack in packs:
+            if pack.get("chunked"):
+                continue
+            if len(set(pack["paths"]) | unit_paths) <= limit:
+                destination = pack
+                break
+        if destination is None:
+            destination = {
+                "units": [], "paths": tuple(), "clock_count": 0,
+                "chunked": False,
+            }
+            packs.append(destination)
+        destination["units"].append(unit)
+        destination["paths"] = tuple(sorted(set(destination["paths"]) | unit_paths))
+        destination["clock_count"] += int(unit.get("clock_count", 0))
+
+    # Chunk packs already represent exactly one (partial) logical unit. Give
+    # every pack a common units shape for the execution loop.
+    for pack in packs:
+        if "units" not in pack:
+            pack["units"] = [{
+                "members": pack.pop("members"),
+                "session": pack.pop("session"),
+            }]
+    return packs
+
+
 def _is_clocking_block_scope(scope: str) -> bool:
     """A SystemVerilog clocking block (e.g. ``tb.m_if0.mdrv_cb``) mirrors its parent
     interface's signals for TB sampling — it is not a distinct bus and has no clock
@@ -414,11 +497,14 @@ def sweep_handshake_anomalies(
         "sweep_native_group_count",
         "sweep_native_group_signal_total",
         "sweep_native_group_signal_max",
+        "sweep_native_group_load_call_count",
         "sweep_native_group_fallback_count",
         "sweep_native_group_unsupported_count",
         "sweep_native_group_oversized_count",
         "sweep_native_group_begin_error_count",
         "sweep_native_profiled_read_count",
+        "sweep_native_standalone_load_call_count",
+        "sweep_native_fallback_signal_total",
         "sweep_native_transition_count",
         "sweep_native_output_bytes",
         "sweep_native_truncated_calls",
@@ -428,6 +514,9 @@ def sweep_handshake_anomalies(
         "sweep_sample_edges_max",
         "sweep_sample_values_total",
         "sweep_sample_values_max",
+        "sweep_group_pack_count",
+        "sweep_group_pack_clock_total",
+        "sweep_group_chunk_count",
     ):
         operation_metrics.set_value(metric_name, 0)
     for metric_name in (
@@ -435,11 +524,20 @@ def sweep_handshake_anomalies(
         "sweep_native_add_signal_total_ms",
         "sweep_native_load_total_ms",
         "sweep_native_load_max_ms",
+        "sweep_native_group_load_total_ms",
+        "sweep_native_group_load_max_ms",
+        "sweep_native_standalone_load_total_ms",
+        "sweep_native_standalone_load_max_ms",
         "sweep_native_create_handle_total_ms",
         "sweep_native_seek_total_ms",
         "sweep_native_traverse_format_total_ms",
         "sweep_native_free_handle_total_ms",
         "sweep_native_unload_total_ms",
+        "sweep_path_resolution_total_ms",
+        "sweep_sample_lookup_total_ms",
+        "sweep_sample_materialize_total_ms",
+        "sweep_protocol_scan_total_ms",
+        "sweep_write_data_scan_total_ms",
         "sweep_result_build_ms",
     ):
         operation_metrics.set_value(metric_name, 0.0)
@@ -449,39 +547,88 @@ def sweep_handshake_anomalies(
     transition_truncated_count = 0
     resolution_cache: dict[str, str] = {}
     parser: Any | None = None
+    logical_units: list[dict[str, Any]] = []
     for group_members, sampling_session in _iter_clock_groups(
         to_inspect, edge=edge, start_ps=start_ps, end_ps=end_ps
     ):
         check_cancelled()
         group_paths: list[str] = []
+        member_paths: list[tuple[str, ...]] = []
+        clock_paths: tuple[str, ...] = ()
         if sampling_session is not None:
-            if parser is None:
-                parser = get_parser(wave_path)
-            raw_paths = [
-                group_members[0].get("clock"),
-                *(
-                    path
-                    for member in group_members
-                    for path in _interface_sample_signals(member)
-                ),
-            ]
-            for raw_path in dict.fromkeys(
-                str(path) for path in raw_paths if path
-            ):
-                if raw_path not in resolution_cache:
-                    resolution_cache[raw_path] = _resolve_signal_path(
-                        parser, raw_path
-                    )
-                group_paths.append(resolution_cache[raw_path])
+            resolution_started = time.perf_counter()
+            try:
+                if parser is None:
+                    parser = get_parser(wave_path)
+                raw_paths = [
+                    group_members[0].get("clock"),
+                    *(
+                        path
+                        for member in group_members
+                        for path in _interface_sample_signals(member)
+                    ),
+                ]
+                resolved_by_raw: dict[str, str] = {}
+                for raw_path in dict.fromkeys(str(path) for path in raw_paths if path):
+                    if raw_path not in resolution_cache:
+                        resolution_cache[raw_path] = _resolve_signal_path(
+                            parser, raw_path
+                        )
+                    resolved_by_raw[raw_path] = resolution_cache[raw_path]
+                    group_paths.append(resolution_cache[raw_path])
+                raw_clock = str(group_members[0].get("clock") or "")
+                if raw_clock:
+                    clock_paths = (resolved_by_raw[raw_clock],)
+                for member in group_members:
+                    member_paths.append(tuple(dict.fromkeys(
+                        resolved_by_raw[path]
+                        for path in _interface_sample_signals(member)
+                    )))
+            finally:
+                operation_metrics.add_sweep_execution_timing(
+                    "path_resolution",
+                    (time.perf_counter() - resolution_started) * 1000.0,
+                )
+        else:
+            member_paths = [tuple() for _ in group_members]
 
+        logical_units.append({
+            "members": group_members,
+            "session": sampling_session,
+            "paths": tuple(sorted(set(group_paths))),
+            "clock_paths": clock_paths,
+            "member_paths": member_paths,
+            "clock_count": 1 if sampling_session is not None else 0,
+        })
+
+    group_limit = max(1, int(getattr(parser, "transition_group_limit", 16)))
+    packs = _pack_clock_units(logical_units, group_limit)
+    session_last_pack: dict[int, int] = {}
+    for pack_index, pack in enumerate(packs):
+        for unit in pack["units"]:
+            if unit.get("session") is not None:
+                session_last_pack[id(unit["session"])] = pack_index
+
+    for pack_index, pack in enumerate(packs):
+        check_cancelled()
+        pack_entries = [
+            (member, unit.get("session"))
+            for unit in pack["units"]
+            for member in unit["members"]
+        ]
         transition_group = getattr(parser, "transition_group", None)
         group_context = (
-            transition_group(group_paths)
-            if transition_group is not None and group_paths
+            transition_group(list(pack["paths"]))
+            if transition_group is not None and pack["paths"]
             else nullcontext(False)
         )
+        if transition_group is not None and pack["paths"]:
+            operation_metrics.record_sweep_group_pack(
+                clock_count=int(pack.get("clock_count", 0)),
+                chunked=bool(pack.get("chunked")),
+            )
         with group_context:
-            for nb in group_members:
+            for nb, sampling_session in pack_entries:
                 # Per-interface cancellation checkpoint: an abandoned whole-design
                 # sweep stops at the next interface instead of finishing all of them.
                 check_cancelled()
@@ -506,6 +653,7 @@ def sweep_handshake_anomalies(
                         cursor_store=None,  # the sweep sets ONE cursor, not one per interface
                         _sampling_session=sampling_session,
                         _resolution_cache=resolution_cache,
+                        _compact_sampling=True,
                         **nb["inspect_kwargs"],
                     )
                 finally:
@@ -540,6 +688,13 @@ def sweep_handshake_anomalies(
                     "attribution": row_attribution,
                     **{k: res.get(k) for k in _FACT_KEYS},
                 })
+        for unit in pack["units"]:
+            sampling_session = unit.get("session")
+            if (
+                sampling_session is not None
+                and session_last_pack.get(id(sampling_session)) == pack_index
+            ):
+                sampling_session.clear()
         operation_metrics.record_sweep_rss(phase="sample")
 
     result_build_started = time.perf_counter()

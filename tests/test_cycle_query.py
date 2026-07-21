@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from bisect import bisect_right
+import random
 import threading
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from src import operation_metrics
 from src.cancellation import OperationCancelled
 from src.cycle_query import (
     EdgeSamplingSession,
+    _sample_signal_values,
     annotate_center_transients,
     get_signals_by_cycle,
     sample_signals_on_edges,
@@ -72,6 +75,75 @@ def test_annotate_does_not_flag_a_normal_cycle_boundary_change():
 
 def _parser() -> VCDParser:
     return VCDParser(str(FIXTURE))
+
+
+class _FallbackParser:
+    def __init__(self, value):
+        self.value = value
+        self.calls: list[tuple[str, int]] = []
+
+    def get_value_at_time(self, signal_path: str, time_ps: int):
+        self.calls.append((signal_path, time_ps))
+        return {"value": self.value}
+
+
+def _bisect_sample_oracle(parser, signal_path, transitions, sample_times):
+    transition_times = [transition["time_ps"] for transition in transitions]
+    fallback = None
+    result = []
+    for sample_time in sample_times:
+        index = bisect_right(transition_times, sample_time) - 1
+        if index >= 0:
+            value = transitions[index].get("value")
+        else:
+            if fallback is None:
+                fallback = parser.get_value_at_time(signal_path, sample_times[0])["value"]
+            value = fallback
+        if isinstance(value, dict):
+            result.append({key: value.get(key) for key in ("bin", "hex", "dec")})
+        else:
+            result.append({"bin": None, "hex": None, "dec": None})
+    return result
+
+
+@pytest.mark.parametrize("decreasing", [False, True])
+def test_linear_signal_sampler_matches_previous_bisect_semantics(decreasing):
+    rng = random.Random(20260721)
+    times = sorted(rng.choices(range(5, 5000), k=700))
+    transitions = [
+        {"time_ps": time_ps, "value": {"bin": str(index & 1), "dec": index}}
+        for index, time_ps in enumerate(times)
+    ]
+    sample_times = sorted(rng.choices(range(0, 5100), k=1200))
+    if decreasing:
+        sample_times[800:900] = reversed(sample_times[800:900])
+    fallback_value = {"bin": "x", "hex": "x", "dec": None}
+    actual_parser = _FallbackParser(fallback_value)
+    oracle_parser = _FallbackParser(fallback_value)
+
+    actual = _sample_signal_values(
+        actual_parser, "top.sig", transitions, sample_times
+    )
+    expected = _bisect_sample_oracle(
+        oracle_parser, "top.sig", transitions, sample_times
+    )
+
+    assert actual == expected
+    assert actual_parser.calls == oracle_parser.calls
+
+
+def test_linear_signal_sampler_uses_last_duplicate_timestamp_value():
+    transitions = [
+        {"time_ps": 10, "value": {"bin": "0", "dec": 0}},
+        {"time_ps": 10, "value": {"bin": "1", "dec": 1}},
+        {"time_ps": 20, "value": {"bin": "0", "dec": 0}},
+    ]
+    parser = _FallbackParser({"bin": "x", "dec": None})
+
+    sampled = _sample_signal_values(parser, "top.sig", transitions, [0, 10, 15, 20])
+
+    assert [value["dec"] for value in sampled] == [None, 1, 1, 0]
+    assert parser.calls == [("top.sig", 0)]
 
 
 def test_get_signals_by_cycle_basic():

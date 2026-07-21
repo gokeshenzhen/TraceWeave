@@ -255,6 +255,11 @@ class FSDBParser:
         self._scale_fs = int(self._lib.fsdb_get_scale_info(handle, unit_buf, 64))
         self._scale_unit = unit_buf.value.decode() or "unknown"
 
+    @property
+    def transition_group_limit(self) -> int:
+        """Maximum resident signal count used by the bounded sweep scheduler."""
+        return _transition_group_limit()
+
     def _scale_unknown_error(self) -> RuntimeError:
         return RuntimeError(
             f"FSDB time scale is unreadable (header scale unit: {self._scale_unit!r}) "
@@ -327,7 +332,8 @@ class FSDBParser:
                 buf, _BUF_SIZE, ctypes.byref(profile),
             )
             operation_metrics.record_sweep_native_transition(
-                _profile_dict(profile)
+                _profile_dict(profile),
+                standalone_load=not self._transition_group_active,
             )
         else:
             rc = self._lib.fsdb_get_transitions(
@@ -370,11 +376,15 @@ class FSDBParser:
             yield False
             return
         if not getattr(self._lib, "_traceweave_has_transition_group", False):
-            operation_metrics.record_sweep_native_group_fallback("unsupported")
+            operation_metrics.record_sweep_native_group_fallback(
+                "unsupported", signal_count=len(paths)
+            )
             yield False
             return
         if len(paths) > _transition_group_limit():
-            operation_metrics.record_sweep_native_group_fallback("oversized")
+            operation_metrics.record_sweep_native_group_fallback(
+                "oversized", signal_count=len(paths)
+            )
             yield False
             return
 
@@ -385,7 +395,9 @@ class FSDBParser:
             self._handle, c_paths, len(encoded), ctypes.byref(begin_profile)
         )
         if rc < 0:
-            operation_metrics.record_sweep_native_group_fallback("begin_error")
+            operation_metrics.record_sweep_native_group_fallback(
+                "begin_error", signal_count=len(paths)
+            )
             yield False
             return
 

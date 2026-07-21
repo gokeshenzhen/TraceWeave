@@ -47,11 +47,18 @@ _PUBLIC_FIELDS = {
     "sweep_native_group_count",
     "sweep_native_group_signal_total",
     "sweep_native_group_signal_max",
+    "sweep_native_group_load_call_count",
+    "sweep_native_group_load_total_ms",
+    "sweep_native_group_load_max_ms",
     "sweep_native_group_fallback_count",
     "sweep_native_group_unsupported_count",
     "sweep_native_group_oversized_count",
     "sweep_native_group_begin_error_count",
     "sweep_native_profiled_read_count",
+    "sweep_native_standalone_load_call_count",
+    "sweep_native_standalone_load_total_ms",
+    "sweep_native_standalone_load_max_ms",
+    "sweep_native_fallback_signal_total",
     "sweep_native_lookup_total_ms",
     "sweep_native_add_signal_total_ms",
     "sweep_native_load_total_ms",
@@ -74,6 +81,14 @@ _PUBLIC_FIELDS = {
     "sweep_sample_edges_max",
     "sweep_sample_values_total",
     "sweep_sample_values_max",
+    "sweep_path_resolution_total_ms",
+    "sweep_sample_lookup_total_ms",
+    "sweep_sample_materialize_total_ms",
+    "sweep_protocol_scan_total_ms",
+    "sweep_write_data_scan_total_ms",
+    "sweep_group_pack_count",
+    "sweep_group_pack_clock_total",
+    "sweep_group_chunk_count",
     "sweep_result_build_ms",
     "sweep_result_serialize_ms",
     "sweep_result_bytes",
@@ -200,6 +215,26 @@ def add_sweep_cpu_timing(kind: str, duration_ms: float) -> None:
         metrics.values[field] = float(metrics.values.get(field, 0.0)) + duration_ms
 
 
+def add_sweep_execution_timing(kind: str, duration_ms: float) -> None:
+    """Aggregate a fixed execution phase without accepting identity labels."""
+    field = {
+        "path_resolution": "sweep_path_resolution_total_ms",
+        "sample_lookup": "sweep_sample_lookup_total_ms",
+        "sample_materialize": "sweep_sample_materialize_total_ms",
+        "protocol_scan": "sweep_protocol_scan_total_ms",
+        "write_data_scan": "sweep_write_data_scan_total_ms",
+    }.get(kind)
+    if field is None:
+        return
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values[field] = float(metrics.values.get(field, 0.0)) + duration_ms
+
+
 def record_sweep_reuse_hit(kind: str) -> None:
     """Count fixed-kind cache reuse without retaining signal identity."""
     field = {
@@ -250,6 +285,17 @@ def record_sweep_native_group_begin(profile: Mapping[str, object]) -> None:
         load_ms = _add_native_duration_locked(
             metrics, "load", profile.get("load_ns")
         )
+        metrics.values["sweep_native_group_load_call_count"] = (
+            int(metrics.values.get("sweep_native_group_load_call_count", 0)) + 1
+        )
+        metrics.values["sweep_native_group_load_total_ms"] = (
+            float(metrics.values.get("sweep_native_group_load_total_ms", 0.0))
+            + load_ms
+        )
+        metrics.values["sweep_native_group_load_max_ms"] = max(
+            float(metrics.values.get("sweep_native_group_load_max_ms", 0.0)),
+            load_ms,
+        )
         metrics.values["sweep_native_load_max_ms"] = max(
             float(metrics.values.get("sweep_native_load_max_ms", 0.0)), load_ms
         )
@@ -265,7 +311,9 @@ def record_sweep_native_group_end(profile: Mapping[str, object]) -> None:
         _add_native_duration_locked(metrics, "unload", profile.get("unload_ns"))
 
 
-def record_sweep_native_transition(profile: Mapping[str, object]) -> None:
+def record_sweep_native_transition(
+    profile: Mapping[str, object], *, standalone_load: bool = False
+) -> None:
     """Aggregate one profiled transition call without its signal identity."""
     metrics = current()
     if metrics is None:
@@ -288,6 +336,23 @@ def record_sweep_native_transition(profile: Mapping[str, object]) -> None:
                     float(metrics.values.get("sweep_native_load_max_ms", 0.0)),
                     duration_ms,
                 )
+                if standalone_load:
+                    metrics.values["sweep_native_standalone_load_call_count"] = (
+                        int(metrics.values.get(
+                            "sweep_native_standalone_load_call_count", 0
+                        )) + 1
+                    )
+                    metrics.values["sweep_native_standalone_load_total_ms"] = (
+                        float(metrics.values.get(
+                            "sweep_native_standalone_load_total_ms", 0.0
+                        )) + duration_ms
+                    )
+                    metrics.values["sweep_native_standalone_load_max_ms"] = max(
+                        float(metrics.values.get(
+                            "sweep_native_standalone_load_max_ms", 0.0
+                        )),
+                        duration_ms,
+                    )
         metrics.values["sweep_native_transition_count"] = (
             int(metrics.values.get("sweep_native_transition_count", 0))
             + int(profile.get("transition_count", 0) or 0)
@@ -311,7 +376,9 @@ def _add_native_duration_locked(
     return duration_ms
 
 
-def record_sweep_native_group_fallback(reason: str) -> None:
+def record_sweep_native_group_fallback(
+    reason: str, *, signal_count: int = 0
+) -> None:
     """Count a fixed fallback reason; arbitrary labels are rejected."""
     reason_field = {
         "unsupported": "sweep_native_group_unsupported_count",
@@ -330,6 +397,31 @@ def record_sweep_native_group_fallback(reason: str) -> None:
             int(metrics.values.get("sweep_native_group_fallback_count", 0)) + 1
         )
         metrics.values[reason_field] = int(metrics.values.get(reason_field, 0)) + 1
+        metrics.values["sweep_native_fallback_signal_total"] = (
+            int(metrics.values.get("sweep_native_fallback_signal_total", 0))
+            + max(0, int(signal_count))
+        )
+
+
+def record_sweep_group_pack(*, clock_count: int, chunked: bool = False) -> None:
+    """Record bounded scheduler shape; identities are deliberately absent."""
+    metrics = current()
+    if metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        metrics.values["sweep_group_pack_count"] = (
+            int(metrics.values.get("sweep_group_pack_count", 0)) + 1
+        )
+        metrics.values["sweep_group_pack_clock_total"] = (
+            int(metrics.values.get("sweep_group_pack_clock_total", 0))
+            + max(0, int(clock_count))
+        )
+        if chunked:
+            metrics.values["sweep_group_chunk_count"] = (
+                int(metrics.values.get("sweep_group_chunk_count", 0)) + 1
+            )
 
 
 def record_sweep_cache_peak(entries: int, transitions: int) -> None:

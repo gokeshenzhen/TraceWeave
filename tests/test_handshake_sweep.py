@@ -26,6 +26,7 @@ from src.handshake_sweep import (
     _flags,
     _infer_channel_hint,
     _is_clocking_block_scope,
+    _pack_clock_units,
     _sort_key,
     sweep_handshake_anomalies,
 )
@@ -142,6 +143,21 @@ def _parser_factory():
         return cache[path]
 
     return get_parser
+
+
+class _RecordingGroupParser:
+    def __init__(self, path: str, limit: int):
+        self.inner = VCDParser(path)
+        self.transition_group_limit = limit
+        self.groups: list[tuple[str, ...]] = []
+
+    @contextmanager
+    def transition_group(self, paths):
+        self.groups.append(tuple(paths))
+        yield True
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
 
 
 # One unique filename per write, purely for per-test isolation hygiene.
@@ -263,6 +279,69 @@ def test_inspect_handshake_recovered_stall_not_ended_in_stall(tmp_path):
     assert res["ended_in_stall"] is False
     assert res["final_stall_cycles"] == 0
     assert res["transfer_count"] > 0
+
+
+def test_compact_inspect_result_matches_legacy_rows(tmp_path):
+    wave = _write(tmp_path, _single_stage_vcd([(0, "0"), (6, "1")]))
+    parser_factory = _parser_factory()
+    arguments = dict(
+        get_parser=parser_factory, wave_path=wave,
+        clock="top.clk", valid="top.valid", ready="top.ready",
+        max_wait_cycles=4,
+    )
+
+    legacy = inspect_handshake(**arguments)
+    compact = inspect_handshake(**arguments, _compact_sampling=True)
+
+    assert compact == legacy
+
+
+def test_scheduler_packs_two_small_clock_units_without_changing_facts(tmp_path):
+    wave = _write(tmp_path, _multi_stage_vcd(["1", "0"], n_cycles=10))
+    parser = _RecordingGroupParser(wave, limit=6)
+    grouped = sweep_handshake_anomalies(
+        get_parser=lambda _: parser, wave_path=wave, max_wait_cycles=4
+    )
+    legacy = sweep_handshake_anomalies(
+        get_parser=_parser_factory(), wave_path=wave, max_wait_cycles=4
+    )
+
+    assert grouped == legacy
+    assert len(parser.groups) == 1
+    assert len(parser.groups[0]) == 6
+
+
+def test_scheduler_chunks_oversized_shared_clock_without_group_fallback(tmp_path):
+    wave = _write(tmp_path, _shared_clock_vcd(["1", "0", "1"], n_cycles=10))
+    parser = _RecordingGroupParser(wave, limit=4)
+    grouped = sweep_handshake_anomalies(
+        get_parser=lambda _: parser, wave_path=wave, max_wait_cycles=4
+    )
+    legacy = sweep_handshake_anomalies(
+        get_parser=_parser_factory(), wave_path=wave, max_wait_cycles=4
+    )
+
+    assert grouped == legacy
+    assert [len(group) for group in parser.groups] == [3, 4]
+    assert all(len(group) <= parser.transition_group_limit for group in parser.groups)
+
+
+def test_pack_clock_units_keeps_single_oversized_interface_intact():
+    session = object()
+    unit = {
+        "members": [{"scope": "big"}],
+        "session": session,
+        "paths": tuple(f"s{i}" for i in range(6)),
+        "clock_paths": ("clk",),
+        "member_paths": [tuple(f"s{i}" for i in range(6))],
+        "clock_count": 1,
+    }
+
+    packs = _pack_clock_units([unit], limit=4)
+
+    assert len(packs) == 1
+    assert len(packs[0]["paths"]) == 7
+    assert packs[0]["chunked"] is True
 
 
 # --- sweep_handshakes (decision B: comparative fact table, not a verdict) -----

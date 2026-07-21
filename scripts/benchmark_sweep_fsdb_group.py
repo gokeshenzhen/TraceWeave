@@ -74,12 +74,35 @@ def _run_once(
         "native_group_signal_max": snapshot.get(
             "sweep_native_group_signal_max", 0
         ),
+        "native_group_load_total_ms": snapshot.get(
+            "sweep_native_group_load_total_ms", 0
+        ),
+        "native_standalone_load_total_ms": snapshot.get(
+            "sweep_native_standalone_load_total_ms", 0
+        ),
+        "native_fallback_signal_total": snapshot.get(
+            "sweep_native_fallback_signal_total", 0
+        ),
+        "group_pack_count": snapshot.get("sweep_group_pack_count", 0),
+        "group_pack_clock_total": snapshot.get(
+            "sweep_group_pack_clock_total", 0
+        ),
+        "group_chunk_count": snapshot.get("sweep_group_chunk_count", 0),
         "native_load_total_ms": snapshot.get("sweep_native_load_total_ms", 0),
         "native_traverse_format_total_ms": snapshot.get(
             "sweep_native_traverse_format_total_ms", 0
         ),
         "clock_read_count": snapshot.get("sweep_clock_read_count", 0),
         "signal_read_count": snapshot.get("sweep_signal_read_count", 0),
+        "sample_lookup_total_ms": snapshot.get(
+            "sweep_sample_lookup_total_ms", 0
+        ),
+        "sample_materialize_total_ms": snapshot.get(
+            "sweep_sample_materialize_total_ms", 0
+        ),
+        "protocol_scan_total_ms": snapshot.get(
+            "sweep_protocol_scan_total_ms", 0
+        ),
         "rss_peak_delta_kib": snapshot.get("sweep_rss_peak_delta_kib", 0),
     }
     return result, summary

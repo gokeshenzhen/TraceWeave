@@ -136,6 +136,21 @@ Verification
   +2.1%). This validates the repeated-clock optimization, not a 5-minute promise
   for a proprietary FSDB whose native signal reads may have a different cost
   profile.
+- Full sweeps use a private column-oriented sampler: one edge-time vector and
+  one value-reference column per signal. They do not materialize `time_ns`, a
+  per-edge `signals` dictionary, or a normalized `{bin,hex,dec}` copy for every
+  sampled value. Standalone sampling tools retain their existing row-oriented
+  result schema. `inspect_handshake` consumes either representation with
+  identical facts, and advances the AHB write-data hold state machine in the
+  same pass as the main handshake state machine. Signal lookup uses a monotonic
+  transition cursor (with a bisect fallback only for unexpected decreasing
+  sample times), preserving duplicate-timestamp and pre-first-transition
+  behavior. On the same generated 32-interface/one-clock/20,000-cycle VCD
+  benchmark above, three runs measured 11,473.8 ms median and 19.80 MiB maximum
+  incremental `tracemalloc` peak: 18.0% lower elapsed time and 40.2% lower peak
+  than the previous 13,986.8 ms / 33.13 MiB grouped implementation. A separate
+  1,000,000-sample/50,000-transition lookup benchmark measured 3.3x speedup
+  over the former per-sample bisect oracle with equal values.
 - For FSDB clock groups, `FSDBParser.transition_group()` uses an optional native
   ABI to add the group's resolved signals once, call `ffrLoadSignals()` once,
   read each signal independently through the existing reusable 64 MiB per-call
@@ -143,6 +158,14 @@ Verification
   per-signal load/unload without adopting the multi-signal batch output format
   or changing truncation receipts. The default
   native group limit is 16 signals to bound resident FFR data on multi-GB waves;
+  the sweep scheduler first-fit packs complete small clock units into that
+  bound. An oversized clock unit is split only at interface boundaries while
+  retaining one `EdgeSamplingSession`: the first chunk reads/caches the clock,
+  later chunks load only their signal subset, and a single interface that
+  itself exceeds the bound falls back honestly. This removes whole-group
+  oversized fallback without raising the resident-signal limit. Packs remain
+  serial under the process-global FSDB lock and every native group unloads in
+  its existing `finally` path.
   `TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS` can set 1..256 after RSS review. Oversized
   groups, begin failures, and older wrappers automatically use the legacy
   per-signal path. Cancellation between interfaces unwinds the context before
@@ -155,11 +178,11 @@ Verification
 - `scripts/benchmark_sweep_fsdb_group.py` compares complete sweep results while
   alternating forced-legacy and grouped runs, and emits aggregates only. On a
   local 34,874-byte AHB repro FSDB (634 signals, four discovered interfaces,
-  7 repeats), both paths returned byte-equivalent fact tables with complete
-  coverage and no transition truncation. The grouped median was 48.405 ms
-  versus 51.433 ms legacy (5.9% lower); all four groups activated, with at most
-  9 signals per group and no fallback. This is a protocol/compatibility sample,
-  not evidence about multi-GB scaling.
+  5 repeats), both paths returned byte-equivalent fact tables with complete
+  coverage and no transition truncation. The packed/grouped median was
+  47.807 ms versus 50.523 ms forced-legacy (5.4% lower); four clock units fit
+  into three native packs (maximum 16 resident signals) with no fallback. This
+  is a protocol/compatibility sample, not evidence about multi-GB scaling.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.
