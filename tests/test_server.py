@@ -138,6 +138,51 @@ class TestDispatchGetSimPaths:
 
 
 @pytest.mark.anyio
+class TestVertexFunctionSchemaCompatibility:
+    async def test_tool_input_schemas_avoid_union_types_and_misplaced_items(self):
+        """Vertex models ``type`` as one enum and permits ``items`` on ARRAY only."""
+        tools = await server.list_tools()
+        violations = []
+
+        def walk(tool_name, path, node):
+            if isinstance(node, dict):
+                schema_type = node.get("type")
+                if isinstance(schema_type, list):
+                    violations.append(
+                        f"{tool_name}:{path}.type is a list: {schema_type!r}"
+                    )
+                if "items" in node and schema_type != "array":
+                    violations.append(
+                        f"{tool_name}:{path} has items with type {schema_type!r}"
+                    )
+                for key, value in node.items():
+                    walk(tool_name, f"{path}.{key}", value)
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    walk(tool_name, f"{path}[{index}]", value)
+
+        for tool in tools:
+            walk(tool.name, "$", tool.inputSchema)
+
+        assert violations == []
+
+    async def test_search_signals_keyword_uses_anyof_without_changing_contract(self):
+        tools = await server.list_tools()
+        search_tool = next(tool for tool in tools if tool.name == "search_signals")
+        keyword = search_tool.inputSchema["properties"]["keyword"]
+
+        assert "type" not in keyword
+        assert "items" not in keyword
+        assert keyword["anyOf"][0] == {"type": "string"}
+        assert keyword["anyOf"][1] == {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": server.SIGNAL_SEARCH_MAX_KEYWORDS,
+        }
+
+
+@pytest.mark.anyio
 class TestStructuralScannerToolContract:
     async def test_tool_schema_allows_default_simulator(self):
         tools = await server.list_tools()

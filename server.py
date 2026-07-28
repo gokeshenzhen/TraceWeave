@@ -1172,9 +1172,15 @@ def _strip_signals_to_values_only(result: dict) -> None:
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
 
+# Vertex function declarations use an OpenAPI subset whose ``type`` field is a
+# single enum value, so JSON-Schema-style type arrays are rejected.  Express
+# integer-or-string inputs through the supported ``anyOf`` keyword instead.
+def _integer_or_string_schema() -> dict:
+    return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+
 # Time inputs accept a TimeSpec: an integer (ps), a cursor reference
 # "@<name>", or a unit literal like "12.34ns". See src/timespec.py.
-_TIMESPEC_TYPE = ["integer", "string"]
 _TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c', or a unit literal like '12.34ns'."
 
 
@@ -1315,11 +1321,21 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
-                    "keyword":   {"type": ["string", "array"], "items": {"type": "string"},
-                                  "description": "Signal keyword (for example s_bits, clk, or data), or a list of "
-                                                 f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
-                                                 "lookups in one call — prefer the list form over consecutive "
-                                                 "single-keyword calls"},
+                    "keyword": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "minItems": 1,
+                                "maxItems": SIGNAL_SEARCH_MAX_KEYWORDS,
+                            },
+                        ],
+                        "description": "Signal keyword (for example s_bits, clk, or data), or a list of "
+                                       f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
+                                       "lookups in one call — prefer the list form over consecutive "
+                                       "single-keyword calls",
+                    },
                     "max_results": {"type": "integer", "description": "Maximum number of matches to return. Default: 50",
                                     "default": 50},
                 },
@@ -1336,7 +1352,7 @@ async def list_tools():
                     "wave_path":   {"type": "string"},
                     "signal_path": {"type": "string",
                                     "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list."},
-                    "time_ps":     {"type": _TIMESPEC_TYPE, "description": "Query time." + _TIMESPEC_HINT},
+                    "time_ps":     {**_integer_or_string_schema(), "description": "Query time." + _TIMESPEC_HINT},
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
             },
@@ -1355,8 +1371,8 @@ async def list_tools():
                 "properties": {
                     "wave_path":     {"type": "string"},
                     "signal_path":   {"type": "string"},
-                    "start_time_ps": {"type": _TIMESPEC_TYPE, "default": 0, "description": "Window start." + _TIMESPEC_HINT},
-                    "end_time_ps":   {"type": _TIMESPEC_TYPE, "default": -1,
+                    "start_time_ps": {**_integer_or_string_schema(), "default": 0, "description": "Window start." + _TIMESPEC_HINT},
+                    "end_time_ps":   {**_integer_or_string_schema(), "default": -1,
                                       "description": "-1 means through the end of simulation." + _TIMESPEC_HINT},
                     "max_transitions": {"type": "integer", "default": TRANSITIONS_MAX_RETURNED,
                                         "description": "Cap on returned transitions (earliest in range kept). "
@@ -1419,7 +1435,7 @@ async def list_tools():
                     "signal_paths":  {"type": "array", "items": {"type": "string"},
                                       "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions."},
                     "center_time_ps": {
-                        "type": _TIMESPEC_TYPE,
+                        **_integer_or_string_schema(),
                         "description": (
                             "Center time in PICOSECONDS (not ns). Convert sim-log ns "
                             "via *1000. Must be within the waveform duration reported "
@@ -1495,11 +1511,11 @@ async def list_tools():
                         "minimum": 0,
                     },
                     "start_time_ps": {
-                        "type": _TIMESPEC_TYPE,
+                        **_integer_or_string_schema(),
                         "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle." + _TIMESPEC_HINT,
                     },
                     "end_time_ps": {
-                        "type": _TIMESPEC_TYPE,
+                        **_integer_or_string_schema(),
                         "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles." + _TIMESPEC_HINT,
                     },
                     "sample_offset_ps": {
@@ -1858,7 +1874,7 @@ async def list_tools():
                 "properties": {
                     "wave_path": {"type": "string"},
                     "signal_path": {"type": "string"},
-                    "time_ps": {"type": _TIMESPEC_TYPE, "description": "Trace start time." + _TIMESPEC_HINT},
+                    "time_ps": {**_integer_or_string_schema(), "description": "Trace start time." + _TIMESPEC_HINT},
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
@@ -2054,8 +2070,8 @@ async def list_tools():
                     "signal_a": {"type": "string", "description": "Full hierarchical signal path in wave_path_a."},
                     "wave_path_b": {"type": "string", "description": "Second waveform. May equal wave_path_a for within-run diff."},
                     "signal_b": {"type": "string", "description": "Full hierarchical signal path in wave_path_b."},
-                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Start of comparison window. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "End of comparison window. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Start of comparison window. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "End of comparison window. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
                     "cursor_name": {"type": "string", "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated."},
                     "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
                 },
@@ -2085,8 +2101,8 @@ async def list_tools():
                         "description": "Edge to count. 'any' for multi-bit/strobe signals. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
                     "tolerance_frac": {
                         "type": "number",
                         "description": "Fraction of the period a beat may deviate before counting as an off-beat. Default 0.05 (5%).",
@@ -2176,8 +2192,8 @@ async def list_tools():
                     "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
                     "scope": {"type": "string", "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut'). If the scope contains no discovered interfaces the result reports coverage_status=zero_coverage; retry unscoped or with a parent/interface scope."},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.", "default": 0},
-                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.", "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.", "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.", "default": -1},
                     "max_wait_cycles": {"type": "integer", "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.", "default": 16},
                     "max_interfaces": {"type": "integer", "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.", "default": 64},
                 },
@@ -2221,7 +2237,7 @@ async def list_tools():
                             "properties": {
                                 "signal": {"type": "string"},
                                 "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known"]},
-                                "value": {"type": ["integer", "string"], "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known."},
+                                "value": {**_integer_or_string_schema(), "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known."},
                             },
                             "required": ["signal", "op"],
                         },
@@ -2233,9 +2249,9 @@ async def list_tools():
                         "description": "sequence only: check the per-accepted-beat increment of one signal. predicate is the accepted-beat gate (e.g. hready==1 && htrans active). E.g. AHB byte INCR: {signal:'top.haddr', value:1}. For WRAP bursts pass modulo = burst region bytes (size*len) so the wrap-around beat is accepted via (cur-prev) mod modulo. Pass restart_when (a predicate, e.g. htrans==NONSEQ) to re-seed at each new burst so burst boundaries are not flagged.",
                         "properties": {
                             "signal": {"type": "string", "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr)."},
-                            "value": {"type": ["integer", "string"], "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'."},
+                            "value": {**_integer_or_string_schema(), "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'."},
                             "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le"], "description": "How the actual increment is compared to value. Default eq."},
-                            "modulo": {"type": ["integer", "string"], "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR."},
+                            "modulo": {**_integer_or_string_schema(), "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR."},
                             "restart_when": {"type": "array", "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.", "items": {"type": "object"}},
                         },
                         "required": ["signal", "value"],
@@ -2243,8 +2259,8 @@ async def list_tools():
                     "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.", "default": 1},
                     "overlap": {"type": "boolean", "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.", "default": True},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace.", "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
                     "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the witness/counterexample."},
                     "cursor_note": {"type": "string", "description": "Optional note for the registered cursor."},
                 },
@@ -2293,8 +2309,8 @@ async def list_tools():
                     "reset_active_low": {"type": "boolean", "description": "reset is active-low (rst_n). Default true.", "default": True},
                     "capture_beats": {"type": "boolean", "description": "Include per-beat data (data_beats[]) on each txn. Default false (only beat_count). Enable for data-integrity debugging; can be large.", "default": False},
                     "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {"type": ["integer", "string"], "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {"type": ["integer", "string"], "description": "Window end. -1 = end of trace.", "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
                     "active_high": {"type": "boolean", "description": "valid/ready/last polarity. Default true.", "default": True},
                     "timeout_cycles": {"type": "integer", "description": "Optional: count completed txns with latency above this many cycles (slow_count fact)."},
                     "max_transactions": {"type": "integer", "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.", "default": 256},
@@ -2366,8 +2382,8 @@ async def list_tools():
                         "description": "Clock edge to sample on. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {"type": _TIMESPEC_TYPE, "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
+                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
                     "max_wait_cycles": {
                         "type": "integer",
                         "description": "A stall longer than this many cycles becomes a long_stall finding. Default 16.",
