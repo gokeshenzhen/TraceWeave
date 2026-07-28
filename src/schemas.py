@@ -401,10 +401,8 @@ class SearchSignalsResult(SchemaModel):
     hint: str | None = None
 
 
-class SearchSignalsBatchEntry(SchemaModel):
-    keyword: str
-    total_matched: int
-    results: list[dict[str, Any]] = Field(default_factory=list)
+class SearchSignalsBatchEntry(SearchSignalsResult):
+    """One batch row has the same strict shape as a single search result."""
 
 
 class SearchSignalsBatchResult(SchemaModel):

@@ -8,6 +8,7 @@ from src.schemas import (
     GetSignalsByCycleResult,
     ParseSimLogResult,
     ProblemHints,
+    SearchSignalsBatchResult,
     SimPathsResult,
     WaveformSummaryResult,
 )
@@ -102,6 +103,24 @@ def test_waveform_summary_json_roundtrip():
         }
     )
     assert json.loads(result.model_dump_json(exclude_none=True))["format"] == "VCD"
+
+
+def test_search_signals_batch_accepts_single_result_hint():
+    result = SearchSignalsBatchResult.model_validate(
+        {
+            "batch": [
+                {
+                    "keyword": "clk",
+                    "total_matched": 0,
+                    "results": [],
+                    "hint": "Use the full signal path.",
+                }
+            ],
+            "hint": "One entry per keyword.",
+        }
+    )
+
+    assert result.batch[0].hint == "Use the full signal path."
 
 
 def test_get_signals_by_cycle_result_roundtrip():

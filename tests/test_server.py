@@ -2429,6 +2429,10 @@ class TestSearchSignalsBatch:
 
     async def test_fsdb_batch_reuses_one_cached_index(self, monkeypatch):
         created = []
+        search_hint = (
+            "Use the full path from the path field as the signal_path argument "
+            "for tools such as get_signal_at_time."
+        )
 
         class _FakeIndex:
             def __init__(self, path):
@@ -2437,7 +2441,13 @@ class TestSearchSignalsBatch:
 
             def search(self, kw, max_r):
                 self.searched.append(kw)
-                return {"keyword": kw, "total_matched": 0, "results": []}
+                # Match the real FSDBParser.search_signals response shape.
+                return {
+                    "keyword": kw,
+                    "total_matched": 0,
+                    "results": [],
+                    "hint": search_hint,
+                }
 
         monkeypatch.setattr(server, "FSDBSignalIndex", _FakeIndex)
         monkeypatch.setattr(server, "_get_wave_signature", lambda p: ("sig",))
@@ -2450,6 +2460,7 @@ class TestSearchSignalsBatch:
         assert len(created) == 1  # one index build serves the whole batch
         assert created[0].searched == ["a", "b"]
         assert [e.keyword for e in result.batch] == ["a", "b"]
+        assert [e.hint for e in result.batch] == [search_hint, search_hint]
 
 
 @pytest.mark.anyio
