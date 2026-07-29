@@ -69,8 +69,6 @@ from src.txn_reconstruct import reconstruct_transactions
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
-from src.signal_driver import explain_signal_driver
-from src.signal_load import find_signal_loads
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import trace_x_source
@@ -979,6 +977,65 @@ async def _run_in_wave_thread(
         # of running a multi-minute scan nobody is listening to.
         cancel_event.set()
         raise
+
+
+async def _run_in_cancellable_thread(fn: Callable):
+    """Run non-wave blocking work without starving the MCP event loop.
+
+    This is the lock-free counterpart to ``_run_in_wave_thread``. It is used
+    by opt-in LSF connectivity calls: cancellation arms the same cooperative
+    event consumed by ``src.npi_lsf`` while no waveform parser lock is taken.
+    Local NPI behavior remains synchronous and unchanged.
+    """
+
+    cancel_event = threading.Event()
+
+    def _worker():
+        token = cancellation.push_cancel_event(cancel_event)
+        try:
+            cancellation.check_cancelled()
+            return fn()
+        finally:
+            cancellation.pop_cancel_event(token)
+
+    try:
+        return await anyio.to_thread.run_sync(_worker, abandon_on_cancel=True)
+    except anyio.get_cancelled_exc_class():
+        cancel_event.set()
+        raise
+
+
+async def _call_connectivity_backend(backend, fn: Callable):
+    if getattr(backend, "uses_external_worker", False):
+        return await _run_in_cancellable_thread(fn)
+    return fn()
+
+
+def _finalize_connectivity_backend_status(
+    result: dict,
+    backend_status: dict,
+    backend,
+) -> tuple[dict, str]:
+    """Merge internal backend receipts into the public, validated status."""
+
+    status = dict(backend_status)
+    status["backend"] = backend.name
+    fallback_reason = result.get("_npi_fallback_reason")
+    actual_backend = "static" if fallback_reason else backend.name
+    status["actual_backend"] = actual_backend
+    if fallback_reason:
+        status["fallback_reason"] = fallback_reason
+    execution = result.pop("_npi_execution_status", None)
+    if isinstance(execution, dict):
+        for key in ("execution_mode", "scheduler_status", "worker_status"):
+            if key in execution:
+                status[key] = execution[key]
+    elif getattr(backend, "execution_mode", None) == "local":
+        status["execution_mode"] = "local"
+    if actual_backend == "verdi_npi":
+        status["parser_match"] = "exact"
+    result.pop("_npi_fallback_reason", None)
+    return status, actual_backend
 
 
 def _get_parser(wave_path: str):
@@ -2919,25 +2976,21 @@ async def _dispatch(name: str, args: dict):
         backend_status = _safe_probe_backend(args["compile_log"], simulator)
         from src.connectivity_backend import select_backend  # noqa: PLC0415
         backend = select_backend(backend_status)
-        result = backend.find_driver(
-            signal_path=args["signal_path"],
-            wave_path=args["wave_path"],
-            compile_log=args["compile_log"],
-            top_hint=args.get("top_hint"),
-            recursive=args.get("recursive", False),
-            max_depth=args.get("max_depth", 10),
-            simulator=simulator,
+        result = await _call_connectivity_backend(
+            backend,
+            lambda: backend.find_driver(
+                signal_path=args["signal_path"],
+                wave_path=args["wave_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                recursive=args.get("recursive", False),
+                max_depth=args.get("max_depth", 10),
+                simulator=simulator,
+            ),
         )
-        backend_status = dict(backend_status)
-        backend_status["backend"] = backend.name
-        fallback_reason = result.get("_npi_fallback_reason")
-        actual_backend = "static" if fallback_reason else backend.name
-        backend_status["actual_backend"] = actual_backend
-        if fallback_reason:
-            backend_status["fallback_reason"] = fallback_reason
-        if actual_backend == "verdi_npi":
-            backend_status["parser_match"] = "exact"
-        result.pop("_npi_fallback_reason", None)
+        backend_status, actual_backend = _finalize_connectivity_backend_status(
+            result, backend_status, backend
+        )
         result["backend"] = actual_backend
         result["backend_status"] = backend_status
         return schemas.ExplainDriverResult.model_validate(result)
@@ -2947,29 +3000,25 @@ async def _dispatch(name: str, args: dict):
         backend_status = _safe_probe_backend(args["compile_log"], simulator)
         from src.connectivity_backend import select_backend  # noqa: PLC0415
         backend = select_backend(backend_status)
-        result = backend.find_loads(
-            signal_path=args["signal_path"],
-            compile_log=args["compile_log"],
-            top_hint=args.get("top_hint"),
-            max_depth=args.get("max_depth", 1),
-            include_expr=args.get("include_expr", True),
-            kind_filter=args.get("kind_filter"),
-            simulator=simulator,
+        result = await _call_connectivity_backend(
+            backend,
+            lambda: backend.find_loads(
+                signal_path=args["signal_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                max_depth=args.get("max_depth", 1),
+                include_expr=args.get("include_expr", True),
+                kind_filter=args.get("kind_filter"),
+                simulator=simulator,
+            ),
         )
         # Reflect the backend that actually produced the result. NPI
         # backend tags every hop with backend='verdi_npi' on success,
         # 'static' on internal fallback. The status field surfaces the
         # active connectivity backend at the result envelope.
-        backend_status = dict(backend_status)
-        backend_status["backend"] = backend.name
-        fallback_reason = result.get("_npi_fallback_reason")
-        actual_backend = "static" if fallback_reason else backend.name
-        backend_status["actual_backend"] = actual_backend
-        if fallback_reason:
-            backend_status["fallback_reason"] = fallback_reason
-        if actual_backend == "verdi_npi":
-            backend_status["parser_match"] = "exact"
-        result.pop("_npi_fallback_reason", None)
+        backend_status, _ = _finalize_connectivity_backend_status(
+            result, backend_status, backend
+        )
         result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
 
@@ -2978,28 +3027,24 @@ async def _dispatch(name: str, args: dict):
         backend_status = _safe_probe_backend(args["compile_log"], simulator)
         from src.connectivity_backend import select_backend  # noqa: PLC0415
         backend = select_backend(backend_status)
-        result = backend.find_path(
-            from_signal=args["from_signal"],
-            to_signal=args["to_signal"],
-            compile_log=args["compile_log"],
-            top_hint=args.get("top_hint"),
-            expand_assigns=args.get("expand_assigns", False),
-            simulator=simulator,
+        result = await _call_connectivity_backend(
+            backend,
+            lambda: backend.find_path(
+                from_signal=args["from_signal"],
+                to_signal=args["to_signal"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                expand_assigns=args.get("expand_assigns", False),
+                simulator=simulator,
+            ),
         )
-        backend_status = dict(backend_status)
-        backend_status["backend"] = backend.name
-        fallback_reason = result.get("_npi_fallback_reason")
         # Static returning static_backend_no_path_api is the expected
         # answer when NPI is unavailable, not a fallback. Only treat
         # _npi_fallback_reason (set by VerdiNpiBackend internals) as a
         # true fallback.
-        actual_backend = "static" if fallback_reason else backend.name
-        backend_status["actual_backend"] = actual_backend
-        if fallback_reason:
-            backend_status["fallback_reason"] = fallback_reason
-        if actual_backend == "verdi_npi":
-            backend_status["parser_match"] = "exact"
-        result.pop("_npi_fallback_reason", None)
+        backend_status, _ = _finalize_connectivity_backend_status(
+            result, backend_status, backend
+        )
         result.pop("_npi_call_error", None)
         result["backend_status"] = backend_status
         return schemas.TraceSignalPathResult.model_validate(result)

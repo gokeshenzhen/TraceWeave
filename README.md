@@ -103,6 +103,8 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend protocol + select_backend
     ├── verdi_backend.py          # KDB / license probe + kdb_hint generator
     ├── verdi_npi_backend.py      # NPI-backed driver/load resolution
+    ├── npi_lsf.py                # Optional LSF transport + exact worker protocol
+    ├── npi_worker.py             # Compute-node NPI worker entry point
     ├── kdb_builder.py            # Auto-build Verdi KDB (vericom + elabcom) for Xcelium flows
     ├── structural_scanner.py
     ├── x_trace.py
@@ -239,6 +241,78 @@ Verify the connection:
 codex mcp list
 # Should show TraceWeave with Status: enabled
 ```
+
+### LSF-only NPI licenses
+
+Some EDA sites grant Verdi/NPI licenses only to scheduled compute nodes. NPI
+execution remains local by default; opt in to LSF at the **TraceWeave MCP
+server process** with:
+
+```bash
+export LSF_QUEUE=<team-licensed-queue>
+export TRACEWEAVE_NPI_EXECUTION=lsf
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+```
+
+TraceWeave reads only the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`; it does not
+interpret a site's generic `LSF_QUEUE`. The shell mapping above lets different
+teams use one TraceWeave checkout while keeping company scheduler policy
+outside TraceWeave. If no generic variable exists, set the TraceWeave variable
+directly:
+
+```bash
+export TRACEWEAVE_NPI_LSF_QUEUE=<licensed-queue>
+```
+
+For `tcsh`:
+
+```tcsh
+setenv LSF_QUEUE <team-licensed-queue>
+setenv TRACEWEAVE_NPI_EXECUTION lsf
+setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
+```
+
+Putting these values in `.bashrc` / `.tcshrc` works
+only when the MCP client inherits that shell environment. IDE/GUI-launched
+clients often do not, so explicitly forward the inherited queue in the
+TraceWeave MCP entry. Add these entries to its existing server table/env map,
+then restart or reconnect the MCP server:
+
+```toml
+[mcp_servers.TraceWeave]
+env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env = { TRACEWEAVE_NPI_EXECUTION = "lsf" }
+```
+
+`env` values are copied literally by Codex, so do not write
+`TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"` there. `env_vars` is the supported
+way to forward the value that the user's shell already expanded.
+
+With this mode enabled, only explicit connectivity operations
+(`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`) submit a
+short `bsub -K` worker. Log parsing, waveform reads, structural scans, KDB
+detection, and Static analysis remain local. Worker failure or timeout falls
+back locally to Static and is visible through fixed
+`backend_status.execution_mode` / `scheduler_status` / `worker_status` /
+`fallback_reason` labels; queue, host, command, and license details are not
+returned.
+
+Optional settings:
+
+```bash
+export TRACEWEAVE_NPI_LSF_TIMEOUT=120
+export TRACEWEAVE_NPI_LSF_BSUB=/path/to/bsub
+export TRACEWEAVE_NPI_LSF_BKILL=/path/to/bkill
+export TRACEWEAVE_NPI_LSF_PYTHON=/path/to/python3.11
+export TRACEWEAVE_NPI_LSF_STAGING_DIR=/shared/private/traceweave-npi
+export TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON='["-R", "select[...]"]'
+```
+
+The KDB, TraceWeave checkout/installation, and staging directory must be
+visible at the same absolute paths on the submission and compute nodes. The
+staging directory defaults under TraceWeave's cache root; set it explicitly
+when that cache is not on a shared filesystem. Scheduler options are JSON argv,
+not shell text, and are limited to scheduler option/value pairs.
 
 ### Functional Verification
 

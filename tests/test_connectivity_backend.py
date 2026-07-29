@@ -98,3 +98,21 @@ def test_select_backend_returns_npi_when_kdb_present():
         # The NPI backend must hold a Static fallback so it can degrade
         # gracefully on any per-call NPI failure.
         assert isinstance(backend._fallback, StaticConnectivityBackend)
+
+
+def test_select_backend_returns_lsf_backend_when_opted_in(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRACEWEAVE_NPI_EXECUTION", "lsf")
+    monkeypatch.setenv("TRACEWEAVE_NPI_LSF_QUEUE", "licensed_q")
+    monkeypatch.setenv("TRACEWEAVE_NPI_LSF_STAGING_DIR", str(tmp_path))
+    status = {
+        "simulator": "vcs",
+        "kdb_flow": "vcs_two_step",
+        "kdb_path": "/some/kdb.elab++",
+    }
+
+    backend = select_backend(status)
+
+    assert backend.name == "verdi_npi"
+    assert backend.execution_mode == "lsf"
+    assert backend.uses_external_worker is True
+    assert not hasattr(backend, "collect_instance_src_map")

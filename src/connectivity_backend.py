@@ -2,10 +2,11 @@
 connectivity_backend.py
 Backend abstraction for driver / load / path (connectivity) queries.
 
-Two backends are wired: ``StaticConnectivityBackend`` (pure-Python
-source-regex, always available) and ``VerdiNpiBackend`` (NPI-backed,
-selected when a Verdi KDB is detected). They share one Protocol so the
-MCP-tool dispatch layer never needs to branch on backend.
+Three execution shapes are wired: ``StaticConnectivityBackend`` (pure-Python
+source-regex, always available), local ``VerdiNpiBackend``, and the optional
+LSF-backed NPI wrapper selected by environment policy when a Verdi KDB is
+detected. They share one Protocol so MCP tool arguments never branch on
+execution placement.
 
 Design intent: backend selection happens at the dispatch site (server.py)
 based on probe_verdi_backend status — not inside individual scanners.
@@ -141,17 +142,25 @@ class StaticConnectivityBackend:
 def select_backend(backend_status: dict[str, Any]) -> ConnectivityBackend:
     """Pick the active backend based on probe output.
 
-    If a usable KDB is present, return a VerdiNpiBackend wrapping a
-    Static fallback. The wrapped backend handles its own fallback on
-    NPI failures (import error, license unavailable, load_design
-    rejection, query exception) so the dispatch layer never needs to
-    distinguish.
+    If a usable KDB is present, return a local VerdiNpiBackend or the opt-in
+    LSF wrapper, each with a Static fallback. The selected backend handles its
+    own load/worker failures so the dispatch layer sees one protocol.
 
     If no KDB is detected, the Static backend is returned directly —
     starting NPI without a design to load would just consume a license
     for nothing.
     """
     if backend_status.get("kdb_flow", "none") != "none" and backend_status.get("kdb_path"):
+        from config import get_npi_execution_config  # noqa: PLC0415
+
+        execution = get_npi_execution_config()
+        if execution.mode != "local" or not execution.valid:
+            from .npi_lsf import LsfConnectivityBackend  # noqa: PLC0415
+
+            return LsfConnectivityBackend(
+                execution,
+                fallback=StaticConnectivityBackend(),
+            )
         # Imported lazily so callers without verdi never trigger the
         # pynpi import path (and the import itself may itself fail).
         from .verdi_npi_backend import VerdiNpiBackend  # noqa: PLC0415

@@ -157,6 +157,7 @@ class TestEventLoopNotBlocked:
                 result = await server._dispatch("cursor_list", {})
                 light_elapsed = time.perf_counter() - start
                 assert result is not None
+                release.set()
         finally:
             release.set()
 
@@ -293,3 +294,132 @@ class TestCooperativeCancellation:
         # Only the lock holder ever reached the parser; the cancelled queued
         # call gave up at the lock-poll checkpoint.
         assert parser_calls == ["/fake/queued.vcd"]
+
+
+@pytest.mark.anyio
+class TestExternalConnectivityWorker:
+    async def test_external_connectivity_does_not_block_event_loop(
+        self,
+        monkeypatch,
+    ):
+        started = threading.Event()
+        release = threading.Event()
+
+        class FakeBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = True
+
+            def find_driver(self, **kwargs):
+                started.set()
+                release.wait(timeout=10)
+                return {
+                    "signal_path": kwargs["signal_path"],
+                    "wave_path": kwargs["wave_path"],
+                    "resolved_rtl_name": "q",
+                    "driver_status": "resolved",
+                    "recursive": False,
+                    "backend": "verdi_npi",
+                    "_npi_execution_status": {
+                        "execution_mode": "lsf",
+                        "scheduler_status": "completed",
+                        "worker_status": "completed",
+                    },
+                }
+
+        monkeypatch.setattr(server, "_check_prerequisites", lambda name, args: None)
+        monkeypatch.setattr(
+            server,
+            "_safe_probe_backend",
+            lambda *args: {
+                "simulator": "vcs",
+                "backend": "static",
+                "parser_match": "approximate",
+                "kdb_path": "/private/kdb",
+                "kdb_flow": "vcs_two_step",
+                "kdb_hint": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.connectivity_backend.select_backend",
+            lambda status: FakeBackend(),
+        )
+
+        light_elapsed = None
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(
+                    server._dispatch,
+                    "explain_signal_driver",
+                    {
+                        "signal_path": "top_tb.q",
+                        "wave_path": "/private/wave.fsdb",
+                        "compile_log": "/private/compile.log",
+                        "simulator": "vcs",
+                    },
+                )
+                assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+                begin = time.perf_counter()
+                await server._dispatch("cursor_list", {})
+                light_elapsed = time.perf_counter() - begin
+                release.set()
+        finally:
+            release.set()
+
+        assert light_elapsed < 0.5
+
+    async def test_cancelled_external_connectivity_stops_at_checkpoint(
+        self,
+        monkeypatch,
+    ):
+        started = threading.Event()
+        observed_cancel = threading.Event()
+
+        class FakeBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = True
+
+            def find_driver(self, **kwargs):
+                started.set()
+                try:
+                    while True:
+                        cancellation.check_cancelled()
+                        time.sleep(0.01)
+                except OperationCancelled:
+                    observed_cancel.set()
+                    raise
+
+        monkeypatch.setattr(server, "_check_prerequisites", lambda name, args: None)
+        monkeypatch.setattr(
+            server,
+            "_safe_probe_backend",
+            lambda *args: {
+                "simulator": "vcs",
+                "backend": "static",
+                "parser_match": "approximate",
+                "kdb_path": "/private/kdb",
+                "kdb_flow": "vcs_two_step",
+                "kdb_hint": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.connectivity_backend.select_backend",
+            lambda status: FakeBackend(),
+        )
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                server._dispatch,
+                "explain_signal_driver",
+                {
+                    "signal_path": "top_tb.q",
+                    "wave_path": "/private/wave.fsdb",
+                    "compile_log": "/private/compile.log",
+                    "simulator": "vcs",
+                },
+            )
+            assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+            tg.cancel_scope.cancel()
+
+        assert await anyio.to_thread.run_sync(_wait_event, observed_cancel, 2)

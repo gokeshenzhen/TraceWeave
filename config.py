@@ -2,8 +2,11 @@
 config.py — 集中放置环境相关路径和解析行为常量
 """
 
+from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
+import re
 
 # ═══════════════════════════════════════════════════════════════════
 # EDA 工具路径（与 ~/.bashrc 保持一致）
@@ -177,6 +180,200 @@ def telemetry_log_path() -> Path:
 
 # Subprocess timeout (seconds) for vericom + elabcom each.
 KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Verdi NPI execution policy
+# ═══════════════════════════════════════════════════════════════════
+#
+# NPI runs locally by default. Some sites grant Verdi/NPI licenses only to
+# scheduled compute nodes; those users can opt in to an LSF worker without
+# changing any MCP tool argument.
+
+_NPI_LSF_QUEUE_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
+_NPI_LSF_RESERVED_ARGS = {
+    "-K",
+    "-J",
+    "-q",
+    "-o",
+    "-oo",
+    "-e",
+    "-eo",
+    "-i",
+}
+_NPI_LSF_ALLOWED_EXTRA_FLAGS = {
+    "-R",
+    "-P",
+    "-G",
+    "-M",
+    "-n",
+    "-W",
+    "-m",
+    "-app",
+    "-sp",
+    "-sla",
+    "-cwd",
+    "-env",
+    "-gpu",
+}
+
+
+@dataclass(frozen=True)
+class NpiExecutionConfig:
+    """Validated, identity-private NPI execution configuration.
+
+    ``error_code`` is always a fixed label. It deliberately never embeds the
+    queue, executable, staging path, or malformed environment value so callers
+    can surface it safely through MCP status.
+    """
+
+    mode: str
+    queue: str | None
+    bsub_bin: str
+    bkill_bin: str
+    python_bin: str
+    timeout_sec: int
+    staging_dir: Path
+    extra_args: tuple[str, ...] = ()
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_npi_execution_config() -> NpiExecutionConfig:
+    """Read and validate the opt-in NPI execution policy from the environment.
+
+    Supported modes:
+      - ``local`` (default): preserve the existing in-process NPI behavior.
+      - ``lsf``: submit only explicit NPI connectivity operations via ``bsub``.
+
+    The worker guard always resolves to local. The LSF worker currently invokes
+    the exact local NPI core directly, but the guard is defense in depth against
+    future worker refactors accidentally calling normal backend selection.
+    """
+
+    default_staging = TRACEWEAVE_CACHE_ROOT / "npi_lsf"
+    if _env_flag("TRACEWEAVE_NPI_WORKER", False):
+        return NpiExecutionConfig(
+            mode="local",
+            queue=None,
+            bsub_bin="bsub",
+            bkill_bin="bkill",
+            python_bin="python3.11",
+            timeout_sec=120,
+            staging_dir=default_staging,
+        )
+
+    raw_mode = os.environ.get("TRACEWEAVE_NPI_EXECUTION", "local").strip().lower()
+    mode = raw_mode or "local"
+    if mode == "local":
+        return NpiExecutionConfig(
+            mode="local",
+            queue=None,
+            bsub_bin="bsub",
+            bkill_bin="bkill",
+            python_bin="python3.11",
+            timeout_sec=120,
+            staging_dir=default_staging,
+        )
+    if mode != "lsf":
+        return _invalid_npi_config("invalid", default_staging)
+
+    # Keep scheduler configuration namespaced and unambiguous. Sites that
+    # already define LSF_QUEUE can map it in shell startup before Codex starts:
+    # export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+    queue = os.environ.get("TRACEWEAVE_NPI_LSF_QUEUE", "").strip()
+    if not _NPI_LSF_QUEUE_RE.fullmatch(queue):
+        return _invalid_npi_config("lsf", default_staging)
+
+    bsub_bin = os.environ.get("TRACEWEAVE_NPI_LSF_BSUB", "bsub").strip()
+    bkill_bin = os.environ.get("TRACEWEAVE_NPI_LSF_BKILL", "bkill").strip()
+    python_bin = os.environ.get("TRACEWEAVE_NPI_LSF_PYTHON", "python3.11").strip()
+    if not all(_valid_exec_token(item) for item in (bsub_bin, bkill_bin, python_bin)):
+        return _invalid_npi_config("lsf", default_staging)
+
+    raw_timeout = os.environ.get("TRACEWEAVE_NPI_LSF_TIMEOUT", "120").strip()
+    try:
+        timeout_sec = int(raw_timeout)
+    except ValueError:
+        return _invalid_npi_config("lsf", default_staging)
+    if timeout_sec < 1 or timeout_sec > 86_400:
+        return _invalid_npi_config("lsf", default_staging)
+
+    raw_staging = os.environ.get("TRACEWEAVE_NPI_LSF_STAGING_DIR", "").strip()
+    staging_dir = (
+        Path(raw_staging).expanduser()
+        if raw_staging
+        else default_staging
+    )
+    if not staging_dir.is_absolute():
+        return _invalid_npi_config("lsf", default_staging)
+
+    extra_args, extra_error = _parse_npi_lsf_extra_args()
+    if extra_error:
+        return _invalid_npi_config("lsf", default_staging)
+
+    return NpiExecutionConfig(
+        mode="lsf",
+        queue=queue,
+        bsub_bin=bsub_bin,
+        bkill_bin=bkill_bin,
+        python_bin=python_bin,
+        timeout_sec=timeout_sec,
+        staging_dir=staging_dir,
+        extra_args=extra_args,
+    )
+
+
+def _invalid_npi_config(mode: str, staging_dir: Path) -> NpiExecutionConfig:
+    return NpiExecutionConfig(
+        mode=mode,
+        queue=None,
+        bsub_bin="bsub",
+        bkill_bin="bkill",
+        python_bin="python3.11",
+        timeout_sec=120,
+        staging_dir=staging_dir,
+        error_code="npi_execution_config_invalid",
+    )
+
+
+def _valid_exec_token(value: str) -> bool:
+    return _valid_argv_token(value) and not value.startswith("-")
+
+
+def _valid_argv_token(value: str) -> bool:
+    return bool(value) and not any(ch in value for ch in ("\x00", "\n", "\r"))
+
+
+def _parse_npi_lsf_extra_args() -> tuple[tuple[str, ...], bool]:
+    """Parse optional scheduler arguments as JSON argv, never shell text."""
+
+    raw = os.environ.get("TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON", "").strip()
+    if not raw:
+        return (), False
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return (), True
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        return (), True
+    args = tuple(parsed)
+    if any(not _valid_argv_token(item) for item in args):
+        return (), True
+    if any(item in _NPI_LSF_RESERVED_ARGS for item in args):
+        return (), True
+    # Every allowed scheduler option in this channel takes one following value.
+    # Rejecting bare/unrecognised tokens prevents bsub from treating config text
+    # as the start of the remote command before TraceWeave's worker executable.
+    if len(args) % 2:
+        return (), True
+    for idx in range(0, len(args), 2):
+        if args[idx] not in _NPI_LSF_ALLOWED_EXTRA_FLAGS:
+            return (), True
+    return args, False
 
 
 def get_fsdb_runtime_info() -> dict:

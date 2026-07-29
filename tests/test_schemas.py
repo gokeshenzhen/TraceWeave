@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas import (
+    BackendStatus,
     ErrorContextResult,
     GetSignalsByCycleResult,
     ParseSimLogResult,
@@ -152,3 +153,19 @@ def test_get_signals_by_cycle_result_roundtrip():
     )
     payload = json.loads(result.model_dump_json(exclude_none=True))
     assert payload["cycles"][0]["signals"]["top_tb.data"]["dec"] == 1
+
+
+def test_backend_status_accepts_optional_lsf_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "vcs",
+            "backend": "verdi_npi",
+            "actual_backend": "static",
+            "fallback_reason": "npi_lsf_worker_failed",
+            "execution_mode": "lsf",
+            "scheduler_status": "failed",
+            "worker_status": "failed",
+        }
+    )
+    assert status.execution_mode == "lsf"
+    assert status.scheduler_status == "failed"

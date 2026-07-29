@@ -245,6 +245,8 @@ class VerdiNpiBackend:
     """NPI backend with internal Static fallback."""
 
     name = "verdi_npi"
+    execution_mode = "local"
+    uses_external_worker = False
 
     def __init__(self, fallback: StaticConnectivityBackend | None = None):
         self._fallback = fallback or StaticConnectivityBackend()

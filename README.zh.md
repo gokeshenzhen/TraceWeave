@@ -96,6 +96,8 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend 协议 + select_backend
     ├── verdi_backend.py          # KDB / license 探测 + kdb_hint 生成
     ├── verdi_npi_backend.py      # NPI 后端实现的 driver/load 解析
+    ├── npi_lsf.py                # 可选 LSF transport + exact worker 协议
+    ├── npi_worker.py             # 执行节点 NPI worker 入口
     ├── kdb_builder.py            # 为 Xcelium 流程自动构建 Verdi KDB
     ├── structural_scanner.py
     ├── x_trace.py
@@ -223,6 +225,70 @@ env = {
 codex mcp list
 # 应该显示 TraceWeave,Status: enabled
 ```
+
+### 仅执行节点可用的 NPI License
+
+部分 EDA 环境只允许调度到执行节点的进程获取 Verdi/NPI license。TraceWeave
+默认仍在本地执行 NPI；这类环境可显式开启 LSF:
+
+```bash
+export LSF_QUEUE=<team-licensed-queue>
+export TRACEWEAVE_NPI_EXECUTION=lsf
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+```
+
+TraceWeave 只读取命名空间明确的 `TRACEWEAVE_NPI_LSF_QUEUE`，不会解释公司
+通用的 `LSF_QUEUE`。上面的 shell 映射让不同团队可以共享同一份 TraceWeave
+代码，同时把公司调度策略留在 TraceWeave 之外。如果没有通用变量，也可以
+直接设置:
+
+```bash
+export TRACEWEAVE_NPI_LSF_QUEUE=<licensed-queue>
+```
+
+`tcsh`:
+
+```tcsh
+setenv LSF_QUEUE <team-licensed-queue>
+setenv TRACEWEAVE_NPI_EXECUTION lsf
+setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
+```
+
+IDE、Codex、Claude 等启动的 MCP server 不一定读取
+`.bashrc` / `.tcshrc`，因此更可靠的做法是在 TraceWeave MCP server 的客户端
+配置中显式转发继承到的队列。把下面两项合并到已有的 server table/env map，
+修改后重启或重新连接 MCP server:
+
+```toml
+[mcp_servers.TraceWeave]
+env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env = { TRACEWEAVE_NPI_EXECUTION = "lsf" }
+```
+
+Codex 会原样复制 `env` 的值，因此不要写
+`TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"`；转发 Codex 父进程已经继承的
+且由 shell 提前展开好的变量应使用 `env_vars`。
+
+开启后，只有 `explain_signal_driver`、`find_signal_loads`、
+`trace_signal_path` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
+读取、结构扫描、KDB 探测与 Static 分析仍在本地执行。worker 失败或超时后，
+父进程会在本地回退 Static，并通过固定的 `backend_status` 状态字段说明原因，
+不会返回队列、主机、命令或 license 细节。
+
+可选配置:
+
+```bash
+export TRACEWEAVE_NPI_LSF_TIMEOUT=120
+export TRACEWEAVE_NPI_LSF_BSUB=/path/to/bsub
+export TRACEWEAVE_NPI_LSF_BKILL=/path/to/bkill
+export TRACEWEAVE_NPI_LSF_PYTHON=/path/to/python3.11
+export TRACEWEAVE_NPI_LSF_STAGING_DIR=/shared/private/traceweave-npi
+export TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON='["-R", "select[...]"]'
+```
+
+KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节点上以相同
+绝对路径可见。staging 默认位于 TraceWeave cache root 下；cache 非共享时必须
+显式设置。额外调度参数采用受限的 option/value JSON argv，而不是 shell 文本。
 
 ### 功能性验证
 

@@ -11,6 +11,11 @@ import os
 # 在 config import 时读取），且无条件覆盖外部环境。
 os.environ["TRACEWEAVE_TELEMETRY"] = "0"
 
+# Normal regression runs must never inherit an operator's opt-in LSF policy
+# and submit real scheduler jobs. Focused LSF tests override this value with
+# monkeypatch and use a fake transport.
+os.environ["TRACEWEAVE_NPI_EXECUTION"] = "local"
+
 # 把 TraceWeave/ 根目录加入路径
 ROOT = os.path.dirname(os.path.dirname(__file__))
 if ROOT not in sys.path:

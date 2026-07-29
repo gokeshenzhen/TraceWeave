@@ -29,6 +29,8 @@ Source-aware structure analysis
 Connectivity backends (driver/load resolution)
   src/connectivity_backend.py     # protocol + Static + select_backend
   src/verdi_npi_backend.py        # Verdi NPI backend, lazy, license-tolerant
+  src/npi_lsf.py                  # optional LSF transport + exact worker protocol
+  src/npi_worker.py               # short-lived compute-node NPI entry point
   src/verdi_backend.py            # KDB / license probe, kdb_hint generator
   src/kdb_builder.py              # Auto-build Verdi KDB (vericom + elabcom) for Xcelium
 
@@ -192,15 +194,31 @@ Verification
   consumers (fanout) of a signal.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
-  returns `VerdiNpiBackend` when a Verdi KDB is available, otherwise the
-  static source-regex backend. The NPI backend wraps Static internally, so
-  any per-call NPI failure (license unavailable, KDB stale, query exception)
-  silently degrades for driver/load queries — the dispatch layer sees one
-  protocol regardless. `find_path` is NPI-only: Static returns
+  returns local `VerdiNpiBackend` when a Verdi KDB is available, or
+  `LsfConnectivityBackend` when `TRACEWEAVE_NPI_EXECUTION=lsf`; its queue comes
+  only from the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`. Site/team variables are
+  mapped in the launching shell, outside TraceWeave. Without a KDB it returns
+  the static source-regex backend directly. Both NPI execution
+  policies wrap Static at the parent: local NPI failures degrade in-process,
+  while an LSF worker returns exact NPI or a fixed failure receipt and the
+  login-node parent performs the fallback. `find_path` is NPI-only: Static returns
   `unsupported_reason="static_backend_no_path_api"` rather than approximating
   with regex, since `sig_to_sig_conn_list` walks the elaborated netlist
   across assigns / interfaces / generates that source-regex cannot follow
   reliably.
+- `src/npi_lsf.py` owns the versioned, exact-only worker protocol and the
+  optional `bsub -K` transport. It writes one private request under a
+  shared staging root, submits an identity-free random job name, validates the
+  response against the existing operation schema, and exposes only fixed
+  execution labels. Remote stdout/stderr is fixed to `/dev/null` so LSF does
+  not email native license output; the local scheduler client output is held
+  only in the private request directory. The synchronous scheduler wait runs in
+  `server._run_in_cancellable_thread`; cancellation or timeout performs a
+  bounded `bkill -J` followed by termination of the local `bsub` waiter.
+  `src/npi_worker.py` invokes the local NPI core directly and never Static, so
+  a compute-node license/load failure cannot be mistaken for an exact answer.
+  The hierarchy source overlay remains local/optional in the initial scope and
+  does not implicitly submit a batch job.
 - `src/verdi_backend.py` is a pure-detection probe: it locates KDB at
   `simv.daidir/kdb.elab++` (VCS two-step) or via `synopsys_sim.setup` work-lib
   mappings (three-step / vericom standalone) and emits a per-simulator
@@ -309,8 +327,15 @@ reflects who actually answered.
 
 ```text
 select_backend(probe_status)
-├── KDB present  → VerdiNpiBackend(fallback=Static)
+├── KDB present + execution=local → VerdiNpiBackend(fallback=Static)
+├── KDB present + execution=lsf   → LsfConnectivityBackend(parent fallback=Static)
 └── KDB absent   → Static directly  (don't start NPI just to burn a license)
+
+LsfConnectivityBackend.find_driver / find_loads / find_path
+├── invalid config / missing KDB or top → local Static fallback, no submission
+├── bsub timeout/failure/bad response   → local Static fallback + fixed receipt
+├── worker reports npi_unavailable      → local Static fallback + fixed receipt
+└── exact worker result                 → validate existing result schema
 
 VerdiNpiBackend.find_driver / find_loads / find_path
 ├── parse_compile_log fails / no kdb_path / no top   → fall back to Static

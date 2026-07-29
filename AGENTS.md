@@ -116,20 +116,22 @@ For any new session, read these files first to build the project map:
 15. `src/connectivity_backend.py`
 16. `src/verdi_backend.py`
 17. `src/verdi_npi_backend.py`
-18. `src/kdb_builder.py`
-19. `src/waveform_batch.py`
-20. `src/structural_scanner.py`
-21. `src/x_trace.py`
-22. `src/cycle_query.py`
-23. `src/schemas.py`
-24. `src/problem_hints.py`
-25. `src/hierarchy_handles.py`
-26. `src/handle_tools.py`
-27. `src/cursor_store.py`
-28. `src/timespec.py`
-29. `src/verify_condition.py`
-30. `src/cancellation.py`
-31. `src/operation_metrics.py`
+18. `src/npi_lsf.py`
+19. `src/npi_worker.py`
+20. `src/kdb_builder.py`
+21. `src/waveform_batch.py`
+22. `src/structural_scanner.py`
+23. `src/x_trace.py`
+24. `src/cycle_query.py`
+25. `src/schemas.py`
+26. `src/problem_hints.py`
+27. `src/hierarchy_handles.py`
+28. `src/handle_tools.py`
+29. `src/cursor_store.py`
+30. `src/timespec.py`
+31. `src/verify_condition.py`
+32. `src/cancellation.py`
+33. `src/operation_metrics.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -151,6 +153,7 @@ If the task involves behavior validation or regression checks, also read:
 - `tests/test_connectivity_backend.py`
 - `tests/test_verdi_backend.py`
 - `tests/test_verdi_npi_backend.py`
+- `tests/test_npi_lsf.py`
 - `tests/test_kdb_builder.py`
 - `tests/test_waveform_batch.py`
 - `tests/test_structural_scanner.py`
@@ -181,8 +184,9 @@ If the task involves behavior validation or regression checks, also read:
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
 - `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.
 - `src/signal_load.py` resolves load/fanout for a signal — the symmetric counterpart to `signal_driver`.
-- `src/connectivity_backend.py` defines the `ConnectivityBackend` protocol; `select_backend()` returns the Verdi NPI backend when a KDB is found, otherwise Static. NPI failures degrade transparently; the dispatch layer never sees verdi-specific exceptions.
+- `src/connectivity_backend.py` defines the `ConnectivityBackend` protocol; `select_backend()` returns local Verdi NPI when a KDB is found, optional LSF NPI when `TRACEWEAVE_NPI_EXECUTION=lsf`, otherwise Static. NPI/worker failures degrade transparently; the dispatch layer never sees Verdi- or scheduler-specific exceptions.
 - `src/verdi_backend.py` probes for Verdi KDB / license environment; emits per-simulator `kdb_hint` when KDB is missing.
+- `src/npi_lsf.py` + `src/npi_worker.py` implement opt-in LSF placement for explicit NPI driver/load/path queries. Default execution is `local`; `lsf` reads its queue only from the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`. Sites may map a team variable in shell startup (for example `export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"`), but TraceWeave does not interpret generic scheduler variables. The parent resolves KDB/top, writes a versioned request in a private shared staging directory, and submits one `bsub -K` worker with `shell=False`. The worker calls the exact local NPI core and never Static; only the parent falls back. Scheduler wait runs under `server._run_in_cancellable_thread`, and cancellation/timeout uses an identity-free random job name for bounded `bkill -J` plus local waiter termination. Public receipts contain fixed `execution_mode`/`scheduler_status`/`worker_status`/`fallback_reason` labels only — never queue, host, command, path, or license text. The initial scope deliberately excludes the optional hierarchy source overlay so `build_tb_hierarchy` does not submit an implicit batch job.
 - `src/verdi_npi_backend.py` is the NPI-backed implementation of `find_driver` / `find_loads` / `find_path`, plus `collect_instance_src_map` used by `build_tb_hierarchy` to overlay elaborated-netlist `file:line` onto compile-log-derived hierarchy nodes. Lazily loads `pynpi` from `$VERDI_HOME` and caches loaded designs across calls. Uses `NetHdl.fan_in_reg_list` to walk the elaborated netlist across instance boundaries — this is why NPI can resolve drivers that Static source-regex cannot reach. `find_path` wraps `netlist.sig_to_sig_conn_list`; Static has no equivalent and returns `unsupported_reason="static_backend_no_path_api"` (honest no-op rather than a regex approximation). **Driver-vs-loads cross-check (TB-driver misattribution guard):** when NPI's `find_driver` would report a "driver" whose raw NPI identity (modulo bit-indexing, via `_norm_raw`/`driver_is_load_alias`) is byte-identical to a LOAD of the *same* net — an interface-slice alias of the net's own consumer, or a register that reads the net — that "driver" cannot be the source (a net cannot be both driven by and read into the same pin). It then prefers a genuine RTL driver among the remaining candidates (`_loadcheck_head`), and if none exists returns an honest no-op `driver_status="testbench_driven"` + `cross_check.conflict` receipt + `unsupported_reason="driver_is_load_real_driver_is_testbench"` instead of naming the load as an `exact` driver. This kills the failure where NPI's register fan-in, unable to see a procedural UVM driver (virtual interface + clocking block), walked the net to a nearby LOAD register inside the DUT (e.g. an AHB matrix `lock_owner`) and confidently mislabeled it the driver of a master's HTRANS — pushing the model toward the interconnect instead of the TB master driver. It is FP-safe by construction: the discriminator is *byte-identical* driver==load (an aliasing artifact), so a legitimate self-referential counter (`q <= q + 1`, whose net loads into a distinct `Add`/`Assignment` cell, not the `Reg`) never matches; an initial-value block is not treated as a genuine runtime driver (`_is_genuine_runtime_driver`). **The decision is keyed on NPI's *original* `driver_list` (what it claims drives the net) and short-circuits BEFORE fan-in — this is what covers `recursive=True`. Keying it on the fan-in result instead would miss the misattribution: under `recursive=True` fan-in walks across the boundary to a downstream LOAD register (the AHB matrix `lock_owner` that merely READS the net), which lives in the net's fan-OUT, not its `load_list`, so the comparison would not match. And widening the load set to include fan-OUT is wrong — a self-counter's own `Reg` IS in its fan-out (the feedback), so that would false-positive.** Reads the net's own `load_list()` (no second dispatch). The contradiction logic is pure and unit-tested without a live KDB (incl. the `recursive=True` shape).
 - `src/kdb_builder.py` provides the `build_kdb` MCP tool: when a Verdi KDB is missing (typical for Xcelium / `xrun` flows), it runs `vericom -kdb` + `elabcom -elab kdb` against the file list parsed from the compile log, caches the result under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`, and writes a runnable `build.sh` reproducer. The probe in `verdi_backend.py` picks up the cache transparently as `kdb_flow: "traceweave_cached"`. Default-on; opt out with `TRACEWEAVE_AUTO_KDB=0`.
 - `src/waveform_batch.py` exposes `WaveformBatchReader` for time-window multi-signal reads, with FSDB and VCD implementations sharing one shape.

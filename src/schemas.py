@@ -665,6 +665,13 @@ class BackendStatus(SchemaModel):
     backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
     actual_backend: Literal["static", "verdi_npi", "verdi_tcl"] | None = None
     fallback_reason: str | None = None
+    execution_mode: Literal["local", "lsf", "invalid"] | None = None
+    scheduler_status: Literal[
+        "not_started", "completed", "failed", "timed_out",
+    ] | None = None
+    worker_status: Literal[
+        "not_started", "completed", "npi_unavailable", "failed",
+    ] | None = None
     parser_match: Literal["exact", "approximate"] = "approximate"
     kdb_path: str | None = None
     kdb_flow: Literal[
