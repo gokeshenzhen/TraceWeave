@@ -114,7 +114,7 @@ TraceWeave/
     ├── handshake_sweep.py        # sweep_handshakes:全设计握手异常扫描
     ├── txn_reconstruct.py        # reconstruct_transactions:id 关联的事务层
     ├── cancellation.py           # worker 线程波形扫描的协作取消检查点
-    └── usage_telemetry.py        # 仅本地的逐调用使用遥测(可关闭)
+    └── usage_telemetry.py        # 仅本地的逐调用使用遥测(默认关闭,显式开启)
 ```
 
 ## 安装
@@ -162,7 +162,12 @@ bash scripts/verify_fsdb.sh
 
 ### Claude Code
 
-Claude Code 与 Codex 都不会把你交互式 shell 的环境变量带入 spawn 出来的 MCP stdio 服务器,所以必须显式列出服务器需要的所有变量 —— 工具根目录,以及 `dlopen` 链(最容易遗漏的是 `LD_LIBRARY_PATH`;一旦缺失,NPI 会静默回退到 Static,`trace_signal_path` 会返回 `found: false`)。
+环境变量是否进入 MCP server,取决于 MCP client 本身如何启动以及它采用的环境
+转发策略。从 terminal 启动的 Codex 可以继承该 shell 已经 `export` 的变量;
+IDE/GUI 启动或其他 MCP client 则不一定。为了让 Claude Code 配置确定可复现,
+应显式列出 server 需要的变量 —— 工具根目录,以及 `dlopen` 链(最容易遗漏的是
+`LD_LIBRARY_PATH`;一旦缺失,NPI 会静默回退到 Static,
+`trace_signal_path` 会返回 `found: false`)。
 
 在 `~/.claude.json` 中添加:
 
@@ -198,25 +203,26 @@ claude mcp list
 
 ### Codex
 
-思路与 Claude Code 相同 —— 全部显式列出。在 `~/.codex/config.toml` 中添加:
+Codex 可以用 `env_vars` 转发其父进程已经继承的变量;固定值则放在 `env` 中。
+为了让 EDA 环境确定可复现,在 `~/.codex/config.toml` 中显式配置所需值:
 
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env = {
-  VERDI_HOME      = "<verdi-install>",
-  NOVAS_HOME      = "<verdi-install>",
-  VCS_HOME        = "<vcs-install>",
-  XLM_ROOT        = "<xcelium-install>",
-  CDS_INST_DIR    = "<xcelium-install>",
-  SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com",
-  LM_LICENSE_FILE     = "xxxx@s-license-server.example.com",
-  CDS_LICENSE_FILE    = "xxxx@c-license.example.com",
-  LD_LIBRARY_PATH = "<library-path>",
-  PATH            = "<path>"
-}
+
+[mcp_servers.TraceWeave.env]
+VERDI_HOME = "<verdi-install>"
+NOVAS_HOME = "<verdi-install>"
+VCS_HOME = "<vcs-install>"
+XLM_ROOT = "<xcelium-install>"
+CDS_INST_DIR = "<xcelium-install>"
+SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com"
+LM_LICENSE_FILE = "xxxx@s-license-server.example.com"
+CDS_LICENSE_FILE = "xxxx@c-license.example.com"
+LD_LIBRARY_PATH = "<library-path>"
+PATH = "<path>"
 ```
 
 验证连接:
@@ -254,18 +260,24 @@ setenv TRACEWEAVE_NPI_EXECUTION lsf
 setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
-IDE、Codex、Claude 等启动的 MCP server 不一定读取
-`.bashrc` / `.tcshrc`，因此更可靠的做法是在 TraceWeave MCP server 的客户端
-配置中显式转发继承到的队列。把下面两项合并到已有的 server table/env map，
-修改后重启或重新连接 MCP server:
+只有 MCP client 继承了对应 shell 环境时,`.bashrc` / `.tcshrc` 中的设置才会
+生效;从 terminal 启动的 Codex 可以继承,IDE/GUI 启动的 client 则经常不会。
+为了确定地转发队列,最终合并后的 Codex 配置相关部分应如下;保留前面已有的
+其他 EDA 环境变量,修改后重启或重新连接 MCP server:
 
 ```toml
 [mcp_servers.TraceWeave]
+command = "python3.11"
+args = ["<TRACEWEAVE_HOME>/server.py"]
+cwd = "<TRACEWEAVE_HOME>"
 env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
-env = { TRACEWEAVE_NPI_EXECUTION = "lsf" }
+
+[mcp_servers.TraceWeave.env]
+# 其他已有 EDA 环境变量继续保留在这里。
+TRACEWEAVE_NPI_EXECUTION = "lsf"
 ```
 
-Codex 会原样复制 `env` 的值，因此不要写
+Codex 会原样复制 `[mcp_servers.TraceWeave.env]` 中的值，因此不要写
 `TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"`；转发 Codex 父进程已经继承的
 且由 shell 提前展开好的变量应使用 `env_vars`。
 
@@ -386,13 +398,13 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 - `trace_x_source`:向上游追溯 X/Z 传播
 - `build_kdb`:从已解析的编译日志自动构建 Verdi KDB(vericom + elabcom)。当仿真器是 Xcelium(xrun)且 NPI 后端报告无 KDB 时使用。输出缓存到 `TRACEWEAVE_CACHE_DIR`(默认 `~/.cache/traceweave/kdb/<hash>/`);缓存命中则跳过 Verdi 重跑。KDB 旁边会写出一个可运行的 `build.sh` 便于检查或手动复现。需要 `VERDI_HOME` 中含有 `bin/vericom` 与 `bin/elabcom`。
 
-当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 会自动启用 Verdi NPI 后端。前两个在 NPI 不可用时透明回退到基于源码正则的 Static 后端;`trace_signal_path` 是 NPI-only,会返回结构化的 `unsupported_reason` 而不是给出近似结果,因为 `sig_to_sig_conn_list` 没有诚实的 Static 等价实现。NPI 是更深、更准确的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越实例端口边界、interface 位置绑定与 assign 链,这些 Static 都跟不过去。当 KDB 存在时,`build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`;`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 标签,便于消费者区分 NPI 标注条目与编译日志衍生条目。结果信封里带一个 `backend_status` 块,包含当前后端、KDB 流程,以及按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
+当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 会自动启用 Verdi NPI 后端。前两个在 NPI 不可用时透明回退到基于源码正则的 Static 后端;`trace_signal_path` 是 NPI-only,会返回结构化的 `unsupported_reason` 而不是给出近似结果,因为 `sig_to_sig_conn_list` 没有诚实的 Static 等价实现。NPI 是更深、更准确的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越实例端口边界、interface 位置绑定与 assign 链,这些 Static 都跟不过去。在 **local NPI execution mode** 下,检测到 KDB 时 `build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 标签,便于消费者区分 NPI 标注条目与编译日志衍生条目。结果信封里带一个 `backend_status` 块,包含当前后端、KDB 流程,以及按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 
 对 VCS 流程,获取 KDB 的最低成本方式是用 `-kdb=only` 重编 —— hint 会给出完整命令。对 Xcelium 流程没有原生 KDB;`get_diagnostic_snapshot` 会把 `build_kdb` 列在 `missing_steps` 中,LLM agent 可以按需触发。设置 `TRACEWEAVE_AUTO_KDB=0` 可关闭自动构建提示。
 
 ### 使用遥测
 
-启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。默认关闭;设置 `TRACEWEAVE_TELEMETRY=1` 可启用。用 `python scripts/telemetry_report.py` 汇总。
+启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。普通用户默认没有设置 `TRACEWEAVE_TELEMETRY`,此时记录功能关闭,也不会创建 telemetry 文件。需要主动开启时,应在 MCP server 启动前设置 `TRACEWEAVE_TELEMETRY=1`;修改变量后需重启或重新连接 MCP server。用 `python scripts/telemetry_report.py` 汇总。
 
 ## 测试
 

@@ -121,7 +121,7 @@ TraceWeave/
     ├── handshake_sweep.py        # sweep_handshakes: whole-design handshake anomaly sweep
     ├── txn_reconstruct.py        # reconstruct_transactions: id-correlated transaction layer
     ├── cancellation.py           # Cooperative cancellation for worker-thread waveform scans
-    └── usage_telemetry.py        # Local-only per-call usage telemetry (opt-out)
+    └── usage_telemetry.py        # Local-only per-call usage telemetry (default off; opt-in)
 ```
 
 ## Installation
@@ -178,7 +178,13 @@ If the client supports server instructions, it can follow the built-in workflow 
 
 ### Claude Code
 
-Neither Claude Code nor Codex inherits your interactive shell env into the spawned MCP stdio server, so list every variable the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the one most often missed; without it NPI silently falls back to Static and `trace_signal_path` returns `found: false`).
+Environment inheritance depends on how the MCP client itself is launched and on
+that client's environment policy. A Codex process launched from a terminal can
+inherit variables already exported by that shell; an IDE/GUI launch or another
+MCP client may not. For a deterministic Claude Code setup, list every variable
+the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the
+one most often missed; without it NPI silently falls back to Static and
+`trace_signal_path` returns `found: false`).
 
 Add this to `~/.claude.json`:
 
@@ -214,25 +220,27 @@ claude mcp list
 
 ### Codex
 
-Same idea as Claude Code — list everything explicitly. Add to `~/.codex/config.toml`:
+Codex can forward variables inherited by its own process through `env_vars`;
+fixed values belong in `env`. For a deterministic EDA setup, configure the
+required values explicitly in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.TraceWeave]
 command = "python3.11"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env = {
-  VERDI_HOME      = "<verdi-install>",
-  NOVAS_HOME      = "<verdi-install>",
-  VCS_HOME        = "<vcs-install>",
-  XLM_ROOT        = "<xcelium-install>",
-  CDS_INST_DIR    = "<xcelium-install>",
-  SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com",
-  LM_LICENSE_FILE     = "xxxx@s-license-server.example.com",
-  CDS_LICENSE_FILE    = "xxxx@c-license.example.com",
-  LD_LIBRARY_PATH = "<library-path>",
-  PATH            = "<path>"
-}
+
+[mcp_servers.TraceWeave.env]
+VERDI_HOME = "<verdi-install>"
+NOVAS_HOME = "<verdi-install>"
+VCS_HOME = "<vcs-install>"
+XLM_ROOT = "<xcelium-install>"
+CDS_INST_DIR = "<xcelium-install>"
+SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com"
+LM_LICENSE_FILE = "xxxx@s-license-server.example.com"
+CDS_LICENSE_FILE = "xxxx@c-license.example.com"
+LD_LIBRARY_PATH = "<library-path>"
+PATH = "<path>"
 ```
 
 Verify the connection:
@@ -272,19 +280,26 @@ setenv TRACEWEAVE_NPI_EXECUTION lsf
 setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
-Putting these values in `.bashrc` / `.tcshrc` works
-only when the MCP client inherits that shell environment. IDE/GUI-launched
-clients often do not, so explicitly forward the inherited queue in the
-TraceWeave MCP entry. Add these entries to its existing server table/env map,
-then restart or reconnect the MCP server:
+Putting these values in `.bashrc` / `.tcshrc` works only when the MCP client
+inherits that shell environment. A terminal-launched Codex process can do so;
+IDE/GUI-launched clients often do not. For deterministic forwarding, the
+relevant portion of the final merged Codex configuration should look like this;
+keep the other EDA variables from the setup above, then restart or reconnect the
+MCP server:
 
 ```toml
 [mcp_servers.TraceWeave]
+command = "python3.11"
+args = ["<TRACEWEAVE_HOME>/server.py"]
+cwd = "<TRACEWEAVE_HOME>"
 env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
-env = { TRACEWEAVE_NPI_EXECUTION = "lsf" }
+
+[mcp_servers.TraceWeave.env]
+# Keep the existing EDA environment entries here.
+TRACEWEAVE_NPI_EXECUTION = "lsf"
 ```
 
-`env` values are copied literally by Codex, so do not write
+Values under `[mcp_servers.TraceWeave.env]` are copied literally by Codex, so do not write
 `TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"` there. `env_vars` is the supported
 way to forward the value that the user's shell already expanded.
 
@@ -411,13 +426,13 @@ returned prefix. Narrow the time window for a complete targeted check.
 - `trace_x_source`: Trace X/Z propagation upstream
 - `build_kdb`: Auto-build a Verdi KDB from the parsed compile log (vericom + elabcom). Use when the simulator is Xcelium (xrun) and the NPI backend reports no KDB. Output is cached under `TRACEWEAVE_CACHE_DIR` (default `~/.cache/traceweave/kdb/<hash>/`); cache hits skip re-running Verdi. A runnable `build.sh` is written next to the KDB for inspection or manual reproduction. Requires `VERDI_HOME` with `bin/vericom` and `bin/elabcom`.
 
-`explain_signal_driver`, `find_signal_loads`, and `trace_signal_path` automatically engage a Verdi NPI backend when a KDB is detected. The first two transparently fall back to a Static source-regex backend when NPI is unavailable; `trace_signal_path` is NPI-only and returns a structured `unsupported_reason` instead of an approximation, since `sig_to_sig_conn_list` has no honest static equivalent. NPI is the deep / accurate path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains that Static cannot follow. When a KDB is present, `build_tb_hierarchy` also overlays each component-tree node's `source_file` / `source_line` with NPI's elaborated `file:line`; affected hops in `find_driver` / `find_loads` results carry a `source_info_origin: "npi"` tag so consumers can tell NPI-annotated entries from compile-log-derived ones. The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
+`explain_signal_driver`, `find_signal_loads`, and `trace_signal_path` automatically engage a Verdi NPI backend when a KDB is detected. The first two transparently fall back to a Static source-regex backend when NPI is unavailable; `trace_signal_path` is NPI-only and returns a structured `unsupported_reason` instead of an approximation, since `sig_to_sig_conn_list` has no honest static equivalent. NPI is the deep / accurate path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains that Static cannot follow. In **local NPI execution mode**, a detected KDB also lets `build_tb_hierarchy` overlay each component-tree node's `source_file` / `source_line` with NPI's elaborated `file:line`. The initial LSF scope deliberately does not submit an implicit batch job from `build_tb_hierarchy`, so in LSF mode that hierarchy source information remains compile-log-derived. Affected hops in `find_driver` / `find_loads` results carry a `source_info_origin: "npi"` tag so consumers can tell NPI-annotated entries from compile-log-derived ones. The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
 
 For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` — the hint surfaces the exact command. For Xcelium flows there is no native KDB; `get_diagnostic_snapshot` will list `build_kdb` in `missing_steps` so the LLM agent can produce one on demand. Set `TRACEWEAVE_AUTO_KDB=0` to opt out of the auto-build suggestion.
 
 ### Usage telemetry
 
-When enabled, TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. Default-off; set `TRACEWEAVE_TELEMETRY=1` to enable it. Summarize with `python scripts/telemetry_report.py`.
+When enabled, TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. The normal user default is that `TRACEWEAVE_TELEMETRY` is absent; recording is then disabled and no telemetry file is written. To opt in, set `TRACEWEAVE_TELEMETRY=1` before starting the MCP server, then restart or reconnect it after changing the value. Summarize with `python scripts/telemetry_report.py`.
 
 ## Testing
 

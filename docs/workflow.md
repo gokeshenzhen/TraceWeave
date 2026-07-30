@@ -29,8 +29,12 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │  - Only proceed to step 3 when `sim_logs` is non-empty
 │
 ▼
-Step 2: build_tb_hierarchy(compile_log, simulator)
-│  Build project-level understanding BEFORE analyzing errors.
+Step 2 (parallel): build_tb_hierarchy(compile_log, simulator)
+                   + scan_structural_risks(compile_log, simulator)
+│  Run both independently on the SAME elaborate-phase compile log before
+│  analyzing failures. Do not wait for one before starting the other.
+│
+├─ build_tb_hierarchy builds project-level understanding.
 │  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
 │    - project: top_module, source_root, simulator
 │    - stats: file_count, module_count, instance_count, tree_depth,
@@ -55,6 +59,17 @@ Step 2: build_tb_hierarchy(compile_log, simulator)
 │  Before reading any RTL source file, call get_tb_file_detail(path=...) or
 │  lookup_tb_files(...) first. The compile_log is the only source of truth
 │  for which file version was compiled in this session.
+│
+│  In local NPI execution mode, a detected KDB may overlay hierarchy source
+│  locations with elaborated file:line data. The initial LSF scope deliberately
+│  does not submit an implicit job from build_tb_hierarchy, so its source
+│  locations remain compile-log-derived in LSF mode.
+│
+└─ scan_structural_risks independently scans the compiled RTL/TB source set.
+   Returns source-anchored structural risks (for example overlap, multi-drive,
+   incomplete control, or narrow-condition findings). Risks overlapping the
+   eventual failing signal/source path are high-priority root-cause candidates,
+   but remain facts to correlate rather than verdicts.
 │
 ▼
 Step 3: parse_sim_log(log_path, simulator)
@@ -96,7 +111,9 @@ Step 4: sweep_handshakes(wave_path, ...)
 │      transition-prefix truncation (`transition_truncated_count > 0`); narrow
 │      the time window for a complete targeted check. Follow any available
 │      suggested_next_actions to complete interface coverage.
-│    * coverage_status="complete" and flagged_count=0 means all interfaces are clean.
+│    * coverage_status="complete" and flagged_count=0 means the discovered,
+│      supported interfaces had none of the checks' reported findings. It is not
+│      proof that every protocol behavior in the design is correct.
 │  - Global findings (flagged interfaces) are facts to correlate against the symptom,
 │    not root-cause verdicts. Findings on one channel/interface may be unrelated to
 │    a mismatch on another channel.
@@ -175,6 +192,13 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │           backend, which can cross instance port boundaries. If the
    │           simulator is Xcelium and no KDB exists yet, get_diagnostic_snapshot
    │           lists `build_kdb` in `missing_steps` — call that first.
+   │           NPI execution defaults to local. With
+   │           TRACEWEAVE_NPI_EXECUTION=lsf, the explicit driver/load/path tools
+   │           submit an exact-only worker using TRACEWEAVE_NPI_LSF_QUEUE
+   │           (TraceWeave does not read generic LSF_QUEUE). Read
+   │           backend_status.execution_mode / scheduler_status / worker_status /
+   │           fallback_reason: a failed worker means the parent result came from
+   │           local Static fallback, not exact NPI.
    │           driver_status="testbench_driven" (cross_check.conflict) means NPI
    │           found NO RTL driver — its only candidate is also a LOAD of the net
    │           (interface-slice alias / a register reading the net), so the real
@@ -199,8 +223,11 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │          trace propagation back to the root cause net.
    │    Output: propagation_chain[], root_cause, trace_status, analysis_guide
    │    Notes: Combines waveform reads (per-hop value at time_ps) with
-   │           source-level driver analysis. Uses fan-in via NPI when KDB
-   │           is available; otherwise source-regex.
+   │           source-level driver analysis. The current implementation uses the
+   │           Static source resolver and does NOT dispatch NPI or LSF; it may
+   │           therefore stop at an instance-port boundary even when max_depth is
+   │           larger. At that stop, call explain_signal_driver(recursive=true)
+   │           on the boundary signal for a deeper NPI connectivity trace.
    │
    ├─ trace_signal_path(from_signal, to_signal, compile_log, expand_assigns?)
    │    When: Need a connected chain of nets between two signals (e.g. "how does
@@ -294,24 +321,25 @@ two-hypothesis discipline above still applies.
 ```text
 get_sim_paths
   ├─ provides compile_log / simulator / log_path / wave_path to downstream tools
-  └─ build_tb_hierarchy
-       └─ parse_sim_log
-            └─ sweep_handshakes
-                 └─ recommend_failure_debug_next_steps
-                      └─ search_signals
-                           └─ analyze_failures
-                                └─ deep dive:
-                                     analyze_failure_event
-                                     explain_signal_driver / find_signal_loads
-                                     get_error_context / get_signal_*
-                                     trace_x_source / trace_signal_path
+  ├─ build_tb_hierarchy ────────┐
+  └─ scan_structural_risks ─────┤  (parallel, same compile_log)
+                                └─ parse_sim_log
+                                     └─ sweep_handshakes
+                                          └─ recommend_failure_debug_next_steps
+                                               └─ search_signals
+                                                    └─ analyze_failures
+                                                         └─ deep dive:
+                                                              analyze_failure_event
+                                                              explain_signal_driver / find_signal_loads
+                                                              get_error_context / get_signal_*
+                                                              trace_x_source / trace_signal_path
 ```
 
 ## Parameter Flow
 
 | Parameter | Source | Consumed by |
 |-----------|--------|-------------|
-| `compile_log` | `get_sim_paths → compile_logs[phase="elaborate"].path` | `build_tb_hierarchy` |
+| `compile_log` | `get_sim_paths → compile_logs[phase="elaborate"].path` | `build_tb_hierarchy`, `scan_structural_risks`, connectivity/X-trace tools, `build_kdb` |
 | `simulator` | `get_sim_paths → simulator` | `build_tb_hierarchy`, `parse_sim_log`, `analyze_failures` |
 | `log_path` (sim) | `get_sim_paths → sim_logs[0].path` | `parse_sim_log`, `get_error_context`, `analyze_failures` |
 | `wave_path` | `get_sim_paths → chosen wave file (.vcd preferred when fsdb_runtime.enabled=false)` | `sweep_handshakes`, `search_signals`, `get_signal_*`, `analyze_failures` |
