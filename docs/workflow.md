@@ -195,7 +195,9 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │           NPI execution defaults to local. With
    │           TRACEWEAVE_NPI_EXECUTION=lsf, the explicit driver/load/path tools
    │           submit an exact-only worker using TRACEWEAVE_NPI_LSF_QUEUE
-   │           (TraceWeave does not read generic LSF_QUEUE). Read
+   │           (set that namespaced queue directly; only map an already-existing
+   │           generic LSF_QUEUE if desired; TraceWeave does not read it).
+   │           Read
    │           backend_status.execution_mode / scheduler_status / worker_status /
    │           fallback_reason: a failed worker means the parent result came from
    │           local Static fallback, not exact NPI.

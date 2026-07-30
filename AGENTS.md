@@ -81,6 +81,42 @@ Rules:
   and verify the opposite side with waveform evidence before assigning root
   cause; state which sides were checked. See `docs/workflow.md`.
 
+## LSF-Only NPI User Setup
+
+When a user says Verdi/NPI licenses are available only on LSF execution nodes,
+explain that TraceWeave remains local by default and give this direct setup
+(replace `digital` with the user's licensed queue):
+
+```bash
+export TRACEWEAVE_NPI_EXECUTION=lsf
+export TRACEWEAVE_NPI_LSF_QUEUE="digital"
+```
+
+Do not tell the user to create or overwrite a generic `LSF_QUEUE`. TraceWeave
+does not read it. Only when the site already exports `LSF_QUEUE` may the user
+optionally map that existing value:
+
+```bash
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+```
+
+For a terminal-launched Codex whose parent already contains the namespaced
+queue, forward it with `env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]` and put
+`TRACEWEAVE_NPI_EXECUTION = "lsf"` under `[mcp_servers.TraceWeave.env]`. If the
+Codex parent does not inherit that environment, omit the queue from `env_vars`
+and set a fixed `TRACEWEAVE_NPI_LSF_QUEUE = "digital"` under the same `env`
+table. For Claude Code, put both fixed namespaced values directly in the
+TraceWeave server's `"env"` object. Restart or reconnect the MCP server after
+changing environment/configuration. The KDB, TraceWeave installation, and
+staging directory must be visible at the same absolute paths on submission and
+compute nodes. After setup, run an explicit driver/load/path query and confirm
+`backend_status` reports `execution_mode="lsf"`,
+`scheduler_status="completed"`, `worker_status="completed"`, and
+`actual_backend="verdi_npi"`; otherwise inspect `fallback_reason`.
+See `README.md#lsf-only-npi-licenses` or
+`README.zh.md#仅执行节点可用的-npi-license` for complete bash/tcsh examples and
+optional settings.
+
 ## Debug Discipline
 
 `docs/debug-discipline.md` is the module-type-agnostic debug discipline — a

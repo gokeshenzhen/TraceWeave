@@ -257,35 +257,38 @@ execution remains local by default; opt in to LSF at the **TraceWeave MCP
 server process** with:
 
 ```bash
-export LSF_QUEUE=<team-licensed-queue>
 export TRACEWEAVE_NPI_EXECUTION=lsf
-export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 ```
 
-TraceWeave reads only the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`; it does not
-interpret a site's generic `LSF_QUEUE`. The shell mapping above lets different
-teams use one TraceWeave checkout while keeping company scheduler policy
-outside TraceWeave. If no generic variable exists, set the TraceWeave variable
-directly:
+Here `digital` is only an example; replace it with the user's licensed team
+queue. TraceWeave reads only the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`; it does
+not create, overwrite, or interpret a site's generic `LSF_QUEUE`. If the site
+already exports `LSF_QUEUE`, the user may map that existing value instead:
 
 ```bash
-export TRACEWEAVE_NPI_LSF_QUEUE=<licensed-queue>
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
 ```
 
 For `tcsh`:
 
 ```tcsh
-setenv LSF_QUEUE <team-licensed-queue>
 setenv TRACEWEAVE_NPI_EXECUTION lsf
+setenv TRACEWEAVE_NPI_LSF_QUEUE "digital"
+```
+
+Or, only when `LSF_QUEUE` already exists:
+
+```tcsh
 setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
 Putting these values in `.bashrc` / `.tcshrc` works only when the MCP client
 inherits that shell environment. A terminal-launched Codex process can do so;
-IDE/GUI-launched clients often do not. For deterministic forwarding, the
-relevant portion of the final merged Codex configuration should look like this;
-keep the other EDA variables from the setup above, then restart or reconnect the
-MCP server:
+IDE/GUI-launched clients often do not. When the Codex parent process already
+contains the exported namespaced queue, the relevant portion of the final
+merged configuration should look like this; keep the other EDA variables from
+the setup above, then restart or reconnect the MCP server:
 
 ```toml
 [mcp_servers.TraceWeave]
@@ -301,7 +304,22 @@ TRACEWEAVE_NPI_EXECUTION = "lsf"
 
 Values under `[mcp_servers.TraceWeave.env]` are copied literally by Codex, so do not write
 `TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"` there. `env_vars` is the supported
-way to forward the value that the user's shell already expanded.
+way to forward the value that the user's shell already expanded. If the Codex
+parent does not inherit the shell environment, omit the queue from `env_vars`
+and put a fixed `TRACEWEAVE_NPI_LSF_QUEUE = "digital"` directly under
+`[mcp_servers.TraceWeave.env]` instead.
+
+For Claude Code, merge the following fixed values into the existing TraceWeave
+server's `"env"` object (replace `digital` with the user's queue):
+
+```json
+{
+  "TRACEWEAVE_NPI_EXECUTION": "lsf",
+  "TRACEWEAVE_NPI_LSF_QUEUE": "digital"
+}
+```
+
+JSON values are literal too; do not put `"$LSF_QUEUE"` in this static map.
 
 With this mode enabled, only explicit connectivity operations
 (`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`) submit a
@@ -311,6 +329,12 @@ back locally to Static and is visible through fixed
 `backend_status.execution_mode` / `scheduler_status` / `worker_status` /
 `fallback_reason` labels; queue, host, command, and license details are not
 returned.
+
+After restarting or reconnecting the MCP server, ask the AI agent to run one
+explicit connectivity operation and report `backend_status`. A successful LSF
+NPI call has `execution_mode="lsf"`, `scheduler_status="completed"`,
+`worker_status="completed"`, and `actual_backend="verdi_npi"`. Otherwise inspect
+`fallback_reason`; a Static fallback is not an exact NPI result.
 
 Optional settings:
 

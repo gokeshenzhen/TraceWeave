@@ -238,32 +238,36 @@ codex mcp list
 默认仍在本地执行 NPI；这类环境可显式开启 LSF:
 
 ```bash
-export LSF_QUEUE=<team-licensed-queue>
 export TRACEWEAVE_NPI_EXECUTION=lsf
-export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 ```
 
-TraceWeave 只读取命名空间明确的 `TRACEWEAVE_NPI_LSF_QUEUE`，不会解释公司
-通用的 `LSF_QUEUE`。上面的 shell 映射让不同团队可以共享同一份 TraceWeave
-代码，同时把公司调度策略留在 TraceWeave 之外。如果没有通用变量，也可以
-直接设置:
+这里的 `digital` 只是示例,请替换为该用户所属团队可获取 license 的队列。
+TraceWeave 只读取命名空间明确的 `TRACEWEAVE_NPI_LSF_QUEUE`,不会创建、覆盖
+或解释公司通用的 `LSF_QUEUE`。如果站点原本已经导出了 `LSF_QUEUE`,用户也可以
+选择映射这个已有值:
 
 ```bash
-export TRACEWEAVE_NPI_LSF_QUEUE=<licensed-queue>
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
 ```
 
 `tcsh`:
 
 ```tcsh
-setenv LSF_QUEUE <team-licensed-queue>
 setenv TRACEWEAVE_NPI_EXECUTION lsf
+setenv TRACEWEAVE_NPI_LSF_QUEUE "digital"
+```
+
+只有在 `LSF_QUEUE` 已经存在时,也可以写成:
+
+```tcsh
 setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
 只有 MCP client 继承了对应 shell 环境时,`.bashrc` / `.tcshrc` 中的设置才会
 生效;从 terminal 启动的 Codex 可以继承,IDE/GUI 启动的 client 则经常不会。
-为了确定地转发队列,最终合并后的 Codex 配置相关部分应如下;保留前面已有的
-其他 EDA 环境变量,修改后重启或重新连接 MCP server:
+当 Codex 父进程已经包含导出的 namespaced queue 时,最终合并后的配置相关部分
+应如下;保留前面已有的其他 EDA 环境变量,修改后重启或重新连接 MCP server:
 
 ```toml
 [mcp_servers.TraceWeave]
@@ -279,13 +283,34 @@ TRACEWEAVE_NPI_EXECUTION = "lsf"
 
 Codex 会原样复制 `[mcp_servers.TraceWeave.env]` 中的值，因此不要写
 `TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"`；转发 Codex 父进程已经继承的
-且由 shell 提前展开好的变量应使用 `env_vars`。
+且由 shell 提前展开好的变量应使用 `env_vars`。如果 Codex 父进程没有继承
+shell 环境,就不要把 queue 放入 `env_vars`,而应直接在
+`[mcp_servers.TraceWeave.env]` 下设置固定值
+`TRACEWEAVE_NPI_LSF_QUEUE = "digital"`。
+
+Claude Code 用户可把下面两个固定值合并进已有 TraceWeave server 的 `"env"`
+对象中(`digital` 替换成用户自己的队列):
+
+```json
+{
+  "TRACEWEAVE_NPI_EXECUTION": "lsf",
+  "TRACEWEAVE_NPI_LSF_QUEUE": "digital"
+}
+```
+
+JSON 中也是字面值,不要在这个静态 map 里写 `"$LSF_QUEUE"`。
 
 开启后，只有 `explain_signal_driver`、`find_signal_loads`、
 `trace_signal_path` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
 读取、结构扫描、KDB 探测与 Static 分析仍在本地执行。worker 失败或超时后，
 父进程会在本地回退 Static，并通过固定的 `backend_status` 状态字段说明原因，
 不会返回队列、主机、命令或 license 细节。
+
+重启或重新连接 MCP server 后,让 AI agent 运行一次显式 connectivity 操作并
+报告 `backend_status`。LSF NPI 成功时应看到 `execution_mode="lsf"`、
+`scheduler_status="completed"`、`worker_status="completed"` 与
+`actual_backend="verdi_npi"`。否则应检查 `fallback_reason`;Static fallback
+不是 exact NPI 结果。
 
 可选配置:
 

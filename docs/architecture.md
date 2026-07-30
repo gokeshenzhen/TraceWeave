@@ -196,9 +196,11 @@ Verification
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or
   `LsfConnectivityBackend` when `TRACEWEAVE_NPI_EXECUTION=lsf`; its queue comes
-  only from the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`. Site/team variables are
-  mapped in the launching shell, outside TraceWeave. Without a KDB it returns
-  the static source-regex backend directly. Both NPI execution
+  only from the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`. Users normally set that
+  variable directly; an already-existing site/team variable may optionally be
+  mapped to it in the launching shell. TraceWeave never creates or interprets a
+  generic scheduler queue variable. Without a KDB it returns the static
+  source-regex backend directly. Both NPI execution
   policies wrap Static at the parent: local NPI failures degrade in-process,
   while an LSF worker returns exact NPI or a fixed failure receipt and the
   login-node parent performs the fallback. `find_path` is NPI-only: Static returns
