@@ -6,6 +6,7 @@ from compile and elaborate logs.
 
 import os
 import re
+import shlex
 from pathlib import Path
 
 
@@ -30,7 +31,23 @@ _VCS_IF_RE = re.compile(r"recompiling interface (\w+)", re.IGNORECASE)
 _XCE_FILE_RE = re.compile(r"^file:\s+(.+)$")
 _XCE_ENTITY_RE = re.compile(r"^\s*(module|interface|package)\s+worklib\.(\w+):", re.IGNORECASE)
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
-_FILELIST_RE = re.compile(r"(?:^|\s)-f\s+(\S+)")
+_SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
+_VCS_FILELIST_MAX_DEPTH = 16
+_VCS_FILELIST_MAX_TOKENS = 100_000
+_VCS_FLAGS_WITH_VALUE = frozenset(
+    {
+        "-assert",
+        "-cm_dir",
+        "-l",
+        "-Mdir",
+        "-ntb_opts",
+        "-o",
+        "-P",
+        "-timescale",
+        "-work",
+        "-y",
+    }
+)
 _VCS_MARKERS = (
     "chronologic vcs",
     "parsing design file",
@@ -101,10 +118,13 @@ def detect_simulator(log_path: str) -> str:
     return "unknown"
 
 
-def _collect_user_files(file_info: dict[str, dict]) -> tuple[list[dict], int]:
+def _collect_user_files(
+    file_info: dict[str, dict], *, preserve_order: bool = False
+) -> tuple[list[dict], int]:
     user = []
     filtered_count = 0
-    for path in sorted(file_info):
+    paths = file_info if preserve_order else sorted(file_info)
+    for path in paths:
         if _is_eda_lib(path):
             filtered_count += 1
             continue
@@ -121,16 +141,14 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     with open(log_path, "r", errors="replace") as f:
         lines = f.readlines()
 
-    command_text = "".join(lines[:40])
     compile_command = _extract_vcs_command(lines)
-    incdirs = [
-        _normalize_path(item, os.path.dirname(log_path))
-        for item in re.findall(r"\+incdir\+([^\s\\]+)", command_text)
-    ]
-    filelist_tree: dict[str, list[str]] = {}
-    for item in _FILELIST_RE.findall(command_text):
-        path = _normalize_path(item, os.path.dirname(log_path))
-        filelist_tree.setdefault(os.path.basename(path), [])
+    parse_warnings: list[str] = []
+    command_tokens = _tokenize_vcs_text(
+        compile_command or "", "VCS Command", parse_warnings
+    )
+    log_dir = os.path.dirname(log_path)
+    incdirs = _extract_vcs_incdirs(command_tokens, log_dir)
+    filelist_tree = _direct_vcs_filelist_tree(command_tokens, log_dir)
 
     include_tree: dict[str, list[str]] = {}
     file_info: dict[str, dict] = {}
@@ -189,7 +207,22 @@ def parse_vcs_compile_log(log_path: str) -> dict:
 
         _VCS_MODULE_RE.search(line)
 
-    user, filtered_count = _collect_user_files(file_info)
+    used_command_fallback = not file_info
+    if used_command_fallback and command_tokens:
+        recovered_files, recovered_tree = _recover_vcs_command_files(
+            command_tokens,
+            log_dir,
+            parse_warnings,
+        )
+        file_info.update(recovered_files)
+        filelist_tree = recovered_tree
+
+    if not top_modules:
+        top_modules.extend(_extract_vcs_tops(command_tokens))
+
+    user, filtered_count = _collect_user_files(
+        file_info, preserve_order=used_command_fallback
+    )
     return {
         "simulator": "vcs",
         "top_modules": top_modules,
@@ -201,6 +234,7 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
         "compile_command": compile_command,
+        "parse_warnings": parse_warnings,
     }
 
 
@@ -227,6 +261,246 @@ def _extract_vcs_command(lines: list[str]) -> str | None:
             body = cont
         return " ".join(p for p in parts if p)
     return None
+
+
+def _tokenize_vcs_text(
+    text: str,
+    context: str,
+    warnings: list[str],
+) -> list[str]:
+    """Tokenize a recorded command/filelist without invoking a shell."""
+    if not text.strip():
+        return []
+    try:
+        return shlex.split(text, comments=True, posix=True)
+    except ValueError as exc:
+        warnings.append(f"{context} tokenization failed: {exc}")
+        return []
+
+
+def _extract_vcs_tops(tokens: list[str]) -> list[str]:
+    tops: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        value = None
+        if token == "-top" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            index += 2
+        elif token.startswith("-top="):
+            value = token.split("=", 1)[1]
+            index += 1
+        else:
+            index += 1
+        if value and re.fullmatch(r"[A-Za-z_]\w*", value) and value not in tops:
+            tops.append(value)
+    return tops
+
+
+def _extract_vcs_incdirs(tokens: list[str], command_dir: str) -> list[str]:
+    incdirs: list[str] = []
+    for token in tokens:
+        if not token.startswith("+incdir+"):
+            continue
+        for raw_path in token[len("+incdir+"):].split("+"):
+            if not raw_path:
+                continue
+            path = _normalize_path(raw_path, command_dir)
+            if path not in incdirs:
+                incdirs.append(path)
+    return incdirs
+
+
+def _direct_vcs_filelist_tree(
+    tokens: list[str], command_dir: str
+) -> dict[str, list[str]]:
+    tree: dict[str, list[str]] = {}
+    index = 0
+    while index < len(tokens):
+        if tokens[index] in {"-f", "-F"} and index + 1 < len(tokens):
+            path = _normalize_path(tokens[index + 1], command_dir)
+            tree.setdefault(os.path.basename(path), [])
+            index += 2
+        else:
+            index += 1
+    return tree
+
+
+def _recover_vcs_command_files(
+    tokens: list[str],
+    command_dir: str,
+    warnings: list[str],
+) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """Recover sources from a no-op VCS command and its filelists.
+
+    This is deliberately a tokenizer plus bounded local-file reader. It never
+    performs globbing, command substitution, variable execution, or any other
+    shell evaluation.
+    """
+    file_info: dict[str, dict] = {}
+    filelist_tree: dict[str, list[str]] = {}
+    state = {
+        "active": set(),
+        "visited": set(),
+        "token_count": 0,
+        "token_limit_reported": False,
+    }
+    _scan_vcs_tokens(
+        tokens,
+        source_base=command_dir,
+        command_dir=command_dir,
+        file_info=file_info,
+        filelist_tree=filelist_tree,
+        warnings=warnings,
+        state=state,
+        parent_filelist=None,
+        depth=0,
+    )
+    return file_info, filelist_tree
+
+
+def _scan_vcs_tokens(
+    tokens: list[str],
+    *,
+    source_base: str,
+    command_dir: str,
+    file_info: dict[str, dict],
+    filelist_tree: dict[str, list[str]],
+    warnings: list[str],
+    state: dict,
+    parent_filelist: str | None,
+    depth: int,
+) -> None:
+    state["token_count"] += len(tokens)
+    if state["token_count"] > _VCS_FILELIST_MAX_TOKENS:
+        if not state["token_limit_reported"]:
+            warnings.append(
+                "VCS filelist token limit exceeded; remaining entries were ignored"
+            )
+            state["token_limit_reported"] = True
+        return
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if index == 0 and Path(token).name in {"vcs", "vlogan"}:
+            index += 1
+            continue
+        if token in {"-f", "-F"} and index + 1 < len(tokens):
+            raw_filelist = tokens[index + 1]
+            filelist_base = command_dir if token == "-f" else source_base
+            filelist_path = _normalize_path(raw_filelist, filelist_base)
+            entries_base = (
+                command_dir if token == "-f" else os.path.dirname(filelist_path)
+            )
+            _expand_vcs_filelist(
+                filelist_path,
+                entries_base=entries_base,
+                command_dir=command_dir,
+                file_info=file_info,
+                filelist_tree=filelist_tree,
+                warnings=warnings,
+                state=state,
+                parent_filelist=parent_filelist,
+                depth=depth + 1,
+            )
+            index += 2
+            continue
+        if token == "-v" and index + 1 < len(tokens):
+            _add_vcs_source(tokens[index + 1], source_base, file_info, warnings)
+            index += 2
+            continue
+        if token in _VCS_FLAGS_WITH_VALUE and index + 1 < len(tokens):
+            index += 2
+            continue
+        if token == "-top" and index + 1 < len(tokens):
+            index += 2
+            continue
+        if token.startswith(("-", "+")):
+            index += 1
+            continue
+        _add_vcs_source(token, source_base, file_info, warnings)
+        index += 1
+
+
+def _expand_vcs_filelist(
+    filelist_path: str,
+    *,
+    entries_base: str,
+    command_dir: str,
+    file_info: dict[str, dict],
+    filelist_tree: dict[str, list[str]],
+    warnings: list[str],
+    state: dict,
+    parent_filelist: str | None,
+    depth: int,
+) -> None:
+    name = os.path.basename(filelist_path)
+    filelist_tree.setdefault(name, [])
+    if parent_filelist is not None:
+        children = filelist_tree.setdefault(parent_filelist, [])
+        if name not in children:
+            children.append(name)
+
+    if filelist_path in state["active"]:
+        warnings.append(f"VCS filelist cycle ignored: {filelist_path}")
+        return
+    if filelist_path in state["visited"]:
+        return
+    if depth > _VCS_FILELIST_MAX_DEPTH:
+        warnings.append(f"VCS filelist depth limit exceeded: {filelist_path}")
+        return
+    if not os.path.isfile(filelist_path):
+        warnings.append(f"VCS filelist missing: {filelist_path}")
+        return
+
+    try:
+        text = Path(filelist_path).read_text(errors="replace")
+    except OSError as exc:
+        warnings.append(f"VCS filelist unreadable: {filelist_path}: {exc}")
+        return
+
+    # Backslash continuation is syntax, not shell execution. Ignore full-line
+    # // comments before shlex handles # comments and quoted paths.
+    logical_text = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    logical_text = "\n".join(
+        line for line in logical_text.splitlines()
+        if not line.lstrip().startswith("//")
+    )
+    tokens = _tokenize_vcs_text(
+        logical_text, f"VCS filelist {filelist_path}", warnings
+    )
+    state["active"].add(filelist_path)
+    state["visited"].add(filelist_path)
+    try:
+        _scan_vcs_tokens(
+            tokens,
+            source_base=entries_base,
+            command_dir=command_dir,
+            file_info=file_info,
+            filelist_tree=filelist_tree,
+            warnings=warnings,
+            state=state,
+            parent_filelist=name,
+            depth=depth,
+        )
+    finally:
+        state["active"].remove(filelist_path)
+
+
+def _add_vcs_source(
+    raw_path: str,
+    source_base: str,
+    file_info: dict[str, dict],
+    warnings: list[str],
+) -> None:
+    if not raw_path.lower().endswith(_SOURCE_SUFFIXES):
+        return
+    path = _normalize_path(raw_path, source_base)
+    if not os.path.isfile(path):
+        warnings.append(f"VCS source missing: {path}")
+        return
+    file_info.setdefault(path, {"type": "unknown"})
 
 
 def parse_xcelium_compile_log(log_path: str) -> dict:

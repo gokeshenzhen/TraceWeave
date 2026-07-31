@@ -99,3 +99,125 @@ file: {root / 'tb' / 'top_tb.sv'}
             assert result["top_modules"] == ["top_tb"]
         finally:
             tmp.cleanup()
+
+    def test_vcs_incremental_command_recovers_direct_sources_and_top(self, tmp_path):
+        rtl = tmp_path / "rtl" / "deep uart.sv"
+        tb = tmp_path / "tb" / "deep_x_tb.sv"
+        _write(rtl, "module deep_uart; endmodule\n")
+        _write(tb, "module uart_deep_x_tb; endmodule\n")
+        log = tmp_path / "compile.log"
+        log.write_text(
+            "Chronologic VCS simulator\n"
+            f"Command: vcs -full64 -sverilog \\\n  '{rtl}' \\\n  {tb} "
+            "-top uart_deep_x_tb -o simv\n"
+            "The design hasn't changed and need not be recompiled.\n"
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [Path(item["path"]).name for item in result["files"]["user"]] == [
+            "deep uart.sv",
+            "deep_x_tb.sv",
+        ]
+        assert result["top_modules"] == ["uart_deep_x_tb"]
+        assert result["parse_warnings"] == []
+
+    def test_vcs_incremental_command_expands_f_and_F_with_correct_bases(self, tmp_path):
+        work = tmp_path / "work"
+        lists = tmp_path / "lists"
+        command_relative = work / "rtl" / "command_relative.sv"
+        list_relative = lists / "rtl" / "list relative.sv"
+        nested_source = lists / "nested" / "nested.sv"
+        for path, module in (
+            (command_relative, "command_relative"),
+            (list_relative, "list_relative"),
+            (nested_source, "nested"),
+        ):
+            _write(path, f"module {module}; endmodule\n")
+
+        _write(lists / "plain.f", "rtl/command_relative.sv\n")
+        _write(
+            lists / "relative.f",
+            "'rtl/list relative.sv'\n-F nested/nested.f\n",
+        )
+        _write(lists / "nested" / "nested.f", "nested.sv\n")
+        log = work / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            "Command: vcs -f ../lists/plain.f -F ../lists/relative.f -top top\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(command_relative.resolve()),
+            str(list_relative.resolve()),
+            str(nested_source.resolve()),
+        ]
+        assert result["filelist_tree"] == {
+            "plain.f": [],
+            "relative.f": ["nested.f"],
+            "nested.f": [],
+        }
+
+    def test_vcs_incremental_filelist_cycle_is_bounded(self, tmp_path):
+        rtl = tmp_path / "rtl" / "dut.sv"
+        _write(rtl, "module dut; endmodule\n")
+        _write(tmp_path / "a.f", "-F b.f\nrtl/dut.sv\n")
+        _write(tmp_path / "b.f", "-F a.f\n")
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            "Command: vcs -F a.f -top dut\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [Path(item["path"]).name for item in result["files"]["user"]] == [
+            "dut.sv"
+        ]
+        assert any("filelist cycle" in warning for warning in result["parse_warnings"])
+
+    def test_vcs_incremental_command_reports_missing_sources_without_shell_execution(
+        self, tmp_path
+    ):
+        marker = tmp_path / "must_not_exist"
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs missing.sv '$(touch {marker}).sv' -top top\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert result["files"]["user"] == []
+        assert result["parse_warnings"]
+        assert marker.exists() is False
+
+    def test_vcs_parsing_records_remain_authoritative_when_command_has_sources(
+        self, tmp_path
+    ):
+        parsed = tmp_path / "parsed.sv"
+        command_only = tmp_path / "command_only.sv"
+        _write(parsed, "module parsed; endmodule\n")
+        _write(command_only, "module command_only; endmodule\n")
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs {command_only} -top parsed\n"
+            f"Parsing design file '{parsed}'\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(parsed.resolve())
+        ]
+        assert result["top_modules"] == ["parsed"]
