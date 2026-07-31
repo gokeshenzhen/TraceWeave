@@ -51,9 +51,13 @@ def _prefill_sweep_handshakes_cache(
     wave_path: str,
     interfaces=None,
     *,
+    scope=None,
+    discovered_count=None,
     coverage_status: str = "complete",
     coverage_warnings=None,
     suggested_next_actions=None,
+    transition_truncated_count: int = 0,
+    skipped=None,
 ):
     """预填一个与 wave_path 兼容的 sweep_handshakes 缓存 + provenance。"""
     if interfaces is None and coverage_status == "complete":
@@ -70,16 +74,21 @@ def _prefill_sweep_handshakes_cache(
     server._result_cache["sweep_handshakes"] = server.schemas.HandshakeSweepResult.model_validate(
         {
             "wave_path": wave_path,
-            "discovered_count": len(interfaces or []),
+            "scope": scope,
+            "discovered_count": (
+                len(interfaces or []) if discovered_count is None else discovered_count
+            ),
             "interface_count": len(interfaces or []),
             "flagged_count": sum(1 for iface in (interfaces or []) if iface.get("flags")),
+            "transition_truncated_count": transition_truncated_count,
             "coverage_status": coverage_status,
             "coverage_warnings": coverage_warnings or [],
             "suggested_next_actions": suggested_next_actions or [],
             "interfaces": interfaces or [],
+            "skipped": skipped or [],
         }
     )
-    server._result_provenance["sweep_handshakes"] = {"wave_path": wave_path, "scope": None}
+    server._result_provenance["sweep_handshakes"] = {"wave_path": wave_path, "scope": scope}
 
 
 LOG_SAMPLE = """\
@@ -285,6 +294,106 @@ class TestStructuralScannerToolContract:
 
             assert result["required_next_call"] is None
             assert result["suggested_next"] is None
+
+
+class TestSweepRetryRouting:
+    @staticmethod
+    def _result(**overrides):
+        payload = {
+            "wave_path": "/tmp/wave.vcd",
+            "discovered_count": 0,
+            "interface_count": 0,
+            "flagged_count": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": ["ZERO COVERAGE: not a protocol pass"],
+            "suggested_next_actions": [],
+        }
+        payload.update(overrides)
+        return server.schemas.HandshakeSweepResult.model_validate(payload)
+
+    def test_unscoped_zero_coverage_has_no_non_progressing_retry(self):
+        result = self._result(
+            suggested_next_actions=[
+                {
+                    "tool": "sweep_handshakes",
+                    "arguments": {"wave_path": "/tmp/wave.vcd"},
+                    "reason": "Blind retry.",
+                }
+            ]
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+
+    def test_scoped_zero_coverage_retries_without_scope(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": "/tmp/wave.vcd"},
+            "reason": "Retry without scope.",
+        }
+        result = self._result(scope="top_tb.u_dut", suggested_next_actions=[retry])
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+
+    def test_truncated_coverage_synthesizes_a_larger_cap(self):
+        result = self._result(
+            coverage_status="truncated",
+            discovered_count=7,
+            interface_count=3,
+            truncated=True,
+        )
+
+        retry = server._build_sweep_required_next_call("/tmp/wave.vcd", result)
+
+        assert retry is not None
+        assert retry["arguments"]["max_interfaces"] == 7
+
+    def test_degraded_coverage_without_parameter_change_has_no_blind_retry(self):
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            coverage_warnings=["COVERAGE DEGRADED: clock was not dumped"],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+
+    def test_degraded_coverage_accepts_a_narrower_window_action(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {
+                "wave_path": "/tmp/wave.vcd",
+                "start_time_ps": 100,
+                "end_time_ps": 200,
+            },
+            "reason": "Retry in a bounded window.",
+        }
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            start_ps=0,
+            end_ps=1000,
+            suggested_next_actions=[retry],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+
+    def test_degraded_open_ended_window_accepts_a_later_start(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {
+                "wave_path": "/tmp/wave.vcd",
+                "start_time_ps": 100,
+            },
+            "reason": "Retry after the failure-correlated anchor.",
+        }
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            start_ps=0,
+            end_ps=-1,
+            suggested_next_actions=[retry],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
 
 
 @pytest.mark.anyio
@@ -585,6 +694,63 @@ class TestParseSimLogSweepNextStep:
             )
             assert res.protocol_symptom_hint is not None  # symptom still reported
             assert res.protocol_symptom_next_step is None  # but no runnable call
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_no_repeat_call_after_unscoped_zero_coverage(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        _prefill_sweep_handshakes_cache(
+            str(wave),
+            interfaces=[],
+            coverage_status="zero_coverage",
+            coverage_warnings=["ZERO COVERAGE: not a protocol pass"],
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+
+            assert res.protocol_symptom_hint is not None
+            assert res.protocol_symptom_next_step is None
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_scoped_zero_coverage_still_relays_unscoped_retry(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": str(wave)},
+            "reason": "Retry without scope.",
+        }
+        _prefill_sweep_handshakes_cache(
+            str(wave),
+            interfaces=[],
+            scope="top_tb.u_dut",
+            coverage_status="zero_coverage",
+            coverage_warnings=["ZERO COVERAGE: not a protocol pass"],
+            suggested_next_actions=[retry],
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+
+            assert res.protocol_symptom_next_step is not None
+            assert res.protocol_symptom_next_step.model_dump() == retry
         finally:
             server._result_cache.pop("get_sim_paths", None)
 
@@ -1638,7 +1804,28 @@ $enddefinitions $end
         assert result["required_next_call"]["tool"] == "sweep_handshakes"
         assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
 
-    async def test_recommend_treats_zero_coverage_sweep_as_incomplete(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("coverage_status", "warning", "expected_missing_input"),
+        [
+            (
+                "zero_coverage",
+                "ZERO COVERAGE: no protocol interfaces checked; this is not a protocol pass.",
+                "not a protocol pass",
+            ),
+            (
+                "degraded",
+                "COVERAGE DEGRADED: clock was not dumped; flagged_count=0 is not clean.",
+                "prerequisite",
+            ),
+        ],
+    )
+    async def test_recommend_does_not_repeat_nonprogressing_incomplete_sweep(
+        self,
+        tmp_path,
+        coverage_status,
+        warning,
+        expected_missing_input,
+    ):
         _prefill_get_sim_paths_state()
         _prefill_build_tb_hierarchy_state()
         log_path = tmp_path / "run.log"
@@ -1679,15 +1866,9 @@ $enddefinitions $end
         _prefill_sweep_handshakes_cache(
             str(wave_path),
             interfaces=[],
-            coverage_status="zero_coverage",
-            coverage_warnings=["ZERO COVERAGE: no protocol interfaces checked"],
-            suggested_next_actions=[
-                {
-                    "tool": "sweep_handshakes",
-                    "arguments": {"wave_path": str(wave_path)},
-                    "reason": "Retry without scope.",
-                }
-            ],
+            coverage_status=coverage_status,
+            coverage_warnings=[warning],
+            suggested_next_actions=[],
         )
 
         result = await server._dispatch(
@@ -1702,8 +1883,10 @@ $enddefinitions $end
 
         assert result["workflow_incomplete"] is True
         assert result["degraded_reason"] == "incomplete_handshake_sweep"
-        assert result["required_next_call"]["tool"] == "sweep_handshakes"
-        assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
+        assert result["required_next_call"] is None
+        assert expected_missing_input in " ".join(result["missing_inputs"])
+        assert result["runtime_protocol_coverage"]["coverage_status"] == coverage_status
+        assert result["runtime_protocol_coverage"]["coverage_warnings"] == [warning]
 
     async def test_recommend_failure_debug_next_steps_ignores_incompatible_cached_inputs(self, tmp_path):
         _prefill_get_sim_paths_state()

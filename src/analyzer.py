@@ -166,13 +166,26 @@ class WaveformAnalyzer:
         log_parser = SimLogParser(self.log_path, self.simulator)
         events = log_parser.parse_failure_events()
         if not events:
+            runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)
+            why = ["No normalized failure events were found in the simulation log."]
+            if (
+                runtime_protocol_coverage is not None
+                and runtime_protocol_coverage["coverage_status"] != "complete"
+            ):
+                warnings = runtime_protocol_coverage["coverage_warnings"]
+                warning_text = " | ".join(warnings) if warnings else (
+                    f"coverage_status={runtime_protocol_coverage['coverage_status']} is not complete."
+                )
+                why.append(f"Runtime protocol coverage remains inconclusive: {warning_text}")
             return {
                 "primary_failure_target": None,
                 "recommended_signals": [],
                 "recommended_instances": [],
                 "correlated_structural_risks": [],
+                "runtime_protocol_findings": _build_runtime_protocol_findings(handshake_sweep),
+                "runtime_protocol_coverage": runtime_protocol_coverage,
                 "suspected_failure_class": "no_failure_detected",
-                "why": ["No normalized failure events were found in the simulation log."],
+                "why": why,
             }
 
         ranked_events = sorted(events, key=_failure_priority_key)
@@ -185,6 +198,7 @@ class WaveformAnalyzer:
             primary_for_risk["failing_signal_path"] = event_analysis["recommended_signals"][0].get("path")
         correlated_risks = _rank_structural_risks(structural_risks or [], primary_for_risk, normalized_hints)
         runtime_protocol_findings = _build_runtime_protocol_findings(handshake_sweep)
+        runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)
         why = [
             "Selected the earliest failure with the strongest available timing/source anchor.",
             f"Failure classified heuristically as {failure_class}.",
@@ -198,6 +212,15 @@ class WaveformAnalyzer:
                 "Runtime handshake sweep flagged protocol anomalies; these are facts to "
                 "correlate against the failure, not a root-cause verdict."
             )
+        if (
+            runtime_protocol_coverage is not None
+            and runtime_protocol_coverage["coverage_status"] != "complete"
+        ):
+            coverage_warnings = runtime_protocol_coverage["coverage_warnings"]
+            warning_text = " | ".join(coverage_warnings) if coverage_warnings else (
+                f"coverage_status={runtime_protocol_coverage['coverage_status']} is not complete."
+            )
+            why.append(f"Runtime protocol coverage remains inconclusive: {warning_text}")
 
         return {
             "primary_failure_target": primary,
@@ -205,6 +228,7 @@ class WaveformAnalyzer:
             "recommended_instances": event_analysis["likely_instances"],
             "correlated_structural_risks": correlated_risks,
             "runtime_protocol_findings": runtime_protocol_findings,
+            "runtime_protocol_coverage": runtime_protocol_coverage,
             "suspected_failure_class": failure_class,
             "recommendation_strategy": "role_rank_v2_structural",
             "failure_window_center_ps": primary.get("time_ps"),
@@ -616,6 +640,20 @@ def _build_runtime_protocol_findings(handshake_sweep: dict[str, Any] | None) -> 
             }
         )
     return findings
+
+
+def _build_runtime_protocol_coverage(
+    handshake_sweep: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not handshake_sweep:
+        return None
+    return {
+        "coverage_status": handshake_sweep.get("coverage_status", "degraded"),
+        "coverage_warnings": list(handshake_sweep.get("coverage_warnings") or []),
+        "discovered_count": int(handshake_sweep.get("discovered_count") or 0),
+        "interface_count": int(handshake_sweep.get("interface_count") or 0),
+        "flagged_count": int(handshake_sweep.get("flagged_count") or 0),
+    }
 
 
 def _rank_structural_risks(

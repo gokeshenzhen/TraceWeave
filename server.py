@@ -689,7 +689,10 @@ Waveform debug workflow:
    - Always interpret flagged_count together with coverage_status:
      zero_coverage means no protocol interfaces were checked and is NOT a pass;
      truncated/degraded means partial coverage, so flagged_count=0 is not a
-     clean-protocol conclusion. Follow suggested_next_actions when present.
+     clean-protocol conclusion. Follow a suggested_next_action only when it
+     changes scope/window/edge/cap; never replay an identical sweep. An unscoped
+     zero-coverage result with no action is terminal for workflow routing, not
+     a protocol pass.
    - Inspect the returned fact table: interfaces flagged ended_in_stall /
      payload_hold_violation / premature_valid_deassertion are the first to
      investigate. On an AHB write-data failure, a master interface holding valid
@@ -2448,6 +2451,8 @@ async def list_tools():
                 "round-trips into one. Always interpret flagged_count together with "
                 "coverage_status: zero_coverage means no protocol interfaces were "
                 "checked and is NOT a pass; truncated/degraded means partial coverage. "
+                "Workflow follow-ups relay only parameter-changing retries: an unscoped "
+                "zero-coverage result is not blindly replayed, but remains inconclusive. "
                 "FSDB native transition-buffer truncation is propagated per row and "
                 "forces degraded coverage; zero findings then cover only returned prefixes. "
                 "Returns FACTS, not a root-cause verdict; re-rank as the symptom "
@@ -3146,20 +3151,27 @@ async def _dispatch(name: str, args: dict):
         # the broader auditor that lists every missing step; this is the single
         # prioritized nudge for an agent that called recommend directly. Both
         # treat "failure context + no complete compatible sweep cache" as
-        # sweep-needed. A zero-coverage/truncated/degraded sweep is useful
-        # evidence, but it must not satisfy the default-flow protocol scan.
+        # requiring attention. Only a parameter-changing retry is actionable;
+        # terminal zero/degraded coverage remains explicitly inconclusive but
+        # must not replay the same sweep forever.
         missing_scan = scan_cache is None and has_failure_context
-        missing_sweep = _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        sweep_needs_attention = _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        sweep_call = (
+            _build_sweep_required_next_call(args["wave_path"], sweep_cache)
+            if sweep_needs_attention
+            else None
+        )
+        actionable_sweep = sweep_needs_attention and sweep_call is not None
         protocol_symptom = _recommend_has_protocol_symptom(parse_cache)
         primary_missing = _select_recommend_primary_missing_step(
-            missing_scan, missing_sweep, protocol_symptom
+            missing_scan, actionable_sweep, protocol_symptom
         )
         if primary_missing == "sweep":
             result["workflow_incomplete"] = True
             result["degraded_reason"] = (
                 "missing_handshake_sweep" if sweep_cache is None else "incomplete_handshake_sweep"
             )
-            result["required_next_call"] = _build_sweep_required_next_call(args["wave_path"], sweep_cache)
+            result["required_next_call"] = sweep_call
             result["missing_inputs"] = []
         elif primary_missing == "scan":
             result["workflow_incomplete"] = True
@@ -3169,6 +3181,11 @@ async def _dispatch(name: str, args: dict):
                 request_context.get("simulator"),
             )
             result["missing_inputs"] = []
+        elif sweep_needs_attention:
+            result["workflow_incomplete"] = True
+            result["degraded_reason"] = "incomplete_handshake_sweep"
+            result["required_next_call"] = None
+            result["missing_inputs"] = [_describe_non_actionable_sweep(sweep_cache)]
         else:
             result["workflow_incomplete"] = False
             result["degraded_reason"] = None
@@ -3686,6 +3703,7 @@ def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict
         "primary_failure_target": result.primary_failure_target,
         "signal_count": len(result.recommended_signals),
         "instance_count": len(result.recommended_instances),
+        "runtime_protocol_coverage": result.runtime_protocol_coverage,
     }
 
 
@@ -3794,12 +3812,26 @@ def _build_sweep_required_next_call(
 ) -> dict | None:
     if not wave_path:
         return None
-    if sweep_result is not None:
-        for action in sweep_result.suggested_next_actions:
-            if action.get("tool") == "sweep_handshakes" and action.get("arguments"):
-                return action
-        if sweep_result.coverage_status == "truncated":
-            target = max(int(sweep_result.discovered_count or 0), int(sweep_result.interface_count or 0))
+    if sweep_result is None:
+        return {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": wave_path},
+            "reason": (
+                "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
+                "symptom. Run the whole-design handshake sweep before reading RTL "
+                "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
+                "premature-valid-deassertion fact table in one call."
+            ),
+        }
+    if sweep_result.coverage_status == "complete":
+        return None
+
+    for action in sweep_result.suggested_next_actions:
+        if _sweep_action_makes_progress(action, wave_path, sweep_result):
+            return action
+    if sweep_result.coverage_status == "truncated":
+        target = max(int(sweep_result.discovered_count or 0), int(sweep_result.interface_count or 0))
+        if target > int(sweep_result.interface_count or 0):
             return {
                 "tool": "sweep_handshakes",
                 "arguments": {"wave_path": wave_path, "max_interfaces": target},
@@ -3809,26 +3841,92 @@ def _build_sweep_required_next_call(
                     "to cover every discovered interface."
                 ),
             }
-        if sweep_result.coverage_status == "degraded":
-            return {
-                "tool": "sweep_handshakes",
-                "arguments": {"wave_path": wave_path},
-                "reason": (
-                    "Previous sweep_handshakes coverage was degraded; some discovered "
-                    "interfaces could not be inspected. Re-run after checking skipped "
-                    "rows, scope choice, and clock dumping."
-                ),
-            }
-    return {
-        "tool": "sweep_handshakes",
-        "arguments": {"wave_path": wave_path},
-        "reason": (
-            "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
-            "symptom. Run the whole-design handshake sweep before reading RTL "
-            "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
-            "premature-valid-deassertion fact table in one call."
-        ),
-    }
+    return None
+
+
+def _sweep_action_makes_progress(
+    action: dict,
+    wave_path: str,
+    sweep_result: schemas.HandshakeSweepResult,
+) -> bool:
+    if action.get("tool") != "sweep_handshakes":
+        return False
+    arguments = action.get("arguments")
+    if not isinstance(arguments, dict) or not arguments:
+        return False
+    action_wave = arguments.get("wave_path")
+    if not action_wave or not _same_realpath(action_wave, wave_path):
+        return False
+
+    prior_scope = sweep_result.scope or None
+    next_scope = arguments.get("scope") or None
+    if prior_scope != next_scope:
+        # Removing a scope, or moving to a strict parent, expands discovery.
+        # Adding/narrowing a scope after an unscoped sweep cannot complete the
+        # whole-design default-flow check.
+        if prior_scope and next_scope is None:
+            return True
+        if prior_scope and next_scope and prior_scope.startswith(next_scope.rstrip(".") + "."):
+            return True
+        return False
+
+    if sweep_result.coverage_status == "truncated":
+        try:
+            next_max = int(arguments.get("max_interfaces"))
+        except (TypeError, ValueError):
+            next_max = 0
+        return (
+            next_max >= int(sweep_result.discovered_count or 0)
+            and next_max > int(sweep_result.interface_count or 0)
+        )
+
+    if sweep_result.coverage_status != "degraded":
+        return False
+    if arguments.get("edge", sweep_result.edge) != sweep_result.edge:
+        return True
+
+    try:
+        next_start = int(arguments.get("start_time_ps", sweep_result.start_ps))
+        next_end = int(arguments.get("end_time_ps", sweep_result.end_ps))
+    except (TypeError, ValueError):
+        return False
+    if next_start < sweep_result.start_ps or (next_end >= 0 and next_end < next_start):
+        return False
+    end_is_narrower = (
+        next_end != sweep_result.end_ps
+        and next_end >= 0
+        and (sweep_result.end_ps < 0 or next_end <= sweep_result.end_ps)
+    )
+    start_is_narrower = next_start > sweep_result.start_ps
+    end_is_not_wider = (
+        sweep_result.end_ps < 0
+        or (next_end >= 0 and next_end <= sweep_result.end_ps)
+    )
+    return (start_is_narrower or end_is_narrower) and end_is_not_wider
+
+
+def _describe_non_actionable_sweep(
+    sweep_result: schemas.HandshakeSweepResult | None,
+) -> str:
+    if sweep_result is None:
+        return "A compatible sweep_handshakes result is unavailable."
+    if sweep_result.coverage_status == "zero_coverage" and not sweep_result.scope:
+        return (
+            "The unscoped sweep found no supported AHB or valid/ready interfaces. "
+            "This is not a protocol pass, and repeating the same sweep cannot add "
+            "coverage; provide a waveform with supported interface and clock signals "
+            "dumped, or use a targeted protocol check when signal paths are known."
+        )
+    if sweep_result.coverage_status == "degraded":
+        return (
+            "Protocol coverage is degraded and no parameter-changing retry was "
+            "provided. Resolve the reported skipped/dumped-signal prerequisite, or "
+            "supply a narrower failure-correlated time window before rerunning."
+        )
+    return (
+        f"Protocol coverage_status={sweep_result.coverage_status!r} remains incomplete, "
+        "but no retry action would change the previous sweep parameters."
+    )
 
 
 def _recommend_has_protocol_symptom(
@@ -4204,17 +4302,17 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     if sweep_wave_path is None and sweep_result is not None:
         sweep_wave_path = sweep_result.wave_path
     if sweep_result is not None:
+        sweep_call = (
+            _build_sweep_required_next_call(sweep_wave_path, sweep_result)
+            if _sweep_coverage_incomplete(sweep_result)
+            else None
+        )
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=True,
             summary=_extract_protocol_health_summary(sweep_result),
-            suggested_call=(
-                _build_sweep_required_next_call(sweep_wave_path, sweep_result)
-                if _sweep_coverage_incomplete(sweep_result)
-                else None
-            ),
+            suggested_call=sweep_call,
         )
         if anchor is not None and has_waveform and sweep_failure_context and _sweep_coverage_incomplete(sweep_result):
-            sweep_call = _build_sweep_required_next_call(sweep_wave_path, sweep_result)
             if sweep_call is not None:
                 missing_steps.append({
                     "tool": "sweep_handshakes",
@@ -4718,7 +4816,20 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             if sim_paths and getattr(sim_paths, "wave_files", None)
             else None
         )
-        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(wave_path)
+        sweep_cache = _result_cache.get("sweep_handshakes")
+        sweep_provenance = _result_provenance.get("sweep_handshakes")
+        compatible_sweep = (
+            sweep_cache
+            if (
+                sweep_cache is not None
+                and sweep_provenance is not None
+                and _same_realpath(sweep_provenance.get("wave_path"), wave_path)
+            )
+            else None
+        )
+        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(
+            wave_path, compatible_sweep
+        )
 
     validated = _enforce_output_budget(
         schemas.ParseSimLogResult.model_validate(summary),

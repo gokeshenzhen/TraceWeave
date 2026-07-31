@@ -86,6 +86,12 @@ Verification
   `coverage_status=complete` with `total_risks=0` supports a clean-scan
   observation; `zero_coverage` and `degraded` explicitly preserve uncertainty
   when no supported source or only a partial/parser-degraded source set was read.
+- Protocol coverage and retry actionability are separate. Server routing relays
+  only a sweep action that expands scope, narrows the time window, changes the
+  edge, or raises a truncated interface cap. An unscoped zero-interface sweep
+  and a degraded sweep with no such action retain their warning/coverage receipt
+  but do not generate an identical required call. Recommendation output carries
+  `runtime_protocol_coverage` even when no interface finding exists.
 - Wave-touching tool bodies (`get_signal_*`, `get_signals_*`, `search_signals`,
   `get_waveform_summary`, `period`/`diff_first_divergence`,
   `suggest_*`, `sweep_handshakes`, `inspect_handshake`, `verify_window`,

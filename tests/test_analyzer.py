@@ -181,6 +181,32 @@ class TestFailureEventAnalysis:
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
+    def test_recommend_preserves_incomplete_protocol_coverage_receipt(self, log_path):
+        analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
+        warning = "ZERO COVERAGE: no interfaces checked; this is not a protocol pass."
+
+        result = analyzer.recommend_debug_next_steps(
+            wave_path="/tmp/wave.vcd",
+            handshake_sweep={
+                "coverage_status": "zero_coverage",
+                "coverage_warnings": [warning],
+                "discovered_count": 0,
+                "interface_count": 0,
+                "flagged_count": 0,
+                "interfaces": [],
+            },
+        )
+
+        assert result["runtime_protocol_findings"] == []
+        assert result["runtime_protocol_coverage"] == {
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": [warning],
+            "discovered_count": 0,
+            "interface_count": 0,
+            "flagged_count": 0,
+        }
+        assert "not a protocol pass" in " ".join(result["why"])
+
     def test_recommend_debug_next_steps_ranks_correlated_structural_risks(self, log_path):
         parser = FakeWaveParser()
         analyzer = WaveformAnalyzer(log_path, parser, "vcs")

@@ -551,6 +551,9 @@ class RecommendNextStepsResult(SchemaModel):
     # carried over from a compatible sweep_handshakes cache. Facts (already sorted
     # by sweep's mechanical key), never a verdict — the LLM judges them.
     runtime_protocol_findings: list[dict[str, Any]] = Field(default_factory=list)
+    # Coverage receipt is kept even when there are no flagged rows. In
+    # particular, zero_coverage + [] findings is not a protocol pass.
+    runtime_protocol_coverage: dict[str, Any] | None = None
     workflow_incomplete: bool = False
     degraded_reason: Literal[
         "missing_structural_scan",

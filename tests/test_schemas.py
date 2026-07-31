@@ -9,6 +9,7 @@ from src.schemas import (
     GetSignalsByCycleResult,
     ParseSimLogResult,
     ProblemHints,
+    RecommendNextStepsResult,
     ScanStructuralRisksResult,
     SearchSignalsBatchResult,
     SimPathsResult,
@@ -214,3 +215,22 @@ def test_structural_scan_result_carries_explicit_coverage_receipt():
     assert result.coverage_status == "zero_coverage"
     assert result.eligible_file_count == 0
     assert result.coverage_warnings == ["ZERO COVERAGE"]
+
+
+def test_recommend_result_preserves_runtime_protocol_coverage_without_findings():
+    result = RecommendNextStepsResult.model_validate(
+        {
+            "suspected_failure_class": "data-path corruption",
+            "runtime_protocol_findings": [],
+            "runtime_protocol_coverage": {
+                "coverage_status": "zero_coverage",
+                "coverage_warnings": ["not a protocol pass"],
+                "discovered_count": 0,
+                "interface_count": 0,
+                "flagged_count": 0,
+            },
+        }
+    )
+
+    assert result.runtime_protocol_findings == []
+    assert result.runtime_protocol_coverage["coverage_status"] == "zero_coverage"

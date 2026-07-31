@@ -64,7 +64,13 @@ Rules:
   and is not a pass; `truncated`/`degraded` means partial coverage, so
   `flagged_count=0` is not a clean-protocol conclusion. When `coverage_status`
   is `truncated`, the result includes `suggested_next_actions` with a one-click
-  retry; follow it to complete coverage. The compact `finding_summary` (by_flag,
+  retry; follow it to complete coverage. Workflow routing relays a retry only
+  when it changes scope, time window, edge, or interface cap. In particular, an
+  unscoped `zero_coverage` result with zero discovered interfaces and no
+  parameter-changing action is not blindly replayed: it remains explicitly
+  "not a protocol pass", but the same call cannot add facts. A `degraded` result
+  without an actionable retry reports the missing dump/clock/window prerequisite
+  instead of replaying the same sweep. The compact `finding_summary` (by_flag,
   by_channel_hint, top_scopes) surfaces which channels have findings before
   opening the full interface list. **Critical**: do not collapse global findings
   from the sweep + targeted clean checks on one interface into a false "protocol
