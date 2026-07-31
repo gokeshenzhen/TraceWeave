@@ -657,6 +657,114 @@ class TestRerunHints:
         assert str(older.resolve()) in result["candidate_previous_logs"]
         assert result["suggested_followup_tool"] == "diff_sim_failure_results"
 
+    def test_compile_and_elaboration_logs_are_not_previous_run_candidates(self, tmp_path):
+        compile_log = tmp_path / "compile.log"
+        elab_log = tmp_path / "elab_previous.log"
+        previous_run = tmp_path / "run_prev.log"
+        current = tmp_path / "run.log"
+        compile_log.write_text(
+            "Chronologic VCS compiler\nCommand: vcs -full64 -sverilog dut.sv\n"
+            "Parsing design file 'dut.sv'\n"
+        )
+        elab_log.write_text("Elaborating the design hierarchy\nTop Level Modules: top_tb\n")
+        previous_run.write_text("UVM_ERROR top_tb.sv(9) @ 1 ns: reporter [SB] previous mismatch\n")
+        current.write_text("UVM_ERROR top_tb.sv(10) @ 2 ns: reporter [SB] current mismatch\n")
+        for index, path in enumerate((compile_log, elab_log, previous_run), start=1):
+            os.utime(path, (path.stat().st_atime, current.stat().st_mtime - index))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["candidate_previous_logs"] == [str(previous_run.resolve())]
+        assert str(compile_log.resolve()) not in result["candidate_previous_logs"]
+        assert str(elab_log.resolve()) not in result["candidate_previous_logs"]
+
+    def test_content_rejects_compiler_only_log_with_ambiguous_name(self, tmp_path):
+        compiler_output = tmp_path / "archive.log"
+        current = tmp_path / "run.log"
+        compiler_output.write_text(
+            "xmvlog: 23.09-s001\nCompiling source file ./dut.sv\n"
+            "source excerpt: `UVM_ERROR(\"bad\")\n*E,CUVMUR: compile error\n"
+        )
+        current.write_text("module_b ERROR current @ 2 ns\n")
+        os.utime(
+            compiler_output,
+            (compiler_output.stat().st_atime, current.stat().st_mtime - 10),
+        )
+
+        result = SimLogParser(str(current), "xcelium").parse()
+
+        assert result["previous_log_detected"] is False
+        assert result["candidate_previous_logs"] == []
+        assert result["suggested_followup_tool"] is None
+
+    def test_ambiguous_plain_log_is_not_suggested_as_a_baseline(self, tmp_path):
+        notes = tmp_path / "notes.log"
+        current = tmp_path / "run.log"
+        notes.write_text("temporary diagnostics from a helper process\n")
+        current.write_text("module_b ERROR current @ 2 ns\n")
+        os.utime(notes, (notes.stat().st_atime, current.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["previous_log_detected"] is False
+        assert result["candidate_previous_logs"] == []
+
+    def test_runtime_evidence_accepts_history_with_an_ambiguous_name(self, tmp_path):
+        history = tmp_path / "archive.log"
+        current = tmp_path / "run.log"
+        history.write_text("UVM_ERROR top_tb.sv(9) @ 1 ns: reporter [SB] previous mismatch\n")
+        current.write_text("UVM_ERROR top_tb.sv(10) @ 2 ns: reporter [SB] current mismatch\n")
+        os.utime(history, (history.stat().st_atime, current.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["candidate_previous_logs"] == [str(history.resolve())]
+
+    def test_mixed_compile_and_runtime_log_remains_a_valid_candidate(self, tmp_path):
+        history = tmp_path / "archive.log"
+        current = tmp_path / "run.log"
+        history.write_text(
+            "Parsing design file 'dut.sv'\n"
+            "Chronologic VCS simulator copyright 1991-2023\n"
+            "UVM_ERROR top_tb.sv(9) @ 1 ns: reporter [SB] previous mismatch\n"
+        )
+        current.write_text("UVM_ERROR top_tb.sv(10) @ 2 ns: reporter [SB] current mismatch\n")
+        os.utime(history, (history.stat().st_atime, current.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["candidate_previous_logs"] == [str(history.resolve())]
+
+    def test_similar_run_name_is_prioritized_over_newer_unrelated_sim_log(self, tmp_path):
+        related = tmp_path / "uart_test_prev.log"
+        unrelated = tmp_path / "sim_prev.log"
+        current = tmp_path / "uart_test.log"
+        related.write_text("UVM_ERROR top_tb.sv(9) @ 1 ns: reporter [SB] related\n")
+        unrelated.write_text("UVM_ERROR other_tb.sv(9) @ 1 ns: reporter [SB] unrelated\n")
+        current.write_text("UVM_ERROR top_tb.sv(10) @ 2 ns: reporter [SB] current\n")
+        os.utime(related, (related.stat().st_atime, current.stat().st_mtime - 20))
+        os.utime(unrelated, (unrelated.stat().st_atime, current.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["candidate_previous_logs"][:2] == [
+            str(related.resolve()),
+            str(unrelated.resolve()),
+        ]
+
+    def test_runtime_footer_in_tail_of_large_log_is_detected(self, tmp_path):
+        history = tmp_path / "history.log"
+        current = tmp_path / "run.log"
+        history.write_text(
+            "helper output\n" + ("padding without markers\n" * 5000) + "Time: 3115000 ps\n"
+        )
+        current.write_text("module_b ERROR current @ 2 ns\n")
+        os.utime(history, (history.stat().st_atime, current.stat().st_mtime - 10))
+
+        result = SimLogParser(str(current), "vcs").parse()
+
+        assert result["candidate_previous_logs"] == [str(history.resolve())]
+
 
 class TestMixedLogRuntimeSafety:
     def test_mixed_log_ignores_compile_errors_and_keeps_runtime_counts(self):

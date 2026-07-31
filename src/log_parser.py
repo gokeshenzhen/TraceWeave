@@ -103,6 +103,43 @@ _NON_RUNTIME_DIAGNOSTIC_TOKENS = (
     "error-[",
 )
 
+_PREVIOUS_LOG_SAMPLE_BYTES = 32 * 1024
+_PREVIOUS_LOG_MAX_INSPECT = 64
+_PREVIOUS_LOG_EXCLUDED_NAME_RE = re.compile(
+    r"(?:^|[._-])(?:comp|compile|compilation|elab|elaborate|elaboration|build|kdb|"
+    r"vlogan|xmvlog|xmelab|vericom|elabcom)(?:$|[._-])",
+    re.IGNORECASE,
+)
+_PREVIOUS_LOG_RUNTIME_NAME_RE = re.compile(
+    r"(?:^|[._-])(?:run|sim|simulation|test|regress)(?:$|[._-])",
+    re.IGNORECASE,
+)
+_PREVIOUS_LOG_UVM_RUNTIME_RE = re.compile(
+    r"\bUVM_(?:ERROR|FATAL|WARNING|INFO)\b[^\n]*@\s*[\d.]+\s*(?:fs|ps|ns|us|ms|s)?\s*:",
+    re.IGNORECASE,
+)
+_PREVIOUS_LOG_BUILD_MARKERS = _NON_RUNTIME_DIAGNOSTIC_TOKENS + (
+    "chronologic vcs compiler",
+    "vcs compiler",
+    "command: vcs",
+    "command: vlogan",
+    "vericom",
+    "elabcom",
+    "compile phase",
+    "elaboration phase",
+)
+_PREVIOUS_LOG_RUNTIME_MARKERS = (
+    "chronologic vcs simulator",
+    "vcs simulation report",
+    "uvm report summary",
+    "simulation complete",
+    "simulation completed",
+    "simulation finished",
+    "$finish called",
+    "$finish at simulation time",
+    "*e,asrtst",
+)
+
 
 @dataclass(frozen=True)
 class TimeParseResult:
@@ -1092,24 +1129,34 @@ def _find_previous_log_hints(log_path: str) -> dict[str, Any]:
     current = Path(log_path)
     try:
         current_stat = current.stat()
-        siblings = sorted(
-            (
-                path for path in current.parent.glob("*.log")
-                if path.resolve() != current.resolve()
-            ),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        current_resolved = current.resolve()
     except OSError:
         current_stat = None
-        siblings = []
+        current_resolved = current
+
+    siblings: list[tuple[Path, float, int]] = []
+    if current_stat is not None:
+        try:
+            sibling_paths = current.parent.glob("*.log")
+            for path in sibling_paths:
+                try:
+                    if path.resolve() == current_resolved:
+                        continue
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime >= current_stat.st_mtime:
+                    continue
+                affinity = _previous_log_name_affinity(current, path)
+                siblings.append((path, mtime, affinity))
+        except OSError:
+            siblings = []
+
+    siblings.sort(key=lambda item: (-item[2], -item[1], str(item[0])))
 
     candidates: list[str] = []
-    for path in siblings:
-        try:
-            if current_stat is not None and path.stat().st_mtime >= current_stat.st_mtime:
-                continue
-        except OSError:
+    for path, _mtime, _affinity in siblings[:_PREVIOUS_LOG_MAX_INSPECT]:
+        if not _is_previous_sim_log_candidate(path):
             continue
         candidates.append(str(path.resolve()))
         if len(candidates) >= 3:
@@ -1119,6 +1166,79 @@ def _find_previous_log_hints(log_path: str) -> dict[str, Any]:
         "candidate_previous_logs": candidates,
         "suggested_followup_tool": "diff_sim_failure_results" if candidates else None,
     }
+
+
+def _previous_log_name_affinity(current: Path, candidate: Path) -> int:
+    current_stem = current.stem.lower()
+    candidate_stem = candidate.stem.lower()
+    separators = ("_", "-", ".")
+    if any(candidate_stem.startswith(current_stem + separator) for separator in separators):
+        return 3
+    if any(current_stem.startswith(candidate_stem + separator) for separator in separators):
+        return 3
+
+    current_head = re.split(r"[._-]", current_stem, maxsplit=1)[0]
+    candidate_head = re.split(r"[._-]", candidate_stem, maxsplit=1)[0]
+    if current_head and current_head == candidate_head:
+        return 2
+    if (
+        _PREVIOUS_LOG_RUNTIME_NAME_RE.search(current_stem)
+        and _PREVIOUS_LOG_RUNTIME_NAME_RE.search(candidate_stem)
+    ):
+        return 1
+    return 0
+
+
+def _is_previous_sim_log_candidate(path: Path) -> bool:
+    if _PREVIOUS_LOG_EXCLUDED_NAME_RE.search(path.stem):
+        return False
+
+    sample = _read_previous_log_sample(path)
+    if sample is None:
+        return False
+    sample_lower = sample.lower()
+    has_runtime_evidence = _has_previous_log_runtime_evidence(sample, sample_lower)
+    if has_runtime_evidence:
+        return True
+    if any(marker in sample_lower for marker in _PREVIOUS_LOG_BUILD_MARKERS):
+        return False
+
+    # A clear run/sim/test filename is useful weak evidence for a quiet passing
+    # run, but an arbitrary sibling log is too ambiguous to recommend as a
+    # diff baseline.
+    return bool(sample.strip() and _PREVIOUS_LOG_RUNTIME_NAME_RE.search(path.stem))
+
+
+def _read_previous_log_sample(path: Path) -> str | None:
+    """Read bounded head/tail evidence without parsing an entire sibling log."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            head = handle.read(_PREVIOUS_LOG_SAMPLE_BYTES)
+            tail = b""
+            if size > _PREVIOUS_LOG_SAMPLE_BYTES:
+                tail_offset = max(len(head), size - _PREVIOUS_LOG_SAMPLE_BYTES)
+                handle.seek(tail_offset)
+                tail = handle.read(_PREVIOUS_LOG_SAMPLE_BYTES)
+    except OSError:
+        return None
+    return (head + (b"\n" if tail else b"") + tail).decode("utf-8", errors="replace")
+
+
+def _has_previous_log_runtime_evidence(sample: str, sample_lower: str) -> bool:
+    if any(marker in sample_lower for marker in _PREVIOUS_LOG_RUNTIME_MARKERS):
+        return True
+    if _SIM_FOOTER_TIME_RE.search(sample):
+        return True
+    if _PREVIOUS_LOG_UVM_RUNTIME_RE.search(sample):
+        return True
+    if _VCS_ASSERT_RE.search(sample) or _XCE_ASSERT_RE.search(sample):
+        return True
+    for line in sample.splitlines():
+        line_lower = line.lower()
+        if _has_error_keyword(line_lower) and _extract_time_info(line).raw_time is not None:
+            return True
+    return False
 
 
 def get_error_context(

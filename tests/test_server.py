@@ -181,6 +181,13 @@ class TestVertexFunctionSchemaCompatibility:
             "maxItems": server.SIGNAL_SEARCH_MAX_KEYWORDS,
         }
 
+    async def test_parse_log_description_explains_previous_log_filtering(self):
+        tools = await server.list_tools()
+        parse_tool = next(tool for tool in tools if tool.name == "parse_sim_log")
+
+        assert "candidate_previous_logs" in parse_tool.description
+        assert "compile/elaboration" in parse_tool.description
+
 
 @pytest.mark.anyio
 class TestStructuralScannerToolContract:

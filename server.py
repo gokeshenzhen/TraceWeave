@@ -1478,6 +1478,7 @@ async def list_tools():
             description=(
                 "Parse a VCS or Xcelium simulation log and return grouped runtime failures by signature. "
                 "The simulator argument is required and is not auto-detected here. "
+                "candidate_previous_logs uses bounded evidence sampling and excludes compile/elaboration logs. "
                 "The first error group automatically includes about 100 lines of surrounding log context "
                 "in first_group_context; use get_error_context for other groups."
             ),

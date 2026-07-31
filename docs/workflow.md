@@ -79,6 +79,8 @@ Step 3: parse_sim_log(log_path, simulator)
 │  Returns: groups list, normalized failure_events, time normalization fields,
 │           rerun hints such as previous_log_detected / candidate_previous_logs,
 │           and log_snapshot_id for same-path rerun diffing
+│  candidate_previous_logs are conservative runtime-log candidates from bounded
+│  sibling head/tail samples; compile/elaboration/build logs are never baselines.
 │
 │  What the agent does:
 │  - Identify the earliest and most frequent error groups

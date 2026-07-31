@@ -77,6 +77,11 @@ Verification
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there.
+- Sibling-file rerun hints are conservative and bounded: `src/log_parser.py`
+  samples only fixed-size head/tail windows, rejects compile/elaboration/build
+  names and compiler-only content, and ranks evidence-backed simulation logs by
+  filename affinity before mtime. Same-path snapshots remain independent of
+  sibling-file discovery.
 - Structural scan results carry an additive coverage receipt. Only
   `coverage_status=complete` with `total_risks=0` supports a clean-scan
   observation; `zero_coverage` and `degraded` explicitly preserve uncertainty

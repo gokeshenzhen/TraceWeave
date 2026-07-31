@@ -407,7 +407,7 @@ All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or 
 
 ### Log Analysis
 
-- `parse_sim_log`: Parse and normalize runtime failures into grouped summaries and `failure_events`; also returns `log_snapshot_id` so same-path reruns can be compared after the simulator overwrites the log. On a scoreboard/compare-style failure it sets `protocol_symptom_hint`, a boundary-safe pointer reminding you to check bus-protocol health (run `sweep_handshakes` once for all interfaces) before reading RTL line-by-line — it never asserts a protocol type or a specific signal.
+- `parse_sim_log`: Parse and normalize runtime failures into grouped summaries and `failure_events`; also returns `log_snapshot_id` so same-path reruns can be compared after the simulator overwrites the log. Its `candidate_previous_logs` are evidence-backed simulation siblings selected from bounded head/tail samples; compile/elaboration/build logs and ambiguous helper logs are excluded. On a scoreboard/compare-style failure it sets `protocol_symptom_hint`, a boundary-safe pointer reminding you to check bus-protocol health (run `sweep_handshakes` once for all interfaces) before reading RTL line-by-line — it never asserts a protocol type or a specific signal.
 - `diff_sim_failure_results`: Compare two simulation runs by paths or by `base_snapshot_id` / `new_snapshot_id`. If only `new_log_path` is supplied after an earlier `parse_sim_log` of the same path, TraceWeave uses the previous parsed snapshot as the baseline.
 - `get_error_context`: Extract raw log context around a specific line
 
