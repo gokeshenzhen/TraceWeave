@@ -5,7 +5,7 @@ The public API matches FSDBParser.
 """
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 
@@ -43,9 +43,13 @@ class VCDParser:
         self._ensure_parsed()
         sym   = self._resolve(signal_path)
         trans = self._transitions.get(sym, [])
+        times = [t for t, _ in trans]
         if end_ps == -1:
             end_ps = self._end_time_ps
-        filtered = [(t, v) for t, v in trans if start_ps <= t <= end_ps]
+        lo = bisect_left(times, start_ps)
+        hi = bisect_right(times, end_ps)
+        filtered = trans[lo:hi]
+        predecessor = trans[lo - 1] if lo > 0 else None
         return {
             "signal":           signal_path,
             "start_ps":         start_ps,
@@ -53,6 +57,15 @@ class VCDParser:
             "transition_count": len(filtered),
             "transitions": [{"time_ps": t, "time_ns": t / 1000, "value": _enrich_value(v)}
                             for t, v in filtered],
+            "predecessor": (
+                {
+                    "time_ps": predecessor[0],
+                    "time_ns": predecessor[0] / 1000,
+                    "value": _enrich_value(predecessor[1]),
+                }
+                if predecessor is not None
+                else None
+            ),
         }
 
     def get_signals_around_time(self, signal_paths: list,

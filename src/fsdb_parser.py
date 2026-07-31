@@ -348,7 +348,26 @@ class FSDBParser:
         if rc < 0:
             raise RuntimeError(f"fsdb_get_transitions failed, rc={rc}")
         text = buf.value.decode()
-        transitions = _parse_trans_buf(text)
+        raw_transitions = _parse_trans_buf(text)
+        predecessor = _parse_predecessor_buf(text)
+        if predecessor is None:
+            # Compatibility with an older wrapper: ffrGotoXTag leaked its
+            # at-or-before result as the first ordinary transition. Separate
+            # that state here so the public transition list is strict even
+            # before the local native wrapper is rebuilt.
+            legacy_predecessors = [
+                item for item in raw_transitions if item["time_ps"] < start_ps
+            ]
+            if legacy_predecessors:
+                predecessor = max(
+                    legacy_predecessors, key=lambda item: item["time_ps"]
+                )
+        transitions = [
+            item
+            for item in raw_transitions
+            if item["time_ps"] >= start_ps
+            and (end_ps == -1 or item["time_ps"] <= end_ps)
+        ]
         native_truncated = _buffer_was_truncated(text)
         return {
             "signal":           signal_path,
@@ -356,6 +375,9 @@ class FSDBParser:
             "end_ps":           end_ps,
             "transition_count": len(transitions),
             "transitions":      transitions,
+            # Explicit pre-state for internal edge extraction. It is never
+            # mixed into the strict [start_ps, end_ps] transition list.
+            "predecessor":      predecessor,
             # Native output is bounded by the shared buffer. A true value means
             # this is only a prefix and must never support a clean/full verdict.
             "truncated":        native_truncated,
@@ -578,6 +600,25 @@ def _parse_trans_buf(text: str) -> list:
     return result
 
 
+def _parse_predecessor_buf(text: str) -> dict | None:
+    for line in text.splitlines():
+        if not line.startswith("@PREDECESSOR\t"):
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) < 3:
+            return None
+        try:
+            t_ps = int(parts[1])
+        except ValueError:
+            return None
+        return {
+            "time_ps": t_ps,
+            "time_ns": t_ps / 1000,
+            "value": _enrich_value(parts[2]),
+        }
+    return None
+
+
 def _buffer_was_truncated(text: str) -> bool:
     """Return whether native output contains its standalone truncation receipt."""
     return text.startswith("@TRUNCATED\n") or "\n@TRUNCATED\n" in text
@@ -649,6 +690,31 @@ def _parse_multi_signal_buf(
                 "time_ns": time_ps / 1000,
                 "value": _enrich_value(value),
             })
+
+    start_ps = max(0, center_ps - window_ps)
+    end_ps = center_ps + window_ps
+    for signal in result["signals"].values():
+        if not isinstance(signal, dict) or "error" in signal:
+            continue
+        signal["transitions_in_window"] = sorted(
+            (
+                item
+                for item in signal["transitions_in_window"]
+                if start_ps <= item["time_ps"] <= end_ps
+            ),
+            key=lambda item: item["time_ps"],
+        )
+        pre_window = sorted(
+            (
+                item
+                for item in signal["pre_window_transitions"]
+                if item["time_ps"] < start_ps
+            ),
+            key=lambda item: item["time_ps"],
+        )
+        signal["pre_window_transitions"] = (
+            pre_window[-extra_transitions:] if extra_transitions > 0 else []
+        )
 
     return result
 

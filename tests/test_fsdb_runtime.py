@@ -99,6 +99,29 @@ def test_transition_parser_detects_native_truncation_receipt():
     assert fsdb_parser._buffer_was_truncated("0\t0\n10\t1\n") is False
 
 
+def test_multi_signal_parser_enforces_window_and_chronological_pre_history():
+    text = """\
+@SIGNAL\ttop.clk\t1
+#VALUE_AT_CENTER\t1
+#WINDOW_TRANSITIONS
+5\t0
+10\t1
+20\t0
+25\t1
+#PRE_WINDOW_TRANSITIONS
+9\t0
+3\t1
+"""
+
+    result = fsdb_parser._parse_multi_signal_buf(
+        text, center_ps=15, window_ps=5, extra_transitions=2
+    )
+    signal = result["signals"]["top.clk"]
+
+    assert [item["time_ps"] for item in signal["transitions_in_window"]] == [10, 20]
+    assert [item["time_ps"] for item in signal["pre_window_transitions"]] == [3, 9]
+
+
 class _FakeGroupLib:
     _traceweave_has_transition_group = True
 
@@ -175,6 +198,17 @@ def test_transition_group_uses_loaded_reads_and_records_profile():
     assert snapshot["sweep_native_load_total_ms"] == 2.0
     assert snapshot["sweep_native_traverse_format_total_ms"] == 3.0
     assert snapshot["sweep_native_unload_total_ms"] == 1.0
+
+
+def test_transition_parser_separates_legacy_native_predecessor_from_window():
+    parser = _fake_group_parser()
+
+    with parser.transition_group(["top.clk"]):
+        result = parser.get_transitions("top.clk", 5, 10)
+
+    assert [item["time_ps"] for item in result["transitions"]] == [10]
+    assert result["predecessor"]["time_ps"] == 0
+    assert result["transition_count"] == 1
 
 
 def test_transition_group_unloads_when_body_raises():

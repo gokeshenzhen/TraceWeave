@@ -12,6 +12,7 @@ from src.schemas import (
     RecommendNextStepsResult,
     ScanStructuralRisksResult,
     SearchSignalsBatchResult,
+    SignalTransitionsResult,
     SimPathsResult,
     TraceXSourceResult,
     WaveformSummaryResult,
@@ -156,6 +157,27 @@ def test_get_signals_by_cycle_result_roundtrip():
     )
     payload = json.loads(result.model_dump_json(exclude_none=True))
     assert payload["cycles"][0]["signals"]["top_tb.data"]["dec"] == 1
+
+
+def test_signal_transitions_result_keeps_predecessor_separate():
+    result = SignalTransitionsResult.model_validate(
+        {
+            "signal": "top.clk",
+            "start_ps": 10,
+            "end_ps": 20,
+            "transition_count": 1,
+            "transitions": [
+                {"time_ps": 20, "value": {"bin": "1", "dec": 1}},
+            ],
+            "predecessor": {
+                "time_ps": 5,
+                "value": {"bin": "0", "dec": 0},
+            },
+        }
+    )
+
+    assert result.predecessor["time_ps"] == 5
+    assert all(item["time_ps"] >= result.start_ps for item in result.transitions)
 
 
 def test_backend_status_accepts_optional_lsf_receipt():

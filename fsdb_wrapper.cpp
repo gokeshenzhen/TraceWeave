@@ -30,6 +30,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 /* ─── 内部数据结构 ─────────────────────────────────────────────────── */
@@ -303,6 +304,21 @@ _AppendTransitionLine(
     return _AppendText(out_buf, buf_size, pos, line, truncated);
 }
 
+static bool
+_AppendPredecessorLine(
+    char *out_buf,
+    int buf_size,
+    int &pos,
+    unsigned long long time_ps,
+    const std::string &value,
+    bool &truncated
+)
+{
+    std::string line = "@PREDECESSOR\t" + std::to_string(time_ps) +
+                       "\t" + value + "\n";
+    return _AppendText(out_buf, buf_size, pos, line, truncated);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * C 接口（extern "C" 保证符号不被 mangle，Python ctypes 可直接调用）
  * ═══════════════════════════════════════════════════════════════════ */
@@ -502,27 +518,54 @@ _GetTransitionsImpl(
     if (hdl->ffrHasIncoreVC()) {
         fsdbTag64 start_tag = _ToTag(ctx, start_ps);
         _ProfileClock::time_point seek_begin = _ProfileClock::now();
-        hdl->ffrGotoXTag((void*)&start_tag);
+        fsdbRC seek_rc = hdl->ffrGotoXTag((void*)&start_tag);
+
+        /* ffrGotoXTag is at-or-before. Preserve that state explicitly for
+         * edge-direction classification, but never disguise it as an
+         * in-window transition. Multiple sub-ps tags can ceil to the same
+         * reported ps, so walk back until the reported timestamp is strictly
+         * less than start_ps. */
+        if (start_ps > 0 && FSDB_RC_SUCCESS == seek_rc) {
+            while (true) {
+                fsdbTag64 time;
+                byte_T *vc_ptr = NULL;
+                hdl->ffrGetXTag(&time);
+                hdl->ffrGetVC(&vc_ptr);
+                unsigned long long t_ps = _TagToPs(ctx, time);
+                if (t_ps < start_ps) {
+                    std::string val = _VCToStr(
+                        vc_ptr, sig->bit_size, sig->bytes_per_bit);
+                    _AppendPredecessorLine(
+                        out_buf, buf_size, pos, t_ps, val, truncated);
+                    break;
+                }
+                if (FSDB_RC_SUCCESS != hdl->ffrGotoPrevVC()) break;
+            }
+            seek_rc = hdl->ffrGotoXTag((void*)&start_tag);
+        }
         _ProfileClock::time_point seek_end = _ProfileClock::now();
         if (profile) profile->seek_ns = _ElapsedNs(seek_begin, seek_end);
 
         _ProfileClock::time_point traverse_begin = _ProfileClock::now();
-        do {
-            fsdbTag64  time;
-            byte_T    *vc_ptr = NULL;
-            hdl->ffrGetXTag(&time);
-            hdl->ffrGetVC(&vc_ptr);
+        if (!truncated && FSDB_RC_SUCCESS == seek_rc) {
+            do {
+                fsdbTag64  time;
+                byte_T    *vc_ptr = NULL;
+                hdl->ffrGetXTag(&time);
+                hdl->ffrGetVC(&vc_ptr);
 
-            unsigned long long t_ps = _TagToPs(ctx, time);
-            if (end_ps != (unsigned long long)-1 && t_ps > end_ps)
-                break;
+                unsigned long long t_ps = _TagToPs(ctx, time);
+                if (t_ps < start_ps) continue;
+                if (end_ps != (unsigned long long)-1 && t_ps > end_ps)
+                    break;
 
-            std::string val = _VCToStr(
-                vc_ptr, sig->bit_size, sig->bytes_per_bit);
-            if (!_AppendTransitionLine(
-                    out_buf, buf_size, pos, t_ps, val, truncated)) break;
-            count++;
-        } while (FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
+                std::string val = _VCToStr(
+                    vc_ptr, sig->bit_size, sig->bytes_per_bit);
+                if (!_AppendTransitionLine(
+                        out_buf, buf_size, pos, t_ps, val, truncated)) break;
+                count++;
+            } while (FSDB_RC_SUCCESS == hdl->ffrGotoNextVC());
+        }
         if (profile)
             profile->traverse_format_ns =
                 _ElapsedNs(traverse_begin, _ProfileClock::now());
@@ -756,6 +799,7 @@ fsdb_get_multi_signals_around_time(
                     hdl->ffrGetXTag(&time);
                     hdl->ffrGetVC(&vc_ptr);
                     unsigned long long t_ps = _TagToPs(ctx, time);
+                    if (t_ps < start_ps) continue;
                     if (t_ps > end_ps) break;
                     std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
                     if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
@@ -777,15 +821,27 @@ fsdb_get_multi_signals_around_time(
         if (hdl->ffrHasIncoreVC() && extra_transitions > 0) {
             fsdbTag64 start_tag = _ToTag(ctx, start_ps);
             if (FSDB_RC_SUCCESS == hdl->ffrGotoXTag((void*)&start_tag)) {
-                for (int n = 0; n < extra_transitions; n++) {
-                    if (FSDB_RC_SUCCESS != hdl->ffrGotoPrevVC()) break;
+                std::vector<std::pair<unsigned long long, std::string> > history;
+                while ((int)history.size() < extra_transitions) {
                     fsdbTag64 time;
                     byte_T *vc_ptr = NULL;
                     hdl->ffrGetXTag(&time);
                     hdl->ffrGetVC(&vc_ptr);
                     unsigned long long t_ps = _TagToPs(ctx, time);
-                    std::string value = _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit);
-                    if (!_AppendTransitionLine(out_buf, buf_size, pos, t_ps, value, truncated))
+                    if (t_ps < start_ps) {
+                        history.push_back(std::make_pair(
+                            t_ps,
+                            _VCToStr(vc_ptr, sig->bit_size, sig->bytes_per_bit)
+                        ));
+                    }
+                    if (FSDB_RC_SUCCESS != hdl->ffrGotoPrevVC()) break;
+                }
+                /* Traversal above is newest→oldest; match VCD and every other
+                 * transition list by returning chronological order. */
+                for (std::vector<std::pair<unsigned long long, std::string> >::reverse_iterator
+                         it = history.rbegin(); it != history.rend(); ++it) {
+                    if (!_AppendTransitionLine(
+                            out_buf, buf_size, pos, it->first, it->second, truncated))
                         break;
                 }
             }

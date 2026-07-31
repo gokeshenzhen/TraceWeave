@@ -101,6 +101,20 @@ def test_get_value_and_transitions_are_enriched(tmp_path: Path):
     assert transitions["transitions"][1]["value"]["bin"] == "1"
 
 
+def test_get_transitions_is_strict_and_exposes_predecessor(tmp_path: Path):
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+
+    result = VCDParser(str(wave)).get_transitions(
+        "top_tb.clk", start_ps=6000, end_ps=15000
+    )
+
+    assert [item["time_ps"] for item in result["transitions"]] == [10000, 15000]
+    assert result["predecessor"]["time_ps"] == 5000
+    assert result["predecessor"]["value"]["bin"] == "1"
+    assert all(6000 <= item["time_ps"] <= 15000 for item in result["transitions"])
+
+
 def test_search_signals_prefers_dut_paths(tmp_path: Path):
     wave = tmp_path / "wave.vcd"
     wave.write_text(

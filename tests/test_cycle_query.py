@@ -146,6 +146,24 @@ def test_linear_signal_sampler_uses_last_duplicate_timestamp_value():
     assert parser.calls == [("top.sig", 0)]
 
 
+def test_signal_sampler_uses_predecessor_without_point_query():
+    parser = _FallbackParser({"bin": "x", "dec": None})
+    predecessor = {
+        "time_ps": 0,
+        "value": {"bin": "0", "hex": "0x0", "dec": 0},
+    }
+    transitions = [
+        {"time_ps": 20, "value": {"bin": "1", "hex": "0x1", "dec": 1}},
+    ]
+
+    sampled = _sample_signal_values(
+        parser, "top.sig", transitions, [10, 20], predecessor=predecessor
+    )
+
+    assert [value["dec"] for value in sampled] == [0, 1]
+    assert parser.calls == []
+
+
 def test_get_signals_by_cycle_basic():
     result = get_signals_by_cycle(
         parser=_parser(),
@@ -463,6 +481,36 @@ def test_edge_sampler_propagates_transition_prefix_truncation():
 
     assert result["transition_data_truncated"] is True
     assert result["transition_signals_truncated"] == ["top.clk", "top.valid"]
+
+
+def test_edge_sampler_uses_explicit_predecessor_for_window_first_edge(tmp_path: Path):
+    wave = tmp_path / "window_first_edge.vcd"
+    wave.write_text(
+        """\
+$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! clk $end
+$var wire 1 \" valid $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+1\"
+#10
+1!
+#20
+0!
+#30
+1!
+"""
+    )
+
+    result = sample_signals_on_edges(
+        VCDParser(str(wave)), "top.clk", ["top.valid"],
+        start_ps=10, end_ps=30, sample_offset_ps=0,
+    )
+
+    assert [sample["time_ps"] for sample in result["samples"]] == [10, 30]
 
 
 class _CountingSamplingParser:

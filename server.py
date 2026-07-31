@@ -1621,10 +1621,12 @@ async def list_tools():
         Tool(
             name="get_signal_transitions",
             description=(
-                "Return transitions for a signal over a time range (capped at "
+                "Return transitions for a signal over the strict closed time range "
+                "[start_time_ps, end_time_ps] (capped at "
                 f"{TRANSITIONS_MAX_RETURNED} by default; truncated=true + hint mark a clipped "
                 "result, transition_count is always the total found). FSDB support depends "
-                "on fsdb_runtime.enabled."
+                "on fsdb_runtime.enabled. The last value-change strictly before the window "
+                "is returned separately as predecessor and is never mixed into transitions."
             ),
             inputSchema={
                 "type": "object",

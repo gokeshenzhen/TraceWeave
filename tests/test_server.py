@@ -2779,6 +2779,20 @@ class TestSignalTransitionsCap:
         assert result.hint is None
         assert result.transition_count == len(result.transitions)
 
+    async def test_public_result_has_strict_window_and_separate_predecessor(self):
+        result = await server._dispatch(
+            "get_signal_transitions",
+            {
+                "wave_path": str(self._FIXTURE),
+                "signal_path": "top_tb.clk",
+                "start_time_ps": 1000,
+                "end_time_ps": 2000,
+            },
+        )
+
+        assert result.predecessor["time_ps"] == 500
+        assert all(1000 <= item["time_ps"] <= 2000 for item in result.transitions)
+
     async def test_explicit_cap_truncates_keeps_earliest_and_hints(self):
         full = await server._dispatch(
             "get_signal_transitions",

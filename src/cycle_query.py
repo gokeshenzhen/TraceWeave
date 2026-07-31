@@ -134,7 +134,9 @@ class EdgeSamplingSession:
         edge_extract_started = time.perf_counter()
         try:
             self._edge_times = _extract_edge_times(
-                self._clock_result.get("transitions", []), edge
+                self._clock_result.get("transitions", []),
+                edge,
+                predecessor=self._clock_result.get("predecessor"),
             )
         finally:
             operation_metrics.add_sweep_cpu_timing(
@@ -357,7 +359,9 @@ def sample_signals_on_edges(
         edge_extract_started = time.perf_counter()
         try:
             edge_times = _extract_edge_times(
-                clock_result.get("transitions", []), edge
+                clock_result.get("transitions", []),
+                edge,
+                predecessor=clock_result.get("predecessor"),
             )
         finally:
             operation_metrics.add_sweep_cpu_timing(
@@ -464,6 +468,7 @@ def _sample_signal_columns_at_edges(
                 signal_path,
                 transitions_result.get("transitions", []),
                 sample_times,
+                predecessor=transitions_result.get("predecessor"),
             )
         except KeyError as exc:
             signal_errors[signal_path] = str(exc)
@@ -519,7 +524,11 @@ def _sample_signals_at_edges(
                 transition_signals_truncated.append(signal_path)
             transitions = transitions_result.get("transitions", [])
             sampled_values = _sample_signal_values(
-                parser, signal_path, transitions, sample_times
+                parser,
+                signal_path,
+                transitions,
+                sample_times,
+                predecessor=transitions_result.get("predecessor"),
             )
             for index, value in enumerate(sampled_values):
                 per_edge_signals[index][signal_path] = value
@@ -534,9 +543,16 @@ def _validate_clock_width(parser, clock_path: str) -> None:
         raise ValueError(f"clock signal must be 1-bit, got {width}-bit")
 
 
-def _extract_edge_times(transitions: list[dict[str, Any]], edge: str) -> list[int]:
+def _extract_edge_times(
+    transitions: list[dict[str, Any]],
+    edge: str,
+    predecessor: dict[str, Any] | None = None,
+) -> list[int]:
     edge_times: list[int] = []
-    prev_val: int | None = None
+    predecessor_value = (predecessor or {}).get("value") or {}
+    prev_val: int | None = predecessor_value.get("dec")
+    if prev_val not in {0, 1}:
+        prev_val = None
     for index, transition in enumerate(transitions):
         if not index % CANCEL_CHECK_STRIDE:
             check_cancelled()
@@ -567,9 +583,14 @@ def _sample_signal_values(
     signal_path: str,
     transitions: list[dict[str, Any]],
     sample_times: list[int],
+    predecessor: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     raw_values = _lookup_signal_values(
-        parser, signal_path, transitions, sample_times
+        parser,
+        signal_path,
+        transitions,
+        sample_times,
+        predecessor=predecessor,
     )
     sampled_values: list[dict[str, Any]] = []
     materialize_started = time.perf_counter()
@@ -594,12 +615,14 @@ def _lookup_signal_values(
     signal_path: str,
     transitions: list[dict[str, Any]],
     sample_times: list[int],
+    predecessor: dict[str, Any] | None = None,
 ) -> list[Any]:
     """Return parser value references at monotonic sample times in linear time."""
     if not sample_times:
         return []
     transition_times = [transition["time_ps"] for transition in transitions]
-    fallback_value = None
+    fallback_value = (predecessor or {}).get("value")
+    fallback_queried = fallback_value is not None
     raw_values: list[Any] = []
     transition_index = -1
     next_transition = 0
@@ -632,11 +655,12 @@ def _lookup_signal_values(
             if transition_index >= 0:
                 value = transitions[transition_index].get("value")
             else:
-                if fallback_value is None:
+                if not fallback_queried:
                     fallback_result = parser.get_value_at_time(
                         signal_path, sample_times[0]
                     )
                     fallback_value = fallback_result.get("value")
+                    fallback_queried = True
                 value = fallback_value
             raw_values.append(value)
     finally:

@@ -158,6 +158,14 @@ Verification
   so the implementation does not keep all design clocks in memory. This is an
   internal execution optimization: MCP inputs/results, coverage semantics,
   cancellation checkpoints, and the process-global FSDB lock are unchanged.
+  FSDB and VCD transition lists obey the same strict closed-window contract.
+  Each parser returns the last value-change before the window separately as
+  `predecessor`; edge extraction seeds its previous value from that receipt so
+  an edge exactly at the window start is not lost. Signal sampling consumes the
+  same receipt before considering a point-query fallback, which is required to
+  keep an active FSDB transition group resident (a nested point query would
+  otherwise load/unload native signals mid-group). Around-time history is also
+  separated from the strict window and normalized to chronological order.
   `scripts/benchmark_sweep_shared_clock.py` is the reproducible structural
   benchmark for this path. On a warmed generated VCD with 32 independent
   valid/ready interfaces, one shared clock, 20,000 cycles, and three repeats,

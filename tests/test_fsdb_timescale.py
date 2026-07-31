@@ -108,6 +108,16 @@ class TestSubPsScale100fs:
             (100101, "0xcccc0000"),
         ]
 
+    def test_transition_window_is_strict_and_has_explicit_predecessor(self, p100fs):
+        r = p100fs.get_transitions(SIG_100FS, 100050, 100101)
+        got = [(t["time_ps"], t["value"]["hex"]) for t in r["transitions"]]
+        assert got == [
+            (100100, "0xbbbb0000"),
+            (100101, "0xcccc0000"),
+        ]
+        assert r["predecessor"]["time_ps"] == 100000
+        assert r["predecessor"]["value"]["hex"] == "0xaaaa0000"
+
     def test_reported_timestamp_roundtrip_returns_post_transition_value(self, p100fs):
         """Feeding a tool-reported transition timestamp back into
         get_value_at_time must return that transition's (new) value — incl.
@@ -123,11 +133,10 @@ class TestSubPsScale100fs:
         sig = r["signals"][SIG_100FS]
         assert sig["value_at_center"]["bin"].endswith("0" * 16)  # AAAA0000
         times = [t["time_ps"] for t in sig["transitions_in_window"]]
-        # ffrGotoXTag(start) lands at-or-before the window start, so the FSDB
-        # window has always carried one leading pre-window transition (here
-        # t=0); that pre-existing quirk is scale-independent. The point of
-        # this assertion is that every in-window timestamp is real ps.
-        assert [t for t in times if t >= 98000] == [100000, 100100, 100101]
+        assert times == [100000, 100100, 100101]
+        assert [
+            t["time_ps"] for t in sig["pre_window_transitions"]
+        ] == [0]
 
 
 class TestSuperPsScale1ns:

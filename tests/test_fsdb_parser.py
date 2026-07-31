@@ -173,7 +173,7 @@ class TestGetSignalsAroundTime:
         assert "pre_window_transitions" in result["signals"][SIGNAL]
         pre = result["signals"][SIGNAL]["pre_window_transitions"]
         times = [item["time_ps"] for item in pre]
-        assert times == sorted(times, reverse=True)
+        assert times == sorted(times)
 
     def test_result_structure(self, parser):
         result = parser.get_signals_around_time([SIGNAL], 310000, 5000)

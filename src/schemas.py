@@ -441,6 +441,10 @@ class SignalTransitionsResult(SchemaModel):
     # the returned list is capped at max_transitions (earliest kept).
     transition_count: int
     transitions: list[dict[str, Any]] = Field(default_factory=list)
+    # Last value-change strictly before start_ps. Kept separate so transitions
+    # remains a strict closed-window list while clock samplers can classify the
+    # first in-window edge without rereading the waveform.
+    predecessor: dict[str, Any] | None = None
     truncated: bool = False
     transition_count_is_lower_bound: bool = False
     hint: str | None = None
