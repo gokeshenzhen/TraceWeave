@@ -10,6 +10,7 @@ from src import schemas
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
     _classify_driver_kind,
+    _classify_fan_in_kind,
     _classify_load_kind,
     _driver_summary,
     _inst_src_info,
@@ -61,6 +62,17 @@ def test_classify_driver_kind_handles_bit_slice_suffix():
     assert _classify_driver_kind(
         "x.dut:Always0#Always0:18:31:Mux.CH_invert[3:0]"
     ) == "always_comb"
+    assert _classify_driver_kind(
+        "x.dut:Always0#Always0:18:31:Reg.ROH_state[0][1]"
+    ) == "always_ff"
+    assert _classify_driver_kind("tb_top.m_if1.ahb_intf#[3:4]") == "instance_port"
+
+
+def test_classify_fan_in_kind_treats_interface_slice_as_primary_port():
+    assert (
+        _classify_fan_in_kind("tb_top.m_if1.ahb_intf#[3:4]", "npiNlPort")
+        == "primary_input_port"
+    )
 
 
 def test_classify_load_kind_module_input_vs_rhs():
@@ -445,6 +457,30 @@ def test_driver_summary_includes_line():
     )
     assert "line 53" in summary
     assert "initial driver" in summary
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "expected"),
+    [
+        (
+            "top_tb.dut:Always0#Always0:20:52:Assignment.OH_data[7:0]",
+            "assign",
+            "assign driver via Assignment.OH_data at line 20",
+        ),
+        (
+            "top_tb.dut:Always0#Always0:20:52:Reg.ROH_data[0][1]",
+            "always_ff",
+            "always_ff driver via Reg.ROH_data at line 20",
+        ),
+        (
+            "tb_top.m_if1.ahb_intf#[3:4]",
+            "instance_port",
+            "instance_port driver via tb_top.m_if1.ahb_intf#",
+        ),
+    ],
+)
+def test_driver_summary_strips_all_trailing_selectors(raw, kind, expected):
+    assert _driver_summary(raw, kind) == expected
 
 
 # ---------------------------------------------------------------------------

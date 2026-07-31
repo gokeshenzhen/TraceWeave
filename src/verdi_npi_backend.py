@@ -1207,6 +1207,31 @@ def _first_colon_outside_brackets(text: str) -> int | None:
     return None
 
 
+def _strip_trailing_npi_selectors(npi_path: str) -> str:
+    """Remove every trailing NPI bit/range selector from a display copy.
+
+    NPI appends packed and unpacked selections to both synthesized pins and
+    interface aliases (for example ``foo[7:0]`` and ``foo[0][1]``).  Colons
+    inside those selectors are not synthesized-path separators.  Keep the raw
+    name untouched everywhere else; driver/load identity checks deliberately
+    operate on their own raw normalization path.
+    """
+    end = len(npi_path)
+    while end > 0 and npi_path[end - 1] == "]":
+        depth = 1
+        idx = end - 2
+        while idx >= 0 and depth:
+            if npi_path[idx] == "]":
+                depth += 1
+            elif npi_path[idx] == "[":
+                depth -= 1
+            idx -= 1
+        if depth:
+            break
+        end = idx + 1
+    return npi_path[:end]
+
+
 def _classify_driver_kind(npi_path: str) -> str:
     """Map a synthesized driver PinHdl to one of the existing driver_kind
     enum values used by Static.
@@ -1219,14 +1244,11 @@ def _classify_driver_kind(npi_path: str) -> str:
       Assignment → continuous ``assign`` → driver_kind=assign
     Falls back to ``unknown`` for cell types we have not seen.
     """
-    if ":" not in npi_path:
+    display_path = _strip_trailing_npi_selectors(npi_path)
+    if _first_colon_outside_brackets(display_path) is None:
         # Non-synthesized: top-level decl-net or instance port
         return "instance_port"
-    # Bit-range suffixes like ``[4:0]`` contain a ':' that would steal
-    # the rsplit and leave us with garbage ("0]"). Strip the trailing
-    # range/index before extracting the cell name.
-    stripped = re.sub(r"\[[^\]]*\]$", "", npi_path)
-    last_segment = stripped.rsplit(":", 1)[-1]
+    last_segment = display_path.rsplit(":", 1)[-1]
     cell = last_segment.split(".", 1)[0]
     cell_lower = cell.lower()
     if cell_lower == "init":
@@ -1247,7 +1269,12 @@ def _driver_summary(raw: str, kind: str) -> str:
     line_part = f" at line {line}" if line is not None else ""
     if kind == "unknown":
         return f"NPI driver {raw}{line_part}"
-    return f"{kind} driver via {raw.rsplit(':', 1)[-1]}{line_part}"
+    display_path = _strip_trailing_npi_selectors(raw)
+    if _first_colon_outside_brackets(display_path) is None:
+        driver_segment = display_path
+    else:
+        driver_segment = display_path.rsplit(":", 1)[-1]
+    return f"{kind} driver via {driver_segment}{line_part}"
 
 
 def _classify_fan_in_kind(npi_path: str, hdl_type: str | None) -> str:
@@ -1259,7 +1286,8 @@ def _classify_fan_in_kind(npi_path: str, hdl_type: str | None) -> str:
       - a top-level port handle (``npiNlPort``) when the fan-in walked
         out to a primary input boundary
     """
-    if ":" not in npi_path:
+    display_path = _strip_trailing_npi_selectors(npi_path)
+    if _first_colon_outside_brackets(display_path) is None:
         # No synthesized tag → fan-in terminated at a primary port.
         if hdl_type == "npiNlPort":
             return "primary_input_port"
