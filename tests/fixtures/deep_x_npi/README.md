@@ -53,6 +53,23 @@ The intended comparison is:
    falls back at any node, TraceWeave discards that partial chain and reruns
    the whole trace with Static.
 
+## Automated integration regression
+
+The real FSDB + KDB acceptance test is opt-in so the default test suite never
+starts Verdi or consumes a license:
+
+```bash
+TRACEWEAVE_RUN_EDA_INTEGRATION=1 \
+pytest -q tests/test_deep_x_npi_integration.py -m eda_integration
+```
+
+Run `./run.sh` first when the ignored `work/` artifacts are absent or stale.
+Once explicitly enabled, the test is strict: missing `VERDI_HOME`, FSDB, KDB,
+source files, or FSDB runtime is a test failure rather than a skip. It forces
+Static for the first public dispatch and then removes that override to verify
+the production local-NPI route with exactly the same signal, waveform, compile
+log, timestamp, top, and depth arguments.
+
 ## Observed comparison
 
 Measured with VCS/Verdi V-2023.12-SP2:
