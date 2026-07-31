@@ -2278,12 +2278,26 @@ x!
             def find_driver(self, **kwargs):
                 assert not wave_lock.locked()
                 calls.append(kwargs["signal_path"])
+                if not kwargs["recursive"]:
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "unknown",
+                        "resolved_module": "top_tb",
+                        "source_file": "/tmp/top_tb.sv",
+                        "source_line": 12,
+                        "expression_summary": "shallow positional-port alias",
+                        "confidence": "exact",
+                        "upstream_signals": [],
+                    }
+                assert kwargs["max_depth"] == 7
                 return {
-                    "driver_status": "partial",
-                    "driver_kind": "unknown",
+                    "driver_status": "resolved",
+                    "driver_kind": "always_ff",
                     "resolved_module": "dut",
                     "source_file": "/tmp/dut.sv",
-                    "expression_summary": "npi unresolved leaf",
+                    "source_line": 20,
+                    "expression_summary": "deep NPI fan-in register",
+                    "confidence": "exact",
                     "upstream_signals": [],
                 }
 
@@ -2310,11 +2324,15 @@ x!
                 "compile_log": str(compile_log),
                 "time_ps": 0,
                 "top_hint": "top_tb",
+                "max_depth": 7,
             },
         )
 
         assert calls == ["top_tb.u0.out_sig"]
-        assert result["trace_status"] == "driver_unresolved"
+        assert result["trace_status"] == "traced_partial_chain"
+        assert result["propagation_chain"][0]["driver_kind"] == "always_ff"
+        assert result["propagation_chain"][0]["source_line"] == 20
+        assert result["propagation_chain"][0]["trace_stop_reason"] == "no_upstream_candidates"
         assert result["backend_status"]["backend"] == "verdi_npi"
         assert result["backend_status"]["actual_backend"] == "verdi_npi"
         assert result["backend_status"]["execution_mode"] == "local"
@@ -2356,6 +2374,8 @@ x"
 
             def find_driver(self, **kwargs):
                 assert not wave_lock.locked()
+                assert kwargs["recursive"] is True
+                assert kwargs["max_depth"] == 6
                 path = kwargs["signal_path"]
                 npi_calls.append(path)
                 if path.endswith(".out_sig"):
@@ -2388,6 +2408,8 @@ x"
 
             def find_driver(self, **kwargs):
                 assert not wave_lock.locked()
+                assert kwargs["recursive"] is False
+                assert kwargs["max_depth"] == 6
                 path = kwargs["signal_path"]
                 static_calls.append(path)
                 if path.endswith(".out_sig"):
@@ -2437,6 +2459,7 @@ x"
                 "compile_log": str(compile_log),
                 "time_ps": 0,
                 "top_hint": "top_tb",
+                "max_depth": 6,
             },
         )
 

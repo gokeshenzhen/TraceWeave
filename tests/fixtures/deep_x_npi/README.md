@@ -32,7 +32,8 @@ Run:
 The script uses VCS `-kdb` rather than `-kdb=only`: a fresh fixture needs both
 the runnable `simv` and the Verdi KDB, while `-kdb=only` creates only the latter.
 With `VERDI_HOME` set, VCS `-debug_access+all` loads the Verdi dumper used to
-emit the FSDB.
+emit the FSDB. Each run invalidates VCS's generated incremental timestamp so
+`compile.log` always retains the source-file parsing records TraceWeave needs.
 
 Artifacts are written to the ignored `work/` directory:
 

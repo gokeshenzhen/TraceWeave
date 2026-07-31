@@ -8,6 +8,11 @@ work_dir="${fixture_dir}/work"
 mkdir -p "${work_dir}"
 cd "${work_dir}"
 
+# TraceWeave derives the compiled source set from VCS parsing records.  VCS's
+# incremental no-op path overwrites compile.log with only "design hasn't
+# changed", so invalidate its generated timestamp before every fixture run.
+rm -f "${work_dir}/simv.daidir/.vcs.timestamp"
+
 vcs \
   -full64 \
   -sverilog \

@@ -1081,7 +1081,14 @@ async def _run_trace_x_attempt(
                 wave_path=wave_path,
                 compile_log=compile_log,
                 top_hint=top_hint,
-                recursive=False,
+                # NPI must walk the elaborated fan-in cone here. A shallow
+                # query can stop on an intermediate positional-port alias
+                # (for example the top-level bridge_prdata net) even though
+                # fan_in_reg_list can reach the real sequential driver.
+                # Keep Static shallow so its legacy X-trace semantics and
+                # blind-spot baseline remain unchanged.
+                recursive=backend.name != "static",
+                max_depth=max_depth,
                 simulator=simulator,
             )
 
