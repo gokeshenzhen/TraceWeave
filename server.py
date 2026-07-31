@@ -14,6 +14,7 @@ This server provides waveform-debug workflow tools, including:
 import asyncio
 from collections.abc import Callable, Sequence
 import hashlib
+import inspect
 import json
 import sys
 import os
@@ -71,7 +72,7 @@ from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_
 from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
-from src.x_trace import trace_x_source
+from src.x_trace import inspect_upstream_values, trace_x_source
 from src.cycle_query import (
     _compute_clock_period_ps,
     _extract_edge_times,
@@ -1011,6 +1012,197 @@ async def _call_connectivity_backend(backend, fn: Callable):
     return fn()
 
 
+class _TraceBackendFallback(RuntimeError):
+    """Abort one X-trace attempt when NPI internally used its fallback.
+
+    Connectivity backends currently fall back per driver query. X-trace issues
+    several such queries, so consuming the returned Static result in-place
+    could produce one chain that mixes exact NPI nodes with approximate Static
+    nodes. The dispatch layer catches this marker and restarts the whole trace
+    with Static instead.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        execution_status: dict | None = None,
+    ):
+        super().__init__(reason)
+        self.reason = reason
+        self.execution_status = dict(execution_status or {})
+
+
+async def _run_trace_x_attempt(
+    *,
+    backend,
+    wave_path: str,
+    signal_path: str,
+    time_ps: int,
+    compile_log: str,
+    top_hint: str | None,
+    max_depth: int,
+    simulator: str,
+    abort_on_backend_fallback: bool,
+) -> tuple[dict, dict]:
+    """Run one backend-consistent X-trace attempt.
+
+    Wave callbacks each take the parser lock only for the actual read/resolve
+    phase. Driver lookup happens after that callback returns, so local NPI,
+    LSF waits, and Static source scans never run while the wave lock is held.
+    """
+
+    execution_status: dict = {}
+
+    async def _value_lookup(path: str, at_ps: int) -> dict:
+        def _work():
+            return _get_parser(wave_path).get_value_at_time(path, at_ps)
+
+        return await _run_in_wave_thread(wave_path, _work)
+
+    async def _upstream_lookup(
+        upstream_names: list[str],
+        current_signal_path: str,
+        at_ps: int,
+    ) -> list[dict]:
+        def _work():
+            return inspect_upstream_values(
+                _get_parser(wave_path),
+                upstream_names,
+                current_signal_path,
+                at_ps,
+            )
+
+        return await _run_in_wave_thread(wave_path, _work)
+
+    async def _driver_lookup(path: str) -> dict:
+        def _query_backend():
+            return backend.find_driver(
+                signal_path=path,
+                wave_path=wave_path,
+                compile_log=compile_log,
+                top_hint=top_hint,
+                recursive=False,
+                simulator=simulator,
+            )
+
+        # Before backend injection, the Static scan ran inside the X-trace
+        # wave worker. Keep its event-loop liveness without keeping the wave
+        # lock: Static is pure Python/source I/O and already ran in a worker.
+        # Local NPI intentionally retains its existing synchronous execution
+        # model; LSF uses its established cancellable worker path.
+        if backend.name == "static":
+            raw = await _run_in_cancellable_thread(_query_backend)
+        else:
+            raw = await _call_connectivity_backend(backend, _query_backend)
+        if not isinstance(raw, dict):
+            raise TypeError("connectivity backend find_driver must return a mapping")
+
+        execution = raw.get("_npi_execution_status")
+        if isinstance(execution, dict):
+            execution_status.update(execution)
+
+        fallback_reason = raw.get("_npi_fallback_reason")
+        if abort_on_backend_fallback and fallback_reason:
+            raise _TraceBackendFallback(
+                str(fallback_reason),
+                execution_status,
+            )
+
+        # Internal routing receipts belong on the trace envelope, not on one
+        # propagation node. Keep the driver facts themselves unchanged.
+        clean = dict(raw)
+        clean.pop("_npi_execution_status", None)
+        clean.pop("_npi_fallback_reason", None)
+        clean.pop("_npi_call_error", None)
+        return clean
+
+    attempt = trace_x_source(
+        wave_path=wave_path,
+        signal_path=signal_path,
+        time_ps=time_ps,
+        compile_log=compile_log,
+        parser=None,
+        top_hint=top_hint,
+        max_depth=max_depth,
+        simulator=simulator,
+        driver_lookup=_driver_lookup,
+        value_lookup=_value_lookup,
+        upstream_lookup=_upstream_lookup,
+    )
+    result = await attempt if inspect.isawaitable(attempt) else attempt
+    if not isinstance(result, dict):
+        raise TypeError("trace_x_source must return a mapping")
+    return result, execution_status
+
+
+async def _handle_trace_x_source(args: dict, simulator: str):
+    """Select one backend for X-trace and apply whole-trace fallback."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    wave_path = args["wave_path"]
+    compile_log = args["compile_log"]
+    time_ps = _resolve_time(args["time_ps"])
+    backend_status = _safe_probe_backend(compile_log, simulator)
+    backend = select_backend(backend_status)
+    trace_restarted = False
+
+    try:
+        result, execution_status = await _run_trace_x_attempt(
+            backend=backend,
+            wave_path=wave_path,
+            signal_path=args["signal_path"],
+            time_ps=time_ps,
+            compile_log=compile_log,
+            top_hint=args.get("top_hint"),
+            max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
+            simulator=simulator,
+            abort_on_backend_fallback=backend.name != "static",
+        )
+        routing_receipt: dict = {}
+        if execution_status:
+            routing_receipt["_npi_execution_status"] = execution_status
+    except _TraceBackendFallback as exc:
+        # Discard the partially NPI-resolved chain and recompute every node
+        # through one backend. This keeps source provenance and confidence
+        # consistent across the returned propagation chain.
+        result, _ = await _run_trace_x_attempt(
+            backend=StaticConnectivityBackend(),
+            wave_path=wave_path,
+            signal_path=args["signal_path"],
+            time_ps=time_ps,
+            compile_log=compile_log,
+            top_hint=args.get("top_hint"),
+            max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
+            simulator=simulator,
+            abort_on_backend_fallback=False,
+        )
+        trace_restarted = True
+        routing_receipt = {"_npi_fallback_reason": exc.reason}
+        if exc.execution_status:
+            routing_receipt["_npi_execution_status"] = exc.execution_status
+
+    finalized_status, _ = _finalize_connectivity_backend_status(
+        routing_receipt,
+        backend_status,
+        backend,
+    )
+    configured_mode = getattr(backend, "execution_mode", None)
+    if (
+        finalized_status.get("execution_mode") is None
+        and configured_mode in {"local", "lsf", "invalid"}
+    ):
+        # A clean/missing waveform signal may require no driver query, hence
+        # no per-call LSF receipt. Still report the selected execution policy.
+        finalized_status["execution_mode"] = configured_mode
+    result["backend_status"] = finalized_status
+    result["trace_restarted"] = trace_restarted
+    return schemas.TraceXSourceResult.model_validate(result)
+
+
 def _finalize_connectivity_backend_status(
     result: dict,
     backend_status: dict,
@@ -1923,8 +2115,16 @@ async def list_tools():
         Tool(
             name="trace_x_source",
             description=(
-                "When a signal shows X/Z at a target time, trace its propagation chain through upstream driver logic. "
-                "If the trace reaches instance port connections, the tool lists them and stops there."
+                "When a signal shows X/Z at a target time, trace its propagation "
+                "chain through upstream driver logic. Uses the selected connectivity "
+                "backend (local/LSF NPI when available, otherwise Static); if NPI "
+                "internally falls back, the whole trace is restarted with Static so "
+                "one returned chain never mixes backend provenance. Connectivity "
+                "queries run outside waveform locks. backend_status reports selected "
+                "versus actual backend; trace_restarted reports a whole-trace retry. "
+                "NPI testbench-driven/cross-check evidence is preserved on the node. "
+                "If the trace reaches instance port connections, the tool lists them "
+                "and stops there."
             ),
             inputSchema={
                 "type": "object",
@@ -3068,21 +3268,7 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "trace_x_source":
         simulator = _resolve_session_simulator(args)
-
-        def _work():
-            result = trace_x_source(
-                wave_path=args["wave_path"],
-                signal_path=args["signal_path"],
-                time_ps=_resolve_time(args["time_ps"]),
-                compile_log=args["compile_log"],
-                parser=_get_parser(args["wave_path"]),
-                top_hint=args.get("top_hint"),
-                max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
-                simulator=simulator,
-            )
-            return schemas.TraceXSourceResult.model_validate(result)
-
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _handle_trace_x_source(args, simulator)
 
     elif name == "cursor_set":
         ref = _cursor_store.set(

@@ -78,7 +78,7 @@ Verification
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there.
 - Wave-touching tool bodies (`get_signal_*`, `get_signals_*`, `search_signals`,
-  `get_waveform_summary`, `trace_x_source`, `period`/`diff_first_divergence`,
+  `get_waveform_summary`, `period`/`diff_first_divergence`,
   `suggest_*`, `sweep_handshakes`, `inspect_handshake`, `verify_window`,
   `reconstruct_transactions`) are synchronous and CPU-bound, so `_dispatch`
   runs them in a worker thread via `_run_in_wave_thread` instead of inline in
@@ -107,6 +107,20 @@ Verification
   serialized and never overlaps. Loop-side state (`_result_cache`,
   `_session_state`, provenance) is still written only on the event-loop
   thread; the worker computes, the loop remains the single writer.
+  `trace_x_source` is the deliberate split-phase exception: its async
+  orchestrator takes the wave lock only for value reads and upstream-path
+  resolution, releases it before every connectivity-backend query, and then
+  merges those facts into the next X/Z frontier. Static source scans run in a
+  lock-free cancellable worker so they do not block the event loop; local NPI
+  retains its existing synchronous execution model, while LSF keeps
+  using its existing worker path. It selects one connectivity backend for the
+  trace. If NPI internally falls back on any driver lookup,
+  the partial chain is discarded and the whole trace restarts with Static, so
+  one returned propagation chain never mixes NPI and Static provenance.
+  `backend_status` records selected versus actual backend and the execution
+  receipt; `trace_restarted` records whether that whole-trace retry occurred.
+  Driver-level NPI evidence (`source_line`, `testbench_driven`, and its
+  driver-vs-load cross-check) remains attached to the terminal trace node.
   Privacy-safe operation metrics make full-sweep cost attributable without
   recording project identities: discovery/search timing, total sweep time,
   planned/attempted/completed interface counts, unique clock/signal counts,

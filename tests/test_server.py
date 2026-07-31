@@ -2189,6 +2189,8 @@ x"
         assert len(result["propagation_chain"]) == 2
         assert result["propagation_chain"][0]["signal_path"] == "top_tb.u0.out_sig"
         assert result["propagation_chain"][1]["signal_path"] == "top_tb.u0.x_sig"
+        assert result["backend_status"]["actual_backend"] == "static"
+        assert result["trace_restarted"] is False
 
     async def test_trace_x_source_signal_not_in_waveform(self, tmp_path):
         _prefill_build_tb_hierarchy_state()
@@ -2241,6 +2243,213 @@ $enddefinitions $end
 
         assert result["trace_status"] == "signal_not_in_waveform"
         assert result["propagation_chain"][0]["trace_stop_reason"] == "signal_not_in_waveform"
+
+    async def test_trace_x_source_uses_selected_backend_outside_wave_lock(
+        self, monkeypatch, tmp_path
+    ):
+        import src.connectivity_backend as connectivity_backend
+
+        _prefill_build_tb_hierarchy_state()
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        compile_log.write_text("Chronologic VCS simulator\n")
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! out_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+x!
+"""
+        )
+
+        calls: list[str] = []
+        wave_lock = server._wave_locks_for([str(wave_path)])[0]
+
+        class FakeNpiBackend:
+            name = "verdi_npi"
+            execution_mode = "local"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                calls.append(kwargs["signal_path"])
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "expression_summary": "npi unresolved leaf",
+                    "upstream_signals": [],
+                }
+
+        probe = {
+            "simulator": "vcs",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": "/tmp/kdb.elab++",
+            "kdb_flow": "vcs_two_step",
+        }
+        backend = FakeNpiBackend()
+        monkeypatch.setattr(server, "_safe_probe_backend", lambda *args: probe)
+        monkeypatch.setattr(
+            connectivity_backend,
+            "select_backend",
+            lambda status: backend,
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.out_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert calls == ["top_tb.u0.out_sig"]
+        assert result["trace_status"] == "driver_unresolved"
+        assert result["backend_status"]["backend"] == "verdi_npi"
+        assert result["backend_status"]["actual_backend"] == "verdi_npi"
+        assert result["backend_status"]["execution_mode"] == "local"
+        assert result["trace_restarted"] is False
+
+    async def test_trace_x_source_restarts_whole_trace_after_npi_fallback(
+        self, monkeypatch, tmp_path
+    ):
+        import src.connectivity_backend as connectivity_backend
+
+        _prefill_build_tb_hierarchy_state()
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        compile_log.write_text("Chronologic VCS simulator\n")
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! mid_sig $end
+$var wire 1 " out_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+x!
+x"
+"""
+        )
+
+        npi_calls: list[str] = []
+        static_calls: list[str] = []
+        wave_lock = server._wave_locks_for([str(wave_path)])[0]
+
+        class FakeNpiBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                path = kwargs["signal_path"]
+                npi_calls.append(path)
+                if path.endswith(".out_sig"):
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "assign",
+                        "resolved_module": "dut",
+                        "source_file": "/tmp/dut.sv",
+                        "expression_summary": "npi root",
+                        "upstream_signals": ["mid_sig"],
+                    }
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "expression_summary": "per-call Static fallback",
+                    "upstream_signals": [],
+                    "_npi_fallback_reason": "npi_lsf_timeout",
+                    "_npi_execution_status": {
+                        "execution_mode": "lsf",
+                        "scheduler_status": "timed_out",
+                        "worker_status": "not_started",
+                    },
+                }
+
+        class FakeStaticBackend:
+            name = "static"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                path = kwargs["signal_path"]
+                static_calls.append(path)
+                if path.endswith(".out_sig"):
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "assign",
+                        "resolved_module": "dut",
+                        "source_file": "/tmp/dut.sv",
+                        "expression_summary": "static root",
+                        "upstream_signals": ["mid_sig"],
+                    }
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "expression_summary": "static leaf",
+                    "upstream_signals": [],
+                }
+
+        probe = {
+            "simulator": "vcs",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": "/tmp/kdb.elab++",
+            "kdb_flow": "vcs_two_step",
+        }
+        npi_backend = FakeNpiBackend()
+        static_backend = FakeStaticBackend()
+        monkeypatch.setattr(server, "_safe_probe_backend", lambda *args: probe)
+        monkeypatch.setattr(
+            connectivity_backend,
+            "select_backend",
+            lambda status: npi_backend,
+        )
+        monkeypatch.setattr(
+            connectivity_backend,
+            "StaticConnectivityBackend",
+            lambda: static_backend,
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.out_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+            },
+        )
+
+        assert npi_calls == ["top_tb.u0.out_sig", "top_tb.u0.mid_sig"]
+        assert static_calls == ["top_tb.u0.out_sig", "top_tb.u0.mid_sig"]
+        assert result["propagation_chain"][0]["driver_expression"] == "static root"
+        assert result["propagation_chain"][1]["driver_expression"] == "static leaf"
+        assert result["backend_status"]["backend"] == "verdi_npi"
+        assert result["backend_status"]["actual_backend"] == "static"
+        assert result["backend_status"]["fallback_reason"] == "npi_lsf_timeout"
+        assert result["backend_status"]["execution_mode"] == "lsf"
+        assert result["backend_status"]["scheduler_status"] == "timed_out"
+        assert result["trace_restarted"] is True
 
 
 @pytest.mark.anyio

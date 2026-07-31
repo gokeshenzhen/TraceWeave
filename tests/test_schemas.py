@@ -11,6 +11,7 @@ from src.schemas import (
     ProblemHints,
     SearchSignalsBatchResult,
     SimPathsResult,
+    TraceXSourceResult,
     WaveformSummaryResult,
 )
 
@@ -169,3 +170,29 @@ def test_backend_status_accepts_optional_lsf_receipt():
     )
     assert status.execution_mode == "lsf"
     assert status.scheduler_status == "failed"
+
+
+def test_trace_x_source_result_carries_backend_consistency_receipt():
+    result = TraceXSourceResult.model_validate(
+        {
+            "start_signal": "top_tb.dut.out",
+            "start_time_ps": 100,
+            "trace_status": "driver_unresolved",
+            "trace_depth": 1,
+            "max_depth": 10,
+            "backend_status": {
+                "simulator": "vcs",
+                "backend": "verdi_npi",
+                "actual_backend": "static",
+                "fallback_reason": "npi_lsf_timeout",
+                "execution_mode": "lsf",
+                "scheduler_status": "timed_out",
+                "worker_status": "not_started",
+            },
+            "trace_restarted": True,
+        }
+    )
+
+    assert result.backend_status.backend == "verdi_npi"
+    assert result.backend_status.actual_backend == "static"
+    assert result.trace_restarted is True

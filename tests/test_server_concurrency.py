@@ -298,6 +298,137 @@ class TestCooperativeCancellation:
 
 @pytest.mark.anyio
 class TestExternalConnectivityWorker:
+    async def test_trace_x_source_static_scan_does_not_block_event_loop(
+        self,
+        monkeypatch,
+    ):
+        backend_started = threading.Event()
+        backend_release = threading.Event()
+        result_box: dict = {}
+
+        class TraceParser:
+            def get_value_at_time(self, signal_path, time_ps):
+                return {"value": {"raw": "x"}}
+
+        class FakeStaticBackend:
+            name = "static"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                backend_started.set()
+                backend_release.wait(timeout=10)
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": None,
+                    "expression_summary": "static leaf",
+                    "upstream_signals": [],
+                }
+
+        monkeypatch.setattr(server, "_get_parser", lambda path: TraceParser())
+
+        light_elapsed = None
+        try:
+            async with anyio.create_task_group() as tg:
+                async def run_trace():
+                    result_box["result"], _ = await server._run_trace_x_attempt(
+                        backend=FakeStaticBackend(),
+                        wave_path="/fake/static-trace.vcd",
+                        signal_path="top_tb.dut.out",
+                        time_ps=0,
+                        compile_log="/fake/compile.log",
+                        top_hint="top_tb",
+                        max_depth=2,
+                        simulator="vcs",
+                        abort_on_backend_fallback=False,
+                    )
+
+                tg.start_soon(run_trace)
+                assert await anyio.to_thread.run_sync(
+                    _wait_event, backend_started, 5
+                )
+                begin = time.perf_counter()
+                await server._dispatch("cursor_list", {})
+                light_elapsed = time.perf_counter() - begin
+                backend_release.set()
+        finally:
+            backend_release.set()
+
+        assert light_elapsed < 0.5
+        assert result_box["result"]["trace_status"] == "driver_unresolved"
+
+    async def test_trace_x_source_releases_wave_lock_before_external_backend(
+        self,
+        monkeypatch,
+    ):
+        backend_started = threading.Event()
+        backend_release = threading.Event()
+        result_box: dict = {}
+        wave_path = "/fake/x-trace.fsdb"
+
+        class TraceParser:
+            def get_value_at_time(self, signal_path, time_ps):
+                return {"value": {"raw": "x"}}
+
+        class FakeBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = True
+
+            def find_driver(self, **kwargs):
+                assert not server._wave_locks_for([wave_path])[0].locked()
+                backend_started.set()
+                backend_release.wait(timeout=10)
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": None,
+                    "expression_summary": "external leaf",
+                    "upstream_signals": [],
+                    "_npi_execution_status": {
+                        "execution_mode": "lsf",
+                        "scheduler_status": "completed",
+                        "worker_status": "completed",
+                    },
+                }
+
+        monkeypatch.setattr(server, "_get_parser", lambda path: TraceParser())
+
+        try:
+            async with anyio.create_task_group() as tg:
+                async def run_trace():
+                    result_box["result"], _ = await server._run_trace_x_attempt(
+                        backend=FakeBackend(),
+                        wave_path=wave_path,
+                        signal_path="top_tb.dut.out",
+                        time_ps=0,
+                        compile_log="/fake/compile.log",
+                        top_hint="top_tb",
+                        max_depth=2,
+                        simulator="vcs",
+                        abort_on_backend_fallback=True,
+                    )
+
+                tg.start_soon(run_trace)
+                assert await anyio.to_thread.run_sync(
+                    _wait_event, backend_started, 5
+                )
+
+                # The trace is waiting on its backend worker, but another
+                # operation on the same waveform must be able to take the lock.
+                with anyio.fail_after(1):
+                    marker = await server._run_in_wave_thread(
+                        wave_path, lambda: "wave-lock-free"
+                    )
+                assert marker == "wave-lock-free"
+                backend_release.set()
+        finally:
+            backend_release.set()
+
+        assert result_box["result"]["trace_status"] == "driver_unresolved"
+
     async def test_external_connectivity_does_not_block_event_loop(
         self,
         monkeypatch,

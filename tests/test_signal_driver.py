@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -21,6 +22,28 @@ def _mock_compile(monkeypatch, files, top_module="top_tb"):
         }
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
+
+
+def test_deep_positional_fixture_remains_a_static_blind_spot(monkeypatch):
+    fixture = Path(__file__).parent / "fixtures" / "deep_x_npi"
+    _mock_compile(
+        monkeypatch,
+        [fixture / "rtl" / "deep_uart_x.sv", fixture / "tb" / "deep_x_tb.sv"],
+        top_module="uart_deep_x_tb",
+    )
+
+    result = explain_signal_driver(
+        signal_path="uart_deep_x_tb.apb_prdata[7:0]",
+        wave_path=str(fixture / "work" / "deep_x.fsdb"),
+        compile_log=str(fixture / "work" / "compile.log"),
+        top_hint="uart_deep_x_tb",
+        simulator="vcs",
+    )
+
+    assert result["driver_status"] == "partial"
+    assert result["driver_kind"] == "unknown"
+    assert result["source_line"] is None
+    assert result["stopped_at"] == "unresolved"
 
 
 def test_single_hop_backward_compat(monkeypatch, tmp_path):

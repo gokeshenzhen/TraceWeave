@@ -744,8 +744,13 @@ class TraceChainNode(SchemaModel):
     has_x: bool | None = None
     module: str | None = None
     source_file: str | None = None
+    source_line: int | None = None
+    driver_status: str | None = None
     driver_kind: str | None = None
     driver_expression: str | None = None
+    driver_confidence: str | None = None
+    unsupported_reason: str | None = None
+    cross_check: DriverLoadCrossCheck | None = None
     instance_port_connections: list[dict[str, Any]] | None = None
     x_upstream_signals: list[str] | None = None
     clean_upstream_signals: list[str] | None = None
@@ -759,6 +764,7 @@ class TraceRootCause(SchemaModel):
     driver_kind: str | None = None
     stop_reason: str | None = None
     source_file: str | None = None
+    source_line: int | None = None
 
 
 class TraceXSourceResult(SchemaModel):
@@ -770,6 +776,8 @@ class TraceXSourceResult(SchemaModel):
     propagation_chain: list[TraceChainNode] = Field(default_factory=list)
     root_cause: TraceRootCause | None = None
     analysis_guide: dict[str, str] = Field(default_factory=dict)
+    backend_status: BackendStatus = Field(default_factory=BackendStatus)
+    trace_restarted: bool = False
 
 
 class PrerequisiteBlockResult(SchemaModel):
