@@ -1821,7 +1821,9 @@ async def list_tools():
             name="scan_structural_risks",
             description=(
                 "Run a Scope 1 regex-based structural risk scan on RTL/TB source files from the compile file list. "
-                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes."
+                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes. "
+                "Always read coverage_status: only complete with total_risks=0 supports a clean-scan observation; "
+                "zero_coverage scanned no supported sources, and degraded covers only part of the source set."
             ),
             inputSchema={
                 "type": "object",
@@ -3655,7 +3657,10 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
 
 def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) -> dict:
     return {
+        "eligible_file_count": result.eligible_file_count,
         "files_scanned": result.files_scanned,
+        "coverage_status": result.coverage_status,
+        "coverage_warnings": result.coverage_warnings,
         "total_risks": result.total_risks,
         "high_risk_count": sum(1 for risk in result.risks if risk.risk_level == "high"),
     }

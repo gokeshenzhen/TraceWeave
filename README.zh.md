@@ -352,6 +352,7 @@ KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节
 
 - `scan_structural_risks` 是默认工作流的一部分,除非用户明确要求跳过,否则不应省略。
 - `build_tb_hierarchy` 与 `scan_structural_risks` 必须使用同一个 `compile_log`。
+- 必须读取结构扫描的 `coverage_status`:只有 `complete` 且 `total_risks=0` 才表示受支持的源码集已扫描且无发现。`zero_coverage` 表示没有扫描到受支持的 Verilog/SystemVerilog 文件,`degraded` 表示源码集不完整或 parser 已降级;两者都不是“扫描干净”。
 - 优先使用 `parse_sim_log` 返回的 `failure_events[].time_ps` 作为波形时间锚点。
 - 当 `fsdb_runtime.enabled == false` 时,优先选择 `.vcd` 而非 `.fsdb`。
 
@@ -365,7 +366,7 @@ KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节
 
 - `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case。可选的显式 `sim_log` / `wave_file` / `compile_log` 覆盖优先于自动发现,省略的字段仍会被发现(以 `sim_log`/`wave_file` 所在目录为锚点)
 - `build_tb_hierarchy`:服务端构建 testbench 层次结构;返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`hierarchy_handle`)。完整数据通过下方的 handle 工具按需获取。
-- `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式
+- `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
 
 ### 层次结构 Handle 工具
 

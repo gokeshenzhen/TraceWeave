@@ -29,7 +29,10 @@ class TestStructuralScanner:
 
         result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["slice_overlap"])
 
+        assert result["eligible_file_count"] == 1
         assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "complete"
+        assert result["coverage_warnings"] == []
         assert result["total_risks"] == 1
         risk = result["risks"][0]
         assert risk["type"] == "slice_overlap"
@@ -191,8 +194,63 @@ endinterface
 
         result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
 
+        assert result["eligible_file_count"] == 2
         assert result["files_scanned"] == 1
         assert len(result["skipped_files"]) == 1
+        assert result["coverage_status"] == "degraded"
+        assert "DEGRADED COVERAGE" in result["coverage_warnings"][0]
+
+    def test_reports_zero_coverage_when_no_supported_sources_are_discovered(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": []},
+                "parse_warnings": ["filelist was unavailable"],
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
+
+        assert result["eligible_file_count"] == 0
+        assert result["files_scanned"] == 0
+        assert result["total_risks"] == 0
+        assert result["coverage_status"] == "zero_coverage"
+        assert "not evidence of a clean design" in result["coverage_warnings"][0]
+        assert "1 warning" in result["coverage_warnings"][1]
+
+    def test_unsupported_sources_do_not_count_as_structural_coverage(self, monkeypatch, tmp_path):
+        vhdl = tmp_path / "dut.vhd"
+        vhdl.write_text("entity dut is end entity;\n")
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(vhdl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs")
+
+        assert result["eligible_file_count"] == 0
+        assert result["files_scanned"] == 0
+        assert result["skipped_files"] == []
+        assert result["coverage_status"] == "zero_coverage"
+
+    def test_compile_parser_warning_degrades_otherwise_complete_scan(self, monkeypatch):
+        compile_result = _compile_result_for("des_clean.v")
+        compile_result["parse_warnings"] = ["nested filelist could not be read"]
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: compile_result,
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "degraded"
+        assert result["coverage_warnings"] == [
+            "Compile-log parsing reported 1 warning; structural source coverage may be incomplete."
+        ]
 
     def test_rejects_unknown_category(self):
         with pytest.raises(ValueError, match="Unknown categories"):

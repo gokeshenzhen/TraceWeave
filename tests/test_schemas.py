@@ -9,6 +9,7 @@ from src.schemas import (
     GetSignalsByCycleResult,
     ParseSimLogResult,
     ProblemHints,
+    ScanStructuralRisksResult,
     SearchSignalsBatchResult,
     SimPathsResult,
     TraceXSourceResult,
@@ -196,3 +197,20 @@ def test_trace_x_source_result_carries_backend_consistency_receipt():
     assert result.backend_status.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "static"
     assert result.trace_restarted is True
+
+
+def test_structural_scan_result_carries_explicit_coverage_receipt():
+    result = ScanStructuralRisksResult.model_validate(
+        {
+            "scan_scope": "scope1",
+            "eligible_file_count": 0,
+            "files_scanned": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": ["ZERO COVERAGE"],
+            "total_risks": 0,
+        }
+    )
+
+    assert result.coverage_status == "zero_coverage"
+    assert result.eligible_file_count == 0
+    assert result.coverage_warnings == ["ZERO COVERAGE"]

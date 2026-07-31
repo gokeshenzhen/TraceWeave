@@ -378,6 +378,7 @@ Important workflow rules:
 
 - `scan_structural_risks` is part of the default workflow and should not be skipped unless the user explicitly asks to skip it.
 - Use the same `compile_log` for both `build_tb_hierarchy` and `scan_structural_risks`.
+- Always read structural `coverage_status`: only `complete` with `total_risks=0` means the supported source set was scanned without findings. `zero_coverage` scanned no supported Verilog/SystemVerilog files, while `degraded` scanned only a partial or parser-degraded source set; neither is a clean result.
 - Prefer `failure_events[].time_ps` from `parse_sim_log` as the waveform time anchor.
 - If `fsdb_runtime.enabled == false`, prefer `.vcd` over `.fsdb`.
 
@@ -391,7 +392,7 @@ Important workflow rules:
 
 - `get_sim_paths`: Discover compile logs, sim logs, waveforms, simulator, and cases. Optional explicit `sim_log` / `wave_file` / `compile_log` overrides win over auto-discovery; omitted fields are still discovered (anchored at the `sim_log`/`wave_file` directory)
 - `build_tb_hierarchy`: Build testbench hierarchy server-side; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `hierarchy_handle`). Full data is reachable via the handle tools below.
-- `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns
+- `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
 
 ### Hierarchy Handle Tools
 

@@ -190,6 +190,8 @@ class TestStructuralScannerToolContract:
 
         assert scan_tool.inputSchema["required"] == ["compile_log"]
         assert scan_tool.inputSchema["properties"]["simulator"]["default"] == "auto"
+        assert "coverage_status" in scan_tool.description
+        assert "zero_coverage" in scan_tool.description
 
     async def test_dispatch_uses_auto_simulator_default(self):
         with patch.object(server, "scan_structural_risks", return_value={

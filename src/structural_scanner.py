@@ -97,26 +97,60 @@ def scan_structural_risks(
     categories_scanned = _normalize_categories(categories)
     compile_result = parse_compile_log(compile_log, simulator)
     file_entries = compile_result.get("files", {}).get("user", [])
-    module_port_dirs = _build_module_port_directions(file_entries)
+    eligible_entries = [entry for entry in file_entries if _should_scan_file(entry["path"])]
+    module_port_dirs = _build_module_port_directions(eligible_entries)
 
     risks: list[_Risk] = []
     skipped_files: list[str] = []
     files_scanned = 0
 
-    for entry in file_entries:
+    for entry in eligible_entries:
         path = entry["path"]
         if not os.path.exists(path):
             skipped_files.append(path)
             continue
-        if not _should_scan_file(path):
+        try:
+            file_risks = _scan_file(path, categories_scanned, module_port_dirs)
+        except OSError:
+            skipped_files.append(path)
             continue
         files_scanned += 1
-        risks.extend(_scan_file(path, categories_scanned, module_port_dirs))
+        risks.extend(file_risks)
+
+    eligible_file_count = len(eligible_entries)
+    parse_warnings = compile_result.get("parse_warnings") or []
+    coverage_warnings: list[str] = []
+    if eligible_file_count == 0:
+        coverage_status = "zero_coverage"
+        coverage_warnings.append(
+            "ZERO COVERAGE: no supported Verilog/SystemVerilog source files were available to scan; "
+            "total_risks=0 is not evidence of a clean design."
+        )
+    elif skipped_files or parse_warnings:
+        coverage_status = "degraded"
+        if skipped_files:
+            coverage_warnings.append(
+                "DEGRADED COVERAGE: scanned "
+                f"{files_scanned} of {eligible_file_count} supported source files; "
+                "total_risks covers only the scanned files."
+            )
+    else:
+        coverage_status = "complete"
+    if parse_warnings:
+        warning_count = len(parse_warnings)
+        suffix = "warning" if warning_count == 1 else "warnings"
+        coverage_warnings.append(
+            f"Compile-log parsing reported {warning_count} {suffix}; "
+            "structural source coverage may be incomplete."
+        )
 
     ordered_risks = sorted(risks, key=lambda item: (item.file, item.line, item.type, item.detail))
     return {
         "scan_scope": scan_scope,
+        "eligible_file_count": eligible_file_count,
         "files_scanned": files_scanned,
+        "coverage_status": coverage_status,
+        "coverage_warnings": coverage_warnings,
         "total_risks": len(ordered_risks),
         "risks": [risk.__dict__ for risk in ordered_risks],
         "categories_scanned": categories_scanned,
@@ -648,8 +682,11 @@ def _build_module_port_directions(file_entries: list[dict]) -> dict[str, dict[st
         path = entry["path"]
         if not os.path.exists(path):
             continue
-        with open(path, "r", errors="replace") as handle:
-            raw_text = handle.read()
+        try:
+            with open(path, "r", errors="replace") as handle:
+                raw_text = handle.read()
+        except OSError:
+            continue
         for match in _MODULE_HEADER_RE.finditer(raw_text):
             module_name = match.group("name")
             ports_blob = match.group("ports")

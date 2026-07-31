@@ -77,6 +77,10 @@ Verification
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there.
+- Structural scan results carry an additive coverage receipt. Only
+  `coverage_status=complete` with `total_risks=0` supports a clean-scan
+  observation; `zero_coverage` and `degraded` explicitly preserve uncertainty
+  when no supported source or only a partial/parser-degraded source set was read.
 - Wave-touching tool bodies (`get_signal_*`, `get_signals_*`, `search_signals`,
   `get_waveform_summary`, `period`/`diff_first_divergence`,
   `suggest_*`, `sweep_handshakes`, `inspect_handshake`, `verify_window`,

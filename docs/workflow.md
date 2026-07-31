@@ -69,7 +69,9 @@ Step 2 (parallel): build_tb_hierarchy(compile_log, simulator)
    Returns source-anchored structural risks (for example overlap, multi-drive,
    incomplete control, or narrow-condition findings). Risks overlapping the
    eventual failing signal/source path are high-priority root-cause candidates,
-   but remain facts to correlate rather than verdicts.
+   but remain facts to correlate rather than verdicts. Always inspect
+   coverage_status: only complete + total_risks=0 is a clean-scan observation;
+   zero_coverage/degraded retain uncertainty and must not be reported as clean.
 │
 ▼
 Step 3: parse_sim_log(log_path, simulator)

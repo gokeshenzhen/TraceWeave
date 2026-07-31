@@ -174,7 +174,10 @@ def _make_recommend_result() -> schemas.RecommendNextStepsResult:
 def _make_scan_result() -> schemas.ScanStructuralRisksResult:
     return schemas.ScanStructuralRisksResult.model_validate({
         "scan_scope": "scope1",
+        "eligible_file_count": 4,
         "files_scanned": 4,
+        "coverage_status": "complete",
+        "coverage_warnings": [],
         "total_risks": 3,
         "risks": [
             {
@@ -330,7 +333,10 @@ class TestDiagnosticSnapshot:
         assert result.structural_scan is not None
         assert result.structural_scan.available is True
         assert result.structural_scan.summary == {
+            "eligible_file_count": 4,
             "files_scanned": 4,
+            "coverage_status": "complete",
+            "coverage_warnings": [],
             "total_risks": 3,
             "high_risk_count": 2,
         }

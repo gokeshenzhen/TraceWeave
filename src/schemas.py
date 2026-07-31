@@ -241,7 +241,10 @@ class StructuralRisk(SchemaModel):
 
 class ScanStructuralRisksResult(TruncatableResult):
     scan_scope: str = "scope1"
+    eligible_file_count: int = 0
     files_scanned: int = 0
+    coverage_status: Literal["complete", "zero_coverage", "degraded"] = "complete"
+    coverage_warnings: list[str] = Field(default_factory=list)
     total_risks: int = 0
     risks: list[StructuralRisk] = Field(default_factory=list)
     categories_scanned: list[str] = Field(default_factory=list)
