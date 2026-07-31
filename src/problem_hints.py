@@ -23,6 +23,9 @@ _UNKNOWN_ONLY_RE = re.compile(r"^[xz?]+$", re.IGNORECASE)
 _SV_LITERAL_RE = re.compile(r"^(?:\d+)?'[bdho][0-9a-fxz?_]+$", re.IGNORECASE)
 _HEX_PREFIX_RE = re.compile(r"^0x[0-9a-fxz?_]+$", re.IGNORECASE)
 _HEX_UNKNOWN_RE = re.compile(r"^[0-9a-f]*[xz][0-9a-fxz]*$", re.IGNORECASE)
+_VALUE_LIKE_STRUCTURED_KEYS = frozenset(
+    {"value", "expected", "actual", "observed", "got", "exp", "act"}
+)
 _ERROR_PATTERN_PRIORITY = (
     "mismatch",
     "timeout",
@@ -155,21 +158,43 @@ def _event_text(event: dict[str, Any]) -> str:
 
 
 def _has_x_in_hex_value(event: dict[str, Any]) -> bool:
-    """Check whether expected/actual contains hex-adjacent X unknown bits."""
-    for field in ("expected", "actual"):
-        value = event.get(field)
+    """Check whether a known value-bearing field contains X unknown bits."""
+    for value in _iter_value_payloads(event):
         if _value_payload_contains_unknown(value, {"x"}):
             return True
     return False
 
 
 def _has_z_in_hex_value(event: dict[str, Any]) -> bool:
-    """Check whether expected/actual contains hex-adjacent Z high-impedance bits."""
-    for field in ("expected", "actual"):
-        value = event.get(field)
+    """Check whether a known value-bearing field contains Z high-impedance bits."""
+    for value in _iter_value_payloads(event):
         if _value_payload_contains_unknown(value, {"z"}):
             return True
     return False
+
+
+def _iter_value_payloads(event: dict[str, Any]):
+    """Yield only fields whose keys mechanically identify value payloads.
+
+    Arbitrary structured values are deliberately excluded: identifiers such as
+    ``signal=x_axis`` must not turn a log into an X-propagation symptom. Keys are
+    matched case-insensitively because simulator/user log formats are not
+    consistent about capitalization.
+    """
+    for field in ("expected", "actual"):
+        value = event.get(field)
+        if value is not None:
+            yield value
+
+    structured_fields = event.get("structured_fields") or {}
+    if not isinstance(structured_fields, dict):
+        return
+    for key, value in structured_fields.items():
+        if (
+            value is not None
+            and str(key).lower() in _VALUE_LIKE_STRUCTURED_KEYS
+        ):
+            yield value
 
 
 def _value_payload_contains_unknown(value: Any, unknown_chars: set[str]) -> bool:

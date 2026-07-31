@@ -1,3 +1,5 @@
+import pytest
+
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
 
 
@@ -103,6 +105,70 @@ def test_compute_hints_detects_z_in_hex_actual():
     assert hints.has_x is False
     assert hints.has_z is True
     assert hints.error_pattern == "zprop"
+
+
+@pytest.mark.parametrize(
+    ("value", "has_x", "has_z", "error_pattern"),
+    [
+        ("xx", True, False, "xprop"),
+        ("8'hx3", True, False, "xprop"),
+        ("0xXf", True, False, "xprop"),
+        ("zz", False, True, "zprop"),
+        ("next_state", False, False, "tb_error"),
+    ],
+)
+def test_compute_hints_detects_unknown_in_structured_value(
+    value, has_x, has_z, error_pattern
+):
+    events = [
+        {
+            "failure_mechanism": "tb_error",
+            "message_text": "DEEP_X_EXPECTED",
+            "group_signature": "ERROR",
+            "structured_fields": {"value": value},
+        }
+    ]
+
+    hints = compute_problem_hints(
+        {"groups": [{"first_time_ps": 66_000}]}, events
+    )
+
+    assert hints.has_x is has_x
+    assert hints.has_z is has_z
+    assert hints.error_pattern == error_pattern
+
+
+def test_compute_hints_does_not_treat_identifier_fields_as_unknown_values():
+    events = [
+        {
+            "failure_mechanism": "tb_error",
+            "message_text": "DEEP_X_EXPECTED",
+            "group_signature": "ERROR",
+            "structured_fields": {"signal": "x_axis", "value": "next_state"},
+        }
+    ]
+
+    hints = compute_problem_hints({"groups": []}, events)
+
+    assert hints.has_x is False
+    assert hints.has_z is False
+    assert hints.error_pattern == "tb_error"
+
+
+def test_xprop_priority_uses_structured_value_evidence():
+    priority = compute_xprop_priority_for_group(
+        [
+            {
+                "message_text": "DEEP_X_EXPECTED",
+                "group_signature": "ERROR",
+                "structured_fields": {"VALUE": "XX"},
+            }
+        ],
+        global_has_x=True,
+        global_has_z=False,
+    )
+
+    assert priority == "high"
 
 
 def test_compute_xprop_priority_returns_none_when_globally_irrelevant():
