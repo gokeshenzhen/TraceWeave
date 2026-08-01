@@ -1,0 +1,369 @@
+import hashlib
+import json
+from copy import deepcopy
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+from scripts import spike_source_frontend as spike
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "spike_source_frontend.py"
+HAND_SOURCE = (
+    ROOT / "tests" / "fixtures" / "source_graph_frontend" / "hand_connectivity.sv"
+)
+HAND_ORACLE = ROOT / "tests" / "fixtures" / "source_graph_frontend" / "hand_oracle.json"
+REQUIREMENTS = ROOT / "scripts" / "frontend_spike_requirements_cp311_linux_x86_64.txt"
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_dependency_receipt_pins_the_isolated_cp311_wheel_by_hash():
+    requirements = REQUIREMENTS.read_text(encoding="utf-8")
+
+    assert "pyslang @ https://files.pythonhosted.org/" in requirements
+    assert spike.FRONTEND_WHEEL in requirements
+    assert f"sha256:{spike.FRONTEND_WHEEL_SHA256}" in requirements
+    assert "not a TraceWeave runtime dependency" in requirements
+
+    receipt = spike._dependency_receipt(Path("/tmp/probe-venv/bin/python"))
+    assert receipt["version"] == "11.0.0"
+    assert receipt["wheel"]["bytes"] == 6_530_751
+    assert receipt["wheel"]["url"].endswith(spike.FRONTEND_WHEEL)
+    assert receipt["system_python_modified"] is False
+    assert "--only-binary=:all:" in receipt["reproduction_commands"][1]
+    assert "--require-hashes" in receipt["reproduction_commands"][1]
+
+
+def test_hand_fixture_and_oracle_cover_required_frontend_features():
+    oracle = json.loads(HAND_ORACLE.read_text(encoding="utf-8"))
+    source = HAND_SOURCE.read_text(encoding="utf-8")
+
+    assert set(oracle["required_features"]) == {
+        "named_ports",
+        "positional_ports",
+        "slice",
+        "concat",
+        "generate",
+        "always_comb",
+        "always_ff",
+        "interface",
+        "modport",
+    }
+    assert "interface sg_bus_if" in source
+    assert "modport producer" in source
+    assert "always_ff" in source
+    assert "always_comb" in source
+    assert "begin : gen_lanes" in source
+    assert "sg_bridge u_bridge (clk, rst_n, bus, lane_data);" in source
+    assert ".data_i(lane_i)" in source
+    assert "{comb_y[3:0], seq_q[7:4]}" in source
+
+    workload = spike.build_hand_workload()
+    assert workload["top"] == "sg_top"
+    assert workload["source_facts"]["existing_source_count"] == 1
+    assert workload["manual_oracle"] == oracle
+
+
+def test_vcs_translation_is_explicit_about_supported_and_excluded_options():
+    source = HAND_SOURCE.resolve()
+    translation = spike.translate_vcs_invocation(
+        " ".join(
+            [
+                "vcs",
+                "+define+VCS+define+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR",
+                "+incdir+/vendor/include",
+                "+libext+.v+.sv",
+                "-sverilog",
+                "-timescale=1ns/1ps",
+                "-kdb",
+                "-debug_access+all",
+                "-CFLAGS",
+                "-DVCS",
+                "/vendor/uvm_dpi.cc",
+                shlex.quote(str(source)),
+                "-top",
+                "sg_top",
+            ]
+        ),
+        top="sg_top",
+        fallback_sources=[source],
+    )
+
+    args = translation["frontend_args"]
+    assert args[:5] == [
+        "--compat",
+        "vcs",
+        "--enable-legacy-protect",
+        "--single-unit",
+        "-Wno-unknown-sys-name",
+    ]
+    assert "+define+VCS+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR" in args
+    assert "+define+VCS+define+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR" not in args
+    assert ["--top", "sg_top"] == args[-2:]
+
+    unsupported = {
+        item["option"]: item["impact"] for item in translation["unsupported_options"]
+    }
+    assert unsupported["-kdb"] == "frontend_irrelevant"
+    assert unsupported["-debug_access+all"] == "frontend_irrelevant"
+    assert unsupported["-CFLAGS -DVCS"] == "frontend_irrelevant"
+    assert unsupported["/vendor/uvm_dpi.cc"] == "external_runtime_not_modeled"
+
+
+def test_real_workload_planning_uses_explicit_environment_and_nested_filelists(
+    tmp_path,
+):
+    project = tmp_path / "uvm_demo"
+    compile_log = project / "tb" / "comp.log"
+    rtl = project / "des" / "rtl" / "verilog" / "dut.sv"
+    top = project / "tb" / "top_tb.sv"
+    uvm_source = project / "vendor" / "uvm" / "src" / "uvm.sv"
+    dpi_source = project / "vendor" / "uvm" / "src" / "dpi" / "uvm_dpi.cc"
+    filelist = project / "dut" / "filelist.f"
+    nested = project / "dut" / "nested.f"
+    for path, text in (
+        (rtl, "module dut; endmodule\n"),
+        (top, "module top_tb; dut u_dut(); endmodule\n"),
+        (uvm_source, "package uvm_pkg; endpackage\n"),
+        (dpi_source, "/* development-only DPI placeholder */\n"),
+    ):
+        _write(path, text)
+    _write(
+        filelist,
+        "+incdir+$UVM_HOME/src\n$DUT_SRC_DIR/dut.sv\n-f $TB_DIR/dut/nested.f\n",
+    )
+    _write(nested, "$TB_DIR/tb/top_tb.sv\n")
+    _write(
+        compile_log,
+        "Chronologic VCS simulator\n"
+        "Command: vcs +define+VCS+define+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR "
+        "-sverilog -kdb -f $TB_DIR/dut/filelist.f "
+        f"{uvm_source} {dpi_source} -CFLAGS -DVCS\n"
+        f"Parsing design file '{rtl}'\n"
+        f"Parsing design file '{top}'\n"
+        f"Parsing design file '{uvm_source}'\n"
+        "Top Level Modules:\n"
+        "       top_tb\n",
+    )
+
+    environment = {
+        "TB_DIR": str(project),
+        "DUT_SRC_DIR": str(rtl.parent),
+        "UVM_HOME": str(uvm_source.parent.parent),
+    }
+    workload = spike.build_real_workload(compile_log, environment)
+
+    assert workload["top"] == "top_tb"
+    assert workload["environment"] == environment
+    assert set(workload["filelists"]) == {
+        str(filelist.resolve()),
+        str(nested.resolve()),
+    }
+    assert workload["source_facts"]["existing_source_count"] == 3
+    assert (
+        "+define+VCS+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR"
+        in workload["translation"]["frontend_args"]
+    )
+
+
+def test_manual_oracle_comparison_checks_hierarchy_and_file_line_fidelity():
+    oracle = json.loads(HAND_ORACLE.read_text(encoding="utf-8"))
+    source = str(HAND_SOURCE.resolve())
+    recovered = {
+        "tops": ["sg_top"],
+        "instances": [{"path": path} for path in oracle["expected_instance_paths"]],
+        "definitions": [
+            {"name": "sg_bus_if", "file": source, "line": 3},
+            {"name": "sg_leaf", "file": source, "line": 12},
+        ],
+        "procedural_blocks": [
+            {"procedure_kind": "AlwaysFF", "file": source, "line": 19},
+            {"procedure_kind": "AlwaysComb", "file": source, "line": 26},
+        ],
+    }
+
+    matched = spike.compare_oracles(recovered, oracle, None)
+    assert matched["all_available_oracles_match"] is True
+
+    recovered["procedural_blocks"][1]["line"] = 27
+    mismatched = spike.compare_oracles(recovered, oracle, None)
+    assert mismatched["all_available_oracles_match"] is False
+    assert mismatched["comparisons"][0]["missing_source_locations"] == [
+        oracle["expected_source_locations"][3]
+    ]
+
+
+def test_plan_only_preserves_venv_launcher_and_never_imports_frontend(tmp_path):
+    launcher = tmp_path / "venv" / "bin" / "python"
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(sys.executable)
+    args = spike.parse_args(
+        [
+            "--frontend-python",
+            str(launcher),
+            "--workload",
+            "hand_fixture",
+            "--plan-only",
+        ]
+    )
+
+    result = spike.run_spike(args)
+
+    assert result["status"] == "planned"
+    assert result["dependency"]["selected_interpreter"] == str(launcher.absolute())
+    assert result["workloads"][0]["name"] == "hand_fixture"
+
+
+def test_missing_frontend_is_a_structured_blocker_without_fallback(tmp_path):
+    launcher = tmp_path / "python-without-site-packages"
+    launcher.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--frontend-python",
+            str(launcher),
+            "--workload",
+            "hand_fixture",
+            "--cold-repeats",
+            "1",
+        ],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert completed.stderr == ""
+    result = json.loads(completed.stdout)
+    workload = result["workloads"][0]
+    assert result["status"] == "blocked"
+    assert workload["status"] == "blocked"
+    assert workload["blockers"][0]["code"] == "frontend_unavailable"
+    assert "fallback" not in workload["representative_frontend_result"]
+
+
+def test_plan_output_file_has_machine_readable_receipt(tmp_path):
+    output = tmp_path / "nested" / "plan.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--workload",
+            "hand_fixture",
+            "--plan-only",
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    receipt = json.loads(completed.stdout)
+    payload = output.read_bytes()
+    assert receipt["output"] == str(output.resolve())
+    assert receipt["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert json.loads(payload)["status"] == "planned"
+
+
+def test_assessment_does_not_request_second_frontend_without_a_key_gap():
+    results = [
+        {
+            "name": name,
+            "status": "supported",
+            "oracle_comparison": {"all_available_oracles_match": True},
+            "cold_process": {"stable_semantics": True},
+        }
+        for name in spike.WORKLOAD_NAMES
+    ]
+
+    assessment = spike._assessment(results)
+
+    assert assessment["slang_primary_frontend"]["decision"] == (
+        "recommended_for_phase_1_prototype"
+    )
+    assert assessment["surelog_uhdm_comparison"] == {
+        "performed": False,
+        "fallback_needed": False,
+        "reason": (
+            "Slang recovered all required workload tops, annotated hierarchy paths, "
+            "and source locations without a key frontend blocker"
+        ),
+    }
+    assert assessment["dependency_model"]["recommendation"] == "optional_extra"
+    assert assessment["cold_frontend_worker_model"]["recommendation"] == (
+        "isolated_worker_process"
+    )
+
+
+def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
+    worker = {
+        "status": "supported",
+        "frontend": {"name": "Slang/pyslang", "version": "11.0.0"},
+        "diagnostics": {
+            "total": 10,
+            "blocking_error_count": 0,
+            "by_code": {"AdvisoryLint": 10},
+            "by_effective_severity": {"Ignored": 10},
+            "items": [],
+            "items_truncated": False,
+            "explicitly_suppressed_unknown_system_count": 0,
+        },
+        "recovered": {
+            "tops": ["top"],
+            "instances": [{"path": "top"}],
+            "definitions": [],
+            "procedural_blocks": [],
+            "object_counts": {},
+        },
+        "blockers": [],
+        "phase_measurements": {},
+        "worker_wall_time_ms": 1.0,
+        "worker_cpu_time_ms": 1.0,
+        "process_rss_kib": {"start": 10, "peak": 20, "end": 20},
+    }
+    jittered = deepcopy(worker)
+    jittered["diagnostics"]["total"] = 12
+    jittered["diagnostics"]["by_code"]["AdvisoryLint"] = 12
+    receipt = {"process_wall_time_ms": 2.0, "process_cpu_time_ms": 2.0}
+
+    result = spike._summarize_workload(
+        {
+            "name": "fixture",
+            "manual_oracle": {"top": "top", "expected_instance_paths": ["top"]},
+        },
+        [worker, jittered],
+        [receipt, receipt],
+        None,
+    )
+
+    assert result["cold_process"]["stable_semantics"] is True
+    stability = result["cold_process"]["diagnostic_stability"]
+    assert stability["stable_full_payload"] is False
+    assert stability["varying_by_code"]["AdvisoryLint"] == {
+        "count": 2,
+        "min": 10.0,
+        "p50": 11.0,
+        "p95": 11.9,
+        "max": 12.0,
+    }

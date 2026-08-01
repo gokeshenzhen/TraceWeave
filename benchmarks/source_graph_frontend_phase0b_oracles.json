@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Development-only FSDB and KDB/NPI oracle evidence for the Phase 0B frontend spike; automated tests do not load this file.",
+  "workloads": {
+    "deep_x_npi": {
+      "fsdb_hierarchy": {
+        "available": true,
+        "top": "uart_deep_x_tb",
+        "signal_paths": [
+          "uart_deep_x_tb.apb_prdata[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.bridge_prdata[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.apb_prdata[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.prdata[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel.rx_data[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel.u_rx_fifo.fifo_data[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel.u_rx_fifo.u_storage_bank.bank_data[7:0]",
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel.u_rx_fifo.u_storage_bank.u_x_cell.data_q[7:0]"
+        ],
+        "evidence": {
+          "tool": "search_signals",
+          "waveform_format": "FSDB",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "kdb_npi": {
+        "available": true,
+        "top": "uart_deep_x_tb",
+        "expected_instance_paths": [
+          "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel.u_rx_fifo.u_storage_bank.u_x_cell"
+        ],
+        "expected_source_locations": [
+          {
+            "kind": "procedural_block",
+            "file_suffix": "tests/fixtures/deep_x_npi/rtl/deep_uart_x.sv",
+            "line": 20,
+            "procedure_kind": "AlwaysFF"
+          }
+        ],
+        "evidence": {
+          "tool": "explain_signal_driver",
+          "query_signal": "uart_deep_x_tb.apb_prdata[7:0]",
+          "driver_status": "resolved",
+          "driver_kind": "always_ff",
+          "confidence": "exact",
+          "backend": "verdi_npi",
+          "actual_backend": "verdi_npi",
+          "execution_mode": "local",
+          "kdb_flow": "vcs_two_step",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      }
+    },
+    "real_uvm": {
+      "fsdb_hierarchy": {
+        "available": true,
+        "top": "top_tb",
+        "signal_paths": [
+          "top_tb.my_dut.bus_addr[15:0]",
+          "top_tb.b_if.bus_addr[15:0]",
+          "top_tb.u0.state[3:0]",
+          "top_tb.u0.m_FSM_IDLE2START_CHK.state[3:0]",
+          "top_tb.u0.edc_32_chk_wrap_L.I_edc_chk.u_edc_32_6.dout[37:0]"
+        ],
+        "evidence": {
+          "tool": "get_waveform_summary + search_signals",
+          "waveform_format": "FSDB",
+          "scale_unit": "1ps",
+          "total_signals": 1046,
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "kdb_npi": {
+        "available": true,
+        "top": "top_tb",
+        "expected_instance_paths": [
+          "top_tb.my_dut"
+        ],
+        "expected_source_locations": [
+          {
+            "kind": "procedural_block",
+            "file_suffix": "uvm_demo_cc20/dut/dut.sv",
+            "line": 48
+          }
+        ],
+        "evidence": {
+          "tool": "explain_signal_driver",
+          "query_signal": "top_tb.my_dut.bus_rd_data[15:0]",
+          "driver_status": "resolved",
+          "driver_kind": "always_ff",
+          "confidence": "exact",
+          "backend": "verdi_npi",
+          "actual_backend": "verdi_npi",
+          "execution_mode": "local",
+          "kdb_flow": "vcs_two_step",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      }
+    }
+  }
+}

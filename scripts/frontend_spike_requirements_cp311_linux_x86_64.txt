@@ -1,0 +1,5 @@
+# Phase 0B feasibility spike only. This is not a TraceWeave runtime dependency.
+# Source: https://pypi.org/project/pyslang/11.0.0/
+# Wheel: CPython 3.11, manylinux_2_27/2_28, x86_64 (6,530,751 bytes).
+pyslang @ https://files.pythonhosted.org/packages/ac/bc/a8830bdbbe30ac04b8a545c5e630707c99da3bed348ea8a96d2591e7e79d/pyslang-11.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+    --hash=sha256:b0ddf4fa29b72e0386d43863c4e7b5d53a4b0e5db6f7038c0f47f2e3e97a88bc

@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "workload": "hand_fixture",
+  "top": "sg_top",
+  "required_features": [
+    "named_ports",
+    "positional_ports",
+    "slice",
+    "concat",
+    "generate",
+    "always_comb",
+    "always_ff",
+    "interface",
+    "modport"
+  ],
+  "expected_instance_paths": [
+    "sg_top",
+    "sg_top.bus",
+    "sg_top.u_bridge",
+    "sg_top.u_bridge.gen_lanes[0].u_lane",
+    "sg_top.u_bridge.gen_lanes[0].u_lane.u_named",
+    "sg_top.u_bridge.gen_lanes[1].u_lane",
+    "sg_top.u_bridge.gen_lanes[1].u_lane.u_named",
+    "sg_top.u_producer"
+  ],
+  "expected_source_locations": [
+    {
+      "kind": "definition",
+      "name": "sg_bus_if",
+      "file_suffix": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+      "line": 3
+    },
+    {
+      "kind": "definition",
+      "name": "sg_leaf",
+      "file_suffix": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+      "line": 12
+    },
+    {
+      "kind": "procedural_block",
+      "procedure_kind": "AlwaysFF",
+      "file_suffix": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+      "line": 19
+    },
+    {
+      "kind": "procedural_block",
+      "procedure_kind": "AlwaysComb",
+      "file_suffix": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+      "line": 26
+    }
+  ]
+}
