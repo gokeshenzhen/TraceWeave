@@ -785,6 +785,22 @@ def test_semantic_projection_excludes_only_truncated_presentation_samples():
     )
 
 
+def test_semantic_projection_reports_but_does_not_key_on_aggregate_counts():
+    first = {
+        "tops": ["tb"],
+        "definitions": [{"name": "tb"}],
+        "object_counts": {"symbols_by_kind": {"Variable": 319721}},
+        "count_scope": "frontend visitor facts",
+    }
+    second = deepcopy(first)
+    second["object_counts"]["symbols_by_kind"]["Variable"] = 319762
+
+    assert first != second
+    assert spike._recovered_semantic_projection(first) == (
+        spike._recovered_semantic_projection(second)
+    )
+
+
 def test_diagnostic_detail_cap_prioritizes_every_blocker_before_warnings():
     blocking = [{"severity": "Error", "id": index} for index in range(65)]
     warnings = [{"severity": "Warning", "id": index} for index in range(80)]

@@ -2233,6 +2233,11 @@ def _diagnostic_semantic_identities(
 
 def _recovered_semantic_projection(recovered: dict[str, Any]) -> dict[str, Any]:
     projection = dict(recovered)
+    # Aggregate visitor counts are benchmark facts, not connectivity identity.
+    # Native generic-specialization traversal can vary those totals while exact
+    # definitions, tops, oracle paths, and diagnostics remain unchanged.
+    projection.pop("object_counts", None)
+    projection.pop("count_scope", None)
     if recovered.get("instances_truncated"):
         projection.pop("instances", None)
     if recovered.get("procedural_blocks_truncated"):
@@ -2646,9 +2651,10 @@ def _summarize_workload(
             "retained_evidence_stability": {
                 "stable_full_payload": stable_retained_evidence,
                 "interpretation": (
-                    "bounded instance/procedural detail arrays are presentation evidence; "
-                    "when truncated they are excluded from semantic identity, while exact "
-                    "counts, definitions, tops, and oracle path memberships remain included"
+                    "full recovered evidence includes aggregate frontend object counts and "
+                    "bounded instance/procedural detail arrays; aggregate counts are benchmark "
+                    "facts, and truncated arrays are presentation evidence, so neither is cache "
+                    "or connectivity semantic identity"
                 ),
             },
             "process_wall_time_ms": _distribution(
