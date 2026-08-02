@@ -30,6 +30,10 @@ _VCS_IF_RE = re.compile(r"recompiling interface (\w+)", re.IGNORECASE)
 
 _XCE_FILE_RE = re.compile(r"^file:\s+(.+)$")
 _XCE_ENTITY_RE = re.compile(r"^\s*(module|interface|package)\s+worklib\.(\w+):", re.IGNORECASE)
+_XCE_SHELL_COMMAND_RE = re.compile(
+    r"^\s*cd\s+(?P<cwd>.+?)\s+&&\s+"
+    r"(?P<command>(?:\S*/)?xrun(?:\s+.*)?)\s*$"
+)
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
 _SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
 _VCS_FILELIST_MAX_DEPTH = 16
@@ -507,6 +511,8 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
     with open(log_path, "r", errors="replace") as f:
         lines = f.readlines()
 
+    log_dir = os.path.dirname(log_path)
+    compile_command, command_dir = _extract_xcelium_invocation(lines, log_dir)
     file_info: dict[str, dict] = {}
     include_tree: dict[str, list[str]] = {}
     filelist_tree: dict[str, list[str]] = {}
@@ -515,6 +521,15 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
     command_started = False
     current_file: str | None = None
     filelist_stack: list[tuple[int, str]] = []
+
+    if compile_command:
+        for top_match in _TOP_RE.finditer(compile_command):
+            top = top_match.group(1)
+            if top not in top_modules:
+                top_modules.append(top)
+        for filelist_match in re.finditer(r"(?:^|\s)-f\s+(\S+)", compile_command):
+            path = _normalize_path(filelist_match.group(1), command_dir)
+            filelist_tree.setdefault(os.path.basename(path), [])
 
     for line in lines:
         stripped = line.strip()
@@ -535,7 +550,7 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         indent = len(line) - len(line.lstrip(" \t"))
         filelist_match = re.search(r"-f\s+(\S+)", stripped)
         if filelist_match:
-            path = _normalize_path(filelist_match.group(1), os.path.dirname(log_path))
+            path = _normalize_path(filelist_match.group(1), command_dir)
             name = os.path.basename(path)
             filelist_tree.setdefault(name, [])
             while filelist_stack and filelist_stack[-1][0] >= indent:
@@ -552,13 +567,13 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
             continue
 
         if any(stripped.endswith(ext) for ext in (".sv", ".svh", ".v", ".vh")):
-            path = _normalize_path(stripped, os.path.dirname(log_path))
+            path = _normalize_path(stripped, command_dir)
             file_info.setdefault(path, {"type": "unknown"})
 
     for line in lines:
         match = _XCE_FILE_RE.match(line)
         if match:
-            current_file = _normalize_path(match.group(1), os.path.dirname(log_path))
+            current_file = _normalize_path(match.group(1), command_dir)
             file_info.setdefault(current_file, {"type": "unknown"})
             continue
         match = _XCE_ENTITY_RE.match(line)
@@ -579,8 +594,36 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         "include_tree": include_tree,
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
-        "compile_command": _extract_xcelium_command(lines),
+        "compile_command": compile_command,
     }
+
+
+def _extract_xcelium_invocation(
+    lines: list[str], log_dir: str
+) -> tuple[str | None, str]:
+    """Recover an xrun command and the directory in which it executed.
+
+    Native xrun logs use an indented argument block. Build orchestrators such
+    as OpenTitan dvsim instead record ``cd <workdir> && xrun ...`` before the
+    tool output. Relative ``file:`` paths in that output are relative to the
+    recorded work directory, not to the directory containing the wrapper log.
+    The match is deliberately limited to that simple, emitted command shape;
+    no shell text is evaluated.
+    """
+    command = _extract_xcelium_command(lines)
+    if command:
+        return command, log_dir
+
+    for line in lines:
+        match = _XCE_SHELL_COMMAND_RE.match(line.rstrip("\n"))
+        if not match:
+            continue
+        command_dir = _normalize_path(match.group("cwd"), log_dir)
+        command = match.group("command")
+        if command.startswith("/"):
+            command = f"xrun{command[command.find('xrun') + len('xrun') :]}"
+        return command, command_dir
+    return None, log_dir
 
 
 def _extract_xcelium_command(lines: list[str]) -> str | None:

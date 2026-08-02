@@ -127,6 +127,40 @@ file: {root / 'tb' / 'top_tb.sv'}
         assert "DEFINE" not in result["compile_command"]
         assert "*W,DLCPTH" not in result["compile_command"]
 
+    def test_xcelium_wrapper_command_anchors_relative_files_to_xrun_cwd(self, tmp_path):
+        work = tmp_path / "fusesoc work"
+        source = work / "src" / "top_earlgrey.sv"
+        filelist = work / "design.scr"
+        _write(source, "module top_earlgrey; endmodule\n")
+        _write(filelist, "src/top_earlgrey.sv\n")
+        log = tmp_path / "default" / "build.log"
+        _write(
+            log,
+            "[make]: build\n"
+            f"cd '{work}' && xrun -elaborate -f design.scr "
+            "-top top_earlgrey -top tb\n"
+            "TOOL: xrun(64) 26.03-s001\n"
+            "file: src/top_earlgrey.sv\n"
+            "\tmodule worklib.top_earlgrey:sv\n"
+            "\tinterface worklib.chip_if:sv\n",
+        )
+
+        result = parse_compile_log(str(log), "xcelium")
+
+        assert result["compile_command"] == (
+            "xrun -elaborate -f design.scr -top top_earlgrey -top tb"
+        )
+        assert result["top_modules"] == ["top_earlgrey", "tb"]
+        assert result["filelist_tree"] == {"design.scr": []}
+        assert result["files"]["user"] == [
+            {
+                "path": str(source.resolve()),
+                "type": "interface",
+                "category": "other",
+            }
+        ]
+        assert result["interfaces"] == ["chip_if"]
+
     def test_vcs_incremental_command_recovers_direct_sources_and_top(self, tmp_path):
         rtl = tmp_path / "rtl" / "deep uart.sv"
         tb = tmp_path / "tb" / "deep_x_tb.sv"
