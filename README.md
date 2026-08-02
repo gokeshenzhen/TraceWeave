@@ -325,7 +325,9 @@ With this mode enabled, only explicit connectivity operations
 (`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`) submit a
 short `bsub -K` worker. Log parsing, waveform reads, structural scans, KDB
 detection, and Static analysis remain local. Worker failure or timeout falls
-back locally to Static and is visible through fixed
+through to the local Source Graph for driver/load queries and then to Legacy
+Static if that bounded graph is unavailable or inconclusive. `trace_signal_path`
+keeps its existing NPI-only/Static-unsupported behavior. Routing is visible through fixed
 `backend_status.execution_mode` / `scheduler_status` / `worker_status` /
 `fallback_reason` labels; queue, host, command, and license details are not
 returned.
@@ -352,6 +354,37 @@ visible at the same absolute paths on the submission and compute nodes. The
 staging directory defaults under TraceWeave's cache root; set it explicitly
 when that cache is not on a shared filesystem. Scheduler options are JSON argv,
 not shell text, and are limited to scheduler option/value pairs.
+
+### On-Demand Source Graph
+
+`explain_signal_driver` and `find_signal_loads` use the production route
+`Verdi NPI -> Source Graph -> Legacy Static`. Source Graph is lazy and
+process-local: the first eligible request starts one isolated, short-lived
+frontend worker, successful scoped IR stays only in the server's memory cache,
+and same-key cold requests share one build. It does not build at startup, use a
+disk cache, hold an FSDB/VCD lock, or import `pyslang` into the MCP server.
+`trace_signal_path` and `trace_x_source` are intentionally unchanged.
+
+Source Graph is enabled by default. If the MCP interpreter does not have the
+optional frontend, the dependency blocker is recorded and the request continues
+to Legacy Static. To use an isolated pinned frontend environment, configure:
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH=1
+export TRACEWEAVE_SOURCE_GRAPH_PYTHON=/path/to/pyslang-11.0.0/bin/python
+export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
+export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
+```
+
+Run `build_tb_hierarchy` first, as in the standard workflow, so the request has
+an exact compile/hierarchy handle. `backend_status` then reports
+`selected_backend`, `attempted_backend`, `actual_backend`, the ordered
+`attempted_backends` chain, and a Source Graph receipt containing fixed blocker
+labels, coverage, build/compile/IR fingerprints, cache disposition, and numeric
+resource metrics. Positive results under partial or inconclusive coverage stay
+partial; only complete coverage can establish `not_connected`. A fallback
+recomputes the whole result with Legacy Static, so payload provenance is never
+mixed.
 
 ### Functional Verification
 
@@ -451,7 +484,7 @@ returned prefix. Narrow the time window for a complete targeted check.
 - `trace_x_source`: Trace X/Z propagation upstream through the selected connectivity backend. Wave locks cover only waveform reads; if an NPI driver lookup falls back, the partial chain is discarded and the whole trace restarts with Static so one chain never mixes backend provenance. `backend_status` reports the selected/actual backend and fallback receipt; `trace_restarted=true` makes the whole-trace retry explicit. NPI `testbench_driven`, source-line, and driver-vs-load cross-check evidence are preserved on the terminal trace node.
 - `build_kdb`: Auto-build a Verdi KDB from the parsed compile log (vericom + elabcom). Use when the simulator is Xcelium (xrun) and the NPI backend reports no KDB. Output is cached under `TRACEWEAVE_CACHE_DIR` (default `~/.cache/traceweave/kdb/<hash>/`); cache hits skip re-running Verdi. A runnable `build.sh` is written next to the KDB for inspection or manual reproduction. Requires `VERDI_HOME` with `bin/vericom` and `bin/elabcom`.
 
-`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`, and `trace_x_source` automatically engage a Verdi NPI backend when a KDB is detected. Driver/load queries transparently fall back to a Static source-regex backend when NPI is unavailable; `trace_x_source` applies that fallback to the whole trace instead of mixing per-node provenance. `trace_signal_path` is NPI-only and returns a structured `unsupported_reason` instead of an approximation, since `sig_to_sig_conn_list` has no honest static equivalent. NPI is the deep / accurate path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains that Static cannot follow. In **local NPI execution mode**, a detected KDB also lets `build_tb_hierarchy` overlay each component-tree node's `source_file` / `source_line` with NPI's elaborated `file:line`. The initial LSF scope deliberately does not submit an implicit batch job from `build_tb_hierarchy`, so in LSF mode that hierarchy source information remains compile-log-derived. Affected hops in `find_driver` / `find_loads` results carry a `source_info_origin: "npi"` tag so consumers can tell NPI-annotated entries from compile-log-derived ones. The result envelope carries a `backend_status` block with the active backend, KDB flow, and a per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
+`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`, and `trace_x_source` automatically engage a Verdi NPI backend when a KDB is detected. For driver/load queries, a trustworthy NPI result wins; otherwise TraceWeave tries the bounded on-demand Source Graph before recomputing the whole result with Legacy Static. `trace_x_source` keeps its existing whole-trace NPI-to-Static retry and does not use Source Graph. `trace_signal_path` remains NPI-only and returns a structured `unsupported_reason` instead of an approximation, since `sig_to_sig_conn_list` has no honest static equivalent. NPI is the deep / accurate path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains that Static cannot follow. In **local NPI execution mode**, a detected KDB also lets `build_tb_hierarchy` overlay each component-tree node's `source_file` / `source_line` with NPI's elaborated `file:line`. The initial LSF scope deliberately does not submit an implicit batch job from `build_tb_hierarchy`, so in LSF mode that hierarchy source information remains compile-log-derived. Affected hops in `find_driver` / `find_loads` results carry `source_info_origin: "npi"` or `"source_graph"`, while Static remains compile-log-derived. The result envelope carries a `backend_status` block with the selected/attempted/actual backend, ordered fallback chain, Source Graph coverage/build receipt, KDB flow, and per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
 
 For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` — the hint surfaces the exact command. For Xcelium flows there is no native KDB; `get_diagnostic_snapshot` will list `build_kdb` in `missing_steps` so the LLM agent can produce one on demand. Set `TRACEWEAVE_AUTO_KDB=0` to opt out of the auto-build suggestion.
 

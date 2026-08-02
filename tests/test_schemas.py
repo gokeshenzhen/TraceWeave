@@ -29,7 +29,10 @@ def test_sim_paths_result_minimal():
     result = SimPathsResult.model_validate(data)
     assert result.verif_root == "/tmp/verif"
     assert result.compile_logs == []
-    assert json.loads(result.model_dump_json(exclude_none=True))["verif_root"] == "/tmp/verif"
+    assert (
+        json.loads(result.model_dump_json(exclude_none=True))["verif_root"]
+        == "/tmp/verif"
+    )
 
 
 def test_sim_paths_result_rejects_extra_fields():
@@ -194,6 +197,71 @@ def test_backend_status_accepts_optional_lsf_receipt():
     )
     assert status.execution_mode == "lsf"
     assert status.scheduler_status == "failed"
+
+
+def test_backend_status_keeps_legacy_payload_backward_compatible():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "vcs",
+            "backend": "static",
+            "actual_backend": "static",
+        }
+    )
+
+    assert status.backend == "static"
+    assert status.selected_backend is None
+    assert status.attempted_backend is None
+    assert status.attempted_backends == []
+    assert status.source_graph is None
+
+
+def test_backend_status_validates_additive_source_graph_route_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "xcelium",
+            "backend": "source_graph",
+            "selected_backend": "source_graph",
+            "attempted_backend": "source_graph",
+            "actual_backend": "source_graph",
+            "attempted_backends": [
+                {
+                    "backend": "verdi_npi",
+                    "status": "unavailable",
+                    "reason": "npi_kdb_unavailable",
+                },
+                {
+                    "backend": "source_graph",
+                    "status": "success",
+                    "coverage_status": "partial",
+                },
+            ],
+            "source_graph": {
+                "adapter_status": "ready",
+                "prepare_status": "ready",
+                "cache_disposition": "miss",
+                "flight_disposition": "builder",
+                "coverage_status": "partial",
+                "coverage_gap_codes": ["protected_payload"],
+                "query_status": "found",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "build_key_sha256": "b" * 64,
+                "compile_fingerprint_sha256": "c" * 64,
+                "ir_fingerprint_sha256": "a" * 64,
+                "metrics": {
+                    "prepare_total_wall_ms": 5.0,
+                    "actual_build_count": 1,
+                    "ir_bytes": 123,
+                    "cache_bytes": 123,
+                },
+            },
+        }
+    )
+
+    assert status.actual_backend == "source_graph"
+    assert status.source_graph.query_confidence == "partial"
+    assert status.source_graph.build_key_sha256 == "b" * 64
+    assert status.source_graph.metrics.actual_build_count == 1
 
 
 def test_trace_x_source_result_carries_backend_consistency_receipt():

@@ -368,7 +368,9 @@ class DiffResult(SchemaModel):
     new_log_file: str | None = None
     base_snapshot_id: str | None = None
     new_snapshot_id: str | None = None
-    diff_source: Literal["paths", "snapshots", "mixed", "auto_previous_snapshot"] | None = None
+    diff_source: (
+        Literal["paths", "snapshots", "mixed", "auto_previous_snapshot"] | None
+    ) = None
     base_summary: DiffEventSummary
     new_summary: DiffEventSummary
     problem_hints_comparison: DiffProblemHintsComparison | None = None
@@ -413,6 +415,7 @@ class SearchSignalsBatchResult(SchemaModel):
     each the same shape as a single search. Exists to collapse the
     consecutive-search keyword-groping chains telemetry surfaced (334/524
     calls arrived in runs of >=4) into one round trip."""
+
     batch: list[SearchSignalsBatchEntry] = Field(default_factory=list)
     hint: str | None = None
 
@@ -546,7 +549,9 @@ class RecommendNextStepsResult(SchemaModel):
     primary_failure_target: dict[str, Any] | None = None
     recommended_signals: list[dict[str, Any]] = Field(default_factory=list)
     recommended_instances: list[dict[str, Any]] = Field(default_factory=list)
-    correlated_structural_risks: list[StructuralRiskCorrelation] = Field(default_factory=list)
+    correlated_structural_risks: list[StructuralRiskCorrelation] = Field(
+        default_factory=list
+    )
     suspected_failure_class: str
     recommendation_strategy: str | None = None
     failure_window_center_ps: int | None = None
@@ -559,11 +564,14 @@ class RecommendNextStepsResult(SchemaModel):
     # particular, zero_coverage + [] findings is not a protocol pass.
     runtime_protocol_coverage: dict[str, Any] | None = None
     workflow_incomplete: bool = False
-    degraded_reason: Literal[
-        "missing_structural_scan",
-        "missing_handshake_sweep",
-        "incomplete_handshake_sweep",
-    ] | None = None
+    degraded_reason: (
+        Literal[
+            "missing_structural_scan",
+            "missing_handshake_sweep",
+            "incomplete_handshake_sweep",
+        ]
+        | None
+    ) = None
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
     next_iteration_hint: dict[str, Any] | None = None
@@ -613,14 +621,20 @@ class DriverChainHop(SchemaModel):
     driver_kind: str | None = None
     source_file: str | None = None
     source_line: int | None = None
-    source_info_origin: Literal["compile_log", "npi"] | None = None
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
     branch_candidates: list[str] | None = None
     stopped_at: str | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    backend_confidence: Literal["exact", "approximate", "unverified"] = "approximate"
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    backend_confidence: Literal[
+        "exact",
+        "conditional",
+        "partial",
+        "approximate",
+        "unverified",
+    ] = "approximate"
 
 
 class DriverLoadCrossCheck(SchemaModel):
@@ -653,6 +667,7 @@ class ExplainDriverResult(SchemaModel):
     driver_kind: str | None = None
     source_file: str | None = None
     source_line: int | None = None
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
@@ -663,30 +678,157 @@ class ExplainDriverResult(SchemaModel):
     driver_chain: list[DriverChainHop] | None = None
     chain_summary: str | None = None
     cross_check: DriverLoadCrossCheck | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus | None = None
 
 
 ExplainSignalDriverResult = ExplainDriverResult
 
 
+class BackendAttemptReceipt(SchemaModel):
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"]
+    status: Literal[
+        "success",
+        "unavailable",
+        "failed",
+        "blocked",
+        "timed_out",
+        "inconclusive",
+    ]
+    reason: str | None = None
+    coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
+
+
+class SourceGraphBlockerReceipt(SchemaModel):
+    code: str
+    stage: str
+
+
+class SourceGraphMetricsReceipt(SchemaModel):
+    adapter_wall_ms: float | None = None
+    prepare_total_wall_ms: float | None = None
+    admission_wait_ms: float | None = None
+    build_wall_ms: float | None = None
+    load_wall_ms: float | None = None
+    query_wall_ms: float | None = None
+    actual_build_count: int = 0
+    coalesced_waiter_count: int = 0
+    cancel_to_exit_ms: float | None = None
+    worker_cpu_ms: float | None = None
+    rss_start_kib: int | None = None
+    rss_peak_kib: int | None = None
+    rss_end_kib: int | None = None
+    ir_bytes: int = 0
+    cache_bytes: int = 0
+
+
+class SourceGraphBackendReceipt(SchemaModel):
+    adapter_status: Literal["ready", "blocked", "disabled", "invalid"]
+    adapter: dict[str, Any] | None = None
+    prepare_status: (
+        Literal[
+            "ready",
+            "dependency_blocked",
+            "build_failed",
+            "worker_crash",
+            "timed_out",
+            "cancelled",
+            "invalid_response",
+        ]
+        | None
+    ) = None
+    cache_disposition: (
+        Literal[
+            "hit_exact",
+            "hit_superset",
+            "miss",
+            "bypass_incomplete_key",
+        ]
+        | None
+    ) = None
+    flight_disposition: Literal["none", "builder", "coalesced"] | None = None
+    coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
+    coverage_gap_codes: list[str] = Field(default_factory=list)
+    objective_exclusions: list[str] = Field(default_factory=list)
+    query_status: Literal["found", "not_connected", "inconclusive"] | None = None
+    query_confidence: Literal["exact", "conditional", "partial"] | None = None
+    query_match_count: int = 0
+    traversed_binding_edges: int = 0
+    max_depth: int | None = None
+    build_key_sha256: str | None = None
+    compile_fingerprint_sha256: str | None = None
+    ir_fingerprint_sha256: str | None = None
+    blocker: SourceGraphBlockerReceipt | None = None
+    metrics: SourceGraphMetricsReceipt = Field(
+        default_factory=SourceGraphMetricsReceipt
+    )
+    fallback_used: bool = False
+
+
 class BackendStatus(SchemaModel):
     simulator: Literal["vcs", "xcelium", "unknown"] = "unknown"
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    actual_backend: Literal["static", "verdi_npi", "verdi_tcl"] | None = None
+    # ``backend`` retains its legacy meaning (policy-selected backend).  The
+    # additive fields make a multi-attempt NPI -> Source Graph -> Static route
+    # explicit without changing existing callers.
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    selected_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    attempted_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    actual_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    attempted_backends: list[BackendAttemptReceipt] = Field(default_factory=list)
     fallback_reason: str | None = None
+    source_graph: SourceGraphBackendReceipt | None = None
     execution_mode: Literal["local", "lsf", "invalid"] | None = None
-    scheduler_status: Literal[
-        "not_started", "completed", "failed", "timed_out",
-    ] | None = None
-    worker_status: Literal[
-        "not_started", "completed", "npi_unavailable", "failed",
-    ] | None = None
+    scheduler_status: (
+        Literal[
+            "not_started",
+            "completed",
+            "failed",
+            "timed_out",
+        ]
+        | None
+    ) = None
+    worker_status: (
+        Literal[
+            "not_started",
+            "completed",
+            "npi_unavailable",
+            "failed",
+        ]
+        | None
+    ) = None
     parser_match: Literal["exact", "approximate"] = "approximate"
     kdb_path: str | None = None
     kdb_flow: Literal[
-        "vcs_two_step", "vcs_three_step", "vericom_standalone",
-        "vericom_import_from_file", "traceweave_cached", "none",
+        "vcs_two_step",
+        "vcs_three_step",
+        "vericom_standalone",
+        "vericom_import_from_file",
+        "traceweave_cached",
+        "none",
     ] = "none"
     kdb_hint: str | None = None
 
@@ -697,9 +839,15 @@ class LoadHop(SchemaModel):
     expr: str | None = None
     source_file: str | None = None
     source_line: int | None = None
-    source_info_origin: Literal["compile_log", "npi"] | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    confidence: Literal["exact", "approximate", "unverified"] = "approximate"
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    confidence: Literal[
+        "exact",
+        "conditional",
+        "partial",
+        "approximate",
+        "unverified",
+    ] = "approximate"
 
 
 class FindSignalLoadsResult(SchemaModel):
@@ -711,6 +859,7 @@ class FindSignalLoadsResult(SchemaModel):
     completeness: Literal["exact", "approximate", "shallow_only"] = "shallow_only"
     stopped_at: str | None = None
     unsupported_reason: str | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 
@@ -737,13 +886,16 @@ class TraceSignalPathResult(SchemaModel):
     path: list[SignalPathHop] = Field(default_factory=list)
     expand_assigns: bool = False
     direction_note: str = _TRACE_SIGNAL_PATH_DIRECTION_NOTE
-    unsupported_reason: Literal[
-        "from_not_found",
-        "to_not_found",
-        "not_connected",
-        "static_backend_no_path_api",
-        "npi_call_failed",
-    ] | None = None
+    unsupported_reason: (
+        Literal[
+            "from_not_found",
+            "to_not_found",
+            "not_connected",
+            "static_backend_no_path_api",
+            "npi_call_failed",
+        ]
+        | None
+    ) = None
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 
@@ -1121,6 +1273,7 @@ class FindingSummary(SchemaModel):
     top_scopes: up to 3 DISTINCT scope paths in sort order (most likely
                 interesting first); a top-level interface renders as "(top)".
     """
+
     by_flag: dict[str, int] = Field(default_factory=dict)
     by_channel_hint: dict[str, int] = Field(default_factory=dict)
     top_scopes: list[str] = Field(default_factory=list)
@@ -1140,7 +1293,9 @@ class HandshakeSweepResult(SchemaModel):
     # Coverage facts for interpreting flagged_count. In particular,
     # zero_coverage means no protocol interfaces were checked, so flagged_count=0
     # is not evidence of a clean protocol run.
-    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = "complete"
+    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = (
+        "complete"
+    )
     coverage_warnings: list[str] = Field(default_factory=list)
     suggested_next_actions: list[dict[str, Any]] = Field(default_factory=list)
     finding_summary: FindingSummary | None = None

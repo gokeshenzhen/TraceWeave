@@ -136,6 +136,19 @@ Verification
   receipt; `trace_restarted` records whether that whole-trace retry occurred.
   Driver-level NPI evidence (`source_line`, `testbench_driven`, and its
   driver-vs-load cross-check) remains attached to the terminal trace node.
+  The two public driver/load tools have a separate production orchestrator:
+  trustworthy NPI results return directly; NPI unavailability/failure defers
+  to an on-demand Source Graph; a Source Graph blocker or inconclusive no-match
+  triggers a whole-result Legacy Static recomputation. The Source Graph runtime
+  is created lazily once per server process, keeps only an in-memory scoped IR
+  cache, admits at most one cold build per process, and executes its optional
+  frontend in an isolated one-shot worker. Adapter and graph queries use the
+  lock-free cancellable worker path, so neither build nor query holds a waveform
+  lock or blocks light event-loop calls. Cancellation terminates the request
+  without entering the next fallback. `backend_status` preserves the ordered
+  attempt chain, fixed fallback/blocker labels, coverage and fingerprints while
+  the result payload contains facts from exactly one backend. Arbitrary path
+  and `trace_x_source` routing are unchanged.
   Privacy-safe operation metrics make full-sweep cost attributable without
   recording project identities: discovery/search timing, total sweep time,
   planned/attempted/completed interface counts, unique clock/signal counts,

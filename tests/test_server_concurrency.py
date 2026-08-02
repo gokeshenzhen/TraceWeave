@@ -66,9 +66,7 @@ class TestWaveLocks:
         holder_event = threading.Event()
         waiter_event = threading.Event()
         metrics = operation_metrics.OperationMetrics()
-        server._set_active_fsdb(
-            holder_event, server._WAVE_PRIORITY_BACKGROUND, metrics
-        )
+        server._set_active_fsdb(holder_event, server._WAVE_PRIORITY_BACKGROUND, metrics)
         try:
             server._preempt_lower_priority_fsdb(
                 waiter_event, server._WAVE_PRIORITY_INTERACTIVE
@@ -127,11 +125,11 @@ class TestEventLoopNotBlocked:
         monkeypatch.setattr(server, "_run_in_wave_thread", capture_run)
 
         with pytest.raises(DispatchReached):
-            await server._dispatch(
-                "sweep_handshakes", {"wave_path": "/fake/wave.fsdb"}
-            )
+            await server._dispatch("sweep_handshakes", {"wave_path": "/fake/wave.fsdb"})
 
-    async def test_light_call_completes_while_heavy_wave_call_in_flight(self, monkeypatch):
+    async def test_light_call_completes_while_heavy_wave_call_in_flight(
+        self, monkeypatch
+    ):
         started = threading.Event()
         release = threading.Event()
 
@@ -145,6 +143,7 @@ class TestEventLoopNotBlocked:
         light_elapsed = None
         try:
             async with anyio.create_task_group() as tg:
+
                 async def heavy():
                     await server._dispatch(
                         "get_waveform_summary", {"wave_path": "/fake/heavy.vcd"}
@@ -238,9 +237,12 @@ class TestCooperativeCancellation:
             ran_to_completion.set()
             return _summary_dict()
 
-        monkeypatch.setattr(server, "_get_parser", lambda p: FakeParser(looping_summary))
+        monkeypatch.setattr(
+            server, "_get_parser", lambda p: FakeParser(looping_summary)
+        )
 
         async with anyio.create_task_group() as tg:
+
             async def call():
                 await server._dispatch(
                     "get_waveform_summary", {"wave_path": "/fake/cancel.vcd"}
@@ -273,6 +275,7 @@ class TestCooperativeCancellation:
 
         try:
             async with anyio.create_task_group() as tg:
+
                 async def holder():
                     await server._dispatch(
                         "get_waveform_summary", {"wave_path": "/fake/queued.vcd"}
@@ -331,6 +334,7 @@ class TestExternalConnectivityWorker:
         light_elapsed = None
         try:
             async with anyio.create_task_group() as tg:
+
                 async def run_trace():
                     result_box["result"], _ = await server._run_trace_x_attempt(
                         backend=FakeStaticBackend(),
@@ -345,9 +349,7 @@ class TestExternalConnectivityWorker:
                     )
 
                 tg.start_soon(run_trace)
-                assert await anyio.to_thread.run_sync(
-                    _wait_event, backend_started, 5
-                )
+                assert await anyio.to_thread.run_sync(_wait_event, backend_started, 5)
                 begin = time.perf_counter()
                 await server._dispatch("cursor_list", {})
                 light_elapsed = time.perf_counter() - begin
@@ -398,6 +400,7 @@ class TestExternalConnectivityWorker:
 
         try:
             async with anyio.create_task_group() as tg:
+
                 async def run_trace():
                     result_box["result"], _ = await server._run_trace_x_attempt(
                         backend=FakeBackend(),
@@ -412,9 +415,7 @@ class TestExternalConnectivityWorker:
                     )
 
                 tg.start_soon(run_trace)
-                assert await anyio.to_thread.run_sync(
-                    _wait_event, backend_started, 5
-                )
+                assert await anyio.to_thread.run_sync(_wait_event, backend_started, 5)
 
                 # The trace is waiting on its backend worker, but another
                 # operation on the same waveform must be able to take the lock.
@@ -473,7 +474,7 @@ class TestExternalConnectivityWorker:
         )
         monkeypatch.setattr(
             "src.connectivity_backend.select_backend",
-            lambda status: FakeBackend(),
+            lambda status, **kwargs: FakeBackend(),
         )
 
         light_elapsed = None
@@ -536,7 +537,7 @@ class TestExternalConnectivityWorker:
         )
         monkeypatch.setattr(
             "src.connectivity_backend.select_backend",
-            lambda status: FakeBackend(),
+            lambda status, **kwargs: FakeBackend(),
         )
 
         async with anyio.create_task_group() as tg:

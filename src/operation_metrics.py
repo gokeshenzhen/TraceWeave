@@ -92,9 +92,38 @@ _PUBLIC_FIELDS = {
     "sweep_result_build_ms",
     "sweep_result_serialize_ms",
     "sweep_result_bytes",
+    "source_graph_phase",
+    "source_graph_adapter_ms",
+    "source_graph_prepare_total_ms",
+    "source_graph_admission_wait_ms",
+    "source_graph_build_ms",
+    "source_graph_load_ms",
+    "source_graph_query_ms",
+    "source_graph_actual_build_count",
+    "source_graph_coalesced_waiter_count",
+    "source_graph_cancel_to_exit_ms",
+    "source_graph_worker_cpu_ms",
+    "source_graph_rss_start_kib",
+    "source_graph_rss_peak_kib",
+    "source_graph_rss_end_kib",
+    "source_graph_ir_bytes",
+    "source_graph_cache_bytes",
 }
-_PUBLIC_PHASES = {"discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"}
-_PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase"}
+_PUBLIC_PHASES = {
+    "discover_valid_ready",
+    "discover_ahb",
+    "inspect_interfaces",
+    "complete",
+}
+_SOURCE_GRAPH_PHASES = {
+    "adapter",
+    "prepare",
+    "query",
+    "fallback",
+    "complete",
+    "cancelled",
+}
+_PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase", "source_graph_phase"}
 
 
 @dataclass
@@ -120,7 +149,9 @@ def current() -> OperationMetrics | None:
     return _current.get()
 
 
-def set_value(name: str, value: object, metrics: OperationMetrics | None = None) -> None:
+def set_value(
+    name: str, value: object, metrics: OperationMetrics | None = None
+) -> None:
     target = metrics or current()
     if target is None:
         return
@@ -271,26 +302,20 @@ def record_sweep_native_group_begin(profile: Mapping[str, object]) -> None:
             int(metrics.values.get("sweep_native_group_count", 0)) + 1
         )
         metrics.values["sweep_native_group_signal_total"] = (
-            int(metrics.values.get("sweep_native_group_signal_total", 0))
-            + signal_count
+            int(metrics.values.get("sweep_native_group_signal_total", 0)) + signal_count
         )
         metrics.values["sweep_native_group_signal_max"] = max(
             int(metrics.values.get("sweep_native_group_signal_max", 0)),
             signal_count,
         )
         _add_native_duration_locked(metrics, "lookup", profile.get("lookup_ns"))
-        _add_native_duration_locked(
-            metrics, "add_signal", profile.get("add_signal_ns")
-        )
-        load_ms = _add_native_duration_locked(
-            metrics, "load", profile.get("load_ns")
-        )
+        _add_native_duration_locked(metrics, "add_signal", profile.get("add_signal_ns"))
+        load_ms = _add_native_duration_locked(metrics, "load", profile.get("load_ns"))
         metrics.values["sweep_native_group_load_call_count"] = (
             int(metrics.values.get("sweep_native_group_load_call_count", 0)) + 1
         )
         metrics.values["sweep_native_group_load_total_ms"] = (
-            float(metrics.values.get("sweep_native_group_load_total_ms", 0.0))
-            + load_ms
+            float(metrics.values.get("sweep_native_group_load_total_ms", 0.0)) + load_ms
         )
         metrics.values["sweep_native_group_load_max_ms"] = max(
             float(metrics.values.get("sweep_native_group_load_max_ms", 0.0)),
@@ -325,8 +350,14 @@ def record_sweep_native_transition(
             int(metrics.values.get("sweep_native_profiled_read_count", 0)) + 1
         )
         for name in (
-            "lookup", "add_signal", "load", "create_handle", "seek",
-            "traverse_format", "free_handle", "unload",
+            "lookup",
+            "add_signal",
+            "load",
+            "create_handle",
+            "seek",
+            "traverse_format",
+            "free_handle",
+            "unload",
         ):
             duration_ms = _add_native_duration_locked(
                 metrics, name, profile.get(f"{name}_ns")
@@ -338,29 +369,35 @@ def record_sweep_native_transition(
                 )
                 if standalone_load:
                     metrics.values["sweep_native_standalone_load_call_count"] = (
-                        int(metrics.values.get(
-                            "sweep_native_standalone_load_call_count", 0
-                        )) + 1
+                        int(
+                            metrics.values.get(
+                                "sweep_native_standalone_load_call_count", 0
+                            )
+                        )
+                        + 1
                     )
                     metrics.values["sweep_native_standalone_load_total_ms"] = (
-                        float(metrics.values.get(
-                            "sweep_native_standalone_load_total_ms", 0.0
-                        )) + duration_ms
+                        float(
+                            metrics.values.get(
+                                "sweep_native_standalone_load_total_ms", 0.0
+                            )
+                        )
+                        + duration_ms
                     )
                     metrics.values["sweep_native_standalone_load_max_ms"] = max(
-                        float(metrics.values.get(
-                            "sweep_native_standalone_load_max_ms", 0.0
-                        )),
+                        float(
+                            metrics.values.get(
+                                "sweep_native_standalone_load_max_ms", 0.0
+                            )
+                        ),
                         duration_ms,
                     )
-        metrics.values["sweep_native_transition_count"] = (
-            int(metrics.values.get("sweep_native_transition_count", 0))
-            + int(profile.get("transition_count", 0) or 0)
-        )
-        metrics.values["sweep_native_output_bytes"] = (
-            int(metrics.values.get("sweep_native_output_bytes", 0))
-            + int(profile.get("output_bytes", 0) or 0)
-        )
+        metrics.values["sweep_native_transition_count"] = int(
+            metrics.values.get("sweep_native_transition_count", 0)
+        ) + int(profile.get("transition_count", 0) or 0)
+        metrics.values["sweep_native_output_bytes"] = int(
+            metrics.values.get("sweep_native_output_bytes", 0)
+        ) + int(profile.get("output_bytes", 0) or 0)
         if int(profile.get("truncated", 0) or 0):
             metrics.values["sweep_native_truncated_calls"] = (
                 int(metrics.values.get("sweep_native_truncated_calls", 0)) + 1
@@ -376,9 +413,7 @@ def _add_native_duration_locked(
     return duration_ms
 
 
-def record_sweep_native_group_fallback(
-    reason: str, *, signal_count: int = 0
-) -> None:
+def record_sweep_native_group_fallback(reason: str, *, signal_count: int = 0) -> None:
     """Count a fixed fallback reason; arbitrary labels are rejected."""
     reason_field = {
         "unsupported": "sweep_native_group_unsupported_count",
@@ -397,10 +432,9 @@ def record_sweep_native_group_fallback(
             int(metrics.values.get("sweep_native_group_fallback_count", 0)) + 1
         )
         metrics.values[reason_field] = int(metrics.values.get(reason_field, 0)) + 1
-        metrics.values["sweep_native_fallback_signal_total"] = (
-            int(metrics.values.get("sweep_native_fallback_signal_total", 0))
-            + max(0, int(signal_count))
-        )
+        metrics.values["sweep_native_fallback_signal_total"] = int(
+            metrics.values.get("sweep_native_fallback_signal_total", 0)
+        ) + max(0, int(signal_count))
 
 
 def record_sweep_group_pack(*, clock_count: int, chunked: bool = False) -> None:
@@ -414,10 +448,9 @@ def record_sweep_group_pack(*, clock_count: int, chunked: bool = False) -> None:
         metrics.values["sweep_group_pack_count"] = (
             int(metrics.values.get("sweep_group_pack_count", 0)) + 1
         )
-        metrics.values["sweep_group_pack_clock_total"] = (
-            int(metrics.values.get("sweep_group_pack_clock_total", 0))
-            + max(0, int(clock_count))
-        )
+        metrics.values["sweep_group_pack_clock_total"] = int(
+            metrics.values.get("sweep_group_pack_clock_total", 0)
+        ) + max(0, int(clock_count))
         if chunked:
             metrics.values["sweep_group_chunk_count"] = (
                 int(metrics.values.get("sweep_group_chunk_count", 0)) + 1
@@ -537,13 +570,13 @@ def snapshot(metrics: OperationMetrics | None) -> dict[str, object]:
         return {}
     with metrics.lock:
         values = {
-            key: value
-            for key, value in metrics.values.items()
-            if key in _PUBLIC_FIELDS
+            key: value for key, value in metrics.values.items() if key in _PUBLIC_FIELDS
         }
     public: dict[str, object] = {}
     for key, value in values.items():
         if key == "sweep_phase" and value not in _PUBLIC_PHASES:
+            continue
+        if key == "source_graph_phase" and value not in _SOURCE_GRAPH_PHASES:
             continue
         if key in _PUBLIC_NUMERIC_FIELDS and (
             isinstance(value, bool) or not isinstance(value, (int, float))

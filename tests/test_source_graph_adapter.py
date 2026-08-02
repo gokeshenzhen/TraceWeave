@@ -161,6 +161,10 @@ def test_unclassified_option_forbids_cross_request_exact_reuse(tmp_path):
         "unclassified_compile_option"
         in plan.request.scope.coverage_boundary.objective_exclusions
     )
+    assert (
+        "compile_manifest_incomplete"
+        in plan.request.scope.coverage_boundary.objective_exclusions
+    )
 
 
 def test_unprovable_hierarchy_scope_is_a_structured_blocker(tmp_path):

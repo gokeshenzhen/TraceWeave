@@ -35,17 +35,22 @@ from config import (
     AUTO_DOWNGRADE_THRESHOLD,
     CLOCK_DETECT_SAMPLE_PS,
     DEFAULT_DETAIL_LEVEL,
-    DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
+    DEFAULT_EXTRA_TRANSITIONS,
+    DEFAULT_LOG_CONTEXT_AFTER,
+    DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_EVENTS_PER_GROUP,
-    FIRST_GROUP_CONTEXT_AFTER, FIRST_GROUP_CONTEXT_BEFORE,
+    FIRST_GROUP_CONTEXT_AFTER,
+    FIRST_GROUP_CONTEXT_BEFORE,
     FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
     SIGNAL_SEARCH_MAX_KEYWORDS,
     TRANSITIONS_MAX_RETURNED,
-    DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_MAX_GROUPS,
+    DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
+    get_source_graph_execution_config,
 )
 import src.cancellation as cancellation
 import src.operation_metrics as operation_metrics
@@ -59,10 +64,24 @@ from src.compile_log_parser import parse_compile_log
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import HandleStore, compute_handle
+from src.source_graph_adapter import AdapterStatus, build_source_graph_plan
+from src.source_graph_backend import (
+    SourceGraphConnectivityBackend,
+    SourceGraphQueryBlocked,
+)
+from src.source_graph_contract import QueryOperation, compute_source_graph_build_key
+from src.source_graph_production import get_source_graph_runtime
+from src.source_graph_runtime import PrepareStatus
 from src.timespec import resolve_timespec
+
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool until the workflow earns that extra surface area.
-from src.verify_condition import diff_first_divergence, period, inspect_handshake, _resolve_signal_path
+from src.verify_condition import (
+    diff_first_divergence,
+    period,
+    inspect_handshake,
+    _resolve_signal_path,
+)
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.handshake_sweep import sweep_handshake_anomalies
 from src.window_verify import verify_window
@@ -125,7 +144,12 @@ _handle_store = HandleStore()
 _cursor_store = CursorStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
-    "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "sweep_handshakes", "recommend_failure_debug_next_steps"],
+    "get_sim_paths": [
+        "build_tb_hierarchy",
+        "parse_sim_log",
+        "sweep_handshakes",
+        "recommend_failure_debug_next_steps",
+    ],
     "build_tb_hierarchy": ["recommend_failure_debug_next_steps"],
     "parse_sim_log": ["recommend_failure_debug_next_steps"],
     "scan_structural_risks": ["recommend_failure_debug_next_steps"],
@@ -234,12 +258,16 @@ def _restore_build_tb_hierarchy_state_from_cache(tool_name: str, args: dict) -> 
 
     _session_state["build_tb_hierarchy"] = {
         "compile_log": provenance.get("compile_log"),
-        "simulator": provenance_simulator or hierarchy_result.project.get("simulator") or "auto",
+        "simulator": provenance_simulator
+        or hierarchy_result.project.get("simulator")
+        or "auto",
     }
     return True
 
 
-def _restore_prerequisite_state_from_cache(step: str, tool_name: str, args: dict) -> bool:
+def _restore_prerequisite_state_from_cache(
+    step: str, tool_name: str, args: dict
+) -> bool:
     if step == "get_sim_paths":
         return _restore_get_sim_paths_state_from_cache()
     if step == "build_tb_hierarchy":
@@ -359,7 +387,9 @@ def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple
         compile_sig = None
     else:
         compile_sig = (
-            os.path.realpath(compile_log.get("path", "")) if compile_log.get("path") else None,
+            os.path.realpath(compile_log.get("path", ""))
+            if compile_log.get("path")
+            else None,
             compile_log.get("size"),
             compile_log.get("mtime"),
         )
@@ -400,7 +430,9 @@ def _resolve_session_simulator(args: dict) -> str:
     if (
         hierarchy_provenance
         and hierarchy_provenance.get("simulator")
-        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+        and _same_realpath(
+            hierarchy_provenance.get("compile_log"), requested_compile_log
+        )
     ):
         return hierarchy_provenance["simulator"]
     hierarchy_result = _result_cache.get("build_tb_hierarchy")
@@ -408,7 +440,9 @@ def _resolve_session_simulator(args: dict) -> str:
         hierarchy_result is not None
         and hierarchy_result.project.get("simulator")
         and hierarchy_provenance is not None
-        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+        and _same_realpath(
+            hierarchy_provenance.get("compile_log"), requested_compile_log
+        )
     ):
         return hierarchy_result.project["simulator"]
     return "auto"
@@ -505,7 +539,9 @@ def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict
     }
 
 
-def _parse_log_events_for_diff(log_path: str, simulator: str) -> tuple[list[dict], dict]:
+def _parse_log_events_for_diff(
+    log_path: str, simulator: str
+) -> tuple[list[dict], dict]:
     stat_info = _log_stat_info(log_path)
     events = SimLogParser(log_path, simulator).parse_failure_events()
     snapshot_id = _capture_log_snapshot(log_path, simulator, events, stat_info)
@@ -516,13 +552,19 @@ def _parse_log_events_for_diff(log_path: str, simulator: str) -> tuple[list[dict
     }
 
 
-def _resolve_base_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
+def _resolve_base_events_for_diff(
+    args: dict, simulator: str
+) -> tuple[list[dict], dict]:
     if args.get("base_snapshot_id"):
         return _snapshot_events(args["base_snapshot_id"], simulator)
 
     base_log_path = args.get("base_log_path")
     new_log_path = args.get("new_log_path")
-    if base_log_path and new_log_path and os.path.realpath(base_log_path) == os.path.realpath(new_log_path):
+    if (
+        base_log_path
+        and new_log_path
+        and os.path.realpath(base_log_path) == os.path.realpath(new_log_path)
+    ):
         previous = _find_previous_log_snapshot(new_log_path, simulator)
         if previous is not None:
             return list(previous["all_failure_events"]), {
@@ -548,7 +590,9 @@ def _resolve_base_events_for_diff(args: dict, simulator: str) -> tuple[list[dict
             "TraceWeave can preserve the baseline even if the simulator overwrites the log."
         )
 
-    raise ValueError("diff_sim_failure_results requires base_snapshot_id or base_log_path, or a new_log_path with a previous parsed snapshot.")
+    raise ValueError(
+        "diff_sim_failure_results requires base_snapshot_id or base_log_path, or a new_log_path with a previous parsed snapshot."
+    )
 
 
 def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
@@ -560,7 +604,9 @@ def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict]
         parse_cache = _result_provenance.get("parse_sim_log")
         if parse_cache and parse_cache.get("log_snapshot_id"):
             return _snapshot_events(parse_cache["log_snapshot_id"], simulator)
-    raise ValueError("diff_sim_failure_results requires new_snapshot_id or new_log_path.")
+    raise ValueError(
+        "diff_sim_failure_results requires new_snapshot_id or new_log_path."
+    )
 
 
 def _diff_source(base_meta: dict, new_meta: dict) -> str:
@@ -605,7 +651,8 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
         _invalidate_downstream(tool_name)
         _session_state["build_tb_hierarchy"] = {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator") or result.get("project", {}).get("simulator", "auto"),
+            "simulator": args.get("simulator")
+            or result.get("project", {}).get("simulator", "auto"),
         }
 
 
@@ -731,7 +778,9 @@ app = Server("traceweave", instructions=SERVER_INSTRUCTIONS)
 
 # Global parser cache.
 _fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
-_parser_cache: dict[str, tuple[tuple[int, int], object]] = {}          # wave_path → ((mtime_ns, size), parser)
+_parser_cache: dict[
+    str, tuple[tuple[int, int], object]
+] = {}  # wave_path → ((mtime_ns, size), parser)
 
 
 def _get_wave_signature(wave_path: str) -> tuple[int, int]:
@@ -832,9 +881,9 @@ def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
 
 _FSDB_WAVE_LOCK = threading.Lock()
 _FSDB_ACTIVE_GUARD = threading.Lock()
-_FSDB_ACTIVE: tuple[
-    threading.Event, int, operation_metrics.OperationMetrics | None
-] | None = None
+_FSDB_ACTIVE: (
+    tuple[threading.Event, int, operation_metrics.OperationMetrics | None] | None
+) = None
 _vcd_wave_locks: dict[str, threading.Lock] = {}
 _vcd_wave_locks_guard = threading.Lock()
 _WAVE_LOCK_POLL_S = 0.2
@@ -987,9 +1036,10 @@ async def _run_in_cancellable_thread(fn: Callable):
     """Run non-wave blocking work without starving the MCP event loop.
 
     This is the lock-free counterpart to ``_run_in_wave_thread``. It is used
-    by opt-in LSF connectivity calls: cancellation arms the same cooperative
-    event consumed by ``src.npi_lsf`` while no waveform parser lock is taken.
-    Local NPI behavior remains synchronous and unchanged.
+    by opt-in LSF connectivity calls, Source Graph adapter/query work, and
+    Legacy Static scans: cancellation arms the same cooperative event while no
+    waveform parser lock is taken. Local NPI behavior remains synchronous and
+    unchanged.
     """
 
     cancel_event = threading.Event()
@@ -1013,6 +1063,743 @@ async def _call_connectivity_backend(backend, fn: Callable):
     if getattr(backend, "uses_external_worker", False):
         return await _run_in_cancellable_thread(fn)
     return fn()
+
+
+_NPI_FALLBACK_REASONS = {
+    "kdb_or_top_missing",
+    "npi_load_failed",
+    "npi_lsf_npi_unavailable",
+    "npi_lsf_timeout",
+    "npi_lsf_worker_failed",
+}
+_SOURCE_GRAPH_PREPARE_REASONS = {
+    PrepareStatus.DEPENDENCY_BLOCKED: "source_graph_dependency_blocked",
+    PrepareStatus.BUILD_FAILED: "source_graph_build_failed",
+    PrepareStatus.WORKER_CRASH: "source_graph_worker_crash",
+    PrepareStatus.TIMED_OUT: "source_graph_timed_out",
+    PrepareStatus.INVALID_RESPONSE: "source_graph_invalid_response",
+}
+
+
+def _sanitize_npi_fallback_reason(value: object) -> str:
+    reason = str(value or "")
+    if reason in _NPI_FALLBACK_REASONS:
+        return reason
+    if reason.startswith("exception:"):
+        return "npi_query_failed"
+    return "npi_result_not_usable"
+
+
+def _strip_connectivity_internal_receipts(result: dict) -> dict:
+    clean = dict(result)
+    for key in (
+        "_connectivity_fallback_deferred",
+        "_npi_call_error",
+        "_npi_execution_status",
+        "_npi_fallback_reason",
+        "_source_graph_query_receipt",
+    ):
+        clean.pop(key, None)
+    return clean
+
+
+def _single_backend_provenance(
+    result: dict,
+    *,
+    operation: str,
+    expected: str,
+) -> bool:
+    explicit: list[object] = []
+    if operation == "driver":
+        if result.get("backend") is not None:
+            explicit.append(result.get("backend"))
+        chain = result.get("driver_chain")
+        if isinstance(chain, list):
+            explicit.extend(
+                hop.get("backend")
+                for hop in chain
+                if isinstance(hop, dict) and hop.get("backend") is not None
+            )
+    else:
+        if result.get("backend") is not None:
+            explicit.append(result.get("backend"))
+        loads = result.get("loads")
+        if isinstance(loads, list):
+            explicit.extend(
+                hop.get("backend")
+                for hop in loads
+                if isinstance(hop, dict) and hop.get("backend") is not None
+            )
+    return all(item == expected for item in explicit)
+
+
+def _npi_result_usable(result: dict, operation: str) -> bool:
+    if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
+        return False
+    if not _single_backend_provenance(
+        result,
+        operation=operation,
+        expected="verdi_npi",
+    ):
+        return False
+    if operation == "driver":
+        return result.get("driver_status") in {"resolved", "testbench_driven"}
+    return result.get("completeness") == "exact" and result.get("stopped_at") in {
+        None,
+        "no_npi_loads",
+    }
+
+
+def _backend_attempt(
+    backend: str,
+    status: str,
+    *,
+    reason: str | None = None,
+    coverage_status: str | None = None,
+) -> dict:
+    result = {"backend": backend, "status": status}
+    if reason is not None:
+        result["reason"] = reason
+    if coverage_status is not None:
+        result["coverage_status"] = coverage_status
+    return result
+
+
+def _source_graph_metrics_dict(
+    *,
+    adapter_wall_ms: float | None = None,
+    prepare_metrics=None,
+    query_wall_ms: float | None = None,
+) -> dict:
+    result: dict[str, int | float] = {}
+    if adapter_wall_ms is not None:
+        result["adapter_wall_ms"] = max(adapter_wall_ms, 0.0)
+    if prepare_metrics is not None:
+        result.update(
+            {
+                "prepare_total_wall_ms": prepare_metrics.total_wall_ms,
+                "admission_wait_ms": prepare_metrics.admission_wait_ms,
+                "build_wall_ms": prepare_metrics.build_wall_ms,
+                "load_wall_ms": prepare_metrics.load_wall_ms,
+                "actual_build_count": prepare_metrics.actual_build_count,
+                "coalesced_waiter_count": prepare_metrics.coalesced_waiter_count,
+                "ir_bytes": prepare_metrics.ir_bytes,
+                "cache_bytes": prepare_metrics.cache_bytes,
+            }
+        )
+        for source_name, public_name in (
+            ("cancel_to_exit_ms", "cancel_to_exit_ms"),
+            ("worker_cpu_ms", "worker_cpu_ms"),
+            ("rss_start_kib", "rss_start_kib"),
+            ("rss_peak_kib", "rss_peak_kib"),
+            ("rss_end_kib", "rss_end_kib"),
+        ):
+            value = getattr(prepare_metrics, source_name)
+            if value is not None:
+                result[public_name] = value
+    if query_wall_ms is not None:
+        result["query_wall_ms"] = max(query_wall_ms, 0.0)
+    return result
+
+
+def _record_source_graph_prepare_metrics(outcome) -> None:
+    metrics = outcome.metrics
+    for field, value in (
+        ("source_graph_prepare_total_ms", metrics.total_wall_ms),
+        ("source_graph_admission_wait_ms", metrics.admission_wait_ms),
+        ("source_graph_build_ms", metrics.build_wall_ms),
+        ("source_graph_load_ms", metrics.load_wall_ms),
+        ("source_graph_actual_build_count", metrics.actual_build_count),
+        (
+            "source_graph_coalesced_waiter_count",
+            metrics.coalesced_waiter_count,
+        ),
+        ("source_graph_ir_bytes", metrics.ir_bytes),
+        ("source_graph_cache_bytes", metrics.cache_bytes),
+        ("source_graph_cancel_to_exit_ms", metrics.cancel_to_exit_ms),
+        ("source_graph_worker_cpu_ms", metrics.worker_cpu_ms),
+        ("source_graph_rss_start_kib", metrics.rss_start_kib),
+        ("source_graph_rss_peak_kib", metrics.rss_peak_kib),
+        ("source_graph_rss_end_kib", metrics.rss_end_kib),
+    ):
+        if value is not None:
+            operation_metrics.set_value(field, value)
+
+
+def _blocked_source_graph_receipt(
+    adapter_status: str,
+    *,
+    code: str,
+    stage: str,
+    adapter: dict | None = None,
+    adapter_wall_ms: float | None = None,
+) -> dict:
+    return {
+        "adapter_status": adapter_status,
+        "adapter": adapter,
+        "blocker": {"code": code, "stage": stage},
+        "metrics": _source_graph_metrics_dict(adapter_wall_ms=adapter_wall_ms),
+        "fallback_used": False,
+    }
+
+
+def _source_graph_receipt_from_prepare(
+    plan,
+    outcome,
+    *,
+    adapter_wall_ms: float,
+) -> dict:
+    entry = outcome.entry
+    receipt = {
+        "adapter_status": "ready",
+        "adapter": plan.receipt.to_dict(),
+        "prepare_status": outcome.status.value,
+        "cache_disposition": outcome.metrics.cache_disposition.value,
+        "flight_disposition": outcome.metrics.flight_disposition.value,
+        "coverage_status": (entry.coverage_status.value if entry is not None else None),
+        "coverage_gap_codes": (
+            list(entry.scope_receipt.gap_codes) if entry is not None else []
+        ),
+        "objective_exclusions": list(
+            plan.request.scope.coverage_boundary.objective_exclusions
+        ),
+        "ir_fingerprint_sha256": (
+            entry.ir_fingerprint_sha256 if entry is not None else None
+        ),
+        "build_key_sha256": outcome.build_key.digest,
+        "compile_fingerprint_sha256": (
+            plan.request.identity.compile_inputs.fingerprint
+        ),
+        "metrics": _source_graph_metrics_dict(
+            adapter_wall_ms=adapter_wall_ms,
+            prepare_metrics=outcome.metrics,
+        ),
+        "fallback_used": False,
+    }
+    if outcome.blocker is not None:
+        receipt["blocker"] = outcome.blocker.to_dict(include_message=False)
+    return receipt
+
+
+def _merge_source_graph_query_receipt(
+    receipt: dict,
+    query: dict,
+    *,
+    query_wall_ms: float,
+) -> None:
+    receipt["query_status"] = query.get("status")
+    receipt["query_confidence"] = query.get("confidence")
+    receipt["query_match_count"] = int(query.get("match_count", 0))
+    receipt["traversed_binding_edges"] = int(query.get("traversed_binding_edges", 0))
+    receipt["max_depth"] = query.get("max_depth")
+    receipt["coverage_status"] = query.get("coverage_status")
+    receipt["coverage_gap_codes"] = sorted(
+        {
+            *receipt.get("coverage_gap_codes", []),
+            *query.get("unresolved_boundary_codes", []),
+        }
+    )
+    receipt["metrics"]["query_wall_ms"] = max(query_wall_ms, 0.0)
+
+
+def _finalize_public_connectivity_status(
+    *,
+    backend_status: dict,
+    selected_backend: str,
+    actual_backend: str,
+    attempts: list[dict],
+    fallback_reason: str | None,
+    npi_backend,
+    npi_execution: dict | None,
+    source_graph_receipt: dict | None,
+) -> dict:
+    status = dict(backend_status)
+    status["backend"] = selected_backend
+    status["selected_backend"] = selected_backend
+    # The singular field names the preferred backend whose failure/blocker
+    # caused a final Static fallback.  ``attempted_backends`` retains the full
+    # ordered chain, including the final Static recomputation.
+    attempted_backend = actual_backend
+    if actual_backend == "static":
+        attempted_backend = next(
+            (
+                attempt["backend"]
+                for attempt in reversed(attempts)
+                if attempt["backend"] != "static"
+            ),
+            actual_backend,
+        )
+    status["attempted_backend"] = attempted_backend
+    status["attempted_backends"] = attempts
+    status["actual_backend"] = actual_backend
+    if fallback_reason:
+        status["fallback_reason"] = fallback_reason
+    else:
+        status.pop("fallback_reason", None)
+    if source_graph_receipt is not None:
+        status["source_graph"] = source_graph_receipt
+    if isinstance(npi_execution, dict):
+        for key in ("execution_mode", "scheduler_status", "worker_status"):
+            if key in npi_execution:
+                status[key] = npi_execution[key]
+    elif (
+        npi_backend is not None
+        and getattr(npi_backend, "execution_mode", None) == "local"
+    ):
+        status["execution_mode"] = "local"
+    if actual_backend == "verdi_npi":
+        status["parser_match"] = "exact"
+    return status
+
+
+async def _call_public_connectivity_operation(
+    backend,
+    *,
+    operation: str,
+    args: dict,
+    simulator: str,
+) -> dict:
+    if operation == "driver":
+
+        def query():
+            return backend.find_driver(
+                signal_path=args["signal_path"],
+                wave_path=args["wave_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                recursive=args.get("recursive", False),
+                max_depth=args.get("max_depth", 10),
+                simulator=simulator,
+            )
+    else:
+
+        def query():
+            return backend.find_loads(
+                signal_path=args["signal_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                max_depth=args.get("max_depth", 1),
+                include_expr=args.get("include_expr", True),
+                kind_filter=args.get("kind_filter"),
+                simulator=simulator,
+            )
+
+    if backend.name in {"static", "source_graph"}:
+        raw = await _run_in_cancellable_thread(query)
+    else:
+        raw = await _call_connectivity_backend(backend, query)
+    if not isinstance(raw, dict):
+        raise TypeError("connectivity backend result must be a mapping")
+    return raw
+
+
+async def _route_public_connectivity(
+    *,
+    operation: str,
+    args: dict,
+    simulator: str,
+) -> tuple[dict, dict]:
+    """Route one public driver/load request without mixed provenance."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        DeferredConnectivityFallbackBackend,
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    backend_status = _safe_probe_backend(args["compile_log"], simulator)
+    deferred = DeferredConnectivityFallbackBackend()
+    npi_selection_reason: str | None = None
+    try:
+        npi_backend = select_backend(backend_status, fallback=deferred)
+    except Exception:  # noqa: BLE001
+        # Backend construction must not deny Source Graph its fallback slot.
+        # Keep exception text out of both public receipts and metrics.
+        npi_backend = deferred
+        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    selected_backend = "verdi_npi" if npi_selected else "source_graph"
+    attempts: list[dict] = []
+    npi_execution: dict | None = None
+    fallback_reason: str | None = None
+
+    if npi_selected:
+        try:
+            npi_result = await _call_public_connectivity_operation(
+                npi_backend,
+                operation=operation,
+                args=args,
+                simulator=simulator,
+            )
+        except OperationCancelled as exc:
+            raise asyncio.CancelledError from exc
+        except Exception:  # noqa: BLE001
+            npi_result = None
+            fallback_reason = "npi_query_failed"
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed",
+                    reason=fallback_reason,
+                )
+            )
+        if npi_result is not None:
+            execution = npi_result.get("_npi_execution_status")
+            if isinstance(execution, dict):
+                npi_execution = dict(execution)
+            if _npi_result_usable(npi_result, operation):
+                attempts.append(_backend_attempt("verdi_npi", "success"))
+                clean = _strip_connectivity_internal_receipts(npi_result)
+                clean["backend"] = "verdi_npi"
+                status = _finalize_public_connectivity_status(
+                    backend_status=backend_status,
+                    selected_backend=selected_backend,
+                    actual_backend="verdi_npi",
+                    attempts=attempts,
+                    fallback_reason=None,
+                    npi_backend=npi_backend,
+                    npi_execution=npi_execution,
+                    source_graph_receipt=None,
+                )
+                return clean, status
+            raw_reason = npi_result.get("_npi_fallback_reason")
+            fallback_reason = _sanitize_npi_fallback_reason(raw_reason)
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed" if raw_reason else "inconclusive",
+                    reason=fallback_reason,
+                )
+            )
+    else:
+        fallback_reason = npi_selection_reason or "npi_kdb_unavailable"
+        attempts.append(
+            _backend_attempt(
+                "verdi_npi",
+                "failed" if npi_selection_reason else "unavailable",
+                reason=fallback_reason,
+            )
+        )
+
+    config = get_source_graph_execution_config()
+    source_graph_receipt: dict
+    source_graph_reason: str
+    if not config.enabled:
+        source_graph_reason = "source_graph_disabled"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "disabled",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    elif not config.valid:
+        source_graph_reason = config.error_code or "source_graph_config_invalid"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "invalid",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    else:
+        operation_metrics.set_value("source_graph_phase", "adapter")
+        adapter_started = time.perf_counter()
+        handle = compute_handle(args["compile_log"], simulator)
+        hierarchy_result = _handle_store.resolve(handle)
+        if hierarchy_result is None:
+            adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+            operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+            source_graph_reason = "source_graph_hierarchy_context_unavailable"
+            source_graph_receipt = _blocked_source_graph_receipt(
+                "blocked",
+                code=source_graph_reason,
+                stage="target_scope",
+                adapter_wall_ms=adapter_wall_ms,
+            )
+            attempts.append(
+                _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+            )
+        else:
+            compile_result = hierarchy_result.get("compile_result")
+            if not isinstance(compile_result, dict):
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                source_graph_reason = "source_graph_compile_context_unavailable"
+                source_graph_receipt = _blocked_source_graph_receipt(
+                    "blocked",
+                    code=source_graph_reason,
+                    stage="compile_manifest",
+                    adapter_wall_ms=adapter_wall_ms,
+                )
+                attempts.append(
+                    _backend_attempt(
+                        "source_graph", "blocked", reason=source_graph_reason
+                    )
+                )
+            else:
+                plan = await _run_in_cancellable_thread(
+                    lambda: build_source_graph_plan(
+                        compile_log=args["compile_log"],
+                        compile_result=compile_result,
+                        hierarchy_result=hierarchy_result,
+                        operation=(
+                            QueryOperation.DRIVER
+                            if operation == "driver"
+                            else QueryOperation.LOADS
+                        ),
+                        signal_path=args["signal_path"],
+                        top_hint=args.get("top_hint"),
+                        max_hops=args.get(
+                            "max_depth", 10 if operation == "driver" else 1
+                        ),
+                        frontend_version=config.frontend_version,
+                    )
+                )
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                if plan.status is AdapterStatus.BLOCKED:
+                    assert plan.receipt.blocker is not None
+                    source_graph_reason = f"source_graph_{plan.receipt.blocker.code}"
+                    source_graph_receipt = _blocked_source_graph_receipt(
+                        "blocked",
+                        code=plan.receipt.blocker.code,
+                        stage=plan.receipt.blocker.stage,
+                        adapter=plan.receipt.to_dict(),
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    attempts.append(
+                        _backend_attempt(
+                            "source_graph",
+                            "blocked",
+                            reason=source_graph_reason,
+                        )
+                    )
+                else:
+                    assert plan.request is not None
+                    operation_metrics.set_value("source_graph_phase", "prepare")
+                    try:
+                        runtime = get_source_graph_runtime(config)
+                        outcome = await runtime.prepare(
+                            plan.request,
+                            timeout_seconds=config.timeout_sec,
+                        )
+                    except RuntimeError:
+                        outcome = None
+                        source_graph_reason = "source_graph_runtime_config_changed"
+                    except Exception:  # noqa: BLE001
+                        outcome = None
+                        source_graph_reason = "source_graph_prepare_failed"
+                    if outcome is None:
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "ready",
+                            code=source_graph_reason,
+                            stage="runtime_prepare",
+                            adapter=plan.receipt.to_dict(),
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["build_key_sha256"] = (
+                            compute_source_graph_build_key(plan.request).digest
+                        )
+                        source_graph_receipt["compile_fingerprint_sha256"] = (
+                            plan.request.identity.compile_inputs.fingerprint
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                    else:
+                        _record_source_graph_prepare_metrics(outcome)
+                        source_graph_receipt = _source_graph_receipt_from_prepare(
+                            plan,
+                            outcome,
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        if outcome.status is PrepareStatus.CANCELLED:
+                            operation_metrics.set_value(
+                                "source_graph_phase", "cancelled"
+                            )
+                            raise asyncio.CancelledError
+                        if outcome.status is not PrepareStatus.READY:
+                            source_graph_reason = _SOURCE_GRAPH_PREPARE_REASONS.get(
+                                outcome.status,
+                                "source_graph_prepare_failed",
+                            )
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    (
+                                        "timed_out"
+                                        if outcome.status is PrepareStatus.TIMED_OUT
+                                        else "failed"
+                                    ),
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        outcome.coverage_status.value
+                                        if outcome.coverage_status is not None
+                                        else None
+                                    ),
+                                )
+                            )
+                        else:
+                            assert outcome.entry is not None
+                            operation_metrics.set_value("source_graph_phase", "query")
+                            query_started = time.perf_counter()
+                            source_backend = SourceGraphConnectivityBackend(
+                                outcome.entry
+                            )
+                            try:
+                                source_result = (
+                                    await _call_public_connectivity_operation(
+                                        source_backend,
+                                        operation=operation,
+                                        args=args,
+                                        simulator=simulator,
+                                    )
+                                )
+                                query_receipt = source_result.pop(
+                                    "_source_graph_query_receipt"
+                                )
+                                source_graph_reason = (
+                                    "source_graph_coverage_inconclusive"
+                                )
+                            except SourceGraphQueryBlocked as exc:
+                                source_result = None
+                                query_receipt = None
+                                source_graph_reason = f"source_graph_{exc.code}"
+                            except (KeyError, ValueError):
+                                source_result = None
+                                query_receipt = None
+                                source_graph_reason = (
+                                    "source_graph_query_target_unresolved"
+                                )
+                            except Exception:  # noqa: BLE001
+                                source_result = None
+                                query_receipt = None
+                                source_graph_reason = "source_graph_query_failed"
+                            query_wall_ms = (
+                                time.perf_counter() - query_started
+                            ) * 1000.0
+                            operation_metrics.set_value(
+                                "source_graph_query_ms", query_wall_ms
+                            )
+                            if query_receipt is not None:
+                                _merge_source_graph_query_receipt(
+                                    source_graph_receipt,
+                                    query_receipt,
+                                    query_wall_ms=query_wall_ms,
+                                )
+                            else:
+                                source_graph_receipt["blocker"] = {
+                                    "code": source_graph_reason.removeprefix(
+                                        "source_graph_"
+                                    ),
+                                    "stage": "query",
+                                }
+                                source_graph_receipt["metrics"]["query_wall_ms"] = (
+                                    query_wall_ms
+                                )
+                            source_provenance_ok = (
+                                source_result is not None
+                                and _single_backend_provenance(
+                                    source_result,
+                                    operation=operation,
+                                    expected="source_graph",
+                                )
+                            )
+                            if source_result is not None and not source_provenance_ok:
+                                source_graph_reason = (
+                                    "source_graph_mixed_provenance_rejected"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "mixed_provenance_rejected",
+                                    "stage": "query",
+                                }
+                            if (
+                                source_result is not None
+                                and query_receipt is not None
+                                and source_provenance_ok
+                                and query_receipt.get("status")
+                                in {"found", "not_connected"}
+                            ):
+                                coverage_status = query_receipt.get("coverage_status")
+                                attempts.append(
+                                    _backend_attempt(
+                                        "source_graph",
+                                        "success",
+                                        coverage_status=coverage_status,
+                                    )
+                                )
+                                clean = _strip_connectivity_internal_receipts(
+                                    source_result
+                                )
+                                clean["backend"] = "source_graph"
+                                operation_metrics.set_value(
+                                    "source_graph_phase", "complete"
+                                )
+                                status = _finalize_public_connectivity_status(
+                                    backend_status=backend_status,
+                                    selected_backend=selected_backend,
+                                    actual_backend="source_graph",
+                                    attempts=attempts,
+                                    fallback_reason=fallback_reason,
+                                    npi_backend=(npi_backend if npi_selected else None),
+                                    npi_execution=npi_execution,
+                                    source_graph_receipt=source_graph_receipt,
+                                )
+                                return clean, status
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "inconclusive",
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        query_receipt.get("coverage_status")
+                                        if query_receipt is not None
+                                        else outcome.coverage_status.value
+                                    ),
+                                )
+                            )
+
+    # Legacy Static is always a whole-result recomputation.  No NPI or Source
+    # Graph facts survive into the payload; their attempt receipts remain only
+    # on the envelope.
+    operation_metrics.set_value("source_graph_phase", "fallback")
+    source_graph_receipt["fallback_used"] = True
+    final_reason = source_graph_reason
+    static_backend = StaticConnectivityBackend()
+    static_result = await _call_public_connectivity_operation(
+        static_backend,
+        operation=operation,
+        args=args,
+        simulator=simulator,
+    )
+    if not _single_backend_provenance(
+        static_result,
+        operation=operation,
+        expected="static",
+    ):
+        raise RuntimeError("Legacy Static result contains mixed provenance")
+    attempts.append(_backend_attempt("static", "success"))
+    clean = _strip_connectivity_internal_receipts(static_result)
+    clean["backend"] = "static"
+    status = _finalize_public_connectivity_status(
+        backend_status=backend_status,
+        selected_backend=selected_backend,
+        actual_backend="static",
+        attempts=attempts,
+        fallback_reason=final_reason,
+        npi_backend=npi_backend if npi_selected else None,
+        npi_execution=npi_execution,
+        source_graph_receipt=source_graph_receipt,
+    )
+    return clean, status
 
 
 class _TraceBackendFallback(RuntimeError):
@@ -1201,10 +1988,11 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         backend,
     )
     configured_mode = getattr(backend, "execution_mode", None)
-    if (
-        finalized_status.get("execution_mode") is None
-        and configured_mode in {"local", "lsf", "invalid"}
-    ):
+    if finalized_status.get("execution_mode") is None and configured_mode in {
+        "local",
+        "lsf",
+        "invalid",
+    }:
         # A clean/missing waveform signal may require no driver query, hence
         # no per-call LSF receipt. Still report the selected execution policy.
         finalized_status["execution_mode"] = configured_mode
@@ -1318,7 +2106,9 @@ def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
                     candidate_paths.add(item["path"])
 
         scored: list[tuple[str, int, int]] = []
-        for candidate in sorted(candidate_paths, key=lambda path: (path.count("."), len(path))):
+        for candidate in sorted(
+            candidate_paths, key=lambda path: (path.count("."), len(path))
+        ):
             try:
                 transitions = parser.get_transitions(
                     candidate, 0, CLOCK_DETECT_SAMPLE_PS
@@ -1369,7 +2159,7 @@ def _validate_signals_around_time_args(
         requested_cycles = window_ps // clock_period_ps
         if requested_cycles > MAX_WAVE_WINDOW_CYCLES:
             raise ValueError(
-                f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) "
+                f"window_ps={window_ps} (±{window_ps / 1000:.0f} ns) "
                 f"= {requested_cycles} clock cycles, exceeds the per-call cap "
                 f"MAX_WAVE_WINDOW_CYCLES={MAX_WAVE_WINDOW_CYCLES} "
                 f"(clock_period_ps={clock_period_ps}, detected from {clock_path}). "
@@ -1381,11 +2171,9 @@ def _validate_signals_around_time_args(
             )
     elif window_ps > FALLBACK_WAVE_WINDOW_PS:
         detect_reason = getattr(parser, "_cached_clock_detect_reason", None)
-        reason_suffix = (
-            f" (detection error: {detect_reason})" if detect_reason else ""
-        )
+        reason_suffix = f" (detection error: {detect_reason})" if detect_reason else ""
         raise ValueError(
-            f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) exceeds the "
+            f"window_ps={window_ps} (±{window_ps / 1000:.0f} ns) exceeds the "
             f"fallback cap FALLBACK_WAVE_WINDOW_PS={FALLBACK_WAVE_WINDOW_PS} ps "
             f"(auto-detect found no 1-bit clock signal matching 'clk'/'clock' "
             f"in this waveform{reason_suffix}). For multi-cycle sampling use "
@@ -1400,10 +2188,10 @@ def _validate_signals_around_time_args(
 
     if sim_end_ps > 0 and center_ps > sim_end_ps:
         raise ValueError(
-            f"center_time_ps={center_ps} ({center_ps/1000:.0f} ns, "
-            f"{center_ps/1_000_000_000:.3f} ms) is past the recorded waveform end "
+            f"center_time_ps={center_ps} ({center_ps / 1000:.0f} ns, "
+            f"{center_ps / 1_000_000_000:.3f} ms) is past the recorded waveform end "
             f"(simulation_duration_ps={sim_end_ps}, "
-            f"{sim_end_ps/1_000_000_000:.3f} ms). "
+            f"{sim_end_ps / 1_000_000_000:.3f} ms). "
             f"Common pitfall: ns->ps conversion - if the sim log shows `Time: X ns`, "
             f"set center_time_ps = X*1000. Call get_waveform_summary to confirm "
             f"the recorded duration."
@@ -1431,6 +2219,7 @@ def _strip_signals_to_values_only(result: dict) -> None:
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
 
+
 # Vertex function declarations use an OpenAPI subset whose ``type`` field is a
 # single enum value, so JSON-Schema-style type arrays are rejected.  Express
 # integer-or-string inputs through the supported ``anyOf`` keyword instead.
@@ -1446,7 +2235,6 @@ _TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c',
 @app.list_tools()
 async def list_tools():
     _tools = [
-
         Tool(
             name="get_sim_paths",
             description=(
@@ -1459,23 +2247,32 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "verif_root": {"type": "string",
-                                   "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif"},
-                    "case_name":  {"type": "string",
-                                   "description": "Optional case name, for example case0 (matching make SV_CASE=case0)"},
-                    "sim_log": {"type": "string",
-                                "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
-                                               "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case."},
-                    "wave_file": {"type": "string",
-                                  "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered."},
-                    "compile_log": {"type": "string",
-                                    "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
-                                                   "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir."},
+                    "verif_root": {
+                        "type": "string",
+                        "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif",
+                    },
+                    "case_name": {
+                        "type": "string",
+                        "description": "Optional case name, for example case0 (matching make SV_CASE=case0)",
+                    },
+                    "sim_log": {
+                        "type": "string",
+                        "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
+                        "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case.",
+                    },
+                    "wave_file": {
+                        "type": "string",
+                        "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered.",
+                    },
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
+                        "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir.",
+                    },
                 },
                 "required": ["verif_root"],
             },
         ),
-
         Tool(
             name="parse_sim_log",
             description=(
@@ -1488,7 +2285,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":  {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Absolute path to the simulation log, for example irun.log",
+                    },
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
                     "max_groups": {
                         "type": "integer",
@@ -1510,7 +2310,6 @@ async def list_tools():
                 "required": ["log_path", "simulator"],
             },
         ),
-
         Tool(
             name="diff_sim_failure_results",
             description=(
@@ -1524,16 +2323,30 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "base_log_path": {"type": "string", "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot."},
-                    "new_log_path": {"type": "string", "description": "New simulation log. For same-path reruns, this may be the overwritten log path."},
-                    "base_snapshot_id": {"type": "string", "description": "Baseline log snapshot ID returned by parse_sim_log."},
-                    "new_snapshot_id": {"type": "string", "description": "New log snapshot ID returned by parse_sim_log."},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted."},
+                    "base_log_path": {
+                        "type": "string",
+                        "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot.",
+                    },
+                    "new_log_path": {
+                        "type": "string",
+                        "description": "New simulation log. For same-path reruns, this may be the overwritten log path.",
+                    },
+                    "base_snapshot_id": {
+                        "type": "string",
+                        "description": "Baseline log snapshot ID returned by parse_sim_log.",
+                    },
+                    "new_snapshot_id": {
+                        "type": "string",
+                        "description": "New log snapshot ID returned by parse_sim_log.",
+                    },
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted.",
+                    },
                 },
                 "required": [],
             },
         ),
-
         Tool(
             name="get_error_context",
             description=(
@@ -1543,8 +2356,14 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path": {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
-                    "line": {"type": "integer", "description": "Center error line number"},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Absolute path to the simulation log, for example irun.log",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Center error line number",
+                    },
                     "before": {
                         "type": "integer",
                         "description": f"Number of lines before the target line. Default: {DEFAULT_LOG_CONTEXT_BEFORE}",
@@ -1559,7 +2378,6 @@ async def list_tools():
                 "required": ["log_path", "line"],
             },
         ),
-
         Tool(
             name="search_signals",
             description=(
@@ -1580,7 +2398,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Absolute path to the waveform file",
+                    },
                     "keyword": {
                         "anyOf": [
                             {"type": "string"},
@@ -1592,32 +2413,38 @@ async def list_tools():
                             },
                         ],
                         "description": "Signal keyword (for example s_bits, clk, or data), or a list of "
-                                       f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
-                                       "lookups in one call — prefer the list form over consecutive "
-                                       "single-keyword calls",
+                        f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
+                        "lookups in one call — prefer the list form over consecutive "
+                        "single-keyword calls",
                     },
-                    "max_results": {"type": "integer", "description": "Maximum number of matches to return. Default: 50",
-                                    "default": 50},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of matches to return. Default: 50",
+                        "default": 50,
+                    },
                 },
                 "required": ["wave_path", "keyword"],
             },
         ),
-
         Tool(
             name="get_signal_at_time",
             description="Query a signal value in a waveform file at a specific time in ps. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":   {"type": "string"},
-                    "signal_path": {"type": "string",
-                                    "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list."},
-                    "time_ps":     {**_integer_or_string_schema(), "description": "Query time." + _TIMESPEC_HINT},
+                    "wave_path": {"type": "string"},
+                    "signal_path": {
+                        "type": "string",
+                        "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list.",
+                    },
+                    "time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Query time." + _TIMESPEC_HINT,
+                    },
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
             },
         ),
-
         Tool(
             name="get_signal_transitions",
             description=(
@@ -1631,20 +2458,30 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":     {"type": "string"},
-                    "signal_path":   {"type": "string"},
-                    "start_time_ps": {**_integer_or_string_schema(), "default": 0, "description": "Window start." + _TIMESPEC_HINT},
-                    "end_time_ps":   {**_integer_or_string_schema(), "default": -1,
-                                      "description": "-1 means through the end of simulation." + _TIMESPEC_HINT},
-                    "max_transitions": {"type": "integer", "default": TRANSITIONS_MAX_RETURNED,
-                                        "description": "Cap on returned transitions (earliest in range kept). "
-                                                       "Raise explicitly only for deliberate bulk extraction; "
-                                                       "prefer narrowing the time range."},
+                    "wave_path": {"type": "string"},
+                    "signal_path": {"type": "string"},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "default": 0,
+                        "description": "Window start." + _TIMESPEC_HINT,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "default": -1,
+                        "description": "-1 means through the end of simulation."
+                        + _TIMESPEC_HINT,
+                    },
+                    "max_transitions": {
+                        "type": "integer",
+                        "default": TRANSITIONS_MAX_RETURNED,
+                        "description": "Cap on returned transitions (earliest in range kept). "
+                        "Raise explicitly only for deliberate bulk extraction; "
+                        "prefer narrowing the time range.",
+                    },
                 },
                 "required": ["wave_path", "signal_path"],
             },
         ),
-
         Tool(
             name="get_signals_around_time",
             description=(
@@ -1682,7 +2519,7 @@ async def list_tools():
                 "SETTLED value as the protocol value; do not attribute a root cause to "
                 "an edge-sampled value that is flagged transient.\n"
                 "\n"
-                "return_mode=\"values_only\" keeps the atomic multi-signal sample but "
+                'return_mode="values_only" keeps the atomic multi-signal sample but '
                 "strips the transition lists from every signal: each entry carries "
                 "value_at_center + window_transition_count (+ any transient "
                 "annotation, computed before stripping). Use it when you only need "
@@ -1693,9 +2530,12 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":     {"type": "string"},
-                    "signal_paths":  {"type": "array", "items": {"type": "string"},
-                                      "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions."},
+                    "wave_path": {"type": "string"},
+                    "signal_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions.",
+                    },
                     "center_time_ps": {
                         **_integer_or_string_schema(),
                         "description": (
@@ -1734,7 +2574,6 @@ async def list_tools():
                 "required": ["wave_path", "signal_paths", "center_time_ps"],
             },
         ),
-
         Tool(
             name="get_signals_by_cycle",
             description=(
@@ -1744,7 +2583,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Absolute path to the waveform file",
+                    },
                     "clock_path": {
                         "type": "string",
                         "description": "Full hierarchical clock path, for example top_tb.des_clk",
@@ -1774,11 +2616,13 @@ async def list_tools():
                     },
                     "start_time_ps": {
                         **_integer_or_string_schema(),
-                        "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle." + _TIMESPEC_HINT,
+                        "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle."
+                        + _TIMESPEC_HINT,
                     },
                     "end_time_ps": {
                         **_integer_or_string_schema(),
-                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles." + _TIMESPEC_HINT,
+                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles."
+                        + _TIMESPEC_HINT,
                     },
                     "sample_offset_ps": {
                         "type": "integer",
@@ -1791,7 +2635,6 @@ async def list_tools():
                 "additionalProperties": False,
             },
         ),
-
         Tool(
             name="get_waveform_summary",
             description="Return basic waveform metadata such as format, duration, and top modules. FSDB support depends on fsdb_runtime.enabled.",
@@ -1803,7 +2646,6 @@ async def list_tools():
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="build_tb_hierarchy",
             description=(
@@ -1815,14 +2657,19 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto (default: auto)",
-                                  "default": "auto"},
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Absolute path to a compile or elaborate log",
+                    },
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto (default: auto)",
+                        "default": "auto",
+                    },
                 },
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="scan_structural_risks",
             description=(
@@ -1834,7 +2681,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Absolute path to a compile or elaborate log",
+                    },
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto (default: auto)",
@@ -1854,7 +2704,6 @@ async def list_tools():
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="analyze_failures",
             description=(
@@ -1864,15 +2713,30 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":     {"type": "string", "description": "Simulation log path, for example irun.log"},
-                    "wave_path":    {"type": "string", "description": "Waveform file path, for example top_tb.fsdb"},
-                    "signal_paths": {"type": "array", "items": {"type": "string"},
-                                     "description": "Signal paths to inspect. Clients should confirm full paths with search_signals after inferring candidates from RTL or log output."},
-                    "window_ps":    {"type": "integer",
-                                     "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
-                                     "default": DEFAULT_WAVE_WINDOW_PS},
-                    "simulator":    {"type": "string", "description": "vcs / xcelium"},
-                    "group_index":  {"type": "integer", "description": "Failure group index to analyze. Default: 0", "default": 0},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Simulation log path, for example irun.log",
+                    },
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform file path, for example top_tb.fsdb",
+                    },
+                    "signal_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Signal paths to inspect. Clients should confirm full paths with search_signals after inferring candidates from RTL or log output.",
+                    },
+                    "window_ps": {
+                        "type": "integer",
+                        "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
+                        "default": DEFAULT_WAVE_WINDOW_PS,
+                    },
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "group_index": {
+                        "type": "integer",
+                        "description": "Failure group index to analyze. Default: 0",
+                        "default": 0,
+                    },
                     "extra_transitions": {
                         "type": "integer",
                         "description": f"Extra transitions to include before the window for each signal. Default: {DEFAULT_EXTRA_TRANSITIONS}",
@@ -1882,7 +2746,6 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "signal_paths", "simulator"],
             },
         ),
-
         Tool(
             name="analyze_failure_event",
             description=(
@@ -1895,14 +2758,16 @@ async def list_tools():
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
-                    "failure_event": {"type": "object", "description": "Normalized failure_event from parse_sim_log for the same log"},
+                    "failure_event": {
+                        "type": "object",
+                        "description": "Normalized failure_event from parse_sim_log for the same log",
+                    },
                     "compile_log": {"type": "string"},
                     "top_hint": {"type": "string"},
                 },
                 "required": ["log_path", "wave_path", "simulator", "failure_event"],
             },
         ),
-
         Tool(
             name="recommend_failure_debug_next_steps",
             description=(
@@ -1922,7 +2787,6 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "simulator"],
             },
         ),
-
         Tool(
             name="get_diagnostic_snapshot",
             description=(
@@ -1959,7 +2823,6 @@ async def list_tools():
                 "required": [],
             },
         ),
-
         Tool(
             name="explain_signal_driver",
             description=(
@@ -1968,8 +2831,14 @@ async def list_tools():
                 "Set recursive=true to walk multiple hops upstream across instance boundaries. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and walks "
                 "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
-                "the static source-regex backend cannot reach; otherwise the static backend "
-                "runs. Each driver_chain hop carries source_info_origin ('compile_log' or 'npi') "
+                "the static source-regex backend cannot reach. If NPI is unavailable or "
+                "cannot return a trustworthy result, TraceWeave next attempts a bounded, "
+                "on-demand Source Graph projection; Legacy Static remains the final fallback. "
+                "backend_status records the selected/attempted/actual backends, fixed fallback "
+                "reason, Source Graph coverage and cache/build receipt. A Source Graph positive "
+                "under partial/inconclusive coverage remains partial; only complete coverage can "
+                "establish not_connected. Each driver_chain hop carries source_info_origin "
+                "('compile_log', 'npi', or 'source_graph') "
                 "so consumers can tell which provenance produced its file:line. "
                 "driver_status='testbench_driven' (with cross_check.conflict=true) means NPI "
                 "found NO RTL driver: the only 'driver' it reported is also a LOAD of the same "
@@ -2004,7 +2873,6 @@ async def list_tools():
                 "required": ["signal_path", "wave_path", "compile_log"],
             },
         ),
-
         Tool(
             name="find_signal_loads",
             description=(
@@ -2012,9 +2880,13 @@ async def list_tools():
                 "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and "
                 "resolves the cross-hierarchy / interface-positional / generate-block cases "
-                "that the static source-regex backend cannot reach; otherwise the static "
-                "backend runs (shallow_only) and surfaces gaps in stopped_at. Each load "
-                "carries source_info_origin ('compile_log' or 'npi') so consumers can tell "
+                "that the static source-regex backend cannot reach. If NPI is unavailable or "
+                "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
+                "on-demand Source Graph; Legacy Static remains the final fallback "
+                "(shallow_only). backend_status preserves the complete attempt chain and Source "
+                "Graph coverage/build receipt. A complete Source Graph not_connected is distinct "
+                "from an inconclusive no-match, which falls through to Static. Each load "
+                "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
                 "which provenance produced its file:line."
             ),
             inputSchema={
@@ -2053,7 +2925,6 @@ async def list_tools():
                 "required": ["signal_path", "compile_log"],
             },
         ),
-
         Tool(
             name="trace_signal_path",
             description=(
@@ -2091,7 +2962,6 @@ async def list_tools():
                 "required": ["from_signal", "to_signal", "compile_log"],
             },
         ),
-
         Tool(
             name="build_kdb",
             description=(
@@ -2126,7 +2996,6 @@ async def list_tools():
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="trace_x_source",
             description=(
@@ -2146,7 +3015,10 @@ async def list_tools():
                 "properties": {
                     "wave_path": {"type": "string"},
                     "signal_path": {"type": "string"},
-                    "time_ps": {**_integer_or_string_schema(), "description": "Trace start time." + _TIMESPEC_HINT},
+                    "time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Trace start time." + _TIMESPEC_HINT,
+                    },
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
@@ -2162,12 +3034,10 @@ async def list_tools():
                 "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
             },
         ),
-
         # ── Hierarchy handle tools (phase 4) ────────────────────────────
         # All six share the same access pattern: resolve `handle` via the
         # in-process HandleStore (registered by build_tb_hierarchy), then
         # return a typed slice or a HandleErrorResult.
-
         Tool(
             name="get_tb_subtree",
             description=(
@@ -2178,18 +3048,29 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "handle": {"type": "string", "description": "hierarchy_handle from build_tb_hierarchy"},
-                    "root": {"type": "string", "default": "",
-                              "description": "dotted instance path (e.g. 'top.u_cpu'); empty = top module"},
-                    "depth": {"type": "integer", "default": 1,
-                              "description": "-1 = unbounded; otherwise number of levels to include"},
-                    "max_nodes": {"type": "integer", "default": 500,
-                                  "description": "hard cap on emitted nodes"},
+                    "handle": {
+                        "type": "string",
+                        "description": "hierarchy_handle from build_tb_hierarchy",
+                    },
+                    "root": {
+                        "type": "string",
+                        "default": "",
+                        "description": "dotted instance path (e.g. 'top.u_cpu'); empty = top module",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "-1 = unbounded; otherwise number of levels to include",
+                    },
+                    "max_nodes": {
+                        "type": "integer",
+                        "default": 500,
+                        "description": "hard cap on emitted nodes",
+                    },
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="lookup_tb_files",
             description=(
@@ -2201,20 +3082,29 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
-                    "basename": {"type": "string", "description": "exact basename match"},
+                    "basename": {
+                        "type": "string",
+                        "description": "exact basename match",
+                    },
                     "name_contains": {"type": "string"},
                     "path_contains": {"type": "string"},
-                    "has_module": {"type": "string", "description": "file defines this module"},
-                    "contains_uvm": {"type": "boolean",
-                                      "description": "scan saw `import uvm_pkg::` or `extends uvm_*`"},
-                    "file_type": {"type": "string",
-                                  "description": "module | interface | package | class | program (from SV scan)"},
+                    "has_module": {
+                        "type": "string",
+                        "description": "file defines this module",
+                    },
+                    "contains_uvm": {
+                        "type": "boolean",
+                        "description": "scan saw `import uvm_pkg::` or `extends uvm_*`",
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "module | interface | package | class | program (from SV scan)",
+                    },
                     "limit": {"type": "integer", "default": 50},
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="find_tb_instance",
             description=(
@@ -2225,14 +3115,19 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
-                    "path": {"type": "string", "description": "exact dotted instance path"},
-                    "module": {"type": "string", "description": "module name; returns all instances"},
+                    "path": {
+                        "type": "string",
+                        "description": "exact dotted instance path",
+                    },
+                    "module": {
+                        "type": "string",
+                        "description": "module name; returns all instances",
+                    },
                     "limit": {"type": "integer", "default": 100},
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="get_tb_file_detail",
             description=(
@@ -2248,7 +3143,6 @@ async def list_tools():
                 "required": ["handle", "path"],
             },
         ),
-
         Tool(
             name="get_tb_class_hierarchy",
             description=(
@@ -2265,7 +3159,6 @@ async def list_tools():
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="dump_tb_section",
             description=(
@@ -2279,16 +3172,19 @@ async def list_tools():
                     "section": {
                         "type": "string",
                         "enum": [
-                            "compile_result", "include_tree", "filelist_tree",
-                            "interfaces", "files_full",
-                            "component_tree_full", "class_hierarchy_full",
+                            "compile_result",
+                            "include_tree",
+                            "filelist_tree",
+                            "interfaces",
+                            "files_full",
+                            "component_tree_full",
+                            "class_hierarchy_full",
                         ],
                     },
                 },
                 "required": ["handle", "section"],
             },
         ),
-
         Tool(
             name="cursor_set",
             description=(
@@ -2301,19 +3197,23 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Cursor name."},
-                    "time_ps": {"type": "integer", "description": "Anchor time in ps. Must be >= 0."},
-                    "note": {"type": "string", "description": "Optional human-readable note."},
+                    "time_ps": {
+                        "type": "integer",
+                        "description": "Anchor time in ps. Must be >= 0.",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional human-readable note.",
+                    },
                 },
                 "required": ["name", "time_ps"],
             },
         ),
-
         Tool(
             name="cursor_list",
             description="List all cursors registered in the current session, ordered by time.",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
-
         Tool(
             name="cursor_delete",
             description="Delete a named cursor. Returns whether the cursor existed.",
@@ -2325,7 +3225,6 @@ async def list_tools():
                 "required": ["name"],
             },
         ),
-
         Tool(
             name="diff_first_divergence",
             description=(
@@ -2338,19 +3237,46 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path_a": {"type": "string", "description": "First waveform (FSDB or VCD)."},
-                    "signal_a": {"type": "string", "description": "Full hierarchical signal path in wave_path_a."},
-                    "wave_path_b": {"type": "string", "description": "Second waveform. May equal wave_path_a for within-run diff."},
-                    "signal_b": {"type": "string", "description": "Full hierarchical signal path in wave_path_b."},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Start of comparison window. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "End of comparison window. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "wave_path_a": {
+                        "type": "string",
+                        "description": "First waveform (FSDB or VCD).",
+                    },
+                    "signal_a": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path in wave_path_a.",
+                    },
+                    "wave_path_b": {
+                        "type": "string",
+                        "description": "Second waveform. May equal wave_path_a for within-run diff.",
+                    },
+                    "signal_b": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path in wave_path_b.",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Start of comparison window. Default 0."
+                        + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "End of comparison window. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path_a", "signal_a", "wave_path_b", "signal_b"],
             },
         ),
-
         Tool(
             name="period",
             description=(
@@ -2365,28 +3291,48 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "signal": {"type": "string", "description": "Full hierarchical signal path."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "signal": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path.",
+                    },
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge", "any"],
                         "description": "Edge to count. 'any' for multi-bit/strobe signals. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start. Default 0." + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
                     "tolerance_frac": {
                         "type": "number",
                         "description": "Fraction of the period a beat may deviate before counting as an off-beat. Default 0.05 (5%).",
                         "default": 0.05,
                     },
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the first off-beat. Defaults to beat_<sha8>."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name for the first off-beat. Defaults to beat_<sha8>.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "signal"],
             },
         ),
-
         Tool(
             name="suggest_handshakes",
             description=(
@@ -2402,14 +3348,23 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
-                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut').",
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "description": "Max bundles to return. Default 8.",
+                        "default": 8,
+                    },
                 },
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="suggest_protocol_bundles",
             description=(
@@ -2430,15 +3385,28 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "protocol": {"type": "string", "enum": ["ahb", "apb"], "description": "Protocol bundle family to discover."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
-                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "protocol": {
+                        "type": "string",
+                        "enum": ["ahb", "apb"],
+                        "description": "Protocol bundle family to discover.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut').",
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "description": "Max bundles to return. Default 8.",
+                        "default": 8,
+                    },
                 },
                 "required": ["wave_path", "protocol"],
             },
         ),
-
         Tool(
             name="sweep_handshakes",
             description=(
@@ -2463,18 +3431,44 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut'). If the scope contains no discovered interfaces the result reports coverage_status=zero_coverage; retry unscoped or with a parent/interface scope."},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.", "default": -1},
-                    "max_wait_cycles": {"type": "integer", "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.", "default": 16},
-                    "max_interfaces": {"type": "integer", "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.", "default": 64},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut'). If the scope contains no discovered interfaces the result reports coverage_status=zero_coverage; retry unscoped or with a parent/interface scope.",
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.",
+                        "default": -1,
+                    },
+                    "max_wait_cycles": {
+                        "type": "integer",
+                        "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.",
+                        "default": 16,
+                    },
+                    "max_interfaces": {
+                        "type": "integer",
+                        "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.",
+                        "default": 64,
+                    },
                 },
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="verify_window",
             description=(
@@ -2500,9 +3494,25 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "mode": {"type": "string", "enum": ["always", "never", "eventually", "implication", "sequence"], "description": "Temporal template to evaluate."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "1-bit clock signal full path.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "always",
+                            "never",
+                            "eventually",
+                            "implication",
+                            "sequence",
+                        ],
+                        "description": "Temporal template to evaluate.",
+                    },
                     "predicate": {
                         "type": "array",
                         "description": "always/never/eventually: list of {signal, op, value} terms, AND-combined.",
@@ -2510,38 +3520,104 @@ async def list_tools():
                             "type": "object",
                             "properties": {
                                 "signal": {"type": "string"},
-                                "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known"]},
-                                "value": {**_integer_or_string_schema(), "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known."},
+                                "op": {
+                                    "type": "string",
+                                    "enum": [
+                                        "eq",
+                                        "ne",
+                                        "gt",
+                                        "ge",
+                                        "lt",
+                                        "le",
+                                        "is_x",
+                                        "is_known",
+                                    ],
+                                },
+                                "value": {
+                                    **_integer_or_string_schema(),
+                                    "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known.",
+                                },
                             },
                             "required": ["signal", "op"],
                         },
                     },
-                    "antecedent": {"type": "array", "description": "implication only: the A predicate (list of terms).", "items": {"type": "object"}},
-                    "consequent": {"type": "array", "description": "implication only: the B predicate that must follow A.", "items": {"type": "object"}},
+                    "antecedent": {
+                        "type": "array",
+                        "description": "implication only: the A predicate (list of terms).",
+                        "items": {"type": "object"},
+                    },
+                    "consequent": {
+                        "type": "array",
+                        "description": "implication only: the B predicate that must follow A.",
+                        "items": {"type": "object"},
+                    },
                     "delta": {
                         "type": "object",
                         "description": "sequence only: check the per-accepted-beat increment of one signal. predicate is the accepted-beat gate (e.g. hready==1 && htrans active). E.g. AHB byte INCR: {signal:'top.haddr', value:1}. For WRAP bursts pass modulo = burst region bytes (size*len) so the wrap-around beat is accepted via (cur-prev) mod modulo. Pass restart_when (a predicate, e.g. htrans==NONSEQ) to re-seed at each new burst so burst boundaries are not flagged.",
                         "properties": {
-                            "signal": {"type": "string", "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr)."},
-                            "value": {**_integer_or_string_schema(), "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'."},
-                            "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le"], "description": "How the actual increment is compared to value. Default eq."},
-                            "modulo": {**_integer_or_string_schema(), "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR."},
-                            "restart_when": {"type": "array", "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.", "items": {"type": "object"}},
+                            "signal": {
+                                "type": "string",
+                                "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr).",
+                            },
+                            "value": {
+                                **_integer_or_string_schema(),
+                                "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'.",
+                            },
+                            "op": {
+                                "type": "string",
+                                "enum": ["eq", "ne", "gt", "ge", "lt", "le"],
+                                "description": "How the actual increment is compared to value. Default eq.",
+                            },
+                            "modulo": {
+                                **_integer_or_string_schema(),
+                                "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR.",
+                            },
+                            "restart_when": {
+                                "type": "array",
+                                "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.",
+                                "items": {"type": "object"},
+                            },
                         },
                         "required": ["signal", "value"],
                     },
-                    "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.", "default": 1},
-                    "overlap": {"type": "boolean", "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.", "default": True},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the witness/counterexample."},
-                    "cursor_note": {"type": "string", "description": "Optional note for the registered cursor."},
+                    "within_cycles": {
+                        "type": "integer",
+                        "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.",
+                        "default": 1,
+                    },
+                    "overlap": {
+                        "type": "boolean",
+                        "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.",
+                        "default": True,
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace.",
+                        "default": -1,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name for the witness/counterexample.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note for the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "clock", "mode"],
             },
         ),
-
         Tool(
             name="reconstruct_transactions",
             description=(
@@ -2563,38 +3639,136 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "Shared 1-bit clock full path (e.g. AXI aclk)."},
-                    "req_valid": {"type": "string", "description": "Request channel valid (e.g. arvalid/awvalid)."},
-                    "req_ready": {"type": "string", "description": "Request channel ready (e.g. arready/awready)."},
-                    "req_id": {"type": "string", "description": "Request id bus (e.g. arid/awid). Optional: omit both req_id and cmp_id for an unindexed in-order stream (AXI-Lite, APB) — txns pair in FIFO order and report id=null."},
-                    "req_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional request payload signals to capture per txn (e.g. araddr, arlen, arsize, arburst)."},
-                    "req_len": {"type": "string", "description": "Optional AxLEN bus (arlen/awlen). Each txn's observed beat_count is compared to req_len+1; a mismatch (early/late LAST, dropped/extra beat) is a real burst-length violation, surfaced per-txn (beat_count vs expected_beats) and as beat_count_mismatch_count. x/z len → no check."},
-                    "cmp_valid": {"type": "string", "description": "Completion channel valid (e.g. rvalid/bvalid)."},
-                    "cmp_ready": {"type": "string", "description": "Completion channel ready (e.g. rready/bready)."},
-                    "cmp_id": {"type": "string", "description": "Completion id bus (e.g. rid/bid). Optional; see req_id (omit both for in-order FIFO pairing)."},
-                    "cmp_last": {"type": "string", "description": "Optional last-beat signal (e.g. rlast). With it, a multi-beat burst completes one txn on last; without it every completion beat is a txn (e.g. AXI B channel)."},
-                    "cmp_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional completion payload signals to capture per txn (e.g. rresp, bresp)."},
-                    "data_valid": {"type": "string", "description": "AXI WRITE only: W-channel valid (wvalid). The W channel carries no id; beats attach in order to the oldest data-incomplete request. Needs data_ready too."},
-                    "data_ready": {"type": "string", "description": "AXI WRITE only: W-channel ready (wready)."},
-                    "data_last": {"type": "string", "description": "AXI WRITE only: W-channel last (wlast); marks the end of a write burst's data."},
-                    "data_fields": {"type": "array", "items": {"type": "string"}, "description": "AXI WRITE only: W-channel payload to capture per beat (e.g. wdata, wstrb)."},
-                    "reset": {"type": "string", "description": "Optional reset signal; while asserted, in-flight transactions are cleared so a txn straddling reset is not reported as a phantom hang."},
-                    "reset_active_low": {"type": "boolean", "description": "reset is active-low (rst_n). Default true.", "default": True},
-                    "capture_beats": {"type": "boolean", "description": "Include per-beat data (data_beats[]) on each txn. Default false (only beat_count). Enable for data-integrity debugging; can be large.", "default": False},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
-                    "active_high": {"type": "boolean", "description": "valid/ready/last polarity. Default true.", "default": True},
-                    "timeout_cycles": {"type": "integer", "description": "Optional: count completed txns with latency above this many cycles (slow_count fact)."},
-                    "max_transactions": {"type": "integer", "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.", "default": 256},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name."},
-                    "cursor_note": {"type": "string", "description": "Optional cursor note."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "Shared 1-bit clock full path (e.g. AXI aclk).",
+                    },
+                    "req_valid": {
+                        "type": "string",
+                        "description": "Request channel valid (e.g. arvalid/awvalid).",
+                    },
+                    "req_ready": {
+                        "type": "string",
+                        "description": "Request channel ready (e.g. arready/awready).",
+                    },
+                    "req_id": {
+                        "type": "string",
+                        "description": "Request id bus (e.g. arid/awid). Optional: omit both req_id and cmp_id for an unindexed in-order stream (AXI-Lite, APB) — txns pair in FIFO order and report id=null.",
+                    },
+                    "req_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional request payload signals to capture per txn (e.g. araddr, arlen, arsize, arburst).",
+                    },
+                    "req_len": {
+                        "type": "string",
+                        "description": "Optional AxLEN bus (arlen/awlen). Each txn's observed beat_count is compared to req_len+1; a mismatch (early/late LAST, dropped/extra beat) is a real burst-length violation, surfaced per-txn (beat_count vs expected_beats) and as beat_count_mismatch_count. x/z len → no check.",
+                    },
+                    "cmp_valid": {
+                        "type": "string",
+                        "description": "Completion channel valid (e.g. rvalid/bvalid).",
+                    },
+                    "cmp_ready": {
+                        "type": "string",
+                        "description": "Completion channel ready (e.g. rready/bready).",
+                    },
+                    "cmp_id": {
+                        "type": "string",
+                        "description": "Completion id bus (e.g. rid/bid). Optional; see req_id (omit both for in-order FIFO pairing).",
+                    },
+                    "cmp_last": {
+                        "type": "string",
+                        "description": "Optional last-beat signal (e.g. rlast). With it, a multi-beat burst completes one txn on last; without it every completion beat is a txn (e.g. AXI B channel).",
+                    },
+                    "cmp_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional completion payload signals to capture per txn (e.g. rresp, bresp).",
+                    },
+                    "data_valid": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel valid (wvalid). The W channel carries no id; beats attach in order to the oldest data-incomplete request. Needs data_ready too.",
+                    },
+                    "data_ready": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel ready (wready).",
+                    },
+                    "data_last": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel last (wlast); marks the end of a write burst's data.",
+                    },
+                    "data_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "AXI WRITE only: W-channel payload to capture per beat (e.g. wdata, wstrb).",
+                    },
+                    "reset": {
+                        "type": "string",
+                        "description": "Optional reset signal; while asserted, in-flight transactions are cleared so a txn straddling reset is not reported as a phantom hang.",
+                    },
+                    "reset_active_low": {
+                        "type": "boolean",
+                        "description": "reset is active-low (rst_n). Default true.",
+                        "default": True,
+                    },
+                    "capture_beats": {
+                        "type": "boolean",
+                        "description": "Include per-beat data (data_beats[]) on each txn. Default false (only beat_count). Enable for data-integrity debugging; can be large.",
+                        "default": False,
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace.",
+                        "default": -1,
+                    },
+                    "active_high": {
+                        "type": "boolean",
+                        "description": "valid/ready/last polarity. Default true.",
+                        "default": True,
+                    },
+                    "timeout_cycles": {
+                        "type": "integer",
+                        "description": "Optional: count completed txns with latency above this many cycles (slow_count fact).",
+                    },
+                    "max_transactions": {
+                        "type": "integer",
+                        "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.",
+                        "default": 256,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional cursor note.",
+                    },
                 },
-                "required": ["wave_path", "clock", "req_valid", "req_ready", "cmp_valid", "cmp_ready"],
+                "required": [
+                    "wave_path",
+                    "clock",
+                    "req_valid",
+                    "req_ready",
+                    "cmp_valid",
+                    "cmp_ready",
+                ],
             },
         ),
-
         Tool(
             name="inspect_handshake",
             description=(
@@ -2632,32 +3806,62 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "valid": {"type": "string", "description": "Initiator valid/request signal (1-bit). Provide this OR valid_htrans."},
-                    "valid_htrans": {"type": "string", "description": "AHB only: path to the htrans signal. A derived valid is computed from it (AHB has no literal valid). Provide this OR valid, not both."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "1-bit clock signal full path.",
+                    },
+                    "valid": {
+                        "type": "string",
+                        "description": "Initiator valid/request signal (1-bit). Provide this OR valid_htrans.",
+                    },
+                    "valid_htrans": {
+                        "type": "string",
+                        "description": "AHB only: path to the htrans signal. A derived valid is computed from it (AHB has no literal valid). Provide this OR valid, not both.",
+                    },
                     "htrans_rule": {
                         "type": "string",
                         "enum": ["active", "non_idle"],
                         "description": "How valid_htrans derives valid. 'active' (default) = NONSEQ/SEQ (htrans[1]==1); 'non_idle' = htrans != IDLE (counts BUSY too).",
                         "default": "active",
                     },
-                    "ready": {"type": "string", "description": "Receiver ready/grant signal (1-bit). For AHB, hready."},
+                    "ready": {
+                        "type": "string",
+                        "description": "Receiver ready/grant signal (1-bit). For AHB, hready.",
+                    },
                     "payload": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation. For AHB do NOT include hwdata here — pass it as write_data (it is a data-phase signal, a different window).",
                     },
-                    "hwrite": {"type": "string", "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check."},
-                    "write_data": {"type": "string", "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold. Pass it ONLY for the producer (initiator/master) interface: on a responder/slave interface HWDATA is an interconnect-mux output that glitches at the clock edge and would false-positive."},
+                    "hwrite": {
+                        "type": "string",
+                        "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check.",
+                    },
+                    "write_data": {
+                        "type": "string",
+                        "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold. Pass it ONLY for the producer (initiator/master) interface: on a responder/slave interface HWDATA is an interconnect-mux output that glitches at the clock edge and would false-positive.",
+                    },
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge"],
                         "description": "Clock edge to sample on. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start. Default 0." + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
                     "max_wait_cycles": {
                         "type": "integer",
                         "description": "A stall longer than this many cycles becomes a long_stall finding. Default 16.",
@@ -2678,13 +3882,18 @@ async def list_tools():
                         "description": "valid/ready are active-high. Set false for active-low handshakes. Default true.",
                         "default": True,
                     },
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. Defaults to hs_<sha8>."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name. Defaults to hs_<sha8>.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "clock", "ready"],
             },
         ),
-
         # NOTE: diff_value_distribution is intentionally NOT registered as an
         # MCP tool. Internal pilots showed no clear benefit over baseline on the
         # common "scoreboard data-mismatch + readable RTL" flow, so it is kept
@@ -2700,8 +3909,15 @@ async def list_tools():
     # /tmp/tw_ab_hide_handshake (touch it + reconnect for Arm A, rm it +
     # reconnect for Arm B). Used only for the handshake blind A/B pilots; off by
     # default for normal operation.
-    if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists("/tmp/tw_ab_hide_handshake"):
-        hidden = {"inspect_handshake", "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes"}
+    if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists(
+        "/tmp/tw_ab_hide_handshake"
+    ):
+        hidden = {
+            "inspect_handshake",
+            "suggest_handshakes",
+            "suggest_protocol_bundles",
+            "sweep_handshakes",
+        }
         return [t for t in _tools if t.name not in hidden]
     return _tools
 
@@ -2709,6 +3925,7 @@ async def list_tools():
 # ═══════════════════════════════════════════════════════════════════
 # Tool dispatch
 # ═══════════════════════════════════════════════════════════════════
+
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
@@ -2728,10 +3945,10 @@ async def call_tool(name: str, arguments: dict):
                 "sweep_result_serialize_ms",
                 (time.perf_counter() - serialize_started) * 1000.0,
             )
-            operation_metrics.set_value(
-                "sweep_result_bytes", len(text.encode("utf-8"))
-            )
-        ok = not isinstance(result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult))
+            operation_metrics.set_value("sweep_result_bytes", len(text.encode("utf-8")))
+        ok = not isinstance(
+            result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
+        )
         blocked = isinstance(result, schemas.PrerequisiteBlockResult)
         if isinstance(result, schemas.PrerequisiteBlockResult):
             error_code = result.error_code
@@ -2791,7 +4008,9 @@ async def _dispatch(name: str, args: dict):
         _update_session_state(name, args, result)
         validated = schemas.SimPathsResult.model_validate(result)
         _result_cache["get_sim_paths"] = validated
-        _result_provenance["get_sim_paths"] = _build_result_provenance(name, args, validated)
+        _result_provenance["get_sim_paths"] = _build_result_provenance(
+            name, args, validated
+        )
         return validated
 
     elif name == "parse_sim_log":
@@ -2802,13 +4021,15 @@ async def _dispatch(name: str, args: dict):
         base_events, base_meta = _resolve_base_events_for_diff(args, simulator)
         new_events, new_meta = _resolve_new_events_for_diff(args, simulator)
         result = diff_failure_events(base_events, new_events)
-        result.update({
-            "base_log_file": base_meta.get("log_file"),
-            "new_log_file": new_meta.get("log_file"),
-            "base_snapshot_id": base_meta.get("snapshot_id"),
-            "new_snapshot_id": new_meta.get("snapshot_id"),
-            "diff_source": _diff_source(base_meta, new_meta),
-        })
+        result.update(
+            {
+                "base_log_file": base_meta.get("log_file"),
+                "new_log_file": new_meta.get("log_file"),
+                "base_snapshot_id": base_meta.get("snapshot_id"),
+                "new_snapshot_id": new_meta.get("snapshot_id"),
+                "diff_source": _diff_source(base_meta, new_meta),
+            }
+        )
         return schemas.DiffResult.model_validate(result)
 
     elif name == "get_error_context":
@@ -2821,9 +4042,9 @@ async def _dispatch(name: str, args: dict):
         return schemas.ErrorContextResult.model_validate(result)
 
     elif name == "search_signals":
-        wave_path  = args["wave_path"]
-        keyword    = args["keyword"]
-        max_r      = args.get("max_results", 50)
+        wave_path = args["wave_path"]
+        keyword = args["keyword"]
+        max_r = args.get("max_results", 50)
 
         def _work():
             ext = wave_path.lower().rsplit(".", 1)[-1]
@@ -2833,12 +4054,17 @@ async def _dispatch(name: str, args: dict):
                 if cached is None or cached[0] != signature:
                     if cached is not None:
                         _dispose_cached_object(cached[1])
-                    _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
+                    _fsdb_index_cache[wave_path] = (
+                        signature,
+                        FSDBSignalIndex(wave_path),
+                    )
                 index = _fsdb_index_cache[wave_path][1]
+
                 def _search_one(kw: str) -> dict:
                     return index.search(kw, max_r)
             elif ext == "vcd":
                 parser = _get_parser(wave_path)
+
                 def _search_one(kw: str) -> dict:
                     return parser.search_signals(kw, max_r)
             else:
@@ -2855,27 +4081,34 @@ async def _dispatch(name: str, args: dict):
                         f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
                     )
                 entries = [_search_one(str(kw)) for kw in keyword]
-                return schemas.SearchSignalsBatchResult.model_validate({
-                    "batch": entries,
-                    "hint": "One entry per keyword, in input order. Use the full path "
-                            "from each result's path field as the signal_path argument "
-                            "for tools such as get_signal_at_time.",
-                })
+                return schemas.SearchSignalsBatchResult.model_validate(
+                    {
+                        "batch": entries,
+                        "hint": "One entry per keyword, in input order. Use the full path "
+                        "from each result's path field as the signal_path argument "
+                        "for tools such as get_signal_at_time.",
+                    }
+                )
             return schemas.SearchSignalsResult.model_validate(_search_one(keyword))
 
         return await _run_in_wave_thread(wave_path, _work)
 
     elif name == "get_signal_at_time":
+
         def _work():
             parser = _get_parser(args["wave_path"])
             raw_path = args["signal_path"]
             resolved_path = _resolve_signal_path(parser, raw_path)
             try:
-                result = parser.get_value_at_time(resolved_path, _resolve_time(args["time_ps"]))
+                result = parser.get_value_at_time(
+                    resolved_path, _resolve_time(args["time_ps"])
+                )
             except KeyError as exc:
                 suggestions = _suggest_signal_paths(parser, raw_path)
                 if suggestions:
-                    raise KeyError(f"{exc} did_you_mean: {', '.join(suggestions)}") from exc
+                    raise KeyError(
+                        f"{exc} did_you_mean: {', '.join(suggestions)}"
+                    ) from exc
                 raise
             if resolved_path != raw_path:
                 result["resolved_from"] = raw_path
@@ -2884,6 +4117,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signal_transitions":
+
         def _work():
             result = _get_parser(args["wave_path"]).get_transitions(
                 args["signal_path"],
@@ -2899,6 +4133,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_around_time":
+
         def _work():
             parser = _get_parser(args["wave_path"])
             center_ps = _resolve_time(args["center_time_ps"])
@@ -2942,15 +4177,30 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_by_cycle":
+
         def _work():
-            start_time_ps = _resolve_time(args["start_time_ps"]) if "start_time_ps" in args else None
-            end_time_ps = _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+            start_time_ps = (
+                _resolve_time(args["start_time_ps"])
+                if "start_time_ps" in args
+                else None
+            )
+            end_time_ps = (
+                _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+            )
             # Two locating axes, one input per axis (reject mixing within an axis).
             if start_time_ps is not None and "start_cycle" in args:
-                raise ValueError("start_time_ps and start_cycle are mutually exclusive; pass one")
+                raise ValueError(
+                    "start_time_ps and start_cycle are mutually exclusive; pass one"
+                )
             if end_time_ps is not None and "num_cycles" in args:
-                raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
-            if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
+                raise ValueError(
+                    "end_time_ps and num_cycles are mutually exclusive; pass one"
+                )
+            if (
+                start_time_ps is not None
+                and end_time_ps is not None
+                and end_time_ps < start_time_ps
+            ):
                 raise ValueError("end_time_ps must be >= start_time_ps")
             parser = _get_parser(args["wave_path"])
             raw_paths = args["signal_paths"]
@@ -2996,6 +4246,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_waveform_summary":
+
         def _work():
             result = _get_parser(args["wave_path"]).get_summary()
             return schemas.WaveformSummaryResult.model_validate(result)
@@ -3052,7 +4303,9 @@ async def _dispatch(name: str, args: dict):
         slim["suggested_next"] = suggested
         validated = schemas.BuildTbHierarchyResult.model_validate(slim)
         _result_cache["build_tb_hierarchy"] = validated
-        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(
+            name, resolved_args, validated
+        )
         return validated
 
     elif name == "scan_structural_risks":
@@ -3074,7 +4327,9 @@ async def _dispatch(name: str, args: dict):
         )
         _invalidate_downstream("scan_structural_risks")
         _result_cache["scan_structural_risks"] = validated
-        _result_provenance["scan_structural_risks"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["scan_structural_risks"] = _build_result_provenance(
+            name, resolved_args, validated
+        )
         return validated
 
     elif name == "analyze_failures":
@@ -3088,7 +4343,7 @@ async def _dispatch(name: str, args: dict):
             signal_paths=args["signal_paths"],
             group_index=args.get("group_index", 0),
             window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
-            extra_transitions = args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
+            extra_transitions=args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
@@ -3134,9 +4389,15 @@ async def _dispatch(name: str, args: dict):
             wave_path=args["wave_path"],
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
-            structural_risks=[risk.model_dump() for risk in scan_cache.risks] if scan_cache is not None else None,
-            problem_hints=parse_cache.problem_hints.model_dump() if parse_cache and parse_cache.problem_hints else None,
-            handshake_sweep=sweep_cache.model_dump() if sweep_cache is not None else None,
+            structural_risks=[risk.model_dump() for risk in scan_cache.risks]
+            if scan_cache is not None
+            else None,
+            problem_hints=parse_cache.problem_hints.model_dump()
+            if parse_cache and parse_cache.problem_hints
+            else None,
+            handshake_sweep=sweep_cache.model_dump()
+            if sweep_cache is not None
+            else None,
         )
         has_failure_context = False
         if parse_cache is not None:
@@ -3157,7 +4418,9 @@ async def _dispatch(name: str, args: dict):
         # terminal zero/degraded coverage remains explicitly inconclusive but
         # must not replay the same sweep forever.
         missing_scan = scan_cache is None and has_failure_context
-        sweep_needs_attention = _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        sweep_needs_attention = (
+            _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        )
         sweep_call = (
             _build_sweep_required_next_call(args["wave_path"], sweep_cache)
             if sweep_needs_attention
@@ -3171,7 +4434,9 @@ async def _dispatch(name: str, args: dict):
         if primary_missing == "sweep":
             result["workflow_incomplete"] = True
             result["degraded_reason"] = (
-                "missing_handshake_sweep" if sweep_cache is None else "incomplete_handshake_sweep"
+                "missing_handshake_sweep"
+                if sweep_cache is None
+                else "incomplete_handshake_sweep"
             )
             result["required_next_call"] = sweep_call
             result["missing_inputs"] = []
@@ -3194,7 +4459,9 @@ async def _dispatch(name: str, args: dict):
             result["required_next_call"] = None
         validated = schemas.RecommendNextStepsResult.model_validate(result)
         _result_cache["recommend_failure_debug_next_steps"] = validated
-        _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["recommend_failure_debug_next_steps"] = (
+            _build_result_provenance(name, resolved_args, validated)
+        )
         return validated
 
     elif name == "get_diagnostic_snapshot":
@@ -3202,51 +4469,20 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "explain_signal_driver":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_driver(
-                signal_path=args["signal_path"],
-                wave_path=args["wave_path"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                recursive=args.get("recursive", False),
-                max_depth=args.get("max_depth", 10),
-                simulator=simulator,
-            ),
+        result, backend_status = await _route_public_connectivity(
+            operation="driver",
+            args=args,
+            simulator=simulator,
         )
-        backend_status, actual_backend = _finalize_connectivity_backend_status(
-            result, backend_status, backend
-        )
-        result["backend"] = actual_backend
         result["backend_status"] = backend_status
         return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "find_signal_loads":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_loads(
-                signal_path=args["signal_path"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                max_depth=args.get("max_depth", 1),
-                include_expr=args.get("include_expr", True),
-                kind_filter=args.get("kind_filter"),
-                simulator=simulator,
-            ),
-        )
-        # Reflect the backend that actually produced the result. NPI
-        # backend tags every hop with backend='verdi_npi' on success,
-        # 'static' on internal fallback. The status field surfaces the
-        # active connectivity backend at the result envelope.
-        backend_status, _ = _finalize_connectivity_backend_status(
-            result, backend_status, backend
+        result, backend_status = await _route_public_connectivity(
+            operation="loads",
+            args=args,
+            simulator=simulator,
         )
         result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
@@ -3255,6 +4491,7 @@ async def _dispatch(name: str, args: dict):
         simulator = _resolve_session_simulator(args)
         backend_status = _safe_probe_backend(args["compile_log"], simulator)
         from src.connectivity_backend import select_backend  # noqa: PLC0415
+
         backend = select_backend(backend_status)
         result = await _call_connectivity_backend(
             backend,
@@ -3280,6 +4517,7 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "build_kdb":
         from src.kdb_builder import build_kdb as _build_kdb
+
         simulator = _resolve_session_simulator(args)
         compile_log = args["compile_log"]
         cr = parse_compile_log(compile_log, simulator)
@@ -3308,18 +4546,23 @@ async def _dispatch(name: str, args: dict):
         return schemas.CursorSetResult.model_validate({"cursor": ref.as_dict()})
 
     elif name == "cursor_list":
-        return schemas.CursorListResult.model_validate({
-            "cursors": [ref.as_dict() for ref in _cursor_store.list()],
-        })
+        return schemas.CursorListResult.model_validate(
+            {
+                "cursors": [ref.as_dict() for ref in _cursor_store.list()],
+            }
+        )
 
     elif name == "cursor_delete":
         deleted = _cursor_store.delete(args["name"])
-        return schemas.CursorDeleteResult.model_validate({
-            "name": args["name"],
-            "deleted": deleted,
-        })
+        return schemas.CursorDeleteResult.model_validate(
+            {
+                "name": args["name"],
+                "deleted": deleted,
+            }
+        )
 
     elif name == "diff_first_divergence":
+
         def _work():
             result = diff_first_divergence(
                 get_parser=_get_parser,
@@ -3340,6 +4583,7 @@ async def _dispatch(name: str, args: dict):
         )
 
     elif name == "period":
+
         def _work():
             result = period(
                 get_parser=_get_parser,
@@ -3358,6 +4602,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_handshakes":
+
         def _work():
             result = suggest_handshakes(
                 get_parser=_get_parser,
@@ -3370,6 +4615,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_protocol_bundles":
+
         def _work():
             result = suggest_protocol_bundles(
                 get_parser=_get_parser,
@@ -3383,6 +4629,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "sweep_handshakes":
+
         def _work():
             started = time.perf_counter()
             try:
@@ -3392,7 +4639,9 @@ async def _dispatch(name: str, args: dict):
                     scope=args.get("scope"),
                     edge=args.get("edge", "posedge"),
                     start_ps=_resolve_time(args.get("start_time_ps", 0)),
-                    end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                    end_ps=_resolve_time(
+                        args.get("end_time_ps", -1), allow_sentinel=True
+                    ),
                     max_wait_cycles=args.get("max_wait_cycles", 16),
                     max_interfaces=args.get("max_interfaces", 64),
                     cursor_store=_cursor_store,
@@ -3410,10 +4659,13 @@ async def _dispatch(name: str, args: dict):
             args["wave_path"], _work, priority=_WAVE_PRIORITY_BACKGROUND
         )
         _result_cache["sweep_handshakes"] = validated
-        _result_provenance["sweep_handshakes"] = _build_result_provenance(name, args, validated)
+        _result_provenance["sweep_handshakes"] = _build_result_provenance(
+            name, args, validated
+        )
         return validated
 
     elif name == "inspect_handshake":
+
         def _work():
             return inspect_handshake(
                 get_parser=_get_parser,
@@ -3442,6 +4694,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.HandshakeInspectResult.model_validate(result)
 
     elif name == "verify_window":
+
         def _work():
             return verify_window(
                 get_parser=_get_parser,
@@ -3466,6 +4719,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.WindowVerifyResult.model_validate(result)
 
     elif name == "reconstruct_transactions":
+
         def _work():
             return reconstruct_transactions(
                 get_parser=_get_parser,
@@ -3503,8 +4757,12 @@ async def _dispatch(name: str, args: dict):
         return schemas.TxnReconstructResult.model_validate(result)
 
     elif name in {
-        "get_tb_subtree", "lookup_tb_files", "find_tb_instance",
-        "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section",
+        "get_tb_subtree",
+        "lookup_tb_files",
+        "find_tb_instance",
+        "get_tb_file_detail",
+        "get_tb_class_hierarchy",
+        "dump_tb_section",
     }:
         return _dispatch_handle_tool(name, args)
 
@@ -3518,15 +4776,18 @@ def _dispatch_handle_tool(name: str, args: dict):
     handle = args.get("handle") or ""
     full = _handle_store.resolve(handle)
     if full is None:
-        return schemas.HandleErrorResult.model_validate({
-            "error": "handle_expired",
-            "hint": "the handle is unknown to this server — re-run build_tb_hierarchy",
-            "current_handle": None,
-        })
+        return schemas.HandleErrorResult.model_validate(
+            {
+                "error": "handle_expired",
+                "hint": "the handle is unknown to this server — re-run build_tb_hierarchy",
+                "current_handle": None,
+            }
+        )
 
     if name == "get_tb_subtree":
         raw = handle_tools.get_tb_subtree(
-            full, handle,
+            full,
+            handle,
             root=args.get("root", ""),
             depth=args.get("depth", 1),
             max_nodes=args.get("max_nodes", 500),
@@ -3535,7 +4796,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "lookup_tb_files":
         raw = handle_tools.lookup_tb_files(
-            full, handle,
+            full,
+            handle,
             basename=args.get("basename"),
             name_contains=args.get("name_contains"),
             path_contains=args.get("path_contains"),
@@ -3548,7 +4810,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "find_tb_instance":
         raw = handle_tools.find_tb_instance(
-            full, handle,
+            full,
+            handle,
             path=args.get("path"),
             module=args.get("module"),
             limit=args.get("limit", 100),
@@ -3561,7 +4824,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "get_tb_class_hierarchy":
         raw = handle_tools.get_tb_class_hierarchy(
-            full, handle,
+            full,
+            handle,
             root_class=args.get("root_class"),
             depth=args.get("depth", -1),
         )
@@ -3580,7 +4844,9 @@ def _wrap_handle_result(raw: dict, result_schema):
     return result_schema.model_validate(raw)
 
 
-def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) -> list[dict]:
+def _truncate_failure_events_by_group(
+    events: list[dict], max_per_group: int
+) -> list[dict]:
     counts: dict[str, int] = {}
     result: list[dict] = []
     for event in events:
@@ -3616,7 +4882,11 @@ def _slim_returned_events(events: list[dict], log_file: str | None) -> list[dict
                 for key, value in sf.items()
                 if not (
                     (key == "reporter" and value == copy.get("instance_path"))
-                    or (key == "tag" and value and str(value) in (copy.get("group_signature") or ""))
+                    or (
+                        key == "tag"
+                        and value
+                        and str(value) in (copy.get("group_signature") or "")
+                    )
                 )
             }
             if trimmed:
@@ -3628,6 +4898,7 @@ def _slim_returned_events(events: list[dict], log_file: str | None) -> list[dict
 
 
 # ── Diagnostic Snapshot helpers ──────────────────────────────────
+
 
 def _extract_sim_paths_summary(result: schemas.SimPathsResult) -> dict:
     return {
@@ -3658,7 +4929,9 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
         "log_file": result.log_file,
         "runtime_total_errors": result.runtime_total_errors,
         "group_count": len(result.groups),
-        "problem_hints": result.problem_hints.model_dump() if result.problem_hints else None,
+        "problem_hints": result.problem_hints.model_dump()
+        if result.problem_hints
+        else None,
         "first_group_signature": result.groups[0].signature if result.groups else None,
         "previous_log_detected": result.previous_log_detected,
     }
@@ -3716,7 +4989,9 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
         "log_path": args.get("log_path"),
         "wave_path": args.get("wave_path"),
         "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
-        "compile_log": args.get("compile_log") or hier_state.get("compile_log") or sim_state.get("compile_log"),
+        "compile_log": args.get("compile_log")
+        or hier_state.get("compile_log")
+        or sim_state.get("compile_log"),
     }
 
 
@@ -3799,12 +5074,16 @@ def _get_compatible_recommend_sweep_cache(
     provenance = _result_provenance.get("sweep_handshakes")
     if sweep_cache is None or provenance is None:
         return None
-    if not _same_realpath(provenance.get("wave_path"), request_context.get("wave_path")):
+    if not _same_realpath(
+        provenance.get("wave_path"), request_context.get("wave_path")
+    ):
         return None
     return sweep_cache
 
 
-def _sweep_coverage_incomplete(sweep_result: schemas.HandshakeSweepResult | None) -> bool:
+def _sweep_coverage_incomplete(
+    sweep_result: schemas.HandshakeSweepResult | None,
+) -> bool:
     return sweep_result is None or sweep_result.coverage_status != "complete"
 
 
@@ -3832,7 +5111,10 @@ def _build_sweep_required_next_call(
         if _sweep_action_makes_progress(action, wave_path, sweep_result):
             return action
     if sweep_result.coverage_status == "truncated":
-        target = max(int(sweep_result.discovered_count or 0), int(sweep_result.interface_count or 0))
+        target = max(
+            int(sweep_result.discovered_count or 0),
+            int(sweep_result.interface_count or 0),
+        )
         if target > int(sweep_result.interface_count or 0):
             return {
                 "tool": "sweep_handshakes",
@@ -3868,7 +5150,11 @@ def _sweep_action_makes_progress(
         # whole-design default-flow check.
         if prior_scope and next_scope is None:
             return True
-        if prior_scope and next_scope and prior_scope.startswith(next_scope.rstrip(".") + "."):
+        if (
+            prior_scope
+            and next_scope
+            and prior_scope.startswith(next_scope.rstrip(".") + ".")
+        ):
             return True
         return False
 
@@ -3877,9 +5163,8 @@ def _sweep_action_makes_progress(
             next_max = int(arguments.get("max_interfaces"))
         except (TypeError, ValueError):
             next_max = 0
-        return (
-            next_max >= int(sweep_result.discovered_count or 0)
-            and next_max > int(sweep_result.interface_count or 0)
+        return next_max >= int(sweep_result.discovered_count or 0) and next_max > int(
+            sweep_result.interface_count or 0
         )
 
     if sweep_result.coverage_status != "degraded":
@@ -3900,9 +5185,8 @@ def _sweep_action_makes_progress(
         and (sweep_result.end_ps < 0 or next_end <= sweep_result.end_ps)
     )
     start_is_narrower = next_start > sweep_result.start_ps
-    end_is_not_wider = (
-        sweep_result.end_ps < 0
-        or (next_end >= 0 and next_end <= sweep_result.end_ps)
+    end_is_not_wider = sweep_result.end_ps < 0 or (
+        next_end >= 0 and next_end <= sweep_result.end_ps
     )
     return (start_is_narrower or end_is_narrower) and end_is_not_wider
 
@@ -3939,7 +5223,10 @@ def _recommend_has_protocol_symptom(
     if getattr(parse_cache, "protocol_symptom_hint", None):
         return True
     hints = getattr(parse_cache, "problem_hints", None)
-    if hints is not None and getattr(hints, "error_pattern", None) in {"mismatch", "xprop"}:
+    if hints is not None and getattr(hints, "error_pattern", None) in {
+        "mismatch",
+        "xprop",
+    }:
         return True
     return False
 
@@ -3961,7 +5248,9 @@ def _select_recommend_primary_missing_step(
     return None
 
 
-def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaModel) -> dict | None:
+def _build_result_provenance(
+    tool_name: str, args: dict, result: schemas.SchemaModel
+) -> dict | None:
     if tool_name == "get_sim_paths":
         compile_log = None
         for entry in result.compile_logs:
@@ -3979,7 +5268,9 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
     if tool_name == "build_tb_hierarchy":
         return {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator") or result.project.get("simulator") or "auto",
+            "simulator": args.get("simulator")
+            or result.project.get("simulator")
+            or "auto",
         }
     if tool_name == "scan_structural_risks":
         return {
@@ -4015,7 +5306,9 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
 
 def _can_suggest_parse_sim_log(anchor: dict | None) -> bool:
     sim_result = _result_cache.get("get_sim_paths")
-    return bool(anchor and anchor.get("simulator") and sim_result and sim_result.sim_logs)
+    return bool(
+        anchor and anchor.get("simulator") and sim_result and sim_result.sim_logs
+    )
 
 
 def _can_suggest_recommend(anchor: dict | None) -> bool:
@@ -4035,12 +5328,16 @@ def _is_under_case_dir(path: str | None, case_dir: str | None) -> bool:
     if not path or not case_dir:
         return False
     try:
-        return os.path.commonpath([os.path.realpath(path), os.path.realpath(case_dir)]) == os.path.realpath(case_dir)
+        return os.path.commonpath(
+            [os.path.realpath(path), os.path.realpath(case_dir)]
+        ) == os.path.realpath(case_dir)
     except ValueError:
         return False
 
 
-def _path_matches_session(path: str | None, candidates: list[str], case_dir: str | None) -> bool:
+def _path_matches_session(
+    path: str | None, candidates: list[str], case_dir: str | None
+) -> bool:
     if not path:
         return False
     real_path = os.path.realpath(path)
@@ -4049,7 +5346,9 @@ def _path_matches_session(path: str | None, candidates: list[str], case_dir: str
     return _is_under_case_dir(real_path, case_dir)
 
 
-def _file_unchanged(provenance: dict, path_key: str, mtime_key: str, size_key: str) -> bool:
+def _file_unchanged(
+    provenance: dict, path_key: str, mtime_key: str, size_key: str
+) -> bool:
     """Return True when the file on disk still matches cached provenance."""
     fpath = provenance.get(path_key)
     expected_mtime = provenance.get(mtime_key)
@@ -4061,23 +5360,29 @@ def _file_unchanged(provenance: dict, path_key: str, mtime_key: str, size_key: s
     except OSError:
         return False
     return (
-        stat_result.st_mtime == expected_mtime
-        and stat_result.st_size == expected_size
+        stat_result.st_mtime == expected_mtime and stat_result.st_size == expected_size
     )
 
 
-def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None) -> bool:
+def _matches_anchor(
+    tool_name: str, anchor: dict | None, provenance: dict | None
+) -> bool:
     if anchor is None or provenance is None:
         return False
     sim_result = _result_cache.get("get_sim_paths")
-    sim_logs = [entry.path for entry in sim_result.sim_logs] if sim_result is not None else []
-    wave_files = [entry.path for entry in sim_result.wave_files] if sim_result is not None else []
+    sim_logs = (
+        [entry.path for entry in sim_result.sim_logs] if sim_result is not None else []
+    )
+    wave_files = (
+        [entry.path for entry in sim_result.wave_files]
+        if sim_result is not None
+        else []
+    )
     case_dir = anchor.get("case_dir")
     if tool_name == "build_tb_hierarchy":
-        return (
-            provenance.get("compile_log") == anchor.get("compile_log")
-            and provenance.get("simulator") == anchor.get("simulator")
-        )
+        return provenance.get("compile_log") == anchor.get(
+            "compile_log"
+        ) and provenance.get("simulator") == anchor.get("simulator")
     if tool_name == "parse_sim_log":
         return (
             provenance.get("simulator") == anchor.get("simulator")
@@ -4150,16 +5455,18 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             available=False,
             suggested_call=suggested,
         )
-        missing_steps.append({
-            "tool": "get_sim_paths",
-            "arguments": suggested["arguments"],
-            "reason": (
-                "Cached get_sim_paths is for a different case than the requested "
-                "target; re-run get_sim_paths for the current case."
-                if case_mismatch
-                else "Path discovery has not run yet, so simulation artifacts cannot be located."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "get_sim_paths",
+                "arguments": suggested["arguments"],
+                "reason": (
+                    "Cached get_sim_paths is for a different case than the requested "
+                    "target; re-run get_sim_paths for the current case."
+                    if case_mismatch
+                    else "Path discovery has not run yet, so simulation artifacts cannot be located."
+                ),
+            }
+        )
 
     # Suggest build_kdb when the active simulator is Xcelium and the
     # probe positively confirms there is no KDB. We deliberately do
@@ -4169,7 +5476,11 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         from config import AUTO_KDB_BUILD  # noqa: PLC0415
     except Exception:
         AUTO_KDB_BUILD = False
-    if AUTO_KDB_BUILD and sim_result is not None and getattr(sim_result, "simulator", None) == "xcelium":
+    if (
+        AUTO_KDB_BUILD
+        and sim_result is not None
+        and getattr(sim_result, "simulator", None) == "xcelium"
+    ):
         cl_entries = getattr(sim_result, "compile_logs", []) or []
         compile_log_path = cl_entries[0].path if cl_entries else None
         if compile_log_path:
@@ -4181,15 +5492,17 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
                 _probe_ok = False
                 _probe = {}
             if _probe_ok and not _probe.get("kdb_path"):
-                missing_steps.append({
-                    "tool": "build_kdb",
-                    "arguments": {"compile_log": compile_log_path},
-                    "reason": (
-                        "Xcelium flow has no Verdi KDB yet; running build_kdb "
-                        "produces one so the NPI backend can answer cross-hierarchy "
-                        "driver/load queries."
-                    ),
-                })
+                missing_steps.append(
+                    {
+                        "tool": "build_kdb",
+                        "arguments": {"compile_log": compile_log_path},
+                        "reason": (
+                            "Xcelium flow has no Verdi KDB yet; running build_kdb "
+                            "produces one so the NPI backend can answer cross-hierarchy "
+                            "driver/load queries."
+                        ),
+                    }
+                )
 
     hier_result = None if case_mismatch else _result_cache.get("build_tb_hierarchy")
     if hier_result is not None:
@@ -4208,16 +5521,20 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     else:
         sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
             available=False,
-            suggested_call=_build_suggested_call("build_tb_hierarchy") if anchor is not None else None,
+            suggested_call=_build_suggested_call("build_tb_hierarchy")
+            if anchor is not None
+            else None,
         )
     if anchor is not None and (hier_result is None or sections["hierarchy"].stale):
         suggested = _build_suggested_call("build_tb_hierarchy")
         sections["hierarchy"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "build_tb_hierarchy",
-            "arguments": suggested["arguments"],
-            "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
-        })
+        missing_steps.append(
+            {
+                "tool": "build_tb_hierarchy",
+                "arguments": suggested["arguments"],
+                "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
+            }
+        )
 
     log_result = None if case_mismatch else _result_cache.get("parse_sim_log")
     compatible_log_result = None
@@ -4239,13 +5556,19 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     else:
         sections["log_analysis"] = schemas.DiagnosticSnapshotSection(available=False)
     if anchor is not None and (log_result is None or sections["log_analysis"].stale):
-        suggested = _build_suggested_call("parse_sim_log") if _can_suggest_parse_sim_log(anchor) else None
+        suggested = (
+            _build_suggested_call("parse_sim_log")
+            if _can_suggest_parse_sim_log(anchor)
+            else None
+        )
         sections["log_analysis"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "parse_sim_log",
-            "arguments": suggested["arguments"] if suggested else {},
-            "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
-        })
+        missing_steps.append(
+            {
+                "tool": "parse_sim_log",
+                "arguments": suggested["arguments"] if suggested else {},
+                "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
+            }
+        )
 
     scan_result = None if case_mismatch else _result_cache.get("scan_structural_risks")
     compatible_hierarchy = bool(
@@ -4280,15 +5603,17 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             anchor.get("compile_log"),
             anchor.get("simulator"),
         )
-        missing_steps.append({
-            "tool": "scan_structural_risks",
-            "arguments": scan_call["arguments"] if scan_call else {},
-            "reason": (
-                "Structural scan is missing, so recommendation quality will be degraded."
-                if has_failure_context
-                else "Structural scan has not been run yet."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "scan_structural_risks",
+                "arguments": scan_call["arguments"] if scan_call else {},
+                "reason": (
+                    "Structural scan is missing, so recommendation quality will be degraded."
+                    if has_failure_context
+                    else "Structural scan has not been run yet."
+                ),
+            }
+        )
 
     # Whole-design protocol health (sweep_handshakes) — the runtime-layer
     # counterpart of scan_structural_risks: a default-flow perception step whose
@@ -4314,34 +5639,43 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             summary=_extract_protocol_health_summary(sweep_result),
             suggested_call=sweep_call,
         )
-        if anchor is not None and has_waveform and sweep_failure_context and _sweep_coverage_incomplete(sweep_result):
+        if (
+            anchor is not None
+            and has_waveform
+            and sweep_failure_context
+            and _sweep_coverage_incomplete(sweep_result)
+        ):
             if sweep_call is not None:
-                missing_steps.append({
-                    "tool": "sweep_handshakes",
-                    "arguments": sweep_call["arguments"],
-                    "reason": (
-                        "A compatible sweep_handshakes result exists, but its "
-                        f"coverage_status={sweep_result.coverage_status!r}; this is "
-                        "not a complete default-flow protocol scan."
-                    ),
-                })
+                missing_steps.append(
+                    {
+                        "tool": "sweep_handshakes",
+                        "arguments": sweep_call["arguments"],
+                        "reason": (
+                            "A compatible sweep_handshakes result exists, but its "
+                            f"coverage_status={sweep_result.coverage_status!r}; this is "
+                            "not a complete default-flow protocol scan."
+                        ),
+                    }
+                )
     elif anchor is not None and has_waveform and sweep_failure_context:
         sweep_call = _build_suggested_call("sweep_handshakes")
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=False,
             suggested_call=sweep_call,
         )
-        missing_steps.append({
-            "tool": "sweep_handshakes",
-            "arguments": sweep_call["arguments"],
-            "reason": (
-                "Whole-design bus protocol health has not been checked; a "
-                "scoreboard/data-compare failure is frequently the symptom of a "
-                "lower-level protocol problem. sweep_handshakes inspects every "
-                "AHB and valid/ready interface in one call and returns a "
-                "per-interface stall/deadlock/payload-hold fact table."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "sweep_handshakes",
+                "arguments": sweep_call["arguments"],
+                "reason": (
+                    "Whole-design bus protocol health has not been checked; a "
+                    "scoreboard/data-compare failure is frequently the symptom of a "
+                    "lower-level protocol problem. sweep_handshakes inspects every "
+                    "AHB and valid/ready interface in one call and returns a "
+                    "per-interface stall/deadlock/payload-hold fact table."
+                ),
+            }
+        )
     else:
         sections["protocol_health"] = None
 
@@ -4351,7 +5685,11 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         and not sections["log_analysis"].stale
         and getattr(log_result, "runtime_total_errors", None) == 0
     )
-    rec_result = None if case_mismatch else _result_cache.get("recommend_failure_debug_next_steps")
+    rec_result = (
+        None
+        if case_mismatch
+        else _result_cache.get("recommend_failure_debug_next_steps")
+    )
     if rec_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
             "recommend_failure_debug_next_steps",
@@ -4368,20 +5706,38 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             quick_ref["suspected_failure_class"] = rec_result.suspected_failure_class
             quick_ref["recommended_signals"] = rec_result.recommended_signals
     elif is_clean_run:
-        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
+            available=False
+        )
     else:
-        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
-    if anchor is not None and not is_clean_run and (rec_result is None or sections["recommended_next"].stale):
-        suggested = _build_suggested_call("recommend_failure_debug_next_steps") if _can_suggest_recommend(anchor) else None
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
+            available=False
+        )
+    if (
+        anchor is not None
+        and not is_clean_run
+        and (rec_result is None or sections["recommended_next"].stale)
+    ):
+        suggested = (
+            _build_suggested_call("recommend_failure_debug_next_steps")
+            if _can_suggest_recommend(anchor)
+            else None
+        )
         sections["recommended_next"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "recommend_failure_debug_next_steps",
-            "arguments": suggested["arguments"] if suggested else {},
-            "reason": "Recommendation analysis has not run yet, so no prioritized debug target is available.",
-        })
+        missing_steps.append(
+            {
+                "tool": "recommend_failure_debug_next_steps",
+                "arguments": suggested["arguments"] if suggested else {},
+                "reason": "Recommendation analysis has not run yet, so no prioritized debug target is available.",
+            }
+        )
 
     if missing_steps:
-        problem_hints = compatible_log_result.problem_hints if compatible_log_result is not None else None
+        problem_hints = (
+            compatible_log_result.problem_hints
+            if compatible_log_result is not None
+            else None
+        )
         prioritize_scan = bool(
             problem_hints
             and (
@@ -4426,7 +5782,9 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
 
 def _enforce_output_budget(
     model: schemas.TruncatableResult,
-    shrink_stages: list[Callable[[schemas.TruncatableResult], schemas.TruncatableResult]],
+    shrink_stages: list[
+        Callable[[schemas.TruncatableResult], schemas.TruncatableResult]
+    ],
 ) -> schemas.TruncatableResult:
     payload = model.model_dump_json(exclude_none=True)
     model.payload_bytes = len(payload)
@@ -4444,7 +5802,9 @@ def _enforce_output_budget(
     return current
 
 
-def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     groups = []
     for group in model.groups[:3]:
@@ -4458,7 +5818,7 @@ def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.Tr
             "max_groups": min(model.max_groups, len(groups)),
             "detail_level": "summary",
             "detail_hint": (
-                "Call parse_sim_log with detail_level=\"full\" and max_groups=<n> "
+                'Call parse_sim_log with detail_level="full" and max_groups=<n> '
                 "for a targeted follow-up."
             ),
             "failure_events": [],
@@ -4471,7 +5831,9 @@ def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.Tr
     )
 
 
-def _shrink_parse_sim_log_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     groups = []
     if model.groups:
@@ -4493,7 +5855,9 @@ def _shrink_parse_sim_log_stage2(model: schemas.TruncatableResult) -> schemas.Tr
     )
 
 
-def _shrink_parse_sim_log_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     return schemas.ParseSimLogResult.model_validate(
         {
@@ -4557,14 +5921,12 @@ def _trim_analyze_summary(summary: dict, group_limit: int, sample_limit: int) ->
     return trimmed
 
 
-def _summarize_wave_context(wave_context: dict | None, signal_limit: int, transition_limit: int) -> dict | None:
+def _summarize_wave_context(
+    wave_context: dict | None, signal_limit: int, transition_limit: int
+) -> dict | None:
     if not isinstance(wave_context, dict):
         return None
-    trimmed = {
-        key: value
-        for key, value in wave_context.items()
-        if key != "signals"
-    }
+    trimmed = {key: value for key, value in wave_context.items() if key != "signals"}
     signals = wave_context.get("signals")
     if not isinstance(signals, dict):
         return trimmed
@@ -4581,10 +5943,14 @@ def _summarize_wave_context(wave_context: dict | None, signal_limit: int, transi
     return trimmed
 
 
-def _shrink_analyze_failures_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=80)
-    wave_context = _summarize_wave_context(model.wave_context, signal_limit=1, transition_limit=4)
+    wave_context = _summarize_wave_context(
+        model.wave_context, signal_limit=1, transition_limit=4
+    )
     log_context = model.log_context
     if isinstance(log_context, dict) and isinstance(log_context.get("context"), str):
         log_context = {
@@ -4607,7 +5973,9 @@ def _shrink_analyze_failures_stage1(model: schemas.TruncatableResult) -> schemas
     )
 
 
-def _shrink_analyze_failures_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=32)
     return schemas.AnalyzeFailuresResult.model_validate(
@@ -4627,7 +5995,9 @@ def _shrink_analyze_failures_stage2(model: schemas.TruncatableResult) -> schemas
     )
 
 
-def _shrink_analyze_failures_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = {
         "runtime_total_errors": model.summary.get("runtime_total_errors"),
@@ -4652,16 +6022,23 @@ def _shrink_analyze_failures_terminal(model: schemas.TruncatableResult) -> schem
     )
 
 
-def _truncate_risk_payload(risk: schemas.StructuralRisk, detail_limit: int, evidence_limit: int) -> dict:
+def _truncate_risk_payload(
+    risk: schemas.StructuralRisk, detail_limit: int, evidence_limit: int
+) -> dict:
     payload = risk.model_dump()
     payload["detail"] = payload["detail"][:detail_limit]
     payload["evidence"] = payload["evidence"][:evidence_limit]
     return payload
 
 
-def _shrink_scan_structural_risks_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
-    risks = [_truncate_risk_payload(risk, detail_limit=120, evidence_limit=2) for risk in model.risks[:10]]
+    risks = [
+        _truncate_risk_payload(risk, detail_limit=120, evidence_limit=2)
+        for risk in model.risks[:10]
+    ]
     return schemas.ScanStructuralRisksResult.model_validate(
         {
             **model.model_dump(exclude_none=True),
@@ -4673,9 +6050,14 @@ def _shrink_scan_structural_risks_stage1(model: schemas.TruncatableResult) -> sc
     )
 
 
-def _shrink_scan_structural_risks_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
-    risks = [_truncate_risk_payload(risk, detail_limit=64, evidence_limit=0) for risk in model.risks[:3]]
+    risks = [
+        _truncate_risk_payload(risk, detail_limit=64, evidence_limit=0)
+        for risk in model.risks[:3]
+    ]
     return schemas.ScanStructuralRisksResult.model_validate(
         {
             **model.model_dump(exclude_none=True),
@@ -4687,7 +6069,9 @@ def _shrink_scan_structural_risks_stage2(model: schemas.TruncatableResult) -> sc
     )
 
 
-def _shrink_scan_structural_risks_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
     return schemas.ScanStructuralRisksResult.model_validate(
         {
@@ -4710,7 +6094,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     parser = SimLogParser(args["log_path"], simulator)
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
-    max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
+    max_events_per_group = args.get(
+        "max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP
+    )
 
     if detail_level not in {"summary", "compact", "full"}:
         raise ValueError("detail_level must be one of: summary, compact, full")
@@ -4719,7 +6105,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
 
     allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
     all_events = parser.parse_failure_events()
-    log_snapshot_id = _capture_log_snapshot(args["log_path"], simulator, all_events, stat_info)
+    log_snapshot_id = _capture_log_snapshot(
+        args["log_path"], simulator, all_events, stat_info
+    )
     previous_snapshot = _find_previous_log_snapshot(
         args["log_path"],
         simulator,
@@ -4735,14 +6123,17 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
         )
     else:
         scoped_events = [
-            event for event in all_events
+            event
+            for event in all_events
             if event["group_signature"] in allowed_signatures
         ]
         total = len(scoped_events)
         if detail_level == "full" and total <= AUTO_DOWNGRADE_THRESHOLD:
             returned_events = scoped_events
         else:
-            returned_events = _truncate_failure_events_by_group(scoped_events, max_events_per_group)
+            returned_events = _truncate_failure_events_by_group(
+                scoped_events, max_events_per_group
+            )
             if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
                 summary["auto_downgraded"] = True
 
@@ -4865,15 +6256,17 @@ def _serialize_result(result: BaseModel | dict) -> str:
 def _format_error(exc: Exception) -> schemas.ToolErrorResult:
     message = str(exc)
     if "FSDB parsing unavailable" in message:
-        return schemas.ToolErrorResult.model_validate({
-            "error": message,
-            "error_code": "fsdb_runtime_unavailable",
-            "fsdb_runtime": get_fsdb_runtime_info(),
-            "fallback": {
-                "supported_wave_formats": ["vcd"],
-                "action": "prefer_vcd_waveforms",
-            },
-        })
+        return schemas.ToolErrorResult.model_validate(
+            {
+                "error": message,
+                "error_code": "fsdb_runtime_unavailable",
+                "fsdb_runtime": get_fsdb_runtime_info(),
+                "fallback": {
+                    "supported_wave_formats": ["vcd"],
+                    "action": "prefer_vcd_waveforms",
+                },
+            }
+        )
     return schemas.ToolErrorResult.model_validate({"error": message})
 
 
@@ -4881,10 +6274,11 @@ def _format_error(exc: Exception) -> schemas.ToolErrorResult:
 # Entry
 # ═══════════════════════════════════════════════════════════════════
 
+
 async def main():
     async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream,
-                      app.create_initialization_options())
+        await app.run(read_stream, write_stream, app.create_initialization_options())
+
 
 if __name__ == "__main__":
     asyncio.run(main())

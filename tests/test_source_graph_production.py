@@ -85,12 +85,12 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     )
 
 
-def test_parent_lifecycle_import_does_not_require_or_import_pyslang():
+def test_server_startup_does_not_require_or_import_pyslang():
     script = """
 import importlib.util
 import sys
 assert importlib.util.find_spec('pyslang') is None
-import src.source_graph_production
+import server
 assert 'pyslang' not in sys.modules
 print('ok')
 """

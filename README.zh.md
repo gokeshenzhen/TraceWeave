@@ -303,7 +303,8 @@ JSON 中也是字面值,不要在这个静态 map 里写 `"$LSF_QUEUE"`。
 开启后，只有 `explain_signal_driver`、`find_signal_loads`、
 `trace_signal_path` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
 读取、结构扫描、KDB 探测与 Static 分析仍在本地执行。worker 失败或超时后，
-父进程会在本地回退 Static，并通过固定的 `backend_status` 状态字段说明原因，
+driver/load 查询先尝试本地 Source Graph，若有 blocker 或结论不充分再回退 Legacy
+Static；`trace_signal_path` 保持原有 NPI-only/Static-unsupported 行为。路由通过固定的 `backend_status` 状态字段说明原因，
 不会返回队列、主机、命令或 license 细节。
 
 重启或重新连接 MCP server 后,让 AI agent 运行一次显式 connectivity 操作并
@@ -326,6 +327,33 @@ export TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON='["-R", "select[...]"]'
 KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节点上以相同
 绝对路径可见。staging 默认位于 TraceWeave cache root 下；cache 非共享时必须
 显式设置。额外调度参数采用受限的 option/value JSON argv，而不是 shell 文本。
+
+### 按需 Source Graph
+
+`explain_signal_driver` 与 `find_signal_loads` 使用生产路由
+`Verdi NPI -> Source Graph -> Legacy Static`。Source Graph 是惰性、进程内生命周期：
+第一个满足条件的请求才启动隔离的短生命周期 frontend worker；成功的 scoped IR
+只保存在 MCP server 的内存 cache；同 key 的并发 cold 请求共享一次 build。它不会在
+启动时构建，不使用 disk cache，不持有 FSDB/VCD wave lock，也不会把 `pyslang`
+导入 MCP server 进程。`trace_signal_path` 与 `trace_x_source` 明确保留原路由。
+
+Source Graph 默认启用。若 MCP Python 没有 optional frontend，会记录 dependency blocker
+并继续 Legacy Static。要使用隔离的 pinned frontend 环境，可配置：
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH=1
+export TRACEWEAVE_SOURCE_GRAPH_PYTHON=/path/to/pyslang-11.0.0/bin/python
+export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
+export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
+```
+
+按标准工作流先运行 `build_tb_hierarchy`，使请求拥有精确的 compile/hierarchy handle。
+`backend_status` 会报告 `selected_backend`、`attempted_backend`、
+`actual_backend`、有序 `attempted_backends` 链，以及包含固定 blocker label、coverage、
+build/compile/IR fingerprint、cache disposition 和数值资源指标的 Source Graph 回执。
+partial/inconclusive coverage 下的正结果仍是 partial；只有 complete coverage 才能确定
+`not_connected`。fallback 会由 Legacy Static 整体重算结果，因此 payload provenance
+不会混合。
 
 ### 功能性验证
 
@@ -424,7 +452,7 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 - `trace_x_source`:通过选定的 connectivity backend 向上游追溯 X/Z 传播。wave lock 只覆盖波形读取；如果某次 NPI driver 查询发生 fallback，会丢弃部分链并用 Static 从头重跑，避免一条链混合不同 backend 的 provenance。`backend_status` 会报告选中/实际 backend 与 fallback 回执；`trace_restarted=true` 明确表示发生了整条 trace 重试。NPI 的 `testbench_driven`、源码行号和 driver-vs-load 交叉校验证据会保留在终止 trace 节点上。
 - `build_kdb`:从已解析的编译日志自动构建 Verdi KDB(vericom + elabcom)。当仿真器是 Xcelium(xrun)且 NPI 后端报告无 KDB 时使用。输出缓存到 `TRACEWEAVE_CACHE_DIR`(默认 `~/.cache/traceweave/kdb/<hash>/`);缓存命中则跳过 Verdi 重跑。KDB 旁边会写出一个可运行的 `build.sh` 便于检查或手动复现。需要 `VERDI_HOME` 中含有 `bin/vericom` 与 `bin/elabcom`。
 
-当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。driver/load 查询在 NPI 不可用时透明回退到基于源码正则的 Static 后端;`trace_x_source` 会对整条 trace 应用 fallback,而不是混合不同节点的 provenance。`trace_signal_path` 是 NPI-only,会返回结构化的 `unsupported_reason` 而不是给出近似结果,因为 `sig_to_sig_conn_list` 没有诚实的 Static 等价实现。NPI 是更深、更准确的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越实例端口边界、interface 位置绑定与 assign 链,这些 Static 都跟不过去。在 **local NPI execution mode** 下,检测到 KDB 时 `build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 标签,便于消费者区分 NPI 标注条目与编译日志衍生条目。结果信封里带一个 `backend_status` 块,包含当前后端、KDB 流程,以及按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
+当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。对 driver/load 查询，可信 NPI 结果保持最高优先级；否则 TraceWeave 会先尝试 bounded on-demand Source Graph，再由 Legacy Static 整体重算 fallback 结果。`trace_x_source` 保持既有的整条 trace NPI-to-Static 重试，不接入 Source Graph。`trace_signal_path` 仍是 NPI-only,会返回结构化的 `unsupported_reason` 而不是给出近似结果,因为 `sig_to_sig_conn_list` 没有诚实的 Static 等价实现。NPI 是更深、更准确的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越实例端口边界、interface 位置绑定与 assign 链,这些 Static 都跟不过去。在 **local NPI execution mode** 下,检测到 KDB 时 `build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 或 `"source_graph"`，Static 则保持 compile-log-derived。结果信封里的 `backend_status` 会给出 selected/attempted/actual backend、有序 fallback 链、Source Graph coverage/build 回执、KDB 流程与按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 
 对 VCS 流程,获取 KDB 的最低成本方式是用 `-kdb=only` 重编 —— hint 会给出完整命令。对 Xcelium 流程没有原生 KDB;`get_diagnostic_snapshot` 会把 `build_kdb` 列在 `missing_steps` 中,LLM agent 可以按需触发。设置 `TRACEWEAVE_AUTO_KDB=0` 可关闭自动构建提示。
 

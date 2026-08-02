@@ -875,6 +875,8 @@ def build_source_graph_plan(
         return _blocked_plan(code="signal_path_unscoped", stage="target_scope")
 
     manifest, gaps, exclusions = _compile_manifest(compile_log, compile_result)
+    if not manifest.complete:
+        exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     if not manifest.ordered_inputs:
         return _blocked_plan(
             code="compile_inputs_unavailable",

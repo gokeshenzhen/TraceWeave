@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.connectivity_backend import (
     ConnectivityBackend,
+    DeferredConnectivityFallbackBackend,
     StaticConnectivityBackend,
     select_backend,
 )
@@ -81,6 +82,27 @@ endmodule
 def test_select_backend_returns_static_when_no_kdb():
     status = {"simulator": "vcs", "kdb_flow": "none", "kdb_path": None}
     assert select_backend(status).name == "static"
+
+
+def test_select_backend_can_defer_static_for_source_graph_routing():
+    status = {"simulator": "vcs", "kdb_flow": "none", "kdb_path": None}
+    deferred = DeferredConnectivityFallbackBackend()
+
+    assert select_backend(status, fallback=deferred) is deferred
+
+
+def test_npi_backend_uses_injected_deferred_fallback(monkeypatch):
+    status = {
+        "simulator": "vcs",
+        "kdb_flow": "vcs_two_step",
+        "kdb_path": "/some/kdb.elab++",
+    }
+    deferred = DeferredConnectivityFallbackBackend()
+
+    backend = select_backend(status, fallback=deferred)
+
+    assert backend.name == "verdi_npi"
+    assert backend._fallback is deferred
 
 
 def test_select_backend_returns_npi_when_kdb_present():

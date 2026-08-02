@@ -1,9 +1,10 @@
 """Internal scoped Source Graph preparation runtime.
 
-The runtime is deliberately not imported or registered by ``server.py``.  It
-owns an in-process session cache, same-key single-flight, and an isolated child
-process runner for the optional source frontend.  It never selects or invokes
-the Legacy Static backend and never acquires a waveform lock.
+The runtime owns an in-process session cache, same-key single-flight, and an
+isolated child process runner for the optional source frontend.  The production
+driver/load router imports it through a lazy lifecycle owner; import/startup
+does not create a runtime or build.  It never selects or invokes the Legacy
+Static backend and never acquires a waveform lock.
 """
 
 from __future__ import annotations
