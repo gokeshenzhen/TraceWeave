@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import benchmark_source_graph_phase1a as benchmark
+from src.connectivity_ir import CoverageGap, CoverageStatus, SignalSelection
+from src.connectivity_query import QueryStatus
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,3 +143,31 @@ def test_percentiles_and_input_validation_are_deterministic():
     args = _args("--cold-repeats", "0")
     with pytest.raises(benchmark.BenchmarkError, match="repeat counts"):
         benchmark.run_benchmark(args)
+
+
+def test_query_receipt_bounds_repeated_global_coverage_gaps():
+    gaps = tuple(
+        CoverageGap(
+            code=f"gap_{index}",
+            message="global projection limitation",
+            impact=CoverageStatus.INCONCLUSIVE,
+            scopes=("*",),
+        )
+        for index in range(benchmark.MAX_RESULT_GAP_ITEMS + 5)
+    )
+    result = SimpleNamespace(
+        operation="driver",
+        signal=SignalSelection("sig", (0,), "top"),
+        status=QueryStatus.INCONCLUSIVE,
+        coverage_status=CoverageStatus.INCONCLUSIVE,
+        matches=(),
+        unresolved_boundaries=gaps,
+        traversed_binding_edges=0,
+        max_depth=64,
+    )
+
+    receipt = benchmark._compact_query_result(result)
+
+    assert receipt["unresolved_boundary_count"] == len(gaps)
+    assert len(receipt["unresolved_boundaries"]) == benchmark.MAX_RESULT_GAP_ITEMS
+    assert receipt["unresolved_boundaries_truncated"] is True

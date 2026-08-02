@@ -785,6 +785,10 @@ def _compact_query_result(result: Any) -> dict[str, Any]:
         }
         for match in result.matches[:MAX_RESULT_QUERY_MATCHES]
     ]
+    unresolved = [
+        {"code": gap.code, "impact": gap.impact.value, "scopes": list(gap.scopes)}
+        for gap in result.unresolved_boundaries[:MAX_RESULT_GAP_ITEMS]
+    ]
     return {
         "operation": result.operation,
         "signal": result.signal.path(include_bits=True),
@@ -793,10 +797,11 @@ def _compact_query_result(result: Any) -> dict[str, Any]:
         "match_count": len(result.matches),
         "matches": matches,
         "matches_truncated": len(matches) < len(result.matches),
-        "unresolved_boundaries": [
-            {"code": gap.code, "impact": gap.impact.value, "scopes": list(gap.scopes)}
-            for gap in result.unresolved_boundaries
-        ],
+        "unresolved_boundary_count": len(result.unresolved_boundaries),
+        "unresolved_boundaries": unresolved,
+        "unresolved_boundaries_truncated": (
+            len(unresolved) < len(result.unresolved_boundaries)
+        ),
         "traversed_binding_edges": result.traversed_binding_edges,
         "max_depth": result.max_depth,
     }
