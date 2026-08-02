@@ -1942,6 +1942,12 @@ def run_frontend_worker(spec: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    serialized_payload, phases["result_serialization"] = _measure_phase(
+        lambda: _canonical_json(
+            _frontend_ipc_payload(diagnostic_payload, recovered, blockers)
+        )
+    )
+
     end_rss = _read_proc_rss_kib()
     overall_cpu_ms = (time.process_time_ns() - cpu_started) / 1_000_000
     overall_wall_ms = (time.perf_counter_ns() - wall_started) / 1_000_000
@@ -1977,6 +1983,15 @@ def run_frontend_worker(spec: dict[str, Any]) -> dict[str, Any]:
             ),
             "elaboration": ("createCompilation + getRoot + getAllDiagnostics"),
             "object_extraction": "read-only elaborated symbol/count projection",
+            "result_serialization": (
+                "canonical compact JSON for diagnostics, recovered frontend objects, "
+                "and blockers; excludes timing and invocation metadata"
+            ),
+        },
+        "result_serialization": {
+            "bytes": len(serialized_payload),
+            "format": "UTF-8 canonical JSON (sorted keys, compact separators)",
+            "scope": "frontend IPC fact payload before measurement metadata",
         },
         "worker_wall_time_ms": _round_ms(overall_wall_ms),
         "worker_cpu_time_ms": _round_ms(overall_cpu_ms),
@@ -1995,6 +2010,18 @@ def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _frontend_ipc_payload(
+    diagnostics: dict[str, Any],
+    recovered: dict[str, Any],
+    blockers: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "diagnostics": diagnostics,
+        "recovered": recovered,
+        "blockers": list(blockers),
+    }
 
 
 def _diagnostic_semantic_identities(

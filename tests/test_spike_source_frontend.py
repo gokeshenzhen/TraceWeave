@@ -635,3 +635,20 @@ def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
             "column": 15,
         }
     ]
+
+
+def test_frontend_ipc_serialization_scope_contains_only_frontend_facts():
+    diagnostics = {"blocking_error_count": 0, "items": []}
+    recovered = {"tops": ["tb"], "instances": [{"path": "tb"}]}
+    blockers = [{"code": "example", "phase": "elaboration"}]
+
+    payload = spike._frontend_ipc_payload(diagnostics, recovered, blockers)
+    serialized = spike._canonical_json(payload)
+
+    assert json.loads(serialized) == {
+        "diagnostics": diagnostics,
+        "recovered": recovered,
+        "blockers": blockers,
+    }
+    assert "phase_measurements" not in payload
+    assert "invocation" not in payload
