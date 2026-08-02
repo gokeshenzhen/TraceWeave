@@ -1814,7 +1814,12 @@ def _diagnostics_payload(driver: Any, diagnostics: Sequence[Any]) -> dict[str, A
 
 
 def _extract_frontend_objects(
-    pyslang: Any, ast: Any, compilation: Any, root: Any, driver: Any
+    pyslang: Any,
+    ast: Any,
+    compilation: Any,
+    root: Any,
+    driver: Any,
+    oracle_instance_paths: Sequence[str] = (),
 ) -> dict[str, Any]:
     source_manager = driver.sourceManager
     definitions: list[dict[str, Any]] = []
@@ -1836,6 +1841,9 @@ def _extract_frontend_objects(
     symbol_counts: collections.Counter[str] = collections.Counter()
     procedural_kind_counts: collections.Counter[str] = collections.Counter()
     port_connection_count = 0
+    oracle_path_membership = {
+        str(path): False for path in sorted(set(oracle_instance_paths))
+    }
 
     def count_symbol(symbol: Any) -> None:
         symbol_counts[symbol.kind.name] += 1
@@ -1843,6 +1851,9 @@ def _extract_frontend_objects(
     def record_instance(instance: Any) -> None:
         nonlocal port_connection_count
         count_symbol(instance)
+        path = str(instance.hierarchicalPath)
+        if path in oracle_path_membership:
+            oracle_path_membership[path] = True
         try:
             connections = len(instance.portConnections)
         except Exception:
@@ -1851,7 +1862,7 @@ def _extract_frontend_objects(
         if len(instances) < 1000:
             instances.append(
                 {
-                    "path": instance.hierarchicalPath,
+                    "path": path,
                     "name": instance.name,
                     "definition": instance.definition.name,
                     "instance_kind": "interface" if instance.isInterface else "module",
@@ -1907,6 +1918,7 @@ def _extract_frontend_objects(
         "tops": top_instances,
         "instances": instances,
         "instances_truncated": symbol_counts["Instance"] > len(instances),
+        "oracle_instance_path_membership": oracle_path_membership,
         "definitions": definitions,
         "procedural_blocks": procedural_blocks,
         "procedural_blocks_truncated": (
@@ -2034,7 +2046,12 @@ def run_frontend_worker(spec: dict[str, Any]) -> dict[str, Any]:
             diagnostic_payload = _diagnostics_payload(parse_driver, diagnostics)
             recovered, phases["object_extraction"] = _measure_phase(
                 lambda: _extract_frontend_objects(
-                    pyslang, ast, compilation, root, parse_driver
+                    pyslang,
+                    ast,
+                    compilation,
+                    root,
+                    parse_driver,
+                    spec.get("oracle_probe_instance_paths") or [],
                 )
             )
         except SpikeError as exc:
@@ -2279,6 +2296,13 @@ def _compare_one_oracle(
 ) -> dict[str, Any]:
     actual_tops = set(recovered.get("tops") or [])
     actual_paths = {item["path"] for item in recovered.get("instances") or []}
+    actual_paths.update(
+        path
+        for path, present in (
+            recovered.get("oracle_instance_path_membership") or {}
+        ).items()
+        if present
+    )
     expected_top = oracle.get("top") or oracle.get("expected_top")
     expected_paths = set(oracle.get("expected_instance_paths") or [])
     signal_paths = list(oracle.get("signal_paths") or [])
@@ -2349,6 +2373,31 @@ def compare_oracles(
             "a frontend or automated-test dependency"
         ),
     }
+
+
+def _oracle_probe_instance_paths(
+    manual_oracle: dict[str, Any] | None,
+    supplemental: dict[str, Any] | None,
+) -> list[str]:
+    paths: set[str] = set()
+    oracles: list[dict[str, Any]] = []
+    if manual_oracle:
+        oracles.append(manual_oracle)
+    if supplemental:
+        oracles.extend(
+            value
+            for value in supplemental.values()
+            if isinstance(value, dict) and value.get("available", True)
+        )
+    for oracle in oracles:
+        paths.update(str(path) for path in oracle.get("expected_instance_paths") or [])
+        for signal_path in oracle.get("signal_paths") or []:
+            paths.add(
+                signal_path.rsplit(".", 1)[0]
+                if "." in signal_path
+                else str(signal_path)
+            )
+    return sorted(paths)
 
 
 def _worker_command(frontend_python: Path, spec_path: Path) -> list[str]:
@@ -2799,17 +2848,23 @@ def run_spike(args: argparse.Namespace) -> dict[str, Any]:
         workers: list[dict[str, Any]] = []
         receipts: list[dict[str, Any]] = []
         try:
-            for _ in range(args.cold_repeats):
-                worker, receipt = _invoke_worker(
-                    frontend_python, spec, args.child_timeout_seconds
-                )
-                workers.append(worker)
-                receipts.append(receipt)
             supplemental = (
                 supplemental_by_workload.get(spec["name"])
                 if isinstance(supplemental_by_workload, dict)
                 else None
             )
+            worker_spec = {
+                **spec,
+                "oracle_probe_instance_paths": _oracle_probe_instance_paths(
+                    spec.get("manual_oracle"), supplemental
+                ),
+            }
+            for _ in range(args.cold_repeats):
+                worker, receipt = _invoke_worker(
+                    frontend_python, worker_spec, args.child_timeout_seconds
+                )
+                workers.append(worker)
+                receipts.append(receipt)
             results.append(_summarize_workload(spec, workers, receipts, supplemental))
         except SpikeError as exc:
             results.append(

@@ -450,6 +450,39 @@ def test_manual_oracle_comparison_checks_hierarchy_and_file_line_fidelity():
     ]
 
 
+def test_oracle_comparison_uses_exact_membership_beyond_retained_instance_cap():
+    oracle = {
+        "top": "tb",
+        "expected_instance_paths": ["tb", "tb.dut.deep.u_leaf"],
+    }
+    recovered = {
+        "tops": ["tb"],
+        "instances": [{"path": "tb"}],
+        "instances_truncated": True,
+        "oracle_instance_path_membership": {"tb.dut.deep.u_leaf": True},
+    }
+
+    comparison = spike.compare_oracles(recovered, oracle, None)
+
+    assert comparison["all_available_oracles_match"] is True
+    assert comparison["comparisons"][0]["missing_instance_paths"] == []
+
+
+def test_oracle_probe_paths_include_supplemental_signal_parent_scopes():
+    paths = spike._oracle_probe_instance_paths(
+        {"expected_instance_paths": ["tb"]},
+        {
+            "fsdb": {
+                "available": True,
+                "signal_paths": ["tb.dut.bus.valid"],
+            },
+            "npi": {"available": False, "expected_instance_paths": ["ignored"]},
+        },
+    )
+
+    assert paths == ["tb", "tb.dut.bus"]
+
+
 def test_plan_only_preserves_venv_launcher_and_never_imports_frontend(tmp_path):
     launcher = tmp_path / "venv" / "bin" / "python"
     launcher.parent.mkdir(parents=True)
