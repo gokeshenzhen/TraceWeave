@@ -17,7 +17,9 @@ def _make_demo_tree():
     tmp = tempfile.TemporaryDirectory()
     root = Path(tmp.name)
     _write(root / "tb" / "top_tb.sv", "module top_tb; endmodule\n")
-    _write(root / "tb" / "my_driver.sv", "class my_driver extends uvm_driver; endclass\n")
+    _write(
+        root / "tb" / "my_driver.sv", "class my_driver extends uvm_driver; endclass\n"
+    )
     _write(root / "dut" / "dut.sv", "module dut; endmodule\n")
     _write(root / "assertion" / "sva_top.sv", "module sva_top; endmodule\n")
     return tmp, root
@@ -53,12 +55,12 @@ class TestParseCompileLog:
         try:
             log = root / "comp.log"
             log.write_text(
-                f"""Command: vcs -f {root / 'dut' / 'filelist.f'} +incdir+{root / 'tb'} /tools/synopsys/vcs/etc/uvm.sv
-Parsing design file '{root / 'tb' / 'top_tb.sv'}'
+                f"""Command: vcs -f {root / "dut" / "filelist.f"} +incdir+{root / "tb"} /tools/synopsys/vcs/etc/uvm.sv
+Parsing design file '{root / "tb" / "top_tb.sv"}'
 Parsing included file 'my_driver.sv'.
-Back to file '{root / 'tb' / 'top_tb.sv'}'.
-Parsing design file '{root / 'dut' / 'dut.sv'}'
-Parsing design file '{root / 'assertion' / 'sva_top.sv'}'
+Back to file '{root / "tb" / "top_tb.sv"}'.
+Parsing design file '{root / "dut" / "dut.sv"}'
+Parsing design file '{root / "assertion" / "sva_top.sv"}'
 Top Level Modules:
        top_tb
        dut
@@ -69,7 +71,10 @@ Top Level Modules:
             assert {"top_tb.sv", "my_driver.sv", "dut.sv", "sva_top.sv"} <= user_paths
             assert result["files"]["filtered_count"] == 0
             top_tb = str((root / "tb" / "top_tb.sv").resolve())
-            assert str((root / "tb" / "my_driver.sv").resolve()) in result["include_tree"][top_tb]
+            assert (
+                str((root / "tb" / "my_driver.sv").resolve())
+                in result["include_tree"][top_tb]
+            )
             assert "top_tb" in result["top_modules"]
         finally:
             tmp.cleanup()
@@ -80,13 +85,13 @@ Top Level Modules:
             log = root / "elab.log"
             log.write_text(
                 f"""xrun
-\t-f {root / 'dut' / 'filelist.f'}
-\t\t{root / 'dut' / 'dut.sv'}
-\t\t{root / 'tb' / 'top_tb.sv'}
+\t-f {root / "dut" / "filelist.f"}
+\t\t{root / "dut" / "dut.sv"}
+\t\t{root / "tb" / "top_tb.sv"}
 \t-top top_tb
-file: {root / 'dut' / 'dut.sv'}
+file: {root / "dut" / "dut.sv"}
 \tmodule worklib.dut:sv
-file: {root / 'tb' / 'top_tb.sv'}
+file: {root / "tb" / "top_tb.sv"}
 \tinterface worklib.my_if:sv
 \tmodule worklib.top_tb:sv
 """
@@ -124,6 +129,7 @@ file: {root / 'tb' / 'top_tb.sv'}
         assert result["compile_command"] == (
             f"xrun -elaborate {source} -timescale 1ns/10ps -top top_tb"
         )
+        assert result["compile_cwd"] == str(tmp_path)
         assert "DEFINE" not in result["compile_command"]
         assert "*W,DLCPTH" not in result["compile_command"]
 
@@ -150,6 +156,7 @@ file: {root / 'tb' / 'top_tb.sv'}
         assert result["compile_command"] == (
             "xrun -elaborate -f design.scr -top top_earlgrey -top tb -snapshot tb"
         )
+        assert result["compile_cwd"] == str(work.resolve())
         assert result["top_modules"] == ["tb", "top_earlgrey"]
         assert result["filelist_tree"] == {"design.scr": []}
         assert result["files"]["user"] == [
@@ -181,6 +188,7 @@ file: {root / 'tb' / 'top_tb.sv'}
             "deep_x_tb.sv",
         ]
         assert result["top_modules"] == ["uart_deep_x_tb"]
+        assert result["compile_cwd"] == str(tmp_path)
         assert result["parse_warnings"] == []
 
     def test_vcs_incremental_command_expands_f_and_F_with_correct_bases(self, tmp_path):

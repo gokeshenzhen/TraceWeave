@@ -29,7 +29,9 @@ _VCS_MODULE_RE = re.compile(r"recompiling module (\w+)", re.IGNORECASE)
 _VCS_IF_RE = re.compile(r"recompiling interface (\w+)", re.IGNORECASE)
 
 _XCE_FILE_RE = re.compile(r"^file:\s+(.+)$")
-_XCE_ENTITY_RE = re.compile(r"^\s*(module|interface|package)\s+worklib\.(\w+):", re.IGNORECASE)
+_XCE_ENTITY_RE = re.compile(
+    r"^\s*(module|interface|package)\s+worklib\.(\w+):", re.IGNORECASE
+)
 _XCE_SHELL_COMMAND_RE = re.compile(
     r"^\s*cd\s+(?P<cwd>.+?)\s+&&\s+"
     r"(?P<command>(?:\S*/)?xrun(?:\s+.*)?)\s*$"
@@ -134,11 +136,13 @@ def _collect_user_files(
             filtered_count += 1
             continue
         info = file_info[path]
-        user.append({
-            "path": path,
-            "type": info.get("type", "unknown"),
-            "category": _categorize(path),
-        })
+        user.append(
+            {
+                "path": path,
+                "type": info.get("type", "unknown"),
+                "category": _categorize(path),
+            }
+        )
     return user, filtered_count
 
 
@@ -230,6 +234,10 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     )
     return {
         "simulator": "vcs",
+        # Adapter-facing provenance: relative command/filelist inputs are
+        # interpreted from the directory that contained the captured VCS log.
+        # Xcelium can record a different cwd explicitly; see its parser below.
+        "compile_cwd": log_dir,
         "top_modules": top_modules,
         "files": {
             "user": user,
@@ -254,7 +262,7 @@ def _extract_vcs_command(lines: list[str]) -> str | None:
         stripped = line.lstrip()
         if not stripped.startswith("Command:"):
             continue
-        body = stripped[len("Command:"):].strip()
+        body = stripped[len("Command:") :].strip()
         parts = [body.rstrip(" \\")]
         i = idx
         while body.endswith("\\"):
@@ -307,7 +315,7 @@ def _extract_vcs_incdirs(tokens: list[str], command_dir: str) -> list[str]:
     for token in tokens:
         if not token.startswith("+incdir+"):
             continue
-        for raw_path in token[len("+incdir+"):].split("+"):
+        for raw_path in token[len("+incdir+") :].split("+"):
             if not raw_path:
                 continue
             path = _normalize_path(raw_path, command_dir)
@@ -469,12 +477,9 @@ def _expand_vcs_filelist(
     # // comments before shlex handles # comments and quoted paths.
     logical_text = text.replace("\\\r\n", " ").replace("\\\n", " ")
     logical_text = "\n".join(
-        line for line in logical_text.splitlines()
-        if not line.lstrip().startswith("//")
+        line for line in logical_text.splitlines() if not line.lstrip().startswith("//")
     )
-    tokens = _tokenize_vcs_text(
-        logical_text, f"VCS filelist {filelist_path}", warnings
-    )
+    tokens = _tokenize_vcs_text(logical_text, f"VCS filelist {filelist_path}", warnings)
     state["active"].add(filelist_path)
     state["visited"].add(filelist_path)
     try:
@@ -592,6 +597,9 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
     user, filtered_count = _collect_user_files(file_info)
     return {
         "simulator": "xcelium",
+        # Preserve the cwd recovered by _extract_xcelium_invocation so an
+        # on-demand source frontend can replay relative inputs without guessing.
+        "compile_cwd": command_dir,
         "top_modules": top_modules,
         "files": {
             "user": user,

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 
 # ═══════════════════════════════════════════════════════════════════
 # EDA 工具路径（与 ~/.bashrc 保持一致）
@@ -55,16 +56,14 @@ WORK_CONTAINER_NAMES = (
 # ═══════════════════════════════════════════════════════════════════
 
 # 相对于 TraceWeave/ 根目录
-CUSTOM_PATTERNS_FILE = os.path.join(
-    os.path.dirname(__file__), "custom_patterns.yaml"
-)
+CUSTOM_PATTERNS_FILE = os.path.join(os.path.dirname(__file__), "custom_patterns.yaml")
 
 # ═══════════════════════════════════════════════════════════════════
 # 解析行为配置
 # ═══════════════════════════════════════════════════════════════════
 
 # UVM 严重级别：哪些级别需要解析（WARNING 不处理）
-UVM_PARSE_LEVELS    = {"UVM_ERROR", "UVM_FATAL"}
+UVM_PARSE_LEVELS = {"UVM_ERROR", "UVM_FATAL"}
 
 # analyze_assertion_failures 默认波形窗口（ps）
 DEFAULT_WAVE_WINDOW_PS = 2000
@@ -134,6 +133,7 @@ MAX_LOG_FILE_SIZE_FOR_MULTILINE = 500 * 1024 * 1024  # 500 MB
 # defines parsed from the compile log, and cache the resulting KDB in a
 # project-agnostic cache directory.
 
+
 # Default on. Set TRACEWEAVE_AUTO_KDB=0 (or "false") to disable.
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -146,6 +146,7 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
+
 
 # Cache root for TraceWeave-managed artifacts (generated KDBs, build
 # scripts, build logs). Honour XDG_CACHE_HOME / TRACEWEAVE_CACHE_DIR
@@ -178,8 +179,78 @@ TELEMETRY_FILENAME = "usage.jsonl"
 def telemetry_log_path() -> Path:
     return TRACEWEAVE_CACHE_ROOT / TELEMETRY_SUBDIR / TELEMETRY_FILENAME
 
+
 # Subprocess timeout (seconds) for vericom + elabcom each.
 KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Source Graph on-demand execution policy
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class SourceGraphExecutionConfig:
+    """Validated process-local policy for the optional Source Graph worker.
+
+    The parent process never imports the optional frontend.  ``python_bin`` is
+    passed as one argv item to the isolated worker launcher; malformed values
+    are represented by a fixed ``error_code`` so routing receipts can remain
+    privacy-safe.
+    """
+
+    enabled: bool
+    python_bin: str
+    frontend_version: str
+    timeout_sec: float
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
+    """Read the lazy, process-local Source Graph execution policy.
+
+    Source Graph is enabled by default, but absence of ``pyslang`` is an
+    expected structured dependency blocker followed by Legacy Static routing.
+    Sites with an isolated frontend install can point only this worker at it
+    with ``TRACEWEAVE_SOURCE_GRAPH_PYTHON``; the MCP server interpreter remains
+    dependency-free.
+    """
+
+    enabled = _env_flag("TRACEWEAVE_SOURCE_GRAPH", True)
+    python_bin = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_PYTHON", sys.executable
+    ).strip()
+    frontend_version = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0"
+    ).strip()
+    raw_timeout = os.environ.get("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", "120").strip()
+
+    try:
+        timeout_sec = float(raw_timeout)
+    except ValueError:
+        timeout_sec = 120.0
+        error_code = "source_graph_execution_config_invalid"
+    else:
+        error_code = None
+
+    if not _valid_exec_token(python_bin):
+        error_code = "source_graph_execution_config_invalid"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}", frontend_version):
+        error_code = "source_graph_execution_config_invalid"
+    if timeout_sec < 0.001 or timeout_sec > 86_400:
+        error_code = "source_graph_execution_config_invalid"
+
+    return SourceGraphExecutionConfig(
+        enabled=enabled,
+        python_bin=python_bin or sys.executable,
+        frontend_version=frontend_version or "11.0.0",
+        timeout_sec=timeout_sec,
+        error_code=error_code,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -303,11 +374,7 @@ def get_npi_execution_config() -> NpiExecutionConfig:
         return _invalid_npi_config("lsf", default_staging)
 
     raw_staging = os.environ.get("TRACEWEAVE_NPI_LSF_STAGING_DIR", "").strip()
-    staging_dir = (
-        Path(raw_staging).expanduser()
-        if raw_staging
-        else default_staging
-    )
+    staging_dir = Path(raw_staging).expanduser() if raw_staging else default_staging
     if not staging_dir.is_absolute():
         return _invalid_npi_config("lsf", default_staging)
 
@@ -358,7 +425,9 @@ def _parse_npi_lsf_extra_args() -> tuple[tuple[str, ...], bool]:
         parsed = json.loads(raw)
     except (TypeError, ValueError):
         return (), True
-    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
         return (), True
     args = tuple(parsed)
     if any(not _valid_argv_token(item) for item in args):
