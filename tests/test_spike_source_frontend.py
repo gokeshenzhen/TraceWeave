@@ -759,6 +759,32 @@ def test_frontend_ipc_serialization_scope_contains_only_frontend_facts():
     assert "invocation" not in payload
 
 
+def test_semantic_projection_excludes_only_truncated_presentation_samples():
+    base = {
+        "tops": ["tb"],
+        "instances": [{"path": "tb.first"}],
+        "instances_truncated": True,
+        "procedural_blocks": [{"path": "tb.first.proc"}],
+        "procedural_blocks_truncated": True,
+        "oracle_instance_path_membership": {"tb.dut": True},
+        "definitions": [{"name": "tb"}],
+        "object_counts": {"symbols_by_kind": {"Instance": 32000}},
+    }
+    jittered = deepcopy(base)
+    jittered["instances"] = [{"path": "tb.second"}]
+    jittered["procedural_blocks"] = [{"path": "tb.second.proc"}]
+
+    assert spike._recovered_semantic_projection(base) == (
+        spike._recovered_semantic_projection(jittered)
+    )
+
+    base["instances_truncated"] = False
+    jittered["instances_truncated"] = False
+    assert spike._recovered_semantic_projection(base) != (
+        spike._recovered_semantic_projection(jittered)
+    )
+
+
 def test_diagnostic_detail_cap_prioritizes_every_blocker_before_warnings():
     blocking = [{"severity": "Error", "id": index} for index in range(65)]
     warnings = [{"severity": "Warning", "id": index} for index in range(80)]

@@ -2231,6 +2231,15 @@ def _diagnostic_semantic_identities(
     )
 
 
+def _recovered_semantic_projection(recovered: dict[str, Any]) -> dict[str, Any]:
+    projection = dict(recovered)
+    if recovered.get("instances_truncated"):
+        projection.pop("instances", None)
+    if recovered.get("procedural_blocks_truncated"):
+        projection.pop("procedural_blocks", None)
+    return projection
+
+
 def _semantic_projection(worker: dict[str, Any]) -> dict[str, Any]:
     diagnostics = worker.get("diagnostics") or {}
     return {
@@ -2250,7 +2259,7 @@ def _semantic_projection(worker: dict[str, Any]) -> dict[str, Any]:
             "item_identities": _diagnostic_semantic_identities(diagnostics),
             "items_truncated": diagnostics.get("items_truncated"),
         },
-        "recovered": worker.get("recovered"),
+        "recovered": _recovered_semantic_projection(worker.get("recovered") or {}),
         "blockers": worker.get("blockers"),
     }
 
@@ -2502,6 +2511,10 @@ def _summarize_workload(
         hashlib.sha256(_canonical_json(worker.get("diagnostics") or {})).hexdigest()
         for worker in workers
     ]
+    retained_evidence_fingerprints = [
+        hashlib.sha256(_canonical_json(worker.get("recovered") or {})).hexdigest()
+        for worker in workers
+    ]
     representative = workers[0]
     phase_names = sorted(
         {
@@ -2537,6 +2550,7 @@ def _summarize_workload(
     )
     stable = len(set(fingerprints)) == 1
     stable_full_diagnostics = len(set(diagnostic_fingerprints)) == 1
+    stable_retained_evidence = len(set(retained_evidence_fingerprints)) == 1
     diagnostic_codes = sorted(
         {
             code
@@ -2564,8 +2578,18 @@ def _summarize_workload(
     else:
         status = "supported"
     samples = []
-    for worker, receipt, fingerprint, diagnostic_fingerprint in zip(
-        workers, receipts, fingerprints, diagnostic_fingerprints
+    for (
+        worker,
+        receipt,
+        fingerprint,
+        diagnostic_fingerprint,
+        retained_evidence_fingerprint,
+    ) in zip(
+        workers,
+        receipts,
+        fingerprints,
+        diagnostic_fingerprints,
+        retained_evidence_fingerprints,
     ):
         samples.append(
             {
@@ -2575,6 +2599,7 @@ def _summarize_workload(
                 "process_rss_kib": worker.get("process_rss_kib"),
                 "semantic_fingerprint_sha256": fingerprint,
                 "full_diagnostic_fingerprint_sha256": diagnostic_fingerprint,
+                "retained_evidence_fingerprint_sha256": retained_evidence_fingerprint,
             }
         )
     return {
@@ -2617,6 +2642,14 @@ def _summarize_workload(
                     ]
                 ),
                 "varying_by_code": varying_diagnostic_codes,
+            },
+            "retained_evidence_stability": {
+                "stable_full_payload": stable_retained_evidence,
+                "interpretation": (
+                    "bounded instance/procedural detail arrays are presentation evidence; "
+                    "when truncated they are excluded from semantic identity, while exact "
+                    "counts, definitions, tops, and oracle path memberships remain included"
+                ),
             },
             "process_wall_time_ms": _distribution(
                 [item["process_wall_time_ms"] for item in receipts]
