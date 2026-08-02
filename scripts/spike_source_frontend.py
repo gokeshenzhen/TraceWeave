@@ -341,6 +341,45 @@ def _extract_xcelium_invocation(log_path: Path) -> tuple[str, list[Path]]:
     return shlex.join(top_level_tokens), expanded_sources
 
 
+def _extract_xcelium_uvm_library(log_path: Path) -> dict[str, Any] | None:
+    """Resolve the simulator-provided UVM sources recorded by xrun itself."""
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(
+        r"Compiling UVM packages \((?P<packages>[^)]+)\) using uvmhome "
+        r"location (?P<location>[^\r\n]+)",
+        text,
+    )
+    if match is None:
+        return None
+
+    location = Path(match.group("location").strip()).expanduser().resolve()
+    search_dirs = [location / "sv" / "src", location / "additions" / "sv"]
+    sources: list[Path] = []
+    missing: list[str] = []
+    for package_name in shlex.split(match.group("packages")):
+        source = next(
+            (directory / package_name for directory in search_dirs if (directory / package_name).is_file()),
+            None,
+        )
+        if source is None:
+            missing.append(package_name)
+        else:
+            sources.append(source.resolve())
+    if missing:
+        raise SpikeInputError(
+            "simulator_library_missing",
+            "xrun recorded simulator-provided UVM packages that are unavailable: "
+            + ", ".join(missing),
+        )
+    return {
+        "name": "xcelium_uvmhome",
+        "source": "xrun_log_uvmhome_record",
+        "location": str(location),
+        "include_dirs": [str(path.resolve()) for path in search_dirs if path.is_dir()],
+        "sources": [str(path) for path in sources],
+    }
+
+
 def _real_project_root(log_path: Path) -> Path:
     for candidate in (log_path.parent, *log_path.parents):
         if (candidate / "dut").is_dir() and (candidate / "tb").is_dir():
@@ -786,6 +825,7 @@ def translate_xcelium_invocation(
     *,
     top: str,
     fallback_sources: Sequence[Path],
+    xcelium_uvm_library: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Translate the Phase 0B-relevant portion of an xrun invocation."""
     try:
@@ -804,6 +844,16 @@ def translate_xcelium_invocation(
         "--single-unit",
         "-Wno-unknown-sys-name",
     ]
+    uvm_frontend_args: list[str] = []
+    if xcelium_uvm_library is not None:
+        for include_dir in xcelium_uvm_library.get("include_dirs", []):
+            uvm_frontend_args.extend(["-I", str(include_dir)])
+        uvm_frontend_args.extend(
+            str(path) for path in xcelium_uvm_library.get("sources", [])
+        )
+        # Xcelium compiles its implicit UVM library before user compilation
+        # units even when the rendered option block prints -uvmhome later.
+        frontend_args.extend(uvm_frontend_args)
     translated: list[dict[str, Any]] = []
     unsupported: list[dict[str, Any]] = []
     _record_translation(
@@ -970,6 +1020,53 @@ def translate_xcelium_invocation(
             )
             index += 1
             continue
+        if token == "-uvmhome" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            if xcelium_uvm_library is None:
+                _record_unsupported(
+                    unsupported,
+                    f"-uvmhome {value}",
+                    (
+                        "Xcelium's implicit UVM source library was not recorded in "
+                        "the compile log and cannot be silently approximated"
+                    ),
+                    "simulator_source_library_unresolved",
+                )
+            else:
+                _record_translation(
+                    translated,
+                    f"-uvmhome {value}",
+                    uvm_frontend_args,
+                    (
+                        "expand the simulator-provided UVM package sources and include "
+                        "directories recorded by xrun"
+                    ),
+                )
+            index += 2
+            continue
+        if token == "-ALLOWREDEFINITION":
+            _record_unsupported(
+                unsupported,
+                token,
+                (
+                    "Xcelium root-definition replacement semantics have no exact "
+                    "Slang switch; elaborated hierarchy requires oracle validation"
+                ),
+                "semantic_compatibility_oracle_required",
+            )
+            index += 1
+            continue
+        if token in {"-errormax", "-nowarn", "-xmerror", "-xprop"}:
+            value = tokens[index + 1] if index + 1 < len(tokens) else None
+            rendered = f"{token} {value}" if value is not None else token
+            _record_unsupported(
+                unsupported,
+                rendered,
+                "Xcelium diagnostic or simulation-runtime policy",
+                "frontend_irrelevant",
+            )
+            index += 2 if value is not None else 1
+            continue
         if token in {
             "-access",
             "-input",
@@ -1010,6 +1107,42 @@ def translate_xcelium_invocation(
                 token,
                 "Xcelium execution, timing, diagnostics, coverage, or runtime option",
                 "frontend_irrelevant",
+            )
+            index += 1
+            continue
+        if token in {
+            "-licqueue",
+            "-enable_strict_timescale",
+            "-nocopyright",
+            "-enable_abv_asrtctrl_enh",
+            "-xverbose",
+        }:
+            _record_unsupported(
+                unsupported,
+                token,
+                "Xcelium license, diagnostics, assertion, or simulation-runtime policy",
+                "frontend_irrelevant",
+            )
+            index += 1
+            continue
+        if token == "-L" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            _record_unsupported(
+                unsupported,
+                f"-L {value}",
+                "native DPI linker search path is outside HDL source connectivity",
+                "external_runtime_not_modeled",
+            )
+            index += 2
+            continue
+        if token.startswith("-L") or (
+            token.startswith("-l") and token not in {"-licqueue"}
+        ):
+            _record_unsupported(
+                unsupported,
+                token,
+                "native DPI linker option is outside HDL source connectivity",
+                "external_runtime_not_modeled",
             )
             index += 1
             continue
@@ -1213,8 +1346,14 @@ def build_real_workload(
     )
     compile_result = _load_compile_result(log_path, selected_simulator)
     xcelium_sources: list[Path] = []
+    xcelium_uvm_library: dict[str, Any] | None = None
     if selected_simulator == "xcelium":
         command, xcelium_sources = _extract_xcelium_invocation(log_path)
+        xcelium_uvm_library = _extract_xcelium_uvm_library(log_path)
+        if xcelium_uvm_library is not None:
+            xcelium_sources.extend(
+                Path(path) for path in xcelium_uvm_library.get("sources", [])
+            )
     else:
         command = str(compile_result.get("compile_command") or "")
     if not command:
@@ -1253,7 +1392,12 @@ def build_real_workload(
             "real compile log has no existing HDL inputs",
         )
     translation = (
-        translate_xcelium_invocation(command, top=top, fallback_sources=source_paths)
+        translate_xcelium_invocation(
+            command,
+            top=top,
+            fallback_sources=source_paths,
+            xcelium_uvm_library=xcelium_uvm_library,
+        )
         if selected_simulator == "xcelium"
         else translate_vcs_invocation(command, top=top, fallback_sources=source_paths)
     )
@@ -1277,6 +1421,9 @@ def build_real_workload(
         "environment": environment,
         "environment_provenance": provenance,
         "filelists": filelists,
+        "simulator_source_libraries": (
+            [xcelium_uvm_library] if xcelium_uvm_library is not None else []
+        ),
         "source_facts": facts,
         "translation": translation,
         "manual_oracle": {

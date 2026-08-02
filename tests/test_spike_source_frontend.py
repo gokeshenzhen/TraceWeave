@@ -168,6 +168,90 @@ def test_xcelium_translation_maps_compile_inputs_and_receipts_vendor_options():
     assert unsupported["-log /tmp/elab.log"] == "frontend_irrelevant"
 
 
+def test_xcelium_translation_expands_uvmhome_and_classifies_opentitan_options(
+    tmp_path,
+):
+    uvm_src = tmp_path / "CDNS-1.2" / "sv" / "src"
+    additions = tmp_path / "CDNS-1.2" / "additions" / "sv"
+    uvm_pkg = uvm_src / "uvm_pkg.sv"
+    cdns_pkg = additions / "cdns_uvm_pkg.sv"
+    _write(uvm_pkg, "package uvm_pkg; endpackage\n")
+    _write(cdns_pkg, "package cdns_uvm_pkg; endpackage\n")
+    library = {
+        "include_dirs": [str(uvm_src), str(additions)],
+        "sources": [str(uvm_pkg), str(cdns_pkg)],
+    }
+    translation = spike.translate_xcelium_invocation(
+        (
+            "xrun -L/tmp/dpi -licqueue -ALLOWREDEFINITION -errormax 50 "
+            "-f /tmp/design.scr "
+            "-uvmhome CDNS-1.2 -enable_strict_timescale -nocopyright "
+            "-nowarn TSNSPK -xmerror ENUMERR -enable_abv_asrtctrl_enh "
+            "-xprop F -xverbose -lelf -lcrypto -lutil -top tb"
+        ),
+        top="tb",
+        fallback_sources=[],
+        xcelium_uvm_library=library,
+    )
+
+    args = translation["frontend_args"]
+    assert args[args.index("-I") : args.index("-I") + 6] == [
+        "-I",
+        str(uvm_src),
+        "-I",
+        str(additions),
+        str(uvm_pkg),
+        str(cdns_pkg),
+    ]
+    assert args.index(str(uvm_pkg)) < args.index("-f")
+    unsupported = {
+        item["option"]: item["impact"] for item in translation["unsupported_options"]
+    }
+    assert unsupported["-ALLOWREDEFINITION"] == (
+        "semantic_compatibility_oracle_required"
+    )
+    assert unsupported["-errormax 50"] == "frontend_irrelevant"
+    assert unsupported["-nowarn TSNSPK"] == "frontend_irrelevant"
+    assert unsupported["-xmerror ENUMERR"] == "frontend_irrelevant"
+    assert unsupported["-xprop F"] == "frontend_irrelevant"
+    assert unsupported["-L/tmp/dpi"] == "external_runtime_not_modeled"
+    assert unsupported["-lcrypto"] == "external_runtime_not_modeled"
+    assert "requires_workload_review" not in unsupported.values()
+
+
+def test_xcelium_real_workload_records_simulator_provided_uvm_sources(tmp_path):
+    work = tmp_path / "fusesoc-work"
+    compile_log = work / "xrun.log"
+    top = work / "src" / "tb.sv"
+    uvmhome = tmp_path / "tools" / "methodology" / "UVM" / "CDNS-1.2"
+    uvm_pkg = uvmhome / "sv" / "src" / "uvm_pkg.sv"
+    cdns_pkg = uvmhome / "additions" / "sv" / "cdns_uvm_pkg.sv"
+    _write(top, "module tb; endmodule\n")
+    _write(uvm_pkg, "package uvm_pkg; endpackage\n")
+    _write(cdns_pkg, "package cdns_uvm_pkg; endpackage\n")
+    _write(
+        compile_log,
+        "xrun(64): 26.03-s001-20260323: started\n"
+        "xrun\n"
+        "\t-elaborate\n"
+        "\t-uvmhome CDNS-1.2\n"
+        f"\t{top}\n"
+        "\t-top tb\n"
+        f"file: {top}\n"
+        "\tmodule worklib.tb:sv\n"
+        "Compiling UVM packages (uvm_pkg.sv cdns_uvm_pkg.sv) using uvmhome "
+        f"location {uvmhome}\n",
+    )
+
+    workload = spike.build_real_workload(compile_log, {}, simulator="xcelium")
+
+    library = workload["simulator_source_libraries"][0]
+    assert library["source"] == "xrun_log_uvmhome_record"
+    assert library["sources"] == [str(uvm_pkg.resolve()), str(cdns_pkg.resolve())]
+    assert workload["source_facts"]["existing_source_count"] == 3
+    assert str(uvm_pkg.resolve()) in workload["translation"]["frontend_args"]
+
+
 def test_real_workload_planning_uses_explicit_environment_and_nested_filelists(
     tmp_path,
 ):
