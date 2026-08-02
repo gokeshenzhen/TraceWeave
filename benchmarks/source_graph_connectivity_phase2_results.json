@@ -1,0 +1,4062 @@
+{
+  "assessment": {
+    "coverage_claim": "target_scoped_only_partial_or_inconclusive_preserved",
+    "decision": "phase2_public_driver_load_gate_passed",
+    "failure_gate_passed": true,
+    "next_step": "stop after Phase 2; do not enter path, X-trace, disk-cache, or persistent-worker scope",
+    "phase2_public_driver_load_gate_passed": true,
+    "production_route_changed": true,
+    "production_route_changed_tools": [
+      "explain_signal_driver",
+      "find_signal_loads"
+    ],
+    "public_production_integration_performed": true,
+    "route_gate_passed": true,
+    "trace_signal_path_route_changed": false,
+    "trace_x_source_route_changed": false,
+    "waveform_locking_model_changed": false,
+    "workload_gates_passed": true
+  },
+  "before_baselines": {
+    "phase1a": {
+      "decision": "go_for_production_integration_review",
+      "measurement_head": "1d4f43e8c9745d03630f89014026f4595c391409",
+      "production_route_changed": false,
+      "sha256": "c7310560a1e89e19694a83d41e24a645578b747585c68df546a20937f3fa42e2"
+    },
+    "phase1b": {
+      "decision": "phase1b_internal_gate_passed_await_production_integration_approval",
+      "measurement_head": "b1ad0da31f27cf9120fb22faff6e0a7c69101f40",
+      "opentitan_reference_scope": {
+        "blocking_diagnostic_count": 65,
+        "coverage_boundary_path_count": 5,
+        "coverage_status": "inconclusive",
+        "objective_exclusions": [
+          "bind_semantics_incomplete",
+          "dpi_runtime_not_modeled",
+          "procedural_force_not_modeled",
+          "protected_payload_not_modeled",
+          "uvm_dynamic_connectivity_not_modeled"
+        ],
+        "representative_query_confidence": "partial",
+        "requested_assignment_cone_path_count": 2
+      },
+      "production_route_changed": false,
+      "public_production_integration_performed": false,
+      "sha256": "c9a25c96c63ddce9205ecabf86b61f6da1eff9ba0f71aeee099a6b04f7237da7"
+    }
+  },
+  "benchmark": "source_graph_connectivity_phase2",
+  "benchmark_script": {
+    "path": "scripts/benchmark_source_graph_phase2.py",
+    "sha256": "46fd6c266f353be34410646e8f28a64fb743a71f490f8dd79ff0eaca1d0fe58a"
+  },
+  "failure_probes": {
+    "gate": {
+      "checks": [
+        {
+          "actual": "build_failed",
+          "expected": "build_failed",
+          "name": "build_failure_structured_status",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "expected": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "name": "build_failure_legacy_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": "worker_crash",
+          "expected": "worker_crash",
+          "name": "crash_structured_status",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "expected": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "name": "crash_legacy_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": "timed_out",
+          "expected": "timed_out",
+          "name": "timeout_structured_status",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "expected": {
+            "actual_backend": "static",
+            "fallback_used": true
+          },
+          "name": "timeout_legacy_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "failure": {
+              "actual_backend": null,
+              "fallback_used": false,
+              "status": "cancelled"
+            },
+            "static_calls": 0
+          },
+          "expected": {
+            "cancelled": true,
+            "fallback_used": false,
+            "static_calls": 0
+          },
+          "name": "cancellation_stops_without_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "name": "build_failure_failure_does_not_pollute_cache",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "expected": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "name": "build_failure_safe_public_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "name": "crash_failure_does_not_pollute_cache",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "expected": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "name": "crash_safe_public_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "name": "timeout_failure_does_not_pollute_cache",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "expected": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "name": "timeout_safe_public_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0
+          },
+          "name": "cancellation_failure_does_not_pollute_cache",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "expected": {
+            "actual_backend": "source_graph",
+            "cache": 1
+          },
+          "name": "cancellation_safe_public_retry",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    "results": {
+      "build_failure": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_build_failed",
+              "status": "failed"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "fallback_reason": "source_graph_build_failed",
+          "parent_cpu_time_ms": 1.388219,
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "56807738532ac42be6f3ba6c5620631438c2bd3886ff927bc13db7b5732977c7",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "frontend_build_failed",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1.0004150681197643,
+              "admission_wait_ms": 0.0013317912817001343,
+              "build_wall_ms": 0.02468610182404518,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.11858087964355946,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "prepare_status": "build_failed",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 1.408124
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "fallback_reason": "npi_kdb_unavailable",
+          "parent_cpu_time_ms": 5.586672,
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "3841bbb99cb97294f4e40efa5f1b378b08c4491fa9989dce79b0b84d7fc6f54a",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_gap_count": 3,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.2632499672472477,
+              "admission_wait_ms": 0.0009220093488693237,
+              "build_wall_ms": 177.49147000722587,
+              "cache_bytes": 10910,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 10910,
+              "load_wall_ms": 3.1251339241862297,
+              "prepare_total_wall_ms": 180.74074410833418,
+              "query_wall_ms": 0.3788259346038103,
+              "rss_end_kib": 52588,
+              "rss_peak_kib": 84044,
+              "rss_start_kib": 24100,
+              "worker_cpu_ms": 52.893456
+            },
+            "objective_exclusions": [],
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 2,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 181.587863
+        },
+        "static_calls_after_failure": 1
+      },
+      "cancellation": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": null,
+          "fallback_used": false,
+          "status": "cancelled"
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "fallback_reason": "npi_kdb_unavailable",
+          "parent_cpu_time_ms": 4.546694,
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "8ecb0f2167e2f04b4215b446942ed0841246a77cce5a033b509e6a848675d6c6",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_gap_count": 3,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.42181601747870445,
+              "admission_wait_ms": 0.0012719538062810898,
+              "build_wall_ms": 162.22118493169546,
+              "cache_bytes": 10910,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 10910,
+              "load_wall_ms": 1.9219720270484686,
+              "prepare_total_wall_ms": 164.28867704235017,
+              "query_wall_ms": 0.37627085112035275,
+              "rss_end_kib": 50204,
+              "rss_peak_kib": 84044,
+              "rss_start_kib": 24196,
+              "worker_cpu_ms": 50.087154
+            },
+            "objective_exclusions": [],
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 2,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 165.339336
+        },
+        "static_calls_after_failure": 0
+      },
+      "crash": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_worker_crash",
+              "status": "failed"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "fallback_reason": "source_graph_worker_crash",
+          "parent_cpu_time_ms": 2.58417,
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "e053aef2b68cc790c9becb4b7439efb4e715fc38472fb4d0ca96761ab772a4c3",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "worker_exit_failure",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1.0437448509037495,
+              "admission_wait_ms": 0.0015229452401399612,
+              "build_wall_ms": 9.079559007659554,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 9.21331811696291,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "prepare_status": "worker_crash",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 10.690571
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "fallback_reason": "npi_kdb_unavailable",
+          "parent_cpu_time_ms": 3.754614,
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "95eb1fa55a35e004482c36c41bd4dcd574f3921053d85db8bbfa7553d6efa398",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_gap_count": 3,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.34160702489316463,
+              "admission_wait_ms": 0.0012621749192476273,
+              "build_wall_ms": 172.98401100561023,
+              "cache_bytes": 10910,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 10910,
+              "load_wall_ms": 1.6336841508746147,
+              "prepare_total_wall_ms": 174.7515241149813,
+              "query_wall_ms": 0.28773583471775055,
+              "rss_end_kib": 52248,
+              "rss_peak_kib": 84044,
+              "rss_start_kib": 24196,
+              "worker_cpu_ms": 52.612949
+            },
+            "objective_exclusions": [],
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 2,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 175.549581
+        },
+        "static_calls_after_failure": 1
+      },
+      "timeout": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_timed_out",
+              "status": "timed_out"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "fallback_reason": "source_graph_timed_out",
+          "parent_cpu_time_ms": 2.131176,
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "26fab3172b60f34e33a7667d89db76ab5d192ca505a9c14698cb56b046035bf7",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "worker_timeout",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.9827411267906427,
+              "admission_wait_ms": 0.0010719522833824158,
+              "build_wall_ms": 2.050891052931547,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": 0.21098298020660877,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 2.1577710285782814,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "prepare_status": "timed_out",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 3.458906
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "fallback_reason": "npi_kdb_unavailable",
+          "parent_cpu_time_ms": 4.337782,
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "360249c71b09948b787cf981954aa05a1fc5a63c9944482aa6aacaf07040b1b2",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_gap_count": 3,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.30784402042627335,
+              "admission_wait_ms": 0.0010421499609947205,
+              "build_wall_ms": 192.1607239637524,
+              "cache_bytes": 10910,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 10910,
+              "load_wall_ms": 2.1230459678918123,
+              "prepare_total_wall_ms": 194.40518715418875,
+              "query_wall_ms": 0.3717329818755388,
+              "rss_end_kib": 52252,
+              "rss_peak_kib": 84044,
+              "rss_start_kib": 24196,
+              "worker_cpu_ms": 54.698762
+            },
+            "objective_exclusions": [],
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 2,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 2,
+              "coverage_boundary_instance_count": 2,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 1
+            }
+          },
+          "wall_time_ms": 195.2712
+        },
+        "static_calls_after_failure": 1
+      }
+    },
+    "workload": "hand_fixture"
+  },
+  "frontend": {
+    "dependency_model": "optional pinned isolated one-shot worker",
+    "interpreter": "/tmp/traceweave-phase0b-pyslang-11.0.0/bin/python",
+    "name": "Slang/pyslang",
+    "parent_import_requires_pyslang": false,
+    "required_version": "11.0.0"
+  },
+  "gate_targets": {
+    "opentitan_public_cold_p50_max_ms": 15000.0,
+    "peak_rss_max_kib": 2621440,
+    "same_key_actual_build_count": 1,
+    "warm_public_prepare_query_p95_max_ms": 100.0
+  },
+  "generated_at_utc": "2026-08-02T11:24:58.109539+00:00",
+  "measurement_policy": {
+    "cold": "fresh manifest cache, runtime, and isolated worker per repeat",
+    "concurrent": "simultaneous identical public driver requests",
+    "coverage_boundary_probe": "tracked marker fixture proving public UVM/DPI/force/bind/protected coverage receipts; not an accuracy or performance workload",
+    "failure": "public crash/timeout fallback and cancellation no-fallback, then same-runtime retry",
+    "npi_probe": "deterministic trusted-result routing probe; validates public NPI precedence/schema without requiring an NPI license or accuracy claim",
+    "opentitan_scope": "four ancestor paths / one target cone path only; not full-design accuracy, coverage, or speedup; protected-source exclusion is proved separately because this manifest has no detected protected input marker",
+    "warm": "whole public dispatch with compile-session and exact IR memory hits"
+  },
+  "repository": {
+    "head": "8b40dc2b7b597f152fe5d0a152d3afe71c8ff05e",
+    "root": "/home/robin/Projects/mcp/TraceWeave"
+  },
+  "route_probes": {
+    "construct_coverage_boundary": {
+      "probe_model": "tracked marker fixture proving public UVM/DPI/force/bind/protected coverage receipts; not an accuracy or performance workload",
+      "result": {
+        "actual_backend": "source_graph",
+        "attempted_backend": "source_graph",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": "npi_kdb_unavailable",
+            "status": "unavailable"
+          },
+          {
+            "backend": "source_graph",
+            "coverage_status": "inconclusive",
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "source_graph",
+        "fallback_reason": "npi_kdb_unavailable",
+        "parent_cpu_time_ms": 6.228793,
+        "payload_backends": [
+          "source_graph"
+        ],
+        "schema_fingerprint_sha256": "07d9543f4f2796f5498096bd2c4297db84ac353a392a9fc57e2027fde7a413ad",
+        "selected_backend": "source_graph",
+        "source_graph": {
+          "adapter_status": "ready",
+          "blocker": null,
+          "build_key_sha256": "49d36e86924d8462b50a9f2b026cc568acd6cae4e1b15e8cc03534f8e64a7b57",
+          "cache_disposition": "miss",
+          "compile_fingerprint_sha256": "b45b846fb5de9e168126e59f0a6c502fd267947bb6bd76fdbad3dc41233878ff",
+          "coverage_blocking_diagnostic_count": 0,
+          "coverage_diagnostic_count": 0,
+          "coverage_files_projected": 2,
+          "coverage_files_total": 2,
+          "coverage_gap_codes": [
+            "ancestor_definition_skeleton_only",
+            "bind_semantics",
+            "dpi_runtime",
+            "hierarchy_projection_scoped",
+            "interface_specialization_unresolved",
+            "procedural_force_release",
+            "protected_region",
+            "uvm_dynamic_connectivity"
+          ],
+          "coverage_gap_count": 8,
+          "coverage_status": "inconclusive",
+          "cross_request_reusable": true,
+          "fallback_used": false,
+          "flight_disposition": "builder",
+          "gap_codes": [],
+          "ir_fingerprint_sha256": "ef3b958051d3e9f6dbb19b8190c47ffe158c76ca7e968159263185aa51e09cbe",
+          "manifest": {
+            "complete": true,
+            "fingerprint_cache_disposition": "miss",
+            "incomplete_reasons": [],
+            "input_count": 2,
+            "option_count": 5,
+            "top_count": 1
+          },
+          "metrics": {
+            "actual_build_count": 1,
+            "adapter_wall_ms": 1.2700359802693129,
+            "admission_wait_ms": 0.005059875547885895,
+            "build_wall_ms": 172.20858484506607,
+            "cache_bytes": 11907,
+            "cancel_to_exit_ms": null,
+            "coalesced_waiter_count": 0,
+            "ir_bytes": 11907,
+            "load_wall_ms": 2.4057631380856037,
+            "prepare_total_wall_ms": 174.8064560815692,
+            "query_wall_ms": 0.44271512888371944,
+            "rss_end_kib": 52624,
+            "rss_peak_kib": 69920,
+            "rss_start_kib": 24248,
+            "worker_cpu_ms": 52.486346
+          },
+          "objective_exclusions": [
+            "bind_semantics",
+            "dpi_runtime",
+            "procedural_force_release",
+            "protected_region",
+            "uvm_dynamic_connectivity"
+          ],
+          "prepare_status": "ready",
+          "query_confidence": "partial",
+          "query_match_count": 2,
+          "query_status": "found",
+          "scope": {
+            "ancestor_count": 2,
+            "coverage_boundary_instance_count": 2,
+            "objective_exclusions": [
+              "bind_semantics",
+              "dpi_runtime",
+              "procedural_force_release",
+              "protected_region",
+              "uvm_dynamic_connectivity"
+            ],
+            "requested_cone_instance_count": 1
+          }
+        },
+        "wall_time_ms": 176.771248
+      },
+      "runtime_stats": {
+        "actual_build_count": 1,
+        "cache_bypass_count": 0,
+        "cache_bytes": 11907,
+        "cache_entry_count": 1,
+        "cache_hit_count": 0,
+        "cache_miss_count": 1,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 0
+      },
+      "static_calls": 0
+    },
+    "gate": {
+      "checks": [
+        {
+          "actual": {
+            "backends": [
+              "verdi_npi",
+              "verdi_npi"
+            ],
+            "source_graph": 0,
+            "static": 0
+          },
+          "expected": {
+            "backend": "verdi_npi",
+            "source_graph": 0,
+            "static": 0
+          },
+          "name": "npi_success_precedes_source_graph_and_static",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual": "static",
+            "prepare": "dependency_blocked"
+          },
+          "expected": {
+            "actual": "static",
+            "prepare": "dependency_blocked"
+          },
+          "name": "dependency_blocker_routes_to_legacy_static",
+          "passed": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "driver_load_only_route_change",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual_backend": "source_graph",
+            "coverage_status": "inconclusive",
+            "objective_exclusions": [
+              "bind_semantics",
+              "dpi_runtime",
+              "procedural_force_release",
+              "protected_region",
+              "uvm_dynamic_connectivity"
+            ],
+            "payload_backends": [
+              "source_graph"
+            ],
+            "query_confidence": "partial",
+            "static_calls": 0
+          },
+          "expected": {
+            "actual_backend": "source_graph",
+            "coverage_status": "inconclusive",
+            "objective_exclusions": [
+              "bind_semantics",
+              "dpi_runtime",
+              "procedural_force_release",
+              "protected_region",
+              "uvm_dynamic_connectivity"
+            ],
+            "query_confidence": "partial",
+            "static_calls": 0
+          },
+          "name": "construct_exclusions_preserved_by_public_receipt",
+          "passed": true
+        },
+        {
+          "actual": {
+            "pyslang_imported": false,
+            "server_import_succeeded": true,
+            "uhdm_imported": false
+          },
+          "expected": {
+            "pyslang": false,
+            "server": true,
+            "uhdm": false
+          },
+          "name": "parent_import_has_no_optional_frontend",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    "npi_success": {
+      "driver": {
+        "actual_backend": "verdi_npi",
+        "attempted_backend": "verdi_npi",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "verdi_npi",
+        "fallback_reason": null,
+        "parent_cpu_time_ms": 2.055911,
+        "payload_backends": [
+          "verdi_npi"
+        ],
+        "schema_fingerprint_sha256": "188f80a471c5b524565732735cbc44fccba94ef395ad07dc513397aaad1a7994",
+        "selected_backend": "verdi_npi",
+        "wall_time_ms": 2.061762
+      },
+      "loads": {
+        "actual_backend": "verdi_npi",
+        "attempted_backend": "verdi_npi",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "verdi_npi",
+        "fallback_reason": null,
+        "parent_cpu_time_ms": 0.052127,
+        "payload_backends": [
+          "verdi_npi"
+        ],
+        "schema_fingerprint_sha256": "2e2a212143d73d58e5fb370005cf9c8507bf0cfb33851d6d5b5dfe383fed13f8",
+        "selected_backend": "verdi_npi",
+        "wall_time_ms": 0.051887
+      },
+      "npi_driver_calls": 1,
+      "npi_load_calls": 1,
+      "probe_model": "deterministic trusted-result routing probe; validates public NPI precedence/schema without requiring an NPI license or accuracy claim",
+      "source_graph_runtime_get_count": 0,
+      "static_calls": 0
+    },
+    "parent_import": {
+      "pyslang_imported": false,
+      "server_import_succeeded": true,
+      "uhdm_imported": false
+    },
+    "scope_isolation": {
+      "accepted_head": "f377abff886631322605d6d3e572641014d97413",
+      "dispatch_branches": {
+        "explain_signal_driver": {
+          "accepted_ast_sha256": "0b055179b7b75a22fbeb6ad806ef6f7ed3908203f713c397ae0f2bd19e551fde",
+          "changed": true,
+          "current_ast_sha256": "b27dc7fd1f4703fd72261b225f9656238c2fdb87865f70e390ccd36657a198ca"
+        },
+        "find_signal_loads": {
+          "accepted_ast_sha256": "9b952f0fae5129b6b893708f74ec43625c1388ccaa888015ab21e6b33071a923",
+          "changed": true,
+          "current_ast_sha256": "f9075c58aa4bc0e44556e2180a88732ba396f132c47609a802be2887acf831b7"
+        },
+        "trace_signal_path": {
+          "accepted_ast_sha256": "14ac40cf7d3f3c7270eaee11a6ab12749eb038fb8c3ce1ff285a1ec7eed9ea43",
+          "changed": false,
+          "current_ast_sha256": "14ac40cf7d3f3c7270eaee11a6ab12749eb038fb8c3ce1ff285a1ec7eed9ea43"
+        },
+        "trace_x_source": {
+          "accepted_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe",
+          "changed": false,
+          "current_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe"
+        }
+      },
+      "driver_load_route_changed_only": true,
+      "waveform_locking_functions": {
+        "_run_in_wave_thread": {
+          "accepted_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044",
+          "changed": false,
+          "current_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044"
+        },
+        "_wave_locks_for": {
+          "accepted_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70",
+          "changed": false,
+          "current_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70"
+        }
+      }
+    },
+    "source_graph_dependency_to_legacy_static": {
+      "result": {
+        "actual_backend": "static",
+        "attempted_backend": "source_graph",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": "npi_kdb_unavailable",
+            "status": "unavailable"
+          },
+          {
+            "backend": "source_graph",
+            "coverage_status": null,
+            "reason": "source_graph_dependency_blocked",
+            "status": "failed"
+          },
+          {
+            "backend": "static",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "static",
+        "fallback_reason": "source_graph_dependency_blocked",
+        "parent_cpu_time_ms": 5.217378,
+        "payload_backends": [
+          "static"
+        ],
+        "schema_fingerprint_sha256": "57d51e1fd41fd7a4d17275d6a94f0965a0d81a8cd12bae6f7d401df4675c8a62",
+        "selected_backend": "source_graph",
+        "source_graph": {
+          "adapter_status": "ready",
+          "blocker": {
+            "code": "frontend_unavailable",
+            "stage": "worker_process"
+          },
+          "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+          "cache_disposition": "miss",
+          "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+          "coverage_blocking_diagnostic_count": 0,
+          "coverage_diagnostic_count": 0,
+          "coverage_files_projected": 0,
+          "coverage_files_total": 0,
+          "coverage_gap_codes": [],
+          "coverage_gap_count": 0,
+          "coverage_status": null,
+          "cross_request_reusable": true,
+          "fallback_used": true,
+          "flight_disposition": "builder",
+          "gap_codes": [],
+          "ir_fingerprint_sha256": null,
+          "manifest": {
+            "complete": true,
+            "fingerprint_cache_disposition": "miss",
+            "incomplete_reasons": [],
+            "input_count": 1,
+            "option_count": 5,
+            "top_count": 1
+          },
+          "metrics": {
+            "actual_build_count": 1,
+            "adapter_wall_ms": 4.675072152167559,
+            "admission_wait_ms": 0.002164160832762718,
+            "build_wall_ms": 0.026529189199209213,
+            "cache_bytes": 0,
+            "cancel_to_exit_ms": null,
+            "coalesced_waiter_count": 0,
+            "ir_bytes": 0,
+            "load_wall_ms": 0.0,
+            "prepare_total_wall_ms": 0.16764318570494652,
+            "query_wall_ms": null,
+            "rss_end_kib": null,
+            "rss_peak_kib": null,
+            "rss_start_kib": null,
+            "worker_cpu_ms": null
+          },
+          "objective_exclusions": [],
+          "prepare_status": "dependency_blocked",
+          "query_confidence": null,
+          "query_match_count": 0,
+          "query_status": null,
+          "scope": {
+            "ancestor_count": 2,
+            "coverage_boundary_instance_count": 2,
+            "objective_exclusions": [],
+            "requested_cone_instance_count": 1
+          }
+        },
+        "wall_time_ms": 5.213776
+      },
+      "runtime_stats": {
+        "actual_build_count": 1,
+        "cache_bypass_count": 0,
+        "cache_bytes": 0,
+        "cache_entry_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 1,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 1
+      },
+      "static_calls": 1
+    }
+  },
+  "runtime_model": {
+    "compile_session_manifest_cache": "bounded process memory",
+    "disk_cache": false,
+    "ir_cache": "process-session memory only",
+    "max_concurrent_cold_builds_per_process": 1,
+    "persistent_worker": false,
+    "process_shared_lazy_runtime": true,
+    "production_route": "trusted Verdi NPI -> bounded on-demand Source Graph -> Legacy Static",
+    "same_key_single_flight": true,
+    "startup_build": false
+  },
+  "schema_version": "1.0",
+  "workloads": [
+    {
+      "concurrent_same_key": {
+        "actual_backends": {
+          "source_graph": 4
+        },
+        "actual_build_count": 1,
+        "cache_entry_count": 1,
+        "coalesced_waiter_count": 3,
+        "flight_dispositions": {
+          "builder": 1,
+          "coalesced": 3
+        },
+        "manifest_cache_dispositions": {
+          "hit_session_snapshot": 3,
+          "miss": 1
+        },
+        "parent_cpu_time_ms": 7.461219,
+        "payload_backend_sets": [
+          [
+            "source_graph"
+          ]
+        ],
+        "request_count": 4,
+        "static_calls": 0,
+        "wall_time_ms": 176.370631
+      },
+      "gate": {
+        "checks": [
+          {
+            "actual": [
+              "source_graph"
+            ],
+            "expected": [
+              "source_graph"
+            ],
+            "name": "driver_source_graph_selected",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "source_graph"
+              ]
+            ],
+            "expected": [
+              [
+                "source_graph"
+              ]
+            ],
+            "name": "driver_no_mixed_provenance",
+            "passed": true
+          },
+          {
+            "actual": [
+              1
+            ],
+            "expected": [
+              1
+            ],
+            "name": "driver_fresh_build_once",
+            "passed": true
+          },
+          {
+            "actual": 0.53112,
+            "expected": "<=100.0ms",
+            "name": "driver_warm_public_p95",
+            "passed": true
+          },
+          {
+            "actual": [
+              "found"
+            ],
+            "expected": [
+              "found"
+            ],
+            "name": "driver_query_found",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "driver_legacy_static_unused",
+            "passed": true
+          },
+          {
+            "actual": [
+              "source_graph"
+            ],
+            "expected": [
+              "source_graph"
+            ],
+            "name": "loads_source_graph_selected",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "source_graph"
+              ]
+            ],
+            "expected": [
+              [
+                "source_graph"
+              ]
+            ],
+            "name": "loads_no_mixed_provenance",
+            "passed": true
+          },
+          {
+            "actual": [
+              1
+            ],
+            "expected": [
+              1
+            ],
+            "name": "loads_fresh_build_once",
+            "passed": true
+          },
+          {
+            "actual": 0.569368,
+            "expected": "<=100.0ms",
+            "name": "loads_warm_public_p95",
+            "passed": true
+          },
+          {
+            "actual": [
+              "found"
+            ],
+            "expected": [
+              "found"
+            ],
+            "name": "loads_query_found",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "loads_legacy_static_unused",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "same_key_public_actual_build_count",
+            "passed": true
+          },
+          {
+            "actual": {
+              "source_graph": 4
+            },
+            "expected": {
+              "source_graph": 4
+            },
+            "name": "same_key_public_all_source_graph",
+            "passed": true
+          }
+        ],
+        "passed": true
+      },
+      "name": "hand_fixture",
+      "operations": {
+        "driver": {
+          "aggregate": {
+            "actual_backends": [
+              "source_graph"
+            ],
+            "actual_build_counts": [
+              1
+            ],
+            "all_static_calls_zero": true,
+            "blocking_diagnostic_counts": [
+              0
+            ],
+            "build_fingerprints": [
+              "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed"
+            ],
+            "cache_bytes": {
+              "count": 3,
+              "max": 10910.0,
+              "min": 10910.0,
+              "p50": 10910.0,
+              "p95": 10910.0
+            },
+            "cold_parent_cpu_time_ms": {
+              "count": 3,
+              "max": 5.331827,
+              "min": 4.970511,
+              "p50": 5.202635,
+              "p95": 5.318908
+            },
+            "cold_wall_time_ms": {
+              "count": 3,
+              "max": 195.15846,
+              "min": 178.546435,
+              "p50": 187.922606,
+              "p95": 194.434875
+            },
+            "compile_fingerprints": [
+              "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495"
+            ],
+            "coverage_boundary_path_counts": [
+              2
+            ],
+            "coverage_fact_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_statuses": [
+              "inconclusive"
+            ],
+            "ir_bytes": {
+              "count": 3,
+              "max": 10910.0,
+              "min": 10910.0,
+              "p50": 10910.0,
+              "p95": 10910.0
+            },
+            "ir_fingerprints": [
+              "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d"
+            ],
+            "manifest_input_counts": [
+              1
+            ],
+            "manifest_top_counts": [
+              1
+            ],
+            "payload_backend_sets": [
+              [
+                "source_graph"
+              ]
+            ],
+            "peak_rss_kib": {
+              "count": 3,
+              "max": 70056.0,
+              "min": 70052.0,
+              "p50": 70056.0,
+              "p95": 70056.0
+            },
+            "query_confidences": [
+              "partial"
+            ],
+            "query_statuses": [
+              "found"
+            ],
+            "requested_cone_path_counts": [
+              1
+            ],
+            "warm_parent_cpu_time_ms": {
+              "count": 300,
+              "max": 0.926331,
+              "min": 0.433746,
+              "p50": 0.463159,
+              "p95": 0.536229
+            },
+            "warm_wall_time_ms": {
+              "count": 300,
+              "max": 0.933018,
+              "min": 0.42954,
+              "p50": 0.461209,
+              "p95": 0.53112
+            },
+            "worker_cpu_ms": {
+              "count": 3,
+              "max": 55.731971,
+              "min": 53.245349,
+              "p50": 54.712188,
+              "p95": 55.629993
+            }
+          },
+          "cold_runs": [
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 5.202635,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "9345167a43268503657305281d9a69804aec0038bda474f8d4d307a123e93572",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 1.2294109910726547,
+                    "admission_wait_ms": 0.0023439060896635056,
+                    "build_wall_ms": 184.37442602589726,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.673517981544137,
+                    "prepare_total_wall_ms": 186.20580807328224,
+                    "query_wall_ms": 0.31378515996038914,
+                    "rss_end_kib": 54392,
+                    "rss_peak_kib": 70052,
+                    "rss_start_kib": 24116,
+                    "worker_cpu_ms": 55.731971
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 187.922606
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 5.331827,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "f90209e4e4103557c1275e8e9bd75211a74fdc3f12faed90610d3c2bc79e510a",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 1.5475740656256676,
+                    "admission_wait_ms": 0.002084067091345787,
+                    "build_wall_ms": 191.28374010324478,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.7205560579895973,
+                    "prepare_total_wall_ms": 193.14773404039443,
+                    "query_wall_ms": 0.3022139426320791,
+                    "rss_end_kib": 50420,
+                    "rss_peak_kib": 70056,
+                    "rss_start_kib": 24080,
+                    "worker_cpu_ms": 53.245349
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 195.15846
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 4.970511,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "521fcf123bfcdf8c0db9832ed7c3de032d206ad1e1b7f8c7c561c3cb358fd54d",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "21d7f0b62e52816a65cb6218de7ffd772397e832c82c5959f83bf2a682f0dfed",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 0.928038964048028,
+                    "admission_wait_ms": 0.0014919787645339966,
+                    "build_wall_ms": 175.34943809732795,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.6292259097099304,
+                    "prepare_total_wall_ms": 177.13925312273204,
+                    "query_wall_ms": 0.29463903047144413,
+                    "rss_end_kib": 52572,
+                    "rss_peak_kib": 70056,
+                    "rss_start_kib": 24152,
+                    "worker_cpu_ms": 54.712188
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 178.546435
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            }
+          ]
+        },
+        "loads": {
+          "aggregate": {
+            "actual_backends": [
+              "source_graph"
+            ],
+            "actual_build_counts": [
+              1
+            ],
+            "all_static_calls_zero": true,
+            "blocking_diagnostic_counts": [
+              0
+            ],
+            "build_fingerprints": [
+              "874ee8978b79612f11f873269072fc3746793f1e6078f9f8d17e68ba44af098c"
+            ],
+            "cache_bytes": {
+              "count": 3,
+              "max": 10910.0,
+              "min": 10910.0,
+              "p50": 10910.0,
+              "p95": 10910.0
+            },
+            "cold_parent_cpu_time_ms": {
+              "count": 3,
+              "max": 5.140318,
+              "min": 4.580643,
+              "p50": 4.866723,
+              "p95": 5.112958
+            },
+            "cold_wall_time_ms": {
+              "count": 3,
+              "max": 188.859041,
+              "min": 175.912347,
+              "p50": 181.617087,
+              "p95": 188.134846
+            },
+            "compile_fingerprints": [
+              "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495"
+            ],
+            "coverage_boundary_path_counts": [
+              2
+            ],
+            "coverage_fact_codes": [
+              "ancestor_definition_skeleton_only",
+              "hierarchy_projection_scoped",
+              "interface_specialization_unresolved"
+            ],
+            "coverage_statuses": [
+              "inconclusive"
+            ],
+            "ir_bytes": {
+              "count": 3,
+              "max": 10910.0,
+              "min": 10910.0,
+              "p50": 10910.0,
+              "p95": 10910.0
+            },
+            "ir_fingerprints": [
+              "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d"
+            ],
+            "manifest_input_counts": [
+              1
+            ],
+            "manifest_top_counts": [
+              1
+            ],
+            "payload_backend_sets": [
+              [
+                "source_graph"
+              ]
+            ],
+            "peak_rss_kib": {
+              "count": 3,
+              "max": 70056.0,
+              "min": 70056.0,
+              "p50": 70056.0,
+              "p95": 70056.0
+            },
+            "query_confidences": [
+              "partial"
+            ],
+            "query_statuses": [
+              "found"
+            ],
+            "requested_cone_path_counts": [
+              1
+            ],
+            "warm_parent_cpu_time_ms": {
+              "count": 300,
+              "max": 33.397666,
+              "min": 0.438554,
+              "p50": 0.468861,
+              "p95": 0.571958
+            },
+            "warm_wall_time_ms": {
+              "count": 300,
+              "max": 33.509041,
+              "min": 0.432466,
+              "p50": 0.466178,
+              "p95": 0.569368
+            },
+            "worker_cpu_ms": {
+              "count": 3,
+              "max": 54.351529,
+              "min": 52.401695,
+              "p50": 52.917118,
+              "p95": 54.208088
+            }
+          },
+          "cold_runs": [
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 5.140318,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "ea6166fe7318af4e4855259ba98593c5f94311e093fb264efe66054a83ca77bf",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "874ee8978b79612f11f873269072fc3746793f1e6078f9f8d17e68ba44af098c",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 1.0045717936009169,
+                    "admission_wait_ms": 0.0014121178537607193,
+                    "build_wall_ms": 185.53133099339902,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.6871851403266191,
+                    "prepare_total_wall_ms": 187.355951173231,
+                    "query_wall_ms": 0.3383401781320572,
+                    "rss_end_kib": 52772,
+                    "rss_peak_kib": 70056,
+                    "rss_start_kib": 24308,
+                    "worker_cpu_ms": 52.917118
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 188.859041
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 4.866723,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "3a3d79b82a53fc996c2db3df57843ff7ebc24fd1209e0c52de117c1ca9fe67a9",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "874ee8978b79612f11f873269072fc3746793f1e6078f9f8d17e68ba44af098c",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 0.9569928515702486,
+                    "admission_wait_ms": 0.003156019374728203,
+                    "build_wall_ms": 172.60536504909396,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.78270204924047,
+                    "prepare_total_wall_ms": 174.53442886471748,
+                    "query_wall_ms": 0.2809939906001091,
+                    "rss_end_kib": 52772,
+                    "rss_peak_kib": 70056,
+                    "rss_start_kib": 24304,
+                    "worker_cpu_ms": 52.401695
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 175.912347
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 4.580643,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "2056158521b2cf6a93a350c9bf89492cdd7992a4733abcc61eee1b2c4fbc2ce2",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "874ee8978b79612f11f873269072fc3746793f1e6078f9f8d17e68ba44af098c",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "c25a510aae331714e02bc89be676636c947347ac1913bd7e73ab4b6736048495",
+                  "coverage_blocking_diagnostic_count": 0,
+                  "coverage_diagnostic_count": 0,
+                  "coverage_files_projected": 1,
+                  "coverage_files_total": 1,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "hierarchy_projection_scoped",
+                    "interface_specialization_unresolved"
+                  ],
+                  "coverage_gap_count": 3,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [],
+                  "ir_fingerprint_sha256": "c6ebe245fdd015024dc09b53282fa1662ee2c4ad8f4ffa0188d728c5461f945d",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 1,
+                    "option_count": 5,
+                    "top_count": 1
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 0.9098760783672333,
+                    "admission_wait_ms": 0.0015029218047857285,
+                    "build_wall_ms": 178.51091921329498,
+                    "cache_bytes": 10910,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 10910,
+                    "load_wall_ms": 1.6117130871862173,
+                    "prepare_total_wall_ms": 180.25379697792232,
+                    "query_wall_ms": 0.3022029995918274,
+                    "rss_end_kib": 52536,
+                    "rss_peak_kib": 70056,
+                    "rss_start_kib": 24136,
+                    "worker_cpu_ms": 54.351529
+                  },
+                  "objective_exclusions": [],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 2,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 2,
+                    "coverage_boundary_instance_count": 2,
+                    "objective_exclusions": [],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 181.617087
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 10910,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            }
+          ]
+        }
+      },
+      "scope_claim": "tracked eight-instance hand fixture; not a production accuracy claim"
+    },
+    {
+      "concurrent_same_key": {
+        "actual_backends": {
+          "source_graph": 4
+        },
+        "actual_build_count": 1,
+        "cache_entry_count": 1,
+        "coalesced_waiter_count": 3,
+        "flight_dispositions": {
+          "builder": 1,
+          "coalesced": 3
+        },
+        "manifest_cache_dispositions": {
+          "hit_session_snapshot": 3,
+          "miss": 1
+        },
+        "parent_cpu_time_ms": 761.754903,
+        "payload_backend_sets": [
+          [
+            "source_graph"
+          ]
+        ],
+        "request_count": 4,
+        "static_calls": 0,
+        "wall_time_ms": 5128.421793
+      },
+      "gate": {
+        "checks": [
+          {
+            "actual": [
+              "source_graph"
+            ],
+            "expected": [
+              "source_graph"
+            ],
+            "name": "driver_source_graph_selected",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "source_graph"
+              ]
+            ],
+            "expected": [
+              [
+                "source_graph"
+              ]
+            ],
+            "name": "driver_no_mixed_provenance",
+            "passed": true
+          },
+          {
+            "actual": [
+              1
+            ],
+            "expected": [
+              1
+            ],
+            "name": "driver_fresh_build_once",
+            "passed": true
+          },
+          {
+            "actual": 4.848171,
+            "expected": "<=100.0ms",
+            "name": "driver_warm_public_p95",
+            "passed": true
+          },
+          {
+            "actual": [
+              "found"
+            ],
+            "expected": [
+              "found"
+            ],
+            "name": "driver_query_found",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "driver_legacy_static_unused",
+            "passed": true
+          },
+          {
+            "actual": [
+              "source_graph"
+            ],
+            "expected": [
+              "source_graph"
+            ],
+            "name": "loads_source_graph_selected",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "source_graph"
+              ]
+            ],
+            "expected": [
+              [
+                "source_graph"
+              ]
+            ],
+            "name": "loads_no_mixed_provenance",
+            "passed": true
+          },
+          {
+            "actual": [
+              1
+            ],
+            "expected": [
+              1
+            ],
+            "name": "loads_fresh_build_once",
+            "passed": true
+          },
+          {
+            "actual": 4.265311,
+            "expected": "<=100.0ms",
+            "name": "loads_warm_public_p95",
+            "passed": true
+          },
+          {
+            "actual": [
+              "found"
+            ],
+            "expected": [
+              "found"
+            ],
+            "name": "loads_query_found",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "loads_legacy_static_unused",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "same_key_public_actual_build_count",
+            "passed": true
+          },
+          {
+            "actual": {
+              "source_graph": 4
+            },
+            "expected": {
+              "source_graph": 4
+            },
+            "name": "same_key_public_all_source_graph",
+            "passed": true
+          },
+          {
+            "actual": 5104.873924,
+            "expected": "<=15000.0ms",
+            "name": "opentitan_driver_cold_public_p50",
+            "passed": true
+          },
+          {
+            "actual": 1365008.0,
+            "expected": "<=2621440KiB",
+            "name": "opentitan_driver_peak_rss",
+            "passed": true
+          },
+          {
+            "actual": [
+              "inconclusive"
+            ],
+            "expected": [
+              "inconclusive"
+            ],
+            "name": "opentitan_driver_coverage_inconclusive",
+            "passed": true
+          },
+          {
+            "actual": [
+              65
+            ],
+            "expected": [
+              65
+            ],
+            "name": "opentitan_driver_blocking_diagnostics",
+            "passed": true
+          },
+          {
+            "actual": [
+              "partial"
+            ],
+            "expected": [
+              "partial"
+            ],
+            "name": "opentitan_driver_query_partial",
+            "passed": true
+          },
+          {
+            "actual": {
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "expected": {
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "name": "opentitan_driver_production_manifest_shape",
+            "passed": true
+          },
+          {
+            "actual": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                1
+              ]
+            },
+            "expected": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                1
+              ]
+            },
+            "name": "opentitan_driver_target_specific_scope",
+            "passed": true
+          },
+          {
+            "actual": [
+              "ancestor_definition_skeleton_only",
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "frontend_diagnostic:BadAssignment",
+              "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+              "frontend_diagnostic:DefinitionUsedAsValue",
+              "frontend_diagnostic:ExpectedScopeOrAssert",
+              "frontend_diagnostic:FatalTask",
+              "frontend_diagnostic:NoImplicitConversion",
+              "frontend_diagnostic:TypoIdentifier",
+              "frontend_diagnostic:UndeclaredIdentifier",
+              "frontend_diagnostic:UnknownFormatSpecifier",
+              "frontend_diagnostic_badassignment",
+              "frontend_diagnostic_couldnotresolvehierarchicalpath",
+              "frontend_diagnostic_definitionusedasvalue",
+              "frontend_diagnostic_expectedscopeorassert",
+              "frontend_diagnostic_fataltask",
+              "frontend_diagnostic_noimplicitconversion",
+              "frontend_diagnostic_typoidentifier",
+              "frontend_diagnostic_undeclaredidentifier",
+              "frontend_diagnostic_unknownformatspecifier",
+              "hierarchy_projection_scoped",
+              "native_runtime_input_excluded",
+              "port_expression_unresolved",
+              "port_width_mapping_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "expected": [
+              "bind_semantics",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "procedural_force_release",
+              "uvm_dynamic_connectivity"
+            ],
+            "name": "opentitan_driver_boundary_facts_explicit",
+            "passed": true
+          },
+          {
+            "actual": 5135.357637,
+            "expected": "<=15000.0ms",
+            "name": "opentitan_loads_cold_public_p50",
+            "passed": true
+          },
+          {
+            "actual": 1365104.0,
+            "expected": "<=2621440KiB",
+            "name": "opentitan_loads_peak_rss",
+            "passed": true
+          },
+          {
+            "actual": [
+              "inconclusive"
+            ],
+            "expected": [
+              "inconclusive"
+            ],
+            "name": "opentitan_loads_coverage_inconclusive",
+            "passed": true
+          },
+          {
+            "actual": [
+              65
+            ],
+            "expected": [
+              65
+            ],
+            "name": "opentitan_loads_blocking_diagnostics",
+            "passed": true
+          },
+          {
+            "actual": [
+              "partial"
+            ],
+            "expected": [
+              "partial"
+            ],
+            "name": "opentitan_loads_query_partial",
+            "passed": true
+          },
+          {
+            "actual": {
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "expected": {
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "name": "opentitan_loads_production_manifest_shape",
+            "passed": true
+          },
+          {
+            "actual": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                1
+              ]
+            },
+            "expected": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                1
+              ]
+            },
+            "name": "opentitan_loads_target_specific_scope",
+            "passed": true
+          },
+          {
+            "actual": [
+              "ancestor_definition_skeleton_only",
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "frontend_diagnostic:BadAssignment",
+              "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+              "frontend_diagnostic:DefinitionUsedAsValue",
+              "frontend_diagnostic:ExpectedScopeOrAssert",
+              "frontend_diagnostic:FatalTask",
+              "frontend_diagnostic:NoImplicitConversion",
+              "frontend_diagnostic:TypoIdentifier",
+              "frontend_diagnostic:UndeclaredIdentifier",
+              "frontend_diagnostic:UnknownFormatSpecifier",
+              "frontend_diagnostic_badassignment",
+              "frontend_diagnostic_couldnotresolvehierarchicalpath",
+              "frontend_diagnostic_definitionusedasvalue",
+              "frontend_diagnostic_expectedscopeorassert",
+              "frontend_diagnostic_fataltask",
+              "frontend_diagnostic_noimplicitconversion",
+              "frontend_diagnostic_typoidentifier",
+              "frontend_diagnostic_undeclaredidentifier",
+              "frontend_diagnostic_unknownformatspecifier",
+              "hierarchy_projection_scoped",
+              "native_runtime_input_excluded",
+              "port_expression_unresolved",
+              "port_width_mapping_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "expected": [
+              "bind_semantics",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "procedural_force_release",
+              "uvm_dynamic_connectivity"
+            ],
+            "name": "opentitan_loads_boundary_facts_explicit",
+            "passed": true
+          }
+        ],
+        "passed": true
+      },
+      "name": "opentitan_core",
+      "operations": {
+        "driver": {
+          "aggregate": {
+            "actual_backends": [
+              "source_graph"
+            ],
+            "actual_build_counts": [
+              1
+            ],
+            "all_static_calls_zero": true,
+            "blocking_diagnostic_counts": [
+              65
+            ],
+            "build_fingerprints": [
+              "55b0bb3036a3e4514e84d1b020060ef747987108af07cbf58531779e223dd855"
+            ],
+            "cache_bytes": {
+              "count": 3,
+              "max": 483562.0,
+              "min": 483562.0,
+              "p50": 483562.0,
+              "p95": 483562.0
+            },
+            "cold_parent_cpu_time_ms": {
+              "count": 3,
+              "max": 780.745713,
+              "min": 731.684953,
+              "p50": 743.198803,
+              "p95": 776.991022
+            },
+            "cold_wall_time_ms": {
+              "count": 3,
+              "max": 5139.637383,
+              "min": 5067.8105,
+              "p50": 5104.873924,
+              "p95": 5136.161037
+            },
+            "compile_fingerprints": [
+              "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc"
+            ],
+            "coverage_boundary_path_counts": [
+              4
+            ],
+            "coverage_fact_codes": [
+              "ancestor_definition_skeleton_only",
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "frontend_diagnostic:BadAssignment",
+              "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+              "frontend_diagnostic:DefinitionUsedAsValue",
+              "frontend_diagnostic:ExpectedScopeOrAssert",
+              "frontend_diagnostic:FatalTask",
+              "frontend_diagnostic:NoImplicitConversion",
+              "frontend_diagnostic:TypoIdentifier",
+              "frontend_diagnostic:UndeclaredIdentifier",
+              "frontend_diagnostic:UnknownFormatSpecifier",
+              "frontend_diagnostic_badassignment",
+              "frontend_diagnostic_couldnotresolvehierarchicalpath",
+              "frontend_diagnostic_definitionusedasvalue",
+              "frontend_diagnostic_expectedscopeorassert",
+              "frontend_diagnostic_fataltask",
+              "frontend_diagnostic_noimplicitconversion",
+              "frontend_diagnostic_typoidentifier",
+              "frontend_diagnostic_undeclaredidentifier",
+              "frontend_diagnostic_unknownformatspecifier",
+              "hierarchy_projection_scoped",
+              "native_runtime_input_excluded",
+              "port_expression_unresolved",
+              "port_width_mapping_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_statuses": [
+              "inconclusive"
+            ],
+            "ir_bytes": {
+              "count": 3,
+              "max": 483562.0,
+              "min": 483562.0,
+              "p50": 483562.0,
+              "p95": 483562.0
+            },
+            "ir_fingerprints": [
+              "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f"
+            ],
+            "manifest_input_counts": [
+              785
+            ],
+            "manifest_top_counts": [
+              11
+            ],
+            "payload_backend_sets": [
+              [
+                "source_graph"
+              ]
+            ],
+            "peak_rss_kib": {
+              "count": 3,
+              "max": 1365008.0,
+              "min": 1364596.0,
+              "p50": 1364856.0,
+              "p95": 1364992.8
+            },
+            "query_confidences": [
+              "partial"
+            ],
+            "query_statuses": [
+              "found"
+            ],
+            "requested_cone_path_counts": [
+              1
+            ],
+            "warm_parent_cpu_time_ms": {
+              "count": 300,
+              "max": 5.759216,
+              "min": 3.06072,
+              "p50": 3.379742,
+              "p95": 4.817942
+            },
+            "warm_wall_time_ms": {
+              "count": 300,
+              "max": 5.789058,
+              "min": 3.066324,
+              "p50": 3.398213,
+              "p95": 4.848171
+            },
+            "worker_cpu_ms": {
+              "count": 3,
+              "max": 4065.179371,
+              "min": 4048.85338,
+              "p50": 4062.583566,
+              "p95": 4064.919791
+            }
+          },
+          "cold_runs": [
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 731.684953,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "3ef5043d989fa5ca57052ab425c423908605bff34eea08a1a4e9f4919e3d07c3",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "55b0bb3036a3e4514e84d1b020060ef747987108af07cbf58531779e223dd855",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 682.8660690225661,
+                    "admission_wait_ms": 0.001783948391675949,
+                    "build_wall_ms": 4337.553120916709,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 45.86328309960663,
+                    "prepare_total_wall_ms": 4384.263030951843,
+                    "query_wall_ms": 0.485624885186553,
+                    "rss_end_kib": 1364168,
+                    "rss_peak_kib": 1365008,
+                    "rss_start_kib": 24580,
+                    "worker_cpu_ms": 4048.85338
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5067.8105
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 780.745713,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "acb359f0db25af9984635426fb8119c77f66df2be6751e2db7e68d8101e7e478",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "55b0bb3036a3e4514e84d1b020060ef747987108af07cbf58531779e223dd855",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 680.5514160078019,
+                    "admission_wait_ms": 0.0023851171135902405,
+                    "build_wall_ms": 4359.725167043507,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 97.46237215586007,
+                    "prepare_total_wall_ms": 4458.175749052316,
+                    "query_wall_ms": 0.7126680575311184,
+                    "rss_end_kib": 1363764,
+                    "rss_peak_kib": 1364596,
+                    "rss_start_kib": 24456,
+                    "worker_cpu_ms": 4062.583566
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5139.637383
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 743.198803,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "93937427ec8aec78eeb40ebac85a96fb200c31f1ab188a1fefdd6776e9f55cf6",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "55b0bb3036a3e4514e84d1b020060ef747987108af07cbf58531779e223dd855",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 693.9468081109226,
+                    "admission_wait_ms": 0.002474989742040634,
+                    "build_wall_ms": 4362.625950947404,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 46.6195410117507,
+                    "prepare_total_wall_ms": 4410.196525044739,
+                    "query_wall_ms": 0.5097200628370047,
+                    "rss_end_kib": 1364032,
+                    "rss_peak_kib": 1364856,
+                    "rss_start_kib": 24420,
+                    "worker_cpu_ms": 4065.179371
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5104.873924
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            }
+          ]
+        },
+        "loads": {
+          "aggregate": {
+            "actual_backends": [
+              "source_graph"
+            ],
+            "actual_build_counts": [
+              1
+            ],
+            "all_static_calls_zero": true,
+            "blocking_diagnostic_counts": [
+              65
+            ],
+            "build_fingerprints": [
+              "081c6f97d27b55295eb513e0ac6d66367b230a8919959f5a9ddba633092b70a1"
+            ],
+            "cache_bytes": {
+              "count": 3,
+              "max": 483562.0,
+              "min": 483562.0,
+              "p50": 483562.0,
+              "p95": 483562.0
+            },
+            "cold_parent_cpu_time_ms": {
+              "count": 3,
+              "max": 793.39555,
+              "min": 747.010279,
+              "p50": 766.449023,
+              "p95": 790.700897
+            },
+            "cold_wall_time_ms": {
+              "count": 3,
+              "max": 5169.680125,
+              "min": 5127.539729,
+              "p50": 5135.357637,
+              "p95": 5166.247876
+            },
+            "compile_fingerprints": [
+              "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc"
+            ],
+            "coverage_boundary_path_counts": [
+              4
+            ],
+            "coverage_fact_codes": [
+              "ancestor_definition_skeleton_only",
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "definition_replacement_semantics",
+              "dpi_runtime",
+              "frontend_diagnostic:BadAssignment",
+              "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+              "frontend_diagnostic:DefinitionUsedAsValue",
+              "frontend_diagnostic:ExpectedScopeOrAssert",
+              "frontend_diagnostic:FatalTask",
+              "frontend_diagnostic:NoImplicitConversion",
+              "frontend_diagnostic:TypoIdentifier",
+              "frontend_diagnostic:UndeclaredIdentifier",
+              "frontend_diagnostic:UnknownFormatSpecifier",
+              "frontend_diagnostic_badassignment",
+              "frontend_diagnostic_couldnotresolvehierarchicalpath",
+              "frontend_diagnostic_definitionusedasvalue",
+              "frontend_diagnostic_expectedscopeorassert",
+              "frontend_diagnostic_fataltask",
+              "frontend_diagnostic_noimplicitconversion",
+              "frontend_diagnostic_typoidentifier",
+              "frontend_diagnostic_undeclaredidentifier",
+              "frontend_diagnostic_unknownformatspecifier",
+              "hierarchy_projection_scoped",
+              "native_runtime_input_excluded",
+              "port_expression_unresolved",
+              "port_width_mapping_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_statuses": [
+              "inconclusive"
+            ],
+            "ir_bytes": {
+              "count": 3,
+              "max": 483562.0,
+              "min": 483562.0,
+              "p50": 483562.0,
+              "p95": 483562.0
+            },
+            "ir_fingerprints": [
+              "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f"
+            ],
+            "manifest_input_counts": [
+              785
+            ],
+            "manifest_top_counts": [
+              11
+            ],
+            "payload_backend_sets": [
+              [
+                "source_graph"
+              ]
+            ],
+            "peak_rss_kib": {
+              "count": 3,
+              "max": 1365104.0,
+              "min": 1364112.0,
+              "p50": 1364608.0,
+              "p95": 1365054.4
+            },
+            "query_confidences": [
+              "partial"
+            ],
+            "query_statuses": [
+              "found"
+            ],
+            "requested_cone_path_counts": [
+              1
+            ],
+            "warm_parent_cpu_time_ms": {
+              "count": 300,
+              "max": 5.15241,
+              "min": 3.081748,
+              "p50": 3.308769,
+              "p95": 4.258202
+            },
+            "warm_wall_time_ms": {
+              "count": 300,
+              "max": 5.156869,
+              "min": 3.085139,
+              "p50": 3.316034,
+              "p95": 4.265311
+            },
+            "worker_cpu_ms": {
+              "count": 3,
+              "max": 4096.930525,
+              "min": 4033.618592,
+              "p50": 4086.93274,
+              "p95": 4095.930746
+            }
+          },
+          "cold_runs": [
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 766.449023,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "233a3ba59f0cf88be0156438d5343c2773920f32d3e89a18946b1aba21abc3d7",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "081c6f97d27b55295eb513e0ac6d66367b230a8919959f5a9ddba633092b70a1",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 689.952083863318,
+                    "admission_wait_ms": 0.0017329584807157516,
+                    "build_wall_ms": 4403.86130916886,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 74.35598596930504,
+                    "prepare_total_wall_ms": 4479.067791020498,
+                    "query_wall_ms": 0.49046403728425503,
+                    "rss_end_kib": 1364264,
+                    "rss_peak_kib": 1365104,
+                    "rss_start_kib": 24380,
+                    "worker_cpu_ms": 4096.930525
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5169.680125
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 747.010279,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "30bf3b348c18ac3352e3d79766c99bd4ffec76d4ac8c1a352659107e3ae6c8bb",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "081c6f97d27b55295eb513e0ac6d66367b230a8919959f5a9ddba633092b70a1",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 697.5301450584084,
+                    "admission_wait_ms": 0.0018440186977386475,
+                    "build_wall_ms": 4389.22385382466,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 47.03103797510266,
+                    "prepare_total_wall_ms": 4437.169756973162,
+                    "query_wall_ms": 0.4968559369444847,
+                    "rss_end_kib": 1363288,
+                    "rss_peak_kib": 1364112,
+                    "rss_start_kib": 24364,
+                    "worker_cpu_ms": 4086.93274
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5135.357637
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            },
+            {
+              "cold": {
+                "actual_backend": "source_graph",
+                "attempted_backend": "source_graph",
+                "attempted_backends": [
+                  {
+                    "backend": "verdi_npi",
+                    "coverage_status": null,
+                    "reason": "npi_kdb_unavailable",
+                    "status": "unavailable"
+                  },
+                  {
+                    "backend": "source_graph",
+                    "coverage_status": "inconclusive",
+                    "reason": null,
+                    "status": "success"
+                  }
+                ],
+                "backend": "source_graph",
+                "fallback_reason": "npi_kdb_unavailable",
+                "parent_cpu_time_ms": 793.39555,
+                "payload_backends": [
+                  "source_graph"
+                ],
+                "schema_fingerprint_sha256": "d171e451821fd3d6f04328725c7bdbd4079abfab4ae53b043ebdceb4a5183331",
+                "selected_backend": "source_graph",
+                "source_graph": {
+                  "adapter_status": "ready",
+                  "blocker": null,
+                  "build_key_sha256": "081c6f97d27b55295eb513e0ac6d66367b230a8919959f5a9ddba633092b70a1",
+                  "cache_disposition": "miss",
+                  "compile_fingerprint_sha256": "09a8d3f8863a85c802aca77c18ef64da239a8de37d1efe0fd5fc8ea24b363ecc",
+                  "coverage_blocking_diagnostic_count": 65,
+                  "coverage_diagnostic_count": 29416,
+                  "coverage_files_projected": 785,
+                  "coverage_files_total": 785,
+                  "coverage_gap_codes": [
+                    "ancestor_definition_skeleton_only",
+                    "assignment_target_unresolved",
+                    "bind_semantics",
+                    "concat_lvalue_partial",
+                    "continuous_assignment_unresolved",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "frontend_diagnostic:BadAssignment",
+                    "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                    "frontend_diagnostic:DefinitionUsedAsValue",
+                    "frontend_diagnostic:ExpectedScopeOrAssert",
+                    "frontend_diagnostic:FatalTask",
+                    "frontend_diagnostic:NoImplicitConversion",
+                    "frontend_diagnostic:TypoIdentifier",
+                    "frontend_diagnostic:UndeclaredIdentifier",
+                    "frontend_diagnostic:UnknownFormatSpecifier",
+                    "frontend_diagnostic_badassignment",
+                    "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                    "frontend_diagnostic_definitionusedasvalue",
+                    "frontend_diagnostic_expectedscopeorassert",
+                    "frontend_diagnostic_fataltask",
+                    "frontend_diagnostic_noimplicitconversion",
+                    "frontend_diagnostic_typoidentifier",
+                    "frontend_diagnostic_undeclaredidentifier",
+                    "frontend_diagnostic_unknownformatspecifier",
+                    "hierarchy_projection_scoped",
+                    "port_expression_unresolved",
+                    "port_width_mapping_unresolved",
+                    "procedural_control_shape_partial",
+                    "procedural_force_release",
+                    "signal_shape_unresolved",
+                    "subroutine_body_not_projected",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "coverage_gap_count": 217,
+                  "coverage_status": "inconclusive",
+                  "cross_request_reusable": true,
+                  "fallback_used": false,
+                  "flight_disposition": "builder",
+                  "gap_codes": [
+                    "definition_replacement_semantics",
+                    "native_runtime_input_excluded"
+                  ],
+                  "ir_fingerprint_sha256": "0e3d49f8ee4583bc1802e41008acf8bc9ed2a32d4389d70ca859ab95b8aeff9f",
+                  "manifest": {
+                    "complete": true,
+                    "fingerprint_cache_disposition": "miss",
+                    "incomplete_reasons": [],
+                    "input_count": 785,
+                    "option_count": 101,
+                    "top_count": 11
+                  },
+                  "metrics": {
+                    "actual_build_count": 1,
+                    "adapter_wall_ms": 706.4516691025347,
+                    "admission_wait_ms": 0.001983949914574623,
+                    "build_wall_ms": 4334.665379021317,
+                    "cache_bytes": 483562,
+                    "cancel_to_exit_ms": null,
+                    "coalesced_waiter_count": 0,
+                    "ir_bytes": 483562,
+                    "load_wall_ms": 84.86672211438417,
+                    "prepare_total_wall_ms": 4420.40813411586,
+                    "query_wall_ms": 0.46963500790297985,
+                    "rss_end_kib": 1363792,
+                    "rss_peak_kib": 1364608,
+                    "rss_start_kib": 24464,
+                    "worker_cpu_ms": 4033.618592
+                  },
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "prepare_status": "ready",
+                  "query_confidence": "partial",
+                  "query_match_count": 1,
+                  "query_status": "found",
+                  "scope": {
+                    "ancestor_count": 4,
+                    "coverage_boundary_instance_count": 4,
+                    "objective_exclusions": [
+                      "bind_semantics",
+                      "definition_replacement_semantics",
+                      "dpi_runtime",
+                      "procedural_force_release",
+                      "uvm_dynamic_connectivity"
+                    ],
+                    "requested_cone_instance_count": 1
+                  }
+                },
+                "wall_time_ms": 5127.539729
+              },
+              "runtime_get_count": 101,
+              "runtime_stats": {
+                "actual_build_count": 1,
+                "cache_bypass_count": 0,
+                "cache_bytes": 483562,
+                "cache_entry_count": 1,
+                "cache_hit_count": 100,
+                "cache_miss_count": 1,
+                "cancelled_waiter_count": 0,
+                "coalesced_waiter_count": 0,
+                "inflight_count": 0,
+                "last_cancel_to_exit_ms": 0.0,
+                "timeout_count": 0,
+                "worker_failure_count": 0
+              },
+              "static_calls": 0,
+              "warm": {
+                "all_source_graph": true,
+                "cache_dispositions": {
+                  "hit_exact": 100
+                },
+                "manifest_cache_dispositions": {
+                  "hit_session_snapshot": 100
+                },
+                "sample_count": 100
+              }
+            }
+          ]
+        }
+      },
+      "scope_claim": "target-specific public adapter scope: four ancestor paths and one assignment-bearing cone path; not Phase 1A/1B five-path/two-cone scope and not a full-design accuracy or speedup claim"
+    }
+  ]
+}
