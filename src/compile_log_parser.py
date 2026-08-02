@@ -35,6 +35,7 @@ _XCE_SHELL_COMMAND_RE = re.compile(
     r"(?P<command>(?:\S*/)?xrun(?:\s+.*)?)\s*$"
 )
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
+_SNAPSHOT_RE = re.compile(r"(?:^|\s)-snapshot\s+(\w+)")
 _SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
 _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
@@ -527,6 +528,11 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
             top = top_match.group(1)
             if top not in top_modules:
                 top_modules.append(top)
+        snapshot_match = _SNAPSHOT_RE.search(compile_command)
+        if snapshot_match and snapshot_match.group(1) in top_modules:
+            snapshot_top = snapshot_match.group(1)
+            top_modules.remove(snapshot_top)
+            top_modules.insert(0, snapshot_top)
         for filelist_match in re.finditer(r"(?:^|\s)-f\s+(\S+)", compile_command):
             path = _normalize_path(filelist_match.group(1), command_dir)
             filelist_tree.setdefault(os.path.basename(path), [])

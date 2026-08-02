@@ -138,7 +138,7 @@ file: {root / 'tb' / 'top_tb.sv'}
             log,
             "[make]: build\n"
             f"cd '{work}' && xrun -elaborate -f design.scr "
-            "-top top_earlgrey -top tb\n"
+            "-top top_earlgrey -top tb -snapshot tb\n"
             "TOOL: xrun(64) 26.03-s001\n"
             "file: src/top_earlgrey.sv\n"
             "\tmodule worklib.top_earlgrey:sv\n"
@@ -148,9 +148,9 @@ file: {root / 'tb' / 'top_tb.sv'}
         result = parse_compile_log(str(log), "xcelium")
 
         assert result["compile_command"] == (
-            "xrun -elaborate -f design.scr -top top_earlgrey -top tb"
+            "xrun -elaborate -f design.scr -top top_earlgrey -top tb -snapshot tb"
         )
-        assert result["top_modules"] == ["top_earlgrey", "tb"]
+        assert result["top_modules"] == ["tb", "top_earlgrey"]
         assert result["filelist_tree"] == {"design.scr": []}
         assert result["files"]["user"] == [
             {
