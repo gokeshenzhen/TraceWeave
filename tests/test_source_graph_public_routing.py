@@ -424,6 +424,11 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
     assert result.backend_status.source_graph.prepare_status == "ready"
     assert result.backend_status.source_graph.query_status == "found"
     assert result.backend_status.source_graph.coverage_status == "complete"
+    assert result.backend_status.source_graph.coverage_files_total == 1
+    assert result.backend_status.source_graph.coverage_files_projected == 1
+    assert result.backend_status.source_graph.coverage_diagnostic_count == 0
+    assert result.backend_status.source_graph.coverage_blocking_diagnostic_count == 0
+    assert result.backend_status.source_graph.coverage_gap_count == 0
     assert len(result.backend_status.source_graph.build_key_sha256) == 64
     assert len(result.backend_status.source_graph.compile_fingerprint_sha256) == 64
     assert len(result.backend_status.source_graph.ir_fingerprint_sha256) == 64

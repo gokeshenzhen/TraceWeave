@@ -241,6 +241,11 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
                 "cache_disposition": "miss",
                 "flight_disposition": "builder",
                 "coverage_status": "partial",
+                "coverage_files_total": 785,
+                "coverage_files_projected": 4,
+                "coverage_diagnostic_count": 29416,
+                "coverage_blocking_diagnostic_count": 65,
+                "coverage_gap_count": 388,
                 "coverage_gap_codes": ["protected_payload"],
                 "query_status": "found",
                 "query_confidence": "partial",
@@ -260,6 +265,11 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
 
     assert status.actual_backend == "source_graph"
     assert status.source_graph.query_confidence == "partial"
+    assert status.source_graph.coverage_files_total == 785
+    assert status.source_graph.coverage_files_projected == 4
+    assert status.source_graph.coverage_diagnostic_count == 29416
+    assert status.source_graph.coverage_blocking_diagnostic_count == 65
+    assert status.source_graph.coverage_gap_count == 388
     assert status.source_graph.build_key_sha256 == "b" * 64
     assert status.source_graph.metrics.actual_build_count == 1
 

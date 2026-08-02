@@ -748,6 +748,11 @@ class SourceGraphBackendReceipt(SchemaModel):
     ) = None
     flight_disposition: Literal["none", "builder", "coalesced"] | None = None
     coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
+    coverage_files_total: int = 0
+    coverage_files_projected: int = 0
+    coverage_diagnostic_count: int = 0
+    coverage_blocking_diagnostic_count: int = 0
+    coverage_gap_count: int = 0
     coverage_gap_codes: list[str] = Field(default_factory=list)
     objective_exclusions: list[str] = Field(default_factory=list)
     query_status: Literal["found", "not_connected", "inconclusive"] | None = None

@@ -1250,6 +1250,7 @@ def _source_graph_receipt_from_prepare(
     adapter_wall_ms: float,
 ) -> dict:
     entry = outcome.entry
+    coverage = entry.ir.coverage if entry is not None else None
     receipt = {
         "adapter_status": "ready",
         "adapter": plan.receipt.to_dict(),
@@ -1257,6 +1258,17 @@ def _source_graph_receipt_from_prepare(
         "cache_disposition": outcome.metrics.cache_disposition.value,
         "flight_disposition": outcome.metrics.flight_disposition.value,
         "coverage_status": (entry.coverage_status.value if entry is not None else None),
+        "coverage_files_total": coverage.files_total if coverage is not None else 0,
+        "coverage_files_projected": (
+            coverage.files_projected if coverage is not None else 0
+        ),
+        "coverage_diagnostic_count": (
+            coverage.diagnostic_count if coverage is not None else 0
+        ),
+        "coverage_blocking_diagnostic_count": (
+            coverage.blocking_diagnostic_count if coverage is not None else 0
+        ),
+        "coverage_gap_count": len(coverage.gaps) if coverage is not None else 0,
         "coverage_gap_codes": (
             list(entry.scope_receipt.gap_codes) if entry is not None else []
         ),
