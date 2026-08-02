@@ -60,9 +60,10 @@ def test_frontend_platform_policy_never_silently_builds_an_unvalidated_wheel():
     assert supported["status"] == "validated_binary_wheel_platform"
     assert unsupported["status"] == "optional_extra_dependency_blocker"
     assert unsupported["source_build_evaluated"] is False
-    assert "do not infer frontend incompatibility" in unsupported[
-        "unsupported_platform_policy"
-    ]
+    assert (
+        "do not infer frontend incompatibility"
+        in unsupported["unsupported_platform_policy"]
+    )
 
 
 def test_hand_fixture_and_oracle_cover_required_frontend_features():
@@ -288,9 +289,7 @@ def test_xcelium_filelist_expansion_excludes_native_dpi_inputs(tmp_path):
     include_dir.mkdir(parents=True)
     _write(
         filelist,
-        "+incdir+src/include\n"
-        "src/model.cc\n"
-        "src/top.sv\n",
+        "+incdir+src/include\nsrc/model.cc\nsrc/top.sv\n",
     )
 
     translation = spike.translate_xcelium_invocation(
@@ -595,9 +594,7 @@ def test_plan_output_file_has_machine_readable_receipt(tmp_path):
     assert json.loads(payload)["status"] == "planned"
 
 
-def test_worker_runs_from_captured_compile_working_directory(
-    tmp_path, monkeypatch
-):
+def test_worker_runs_from_captured_compile_working_directory(tmp_path, monkeypatch):
     compile_cwd = tmp_path / "fusesoc-work"
     compile_cwd.mkdir()
     captured = {}
@@ -686,9 +683,7 @@ def test_assessment_context_combines_explicit_repository_evidence_without_mutati
     assert combined["open_questions"] == []
     assert combined["known_limitations"] == ["bind gap"]
     assert combined["phase_1_acceptance_items"] == ["IR edge fidelity"]
-    assert combined["repository_evidence_context"] == {
-        "results": ["tracked.json"]
-    }
+    assert combined["repository_evidence_context"] == {"results": ["tracked.json"]}
     assert base["slang_primary_frontend"]["decision"] != "conditional_primary"
 
 

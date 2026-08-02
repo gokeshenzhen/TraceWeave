@@ -358,7 +358,11 @@ def _extract_xcelium_uvm_library(log_path: Path) -> dict[str, Any] | None:
     missing: list[str] = []
     for package_name in shlex.split(match.group("packages")):
         source = next(
-            (directory / package_name for directory in search_dirs if (directory / package_name).is_file()),
+            (
+                directory / package_name
+                for directory in search_dirs
+                if (directory / package_name).is_file()
+            ),
             None,
         )
         if source is None:
@@ -602,7 +606,8 @@ def _expand_xcelium_filelist_for_frontend(
             if token.startswith("+incdir+"):
                 directories = token[len("+incdir+") :].split("+")
                 frontend_args.append(
-                    "+incdir+" + "+".join(str(resolve_path(item, base)) for item in directories)
+                    "+incdir+"
+                    + "+".join(str(resolve_path(item, base)) for item in directories)
                 )
                 index += 1
                 continue
