@@ -530,6 +530,120 @@ def _direct_command_sources(
     return result
 
 
+def _expand_xcelium_filelist_for_frontend(
+    filelist: Path,
+    cwd: Path,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    """Flatten Xcelium filelists while excluding native DPI build inputs."""
+    frontend_args: list[str] = []
+    unsupported: list[dict[str, Any]] = []
+    visited: list[str] = []
+    seen: set[Path] = set()
+    hdl_input_count = 0
+
+    def resolve_path(raw: str, base: Path) -> Path:
+        expanded = _expand_with_env(raw, environment)
+        path = Path(expanded).expanduser()
+        if not path.is_absolute():
+            path = base / path
+        return path.resolve()
+
+    def expand(path: Path, mode: str) -> None:
+        nonlocal hdl_input_count
+        resolved = path.expanduser().resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        visited.append(str(resolved))
+        if not resolved.is_file():
+            _record_unsupported(
+                unsupported,
+                f"{mode} {resolved}",
+                "captured Xcelium filelist is unavailable",
+                "compile_input_missing",
+            )
+            return
+        base = cwd if mode == "-f" else resolved.parent
+        try:
+            tokens = shlex.split(
+                _expand_with_env(_read_command_file(resolved), environment),
+                comments=True,
+            )
+        except ValueError as exc:
+            raise SpikeInputError(
+                "compile_command_invalid",
+                f"cannot tokenize Xcelium filelist {resolved}: {exc}",
+            ) from exc
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            suffix = Path(token).suffix.lower()
+            if token in {"-f", "-F"} and index + 1 < len(tokens):
+                nested_base = cwd if token == "-f" else resolved.parent
+                expand(resolve_path(tokens[index + 1], nested_base), token)
+                index += 2
+                continue
+            if suffix in HDL_SUFFIXES:
+                frontend_args.append(str(resolve_path(token, base)))
+                hdl_input_count += 1
+                index += 1
+                continue
+            if suffix in {".c", ".cc", ".cpp", ".o", ".a", ".so"}:
+                _record_unsupported(
+                    unsupported,
+                    str(resolve_path(token, base)),
+                    "native DPI filelist input is outside HDL source connectivity",
+                    "external_runtime_not_modeled",
+                )
+                index += 1
+                continue
+            if token.startswith("+incdir+"):
+                directories = token[len("+incdir+") :].split("+")
+                frontend_args.append(
+                    "+incdir+" + "+".join(str(resolve_path(item, base)) for item in directories)
+                )
+                index += 1
+                continue
+            if token.startswith(("+define+", "+libext+")):
+                frontend_args.append(token)
+                index += 1
+                continue
+            if token in {"-I", "-D", "-U", "-y", "-v"} and index + 1 < len(tokens):
+                value = tokens[index + 1]
+                frontend_args.extend(
+                    [token, value]
+                    if token in {"-D", "-U"}
+                    else [token, str(resolve_path(value, base))]
+                )
+                index += 2
+                continue
+            if token.startswith(("-I", "-y", "-v")) and len(token) > 2:
+                frontend_args.append(token[:2] + str(resolve_path(token[2:], base)))
+                index += 1
+                continue
+            if token.startswith(("-D", "-U")) and len(token) > 2:
+                frontend_args.append(token)
+                index += 1
+                continue
+            _record_unsupported(
+                unsupported,
+                token,
+                "unclassified Xcelium filelist token was not forwarded",
+                "requires_workload_review",
+            )
+            index += 1
+
+    expand(filelist, "-f")
+    return {
+        "frontend_args": frontend_args,
+        "unsupported_options": unsupported,
+        "visited_filelists": visited,
+        "hdl_input_count": hdl_input_count,
+    }
+
+
 def _simulator_version_from_log(log_path: Path, simulator: str) -> str | None:
     text = log_path.read_text(encoding="utf-8", errors="replace")[:16_384]
     if simulator == "xcelium":
@@ -826,6 +940,8 @@ def translate_xcelium_invocation(
     top: str,
     fallback_sources: Sequence[Path],
     xcelium_uvm_library: dict[str, Any] | None = None,
+    compile_cwd: Path | None = None,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Translate the Phase 0B-relevant portion of an xrun invocation."""
     try:
@@ -856,6 +972,7 @@ def translate_xcelium_invocation(
         frontend_args.extend(uvm_frontend_args)
     translated: list[dict[str, Any]] = []
     unsupported: list[dict[str, Any]] = []
+    filelist_expansions: list[dict[str, Any]] = []
     _record_translation(
         translated,
         "simulator=xcelium",
@@ -938,14 +1055,55 @@ def translate_xcelium_invocation(
             continue
         if token in {"-f", "-F"} and index + 1 < len(tokens):
             value = tokens[index + 1]
-            frontend_args.extend([token, value])
-            source_input_seen = True
-            _record_translation(
-                translated,
-                f"{token} {value}",
-                [token, value],
-                "Slang command files support nested filelists and environment expansion",
-            )
+            expanded_environment = environment or {}
+            filelist_path = Path(_expand_with_env(value, expanded_environment))
+            if compile_cwd is not None and not filelist_path.is_absolute():
+                filelist_path = compile_cwd / filelist_path
+            if compile_cwd is not None and filelist_path.is_file():
+                expansion = _expand_xcelium_filelist_for_frontend(
+                    filelist_path.resolve(), compile_cwd, expanded_environment
+                )
+                expanded_args = list(expansion["frontend_args"])
+                frontend_args.extend(expanded_args)
+                unsupported.extend(expansion["unsupported_options"])
+                source_input_seen = source_input_seen or bool(
+                    expansion["hdl_input_count"]
+                )
+                filelist_expansions.append(
+                    {
+                        "input": f"{token} {value}",
+                        "status": "expanded_for_frontend",
+                        "visited_filelists": expansion["visited_filelists"],
+                        "frontend_argument_count": len(expanded_args),
+                        "hdl_input_count": expansion["hdl_input_count"],
+                        "excluded_input_count": len(expansion["unsupported_options"]),
+                    }
+                )
+                _record_translation(
+                    translated,
+                    f"{token} {value}",
+                    expanded_args,
+                    (
+                        "expand captured Xcelium compile inputs and exclude native "
+                        "DPI files from the HDL frontend"
+                    ),
+                )
+            else:
+                frontend_args.extend([token, value])
+                source_input_seen = True
+                filelist_expansions.append(
+                    {
+                        "input": f"{token} {value}",
+                        "status": "forwarded_unexpanded",
+                        "reason": "compile working directory was not supplied or filelist is unavailable",
+                    }
+                )
+                _record_translation(
+                    translated,
+                    f"{token} {value}",
+                    [token, value],
+                    "forward command file because expansion inputs are unavailable",
+                )
             index += 2
             continue
         if token == "-incdir" and index + 1 < len(tokens):
@@ -1187,6 +1345,7 @@ def translate_xcelium_invocation(
         "translated_options": translated,
         "unsupported_options": unsupported,
         "frontend_args": frontend_args,
+        "filelist_expansions": filelist_expansions,
         "frontend_invocation": (
             "pyslang.driver.Driver.parseCommandLine("
             + repr(shlex.join(frontend_args))
@@ -1397,6 +1556,8 @@ def build_real_workload(
             top=top,
             fallback_sources=source_paths,
             xcelium_uvm_library=xcelium_uvm_library,
+            compile_cwd=compile_cwd,
+            environment=environment,
         )
         if selected_simulator == "xcelium"
         else translate_vcs_invocation(command, top=top, fallback_sources=source_paths)

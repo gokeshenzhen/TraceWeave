@@ -252,6 +252,53 @@ def test_xcelium_real_workload_records_simulator_provided_uvm_sources(tmp_path):
     assert str(uvm_pkg.resolve()) in workload["translation"]["frontend_args"]
 
 
+def test_xcelium_filelist_expansion_excludes_native_dpi_inputs(tmp_path):
+    work = tmp_path / "fusesoc-work"
+    source = work / "src" / "top.sv"
+    native = work / "src" / "model.cc"
+    include_dir = work / "src" / "include"
+    filelist = work / "design.scr"
+    _write(source, "module tb; endmodule\n")
+    _write(native, "int dpi_model(void) { return 0; }\n")
+    include_dir.mkdir(parents=True)
+    _write(
+        filelist,
+        "+incdir+src/include\n"
+        "src/model.cc\n"
+        "src/top.sv\n",
+    )
+
+    translation = spike.translate_xcelium_invocation(
+        "xrun -f design.scr -top tb",
+        top="tb",
+        fallback_sources=[],
+        compile_cwd=work,
+        environment={},
+    )
+
+    args = translation["frontend_args"]
+    assert str(source.resolve()) in args
+    assert str(native.resolve()) not in args
+    assert f"+incdir+{include_dir.resolve()}" in args
+    assert "-f" not in args
+    assert translation["filelist_expansions"] == [
+        {
+            "input": "-f design.scr",
+            "status": "expanded_for_frontend",
+            "visited_filelists": [str(filelist.resolve())],
+            "frontend_argument_count": 2,
+            "hdl_input_count": 1,
+            "excluded_input_count": 1,
+        }
+    ]
+    excluded = translation["unsupported_options"]
+    assert any(
+        item["option"] == str(native.resolve())
+        and item["impact"] == "external_runtime_not_modeled"
+        for item in excluded
+    )
+
+
 def test_real_workload_planning_uses_explicit_environment_and_nested_filelists(
     tmp_path,
 ):
