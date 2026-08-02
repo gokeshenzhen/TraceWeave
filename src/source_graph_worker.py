@@ -106,8 +106,9 @@ def _gap_label(value: str) -> str:
 def _frontend_args(request: SourceGraphBuildRequest) -> list[str]:
     manifest = request.identity.compile_inputs
     result = [*manifest.ordered_options, *manifest.ordered_inputs]
-    if "--top" not in result:
-        result.extend(["--top", request.scope.top])
+    tops = manifest.ordered_tops or (request.scope.top,)
+    for top in tops:
+        result.extend(["--top", top])
     return result
 
 

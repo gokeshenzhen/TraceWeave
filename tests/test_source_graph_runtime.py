@@ -33,6 +33,7 @@ from src.source_graph_runtime import (
     WorkerBuildResult,
     WorkerResourceMetrics,
 )
+from src.source_graph_worker import _frontend_args
 from tests.connectivity_ir_fixtures import build_hand_ir
 
 
@@ -111,6 +112,30 @@ def _ready_result(request: SourceGraphBuildRequest) -> WorkerBuildResult:
             ir_bytes=len(payload),
         ),
     )
+
+
+def test_worker_replays_all_ordered_tops_from_compile_manifest():
+    request = _request()
+    request = replace(
+        request,
+        identity=replace(
+            request.identity,
+            compile_inputs=replace(
+                request.identity.compile_inputs,
+                ordered_tops=("bind_top", "sg_top"),
+            ),
+        ),
+    )
+
+    assert _frontend_args(request) == [
+        "--compat",
+        "all",
+        "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+        "--top",
+        "bind_top",
+        "--top",
+        "sg_top",
+    ]
 
 
 class ImmediateWorker:
