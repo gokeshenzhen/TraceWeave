@@ -149,6 +149,13 @@ Verification
   attempt chain, fixed fallback/blocker labels, coverage and fingerprints while
   the result payload contains facts from exactly one backend. Arbitrary path
   and `trace_x_source` routing are unchanged.
+  The adapter content-hashes every ordered source/support input on the first
+  request for a hierarchy handle. A bounded process-memory manifest cache then
+  reuses that immutable compile-session snapshot; its key includes compile-log
+  metadata and normalized parser output, matching the handle's rebuild
+  boundary. Re-running the compile and `build_tb_hierarchy` invalidates it.
+  The initial scan compares all input metadata before and after hashing and
+  refuses a reusable key if the snapshot changes mid-scan.
   Privacy-safe operation metrics make full-sweep cost attributable without
   recording project identities: discovery/search timing, total sweep time,
   planned/attempted/completed interface counts, unique clock/signal counts,

@@ -224,7 +224,11 @@ If the task involves behavior validation or regression checks, also read:
   `trusted Verdi NPI -> bounded on-demand Source Graph -> Legacy Static`.
   `src/source_graph_adapter.py` constructs conservative content-fingerprinted
   requests from the cached compile/hierarchy context without enumerating the
-  full design. `src/source_graph_production.py` owns one lazy process-session
+  full design. Its first call hashes every ordered source/support input; later
+  calls may reuse a bounded process-memory manifest keyed to the immutable
+  compile-log/hierarchy snapshot (`hit_session_snapshot`). Rebuild and refresh
+  `build_tb_hierarchy` after source changes. `src/source_graph_production.py`
+  owns one lazy process-session
   runtime; the optional frontend stays in isolated one-shot workers, successful
   IR is memory-only, and same-key cold calls are single-flight under a
   process-wide one-build admission limit. Adapter/query/Static work uses the

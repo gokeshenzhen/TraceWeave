@@ -365,6 +365,13 @@ and same-key cold requests share one build. It does not build at startup, use a
 disk cache, hold an FSDB/VCD lock, or import `pyslang` into the MCP server.
 `trace_signal_path` and `trace_x_source` are intentionally unchanged.
 
+The first request for a hierarchy handle content-hashes every ordered compile
+input. Later requests reuse that bounded in-memory compile-session manifest,
+reported as `fingerprint_cache_disposition=hit_session_snapshot`; a changed
+compile log / refreshed `build_tb_hierarchy` handle invalidates the snapshot.
+If source inputs change, rebuild and refresh the hierarchy before querying so
+Source Graph stays aligned with the simulated compile session.
+
 Source Graph is enabled by default. If the MCP interpreter does not have the
 optional frontend, the dependency blocker is recorded and the request continues
 to Legacy Static. To use an isolated pinned frontend environment, configure:

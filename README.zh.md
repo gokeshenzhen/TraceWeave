@@ -337,6 +337,12 @@ KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节
 启动时构建，不使用 disk cache，不持有 FSDB/VCD wave lock，也不会把 `pyslang`
 导入 MCP server 进程。`trace_signal_path` 与 `trace_x_source` 明确保留原路由。
 
+同一 hierarchy handle 的首个请求会对全部有序 compile inputs 做内容哈希；后续请求复用
+容量有界的进程内 compile-session manifest，并在回执中标记
+`fingerprint_cache_disposition=hit_session_snapshot`。compile log 变化并重新运行
+`build_tb_hierarchy` 后该 snapshot 会失效。若源码发生变化，应先重新编译并刷新 hierarchy，
+使 Source Graph 与实际仿真 compile session 保持一致。
+
 Source Graph 默认启用。若 MCP Python 没有 optional frontend，会记录 dependency blocker
 并继续 Legacy Static。要使用隔离的 pinned frontend 环境，可配置：
 

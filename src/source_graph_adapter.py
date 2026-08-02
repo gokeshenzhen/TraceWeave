@@ -14,6 +14,7 @@ scope is a structured blocker rather than an implicit full-design scan.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import threading
 from typing import Any
 
 from .cancellation import check_cancelled
@@ -48,6 +50,7 @@ _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _FIXED_LABEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MAX_FILELIST_DEPTH = 64
 _MAX_FILELIST_TOKENS = 1_000_000
+_MANIFEST_CACHE_MAX_ENTRIES = 8
 
 _BASE_OPTIONS = {
     "vcs": (
@@ -180,6 +183,7 @@ class SourceGraphAdapterReceipt:
     requested_cone_instance_count: int = 0
     coverage_boundary_instance_count: int = 0
     cross_request_reusable: bool = False
+    fingerprint_cache_disposition: str | None = None
     blocker: SourceGraphAdapterBlocker | None = None
 
     def __post_init__(self) -> None:
@@ -197,6 +201,12 @@ class SourceGraphAdapterReceipt:
             raise ValueError("blocked adapter receipt requires a blocker")
         if self.status is AdapterStatus.READY and self.blocker is not None:
             raise ValueError("ready adapter receipt must not carry a blocker")
+        if self.fingerprint_cache_disposition not in {
+            None,
+            "miss",
+            "hit_session_snapshot",
+        }:
+            raise ValueError("invalid fingerprint cache disposition")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -208,6 +218,7 @@ class SourceGraphAdapterReceipt:
                 "top_count": self.top_count,
                 "complete": self.manifest_complete,
                 "incomplete_reasons": list(self.manifest_incomplete_reasons),
+                "fingerprint_cache_disposition": self.fingerprint_cache_disposition,
             },
             "scope": {
                 "ancestor_count": self.ancestor_count,
@@ -254,6 +265,18 @@ class _TranslationState:
     options_complete: bool = True
     uvmhome_resolved: bool = False
     token_count: int = 0
+
+
+@dataclass(frozen=True)
+class _ManifestCacheEntry:
+    manifest: CompileInputManifest
+    gap_codes: tuple[str, ...]
+    objective_exclusions: tuple[str, ...]
+
+
+_MANIFEST_CACHE: OrderedDict[str, _ManifestCacheEntry] = OrderedDict()
+_MANIFEST_CACHE_LOCK = threading.Lock()
+_MANIFEST_BUILD_LOCK = threading.Lock()
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -739,7 +762,119 @@ def _compile_fingerprint(
     return hashlib.sha256(_canonical_json(payload)).hexdigest(), True
 
 
-def _compile_manifest(
+def _stat_record(path: Path) -> dict[str, int | str] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {
+        "path": str(path),
+        "device": stat.st_dev,
+        "inode": stat.st_ino,
+        "bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+    }
+
+
+def _content_stat_key(
+    *,
+    inputs: Sequence[str],
+    support_files: set[Path],
+) -> str | None:
+    input_records: list[dict[str, int | str]] = []
+    for index, rendered in enumerate(inputs):
+        if index % 256 == 0:
+            check_cancelled()
+        record = _stat_record(Path(rendered))
+        if record is None:
+            return None
+        input_records.append(record)
+    input_paths = {Path(item).resolve(strict=False) for item in inputs}
+    support_records: list[dict[str, int | str]] = []
+    for path in sorted(support_files - input_paths, key=lambda item: str(item)):
+        record = _stat_record(path)
+        if record is None:
+            return None
+        support_records.append(record)
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "ordered_inputs": input_records,
+                "support_files": support_records,
+            }
+        )
+    ).hexdigest()
+
+
+def _manifest_snapshot_key(
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+) -> str | None:
+    log_path = Path(compile_log).resolve(strict=False)
+    log_record = _stat_record(log_path)
+    if log_record is None:
+        return None
+    files = compile_result.get("files")
+    user = files.get("user") if isinstance(files, Mapping) else ()
+    user_records = []
+    if isinstance(user, Sequence) and not isinstance(user, (str, bytes)):
+        user_records = [
+            {
+                "path": str(item.get("path") or ""),
+                "type": str(item.get("type") or ""),
+                "category": str(item.get("category") or ""),
+            }
+            for item in user
+            if isinstance(item, Mapping)
+        ]
+    payload = {
+        "adapter_version": SOURCE_GRAPH_ADAPTER_VERSION,
+        "compile_log": log_record,
+        "simulator": str(compile_result.get("simulator") or ""),
+        "compile_cwd": str(compile_result.get("compile_cwd") or ""),
+        "compile_command": str(compile_result.get("compile_command") or ""),
+        "compile_replay_command": str(
+            compile_result.get("compile_replay_command") or ""
+        ),
+        "top_modules": list(compile_result.get("top_modules") or ()),
+        "user_files": user_records,
+        "include_tree": compile_result.get("include_tree") or {},
+        "filelist_tree": compile_result.get("filelist_tree") or {},
+        "parse_warnings": list(compile_result.get("parse_warnings") or ()),
+    }
+    try:
+        return hashlib.sha256(_canonical_json(payload)).hexdigest()
+    except (TypeError, ValueError):
+        return None
+
+
+def _lookup_manifest_cache(key: str | None) -> _ManifestCacheEntry | None:
+    if key is None:
+        return None
+    with _MANIFEST_CACHE_LOCK:
+        entry = _MANIFEST_CACHE.get(key)
+        if entry is not None:
+            _MANIFEST_CACHE.move_to_end(key)
+        return entry
+
+
+def _publish_manifest_cache(key: str, entry: _ManifestCacheEntry) -> None:
+    with _MANIFEST_CACHE_LOCK:
+        _MANIFEST_CACHE[key] = entry
+        _MANIFEST_CACHE.move_to_end(key)
+        while len(_MANIFEST_CACHE) > _MANIFEST_CACHE_MAX_ENTRIES:
+            _MANIFEST_CACHE.popitem(last=False)
+
+
+def _reset_source_graph_adapter_cache_for_tests() -> None:
+    """Clear process-local manifest memoization after all calls are idle."""
+
+    with _MANIFEST_CACHE_LOCK:
+        _MANIFEST_CACHE.clear()
+
+
+def _build_compile_manifest(
     compile_log: str,
     compile_result: Mapping[str, Any],
 ) -> tuple[CompileInputManifest, tuple[str, ...], tuple[str, ...]]:
@@ -822,6 +957,10 @@ def _compile_manifest(
         state.objective_exclusions.add("bind_semantics")
 
     state.support_files.update(_include_support_paths(compile_result))
+    before_content = _content_stat_key(
+        inputs=state.inputs,
+        support_files=state.support_files,
+    )
     fingerprint, content_complete = _compile_fingerprint(
         simulator=simulator,
         command=command,
@@ -831,6 +970,13 @@ def _compile_manifest(
         support_files=state.support_files,
         exclusions=state.objective_exclusions,
     )
+    after_content = _content_stat_key(
+        inputs=state.inputs,
+        support_files=state.support_files,
+    )
+    if before_content is None or after_content != before_content:
+        fingerprint = None
+        content_complete = False
     if not content_complete:
         state.inputs_complete = False
         state.gap_codes.add("compile_content_unavailable")
@@ -849,6 +995,71 @@ def _compile_manifest(
         tuple(sorted(state.gap_codes)),
         tuple(sorted(state.objective_exclusions)),
     )
+
+
+def _compile_manifest(
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+) -> tuple[CompileInputManifest, tuple[str, ...], tuple[str, ...], str]:
+    """Return a content-hashed manifest for one immutable compile session.
+
+    The hierarchy handle and this cache share the same lifetime boundary: the
+    compile-log snapshot.  A rebuild changes the log metadata and therefore
+    invalidates the memoized manifest.  The first request still hashes every
+    source/support input and rejects a snapshot whose file metadata changes
+    during that scan; later requests reuse that exact process-session snapshot
+    instead of re-walking hundreds of source paths.
+    """
+
+    snapshot_key = _manifest_snapshot_key(compile_log, compile_result)
+    cached = _lookup_manifest_cache(snapshot_key)
+    if cached is not None:
+        return (
+            cached.manifest,
+            cached.gap_codes,
+            cached.objective_exclusions,
+            "hit_session_snapshot",
+        )
+
+    while not _MANIFEST_BUILD_LOCK.acquire(timeout=0.05):
+        check_cancelled()
+    try:
+        snapshot_key = _manifest_snapshot_key(compile_log, compile_result)
+        cached = _lookup_manifest_cache(snapshot_key)
+        if cached is not None:
+            return (
+                cached.manifest,
+                cached.gap_codes,
+                cached.objective_exclusions,
+                "hit_session_snapshot",
+            )
+        manifest, gaps, exclusions = _build_compile_manifest(
+            compile_log, compile_result
+        )
+        after_key = _manifest_snapshot_key(compile_log, compile_result)
+        if snapshot_key is not None and after_key != snapshot_key:
+            manifest = CompileInputManifest(
+                fingerprint=None,
+                ordered_inputs=manifest.ordered_inputs,
+                ordered_options=manifest.ordered_options,
+                ordered_tops=manifest.ordered_tops,
+                inputs_complete=False,
+                options_complete=manifest.options_complete,
+                tops_complete=manifest.tops_complete,
+            )
+            gaps = tuple(sorted({*gaps, "compile_snapshot_changed"}))
+        elif snapshot_key is not None and manifest.complete:
+            _publish_manifest_cache(
+                snapshot_key,
+                _ManifestCacheEntry(
+                    manifest=manifest,
+                    gap_codes=gaps,
+                    objective_exclusions=exclusions,
+                ),
+            )
+        return manifest, gaps, exclusions, "miss"
+    finally:
+        _MANIFEST_BUILD_LOCK.release()
 
 
 def _selected_top(
@@ -947,7 +1158,9 @@ def build_source_graph_plan(
     if not normalized_signal or "." not in normalized_signal:
         return _blocked_plan(code="signal_path_unscoped", stage="target_scope")
 
-    manifest, gaps, exclusions = _compile_manifest(compile_log, compile_result)
+    manifest, gaps, exclusions, fingerprint_cache_disposition = _compile_manifest(
+        compile_log, compile_result
+    )
     if not manifest.complete:
         exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     if not manifest.ordered_inputs:
@@ -1045,6 +1258,7 @@ def build_source_graph_plan(
         requested_cone_instance_count=1,
         coverage_boundary_instance_count=len(boundary_paths),
         cross_request_reusable=build_key.cross_request_reusable,
+        fingerprint_cache_disposition=fingerprint_cache_disposition,
     )
     return SourceGraphBuildPlan(
         status=AdapterStatus.READY,

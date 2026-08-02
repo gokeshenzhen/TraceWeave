@@ -6,6 +6,7 @@ import threading
 import pytest
 
 import src.cancellation as cancellation
+import src.source_graph_adapter as source_graph_adapter
 from src.compile_log_parser import parse_compile_log
 from src.source_graph_adapter import (
     AdapterStatus,
@@ -13,6 +14,13 @@ from src.source_graph_adapter import (
     build_source_graph_plan,
 )
 from src.source_graph_contract import QueryOperation, compute_source_graph_build_key
+
+
+@pytest.fixture(autouse=True)
+def _clean_fingerprint_cache():
+    source_graph_adapter._reset_source_graph_adapter_cache_for_tests()
+    yield
+    source_graph_adapter._reset_source_graph_adapter_cache_for_tests()
 
 
 def _write(path: Path, text: str) -> None:
@@ -27,6 +35,7 @@ def _compile_result(
     sources: tuple[Path, ...],
     tops: tuple[str, ...] = ("tb",),
 ) -> dict:
+    (tmp_path / "compile.log").write_text(command + "\n", encoding="utf-8")
     return {
         "simulator": "xcelium",
         "compile_cwd": str(tmp_path),
@@ -191,6 +200,7 @@ def test_content_fingerprint_changes_when_an_input_changes(tmp_path):
 
     first = _plan(tmp_path, compile_result, signal_path="tb.q")
     _write(source, "module tb; logic q; assign q = 1'b1; endmodule\n")
+    _write(tmp_path / "compile.log", "xrun top.sv -top tb\nrebuilt\n")
     second = _plan(tmp_path, compile_result, signal_path="tb.q")
 
     assert first.request is not None and second.request is not None
@@ -200,6 +210,50 @@ def test_content_fingerprint_changes_when_an_input_changes(tmp_path):
     assert first_fingerprint != second_fingerprint
     assert len(first_fingerprint) == 64
     assert int(first_fingerprint, 16) >= 0
+
+
+def test_content_fingerprint_cache_hits_and_invalidates_on_rebuild(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    original = source_graph_adapter._hash_file_and_scan
+    calls = 0
+
+    def tracked_hash(path, exclusions):
+        nonlocal calls
+        calls += 1
+        return original(path, exclusions)
+
+    monkeypatch.setattr(source_graph_adapter, "_hash_file_and_scan", tracked_hash)
+
+    first = _plan(tmp_path, compile_result, signal_path="tb.q")
+    first_calls = calls
+    second = _plan(tmp_path, compile_result, signal_path="tb.q")
+    _write(source, "module tb; logic q; assign q = 1'b1; endmodule\n")
+    _write(tmp_path / "compile.log", "xrun top.sv -top tb\nrebuilt\n")
+    third = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert first.receipt.fingerprint_cache_disposition == "miss"
+    assert second.receipt.fingerprint_cache_disposition == "hit_session_snapshot"
+    assert third.receipt.fingerprint_cache_disposition == "miss"
+    assert first_calls == 1
+    assert calls == 2
+    assert first.request is not None and second.request is not None
+    assert third.request is not None
+    assert (
+        first.request.identity.compile_inputs.fingerprint
+        == second.request.identity.compile_inputs.fingerprint
+    )
+    assert (
+        third.request.identity.compile_inputs.fingerprint
+        != first.request.identity.compile_inputs.fingerprint
+    )
 
 
 def test_unclassified_option_forbids_cross_request_exact_reuse(tmp_path):

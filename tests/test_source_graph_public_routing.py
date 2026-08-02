@@ -431,6 +431,31 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
 
 
 @pytest.mark.anyio
+async def test_warm_public_request_reuses_compile_snapshot_and_ir(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    first = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    second = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+
+    assert first.backend_status.source_graph.cache_disposition == "miss"
+    assert second.backend_status.source_graph.cache_disposition == "hit_exact"
+    assert (
+        second.backend_status.source_graph.adapter["manifest"][
+            "fingerprint_cache_disposition"
+        ]
+        == "hit_session_snapshot"
+    )
+    assert worker.calls == 1
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
 async def test_npi_failure_uses_source_graph_before_static(monkeypatch, tmp_path):
     compile_log, _ = _install_source_context(tmp_path)
     worker = ReadyWorker()
