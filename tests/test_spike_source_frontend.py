@@ -116,6 +116,58 @@ def test_vcs_translation_is_explicit_about_supported_and_excluded_options():
     assert unsupported["/vendor/uvm_dpi.cc"] == "external_runtime_not_modeled"
 
 
+def test_xcelium_translation_maps_compile_inputs_and_receipts_vendor_options():
+    source = HAND_SOURCE.resolve()
+    translation = spike.translate_xcelium_invocation(
+        " ".join(
+            [
+                "xrun",
+                "-elaborate",
+                "-sv",
+                "-64bit",
+                "+define+XCELIUM+DUMP_FSDB",
+                "-incdir",
+                "/vendor/uvm/src",
+                "-timescale",
+                "1ns/10ps",
+                "-access",
+                "+rc",
+                "-disable_sem2009",
+                shlex.quote(str(source)),
+                "-top",
+                "sg_top",
+                "-log",
+                "/tmp/elab.log",
+            ]
+        ),
+        top="sg_top",
+        fallback_sources=[source],
+    )
+
+    args = translation["frontend_args"]
+    assert args[:5] == [
+        "--compat",
+        "all",
+        "--enable-legacy-protect",
+        "--single-unit",
+        "-Wno-unknown-sys-name",
+    ]
+    assert ["-I", "/vendor/uvm/src"] == args[args.index("-I") : args.index("-I") + 2]
+    assert ["--timescale", "1ns/10ps"] == args[
+        args.index("--timescale") : args.index("--timescale") + 2
+    ]
+    assert ["--top", "sg_top"] == args[-2:]
+
+    unsupported = {
+        item["option"]: item["impact"] for item in translation["unsupported_options"]
+    }
+    assert unsupported["-elaborate"] == "frontend_irrelevant"
+    assert unsupported["-64bit"] == "frontend_irrelevant"
+    assert unsupported["-access +rc"] == "frontend_irrelevant"
+    assert unsupported["-disable_sem2009"] == ("semantic_compatibility_oracle_required")
+    assert unsupported["-log /tmp/elab.log"] == "frontend_irrelevant"
+
+
 def test_real_workload_planning_uses_explicit_environment_and_nested_filelists(
     tmp_path,
 ):
@@ -170,6 +222,74 @@ def test_real_workload_planning_uses_explicit_environment_and_nested_filelists(
         "+define+VCS+UVM_OBJECT_MUST_HAVE_CONSTRUCTOR"
         in workload["translation"]["frontend_args"]
     )
+
+
+def test_xcelium_real_workload_recovers_bounded_command_and_nested_sources(tmp_path):
+    project = tmp_path / "uvm_demo"
+    compile_log = project / "tb" / "work" / "elab.log"
+    rtl = project / "des" / "rtl" / "verilog" / "dut.sv"
+    top = project / "tb" / "top_tb.sv"
+    uvm_source = project / "vendor" / "uvm" / "src" / "uvm_pkg.sv"
+    filelist = project / "dut" / "filelist.f"
+    nested = project / "dut" / "nested.f"
+    for path, text in (
+        (rtl, "module dut; endmodule\n"),
+        (top, "module top_tb; dut u_dut(); endmodule\n"),
+        (uvm_source, "package uvm_pkg; endpackage\n"),
+    ):
+        _write(path, text)
+    _write(
+        filelist,
+        "$UVM_HOME/src/uvm_pkg.sv\n$DUT_SRC_DIR/dut.sv\n"
+        "-f $TB_DIR/dut/nested.f\n"
+        "// $TB_DIR/tb/not_compiled.sv\n",
+    )
+    _write(nested, "$TB_DIR/tb/top_tb.sv\n")
+    _write(
+        compile_log,
+        "xrun(64): 26.03-s001-20260323: started\n"
+        "xrun\n"
+        "\t-elaborate\n"
+        "\t-sv\n"
+        "\t-disable_sem2009\n"
+        f"\t{uvm_source}\n"
+        "\t-incdir $UVM_HOME/src\n"
+        "\t-f $TB_DIR/dut/filelist.f\n"
+        f"\t\t{rtl}\n"
+        f"\t\t{top}\n"
+        "\t-timescale 1ns/10ps\n"
+        "\t-top top_tb\n"
+        "\t-log /tmp/elab.log\n"
+        f"file: {rtl}\n"
+        "\tmodule worklib.dut:sv\n"
+        f"file: {top}\n"
+        "\tmodule worklib.top_tb:sv\n"
+        "DEFINE std ./STD\n"
+        "xrun: *W,AFTER: this diagnostic is not part of the invocation\n",
+    )
+
+    workload = spike.build_real_workload(compile_log, {}, simulator="auto")
+
+    assert workload["simulator"] == "xcelium"
+    assert workload["simulator_version"] == "26.03-s001-20260323"
+    assert workload["top"] == "top_tb"
+    assert workload["compile_cwd"] == str((project / "tb").resolve())
+    assert workload["environment"] == {
+        "TB_DIR": str(project.resolve()),
+        "UVM_HOME": str(uvm_source.parent.parent.resolve()),
+        "DUT_SRC_DIR": str(rtl.parent.resolve()),
+    }
+    assert set(workload["filelists"]) == {
+        str(filelist.resolve()),
+        str(nested.resolve()),
+    }
+    assert workload["source_facts"]["existing_source_count"] == 3
+    invocation = workload["translation"]["original_invocation"]
+    assert invocation.startswith("xrun -elaborate -sv")
+    assert "this diagnostic is not part of the invocation" not in invocation
+    assert workload["diagnostic_policy"]["excluded_inputs"][
+        "protected_source"
+    ].endswith("never a fallback")
 
 
 def test_manual_oracle_comparison_checks_hierarchy_and_file_line_fidelity():

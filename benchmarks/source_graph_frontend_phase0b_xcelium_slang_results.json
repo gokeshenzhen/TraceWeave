@@ -1,0 +1,3534 @@
+{
+  "assessment": {
+    "cold_frontend_worker_model": {
+      "reason": "preserves hard timeout/crash and RSS isolation for a native frontend; future session caching can keep a successful worker warm",
+      "recommendation": "isolated_worker_process"
+    },
+    "dependency_model": {
+      "base_dependency": false,
+      "bundled_artifact": false,
+      "reason": "pyslang is a native, platform-specific wheel and source connectivity is additive to TraceWeave's existing log/wave functionality",
+      "recommendation": "optional_extra"
+    },
+    "evidence_scope": "Phase 0B frontend feasibility only: parsing, elaborated hierarchy, source locations, diagnostics, and frontend-exposed object counts; no Source Graph edges or production accuracy claim",
+    "key_frontend_gaps": [
+      {
+        "reason": "not_measured",
+        "workload": "deep_x_npi"
+      },
+      {
+        "reason": "not_measured",
+        "workload": "hand_fixture"
+      },
+      {
+        "blockers": [
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          },
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          }
+        ],
+        "reason": "status=blocked",
+        "workload": "real_uvm"
+      }
+    ],
+    "open_questions": [
+      "large-design cold build and steady-state cache measurements",
+      "vendor protected-source and DPI/system-task exclusion policy",
+      "Xcelium-specific option translation on a representative local workload",
+      "frontend wheel availability on every supported deployment platform"
+    ],
+    "slang_primary_frontend": {
+      "decision": "not_yet_supported_by_complete_phase_0b_evidence",
+      "production_status": "not_implemented_not_production_validated"
+    },
+    "surelog_uhdm_comparison": {
+      "fallback_needed": null,
+      "performed": false,
+      "reason": "required workload coverage is incomplete or has a recorded gap"
+    }
+  },
+  "cold_repeats_per_workload": 10,
+  "dependency": {
+    "isolation": "fresh child processes using a /tmp virtual environment",
+    "package": "pyslang",
+    "reproduction_commands": [
+      "python3.11 -m venv /tmp/traceweave-phase0b-pyslang-11.0.0",
+      "/tmp/traceweave-phase0b-pyslang-11.0.0/bin/python -m pip install --only-binary=:all: --require-hashes -r /home/robin/Projects/mcp/TraceWeave/scripts/frontend_spike_requirements_cp311_linux_x86_64.txt"
+    ],
+    "requirements_file": "/home/robin/Projects/mcp/TraceWeave/scripts/frontend_spike_requirements_cp311_linux_x86_64.txt",
+    "selected_interpreter": "/tmp/traceweave-phase0b-pyslang-11.0.0/bin/python",
+    "source": "https://pypi.org/project/pyslang/11.0.0/",
+    "system_python_modified": false,
+    "upstream_commit": "7ddf4059f79eff508dd486eb42fd650cdf320d52",
+    "version": "11.0.0",
+    "wheel": {
+      "bytes": 6530751,
+      "filename": "pyslang-11.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platform": "CPython 3.11 manylinux_2_27/2_28 x86_64",
+      "sha256": "b0ddf4fa29b72e0386d43863c4e7b5d53a4b0e5db6f7038c0f47f2e3e97a88bc",
+      "url": "https://files.pythonhosted.org/packages/ac/bc/a8830bdbbe30ac04b8a545c5e630707c99da3bed348ea8a96d2591e7e79d/pyslang-11.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+    }
+  },
+  "environment": {
+    "logical_cpu_count": 16,
+    "machine": "x86_64",
+    "orchestrator_frontend_availability": {
+      "interpretation": "package presence only; absence is not frontend incompatibility",
+      "pyslang": true,
+      "uhdm": false
+    },
+    "orchestrator_python_version": "3.11.13",
+    "platform_system": "Linux",
+    "python_implementation": "CPython",
+    "rss_source": "/proc/self/status VmRSS/VmHWM (KiB)"
+  },
+  "frontend": {
+    "name": "Slang/pyslang",
+    "package": "pyslang",
+    "source": "https://pypi.org/project/pyslang/11.0.0/",
+    "version": "11.0.0"
+  },
+  "harness": {
+    "child_timeout_seconds": 300.0,
+    "oracle_input": "/home/robin/Projects/mcp/TraceWeave/benchmarks/source_graph_frontend_phase0b_xcelium_oracles.json",
+    "repository_baseline": "02cc7c11f62daf6a9fdf8fcee3eb40c98afbdea0",
+    "script": "/home/robin/Projects/mcp/TraceWeave/scripts/spike_source_frontend.py",
+    "selected_workloads": [
+      "real_uvm"
+    ]
+  },
+  "methodology": {
+    "execution": "one workload per fresh child interpreter; the parent does not import pyslang",
+    "oracles": "tracked hand annotation is mandatory; FSDB/KDB/NPI evidence is development-only supplemental input",
+    "preprocess_parse": "preprocess is an independent runPreprocessor probe; parseAllSources necessarily preprocesses again",
+    "production_claim": "feasibility data only; no Source Graph backend or routing is implemented",
+    "rss": "start/end are VmRSS and peak is process-lifetime VmHWM; each cold sample exits after one workload"
+  },
+  "schema_version": "1.0",
+  "spike": "source_graph_frontend_feasibility",
+  "status": "blocked",
+  "workload_count": 1,
+  "workloads": [
+    {
+      "blockers": [
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        },
+        {
+          "code": "blocking_frontend_diagnostics",
+          "message": "1 effective error/fatal diagnostics remain",
+          "phase": "elaboration"
+        }
+      ],
+      "cold_process": {
+        "diagnostic_stability": {
+          "blocking_error_count": {
+            "count": 10,
+            "max": 1.0,
+            "min": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "interpretation": "full diagnostics include advisory/ignored lint aggregates; semantic stability still includes all blocking counts and emitted error/warning/unknown-system items",
+          "stable_full_payload": false,
+          "suppressed_unknown_system_count": {
+            "count": 10,
+            "max": 5.0,
+            "min": 5.0,
+            "p50": 5.0,
+            "p95": 5.0
+          },
+          "total": {
+            "count": 10,
+            "max": 1620.0,
+            "min": 1616.0,
+            "p50": 1620.0,
+            "p95": 1620.0
+          },
+          "varying_by_code": {
+            "DynamicCastConst": {
+              "count": 10,
+              "max": 45.0,
+              "min": 41.0,
+              "p50": 45.0,
+              "p95": 45.0
+            }
+          }
+        },
+        "phase_measurements": {
+          "elaboration": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 207.934733,
+              "min": 201.922042,
+              "p50": 205.034161,
+              "p95": 207.85992
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 132216.0,
+              "min": 129844.0,
+              "p50": 132080.0,
+              "p95": 132207.0,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 132216.0,
+              "min": 129844.0,
+              "p50": 132080.0,
+              "p95": 132207.0,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 76444.0,
+              "min": 74004.0,
+              "p50": 76092.0,
+              "p95": 76386.4,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 208.740598,
+              "min": 202.707543,
+              "p50": 205.814024,
+              "p95": 208.655737
+            }
+          },
+          "frontend_import": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 52.952239,
+              "min": 49.896784,
+              "p50": 50.950923,
+              "p95": 52.772488
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 40644.0,
+              "min": 40236.0,
+              "p50": 40536.0,
+              "p95": 40618.8,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 40644.0,
+              "min": 40236.0,
+              "p50": 40536.0,
+              "p95": 40618.8,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 20360.0,
+              "min": 20236.0,
+              "p50": 20284.0,
+              "p95": 20358.2,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 53.224791,
+              "min": 50.098298,
+              "p50": 51.177278,
+              "p95": 53.049455
+            }
+          },
+          "object_extraction": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 417.862318,
+              "min": 403.798886,
+              "p50": 408.117816,
+              "p95": 415.143246
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 137056.0,
+              "min": 134696.0,
+              "p50": 136958.0,
+              "p95": 137054.2,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 137056.0,
+              "min": 134696.0,
+              "p50": 136958.0,
+              "p95": 137054.2,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 132216.0,
+              "min": 129844.0,
+              "p50": 132080.0,
+              "p95": 132207.0,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 418.830861,
+              "min": 404.792177,
+              "p50": 409.105119,
+              "p95": 416.113773
+            }
+          },
+          "parse": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 59.305736,
+              "min": 58.054957,
+              "p50": 58.767738,
+              "p95": 59.229568
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 76444.0,
+              "min": 74004.0,
+              "p50": 76092.0,
+              "p95": 76386.4,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 76444.0,
+              "min": 74004.0,
+              "p50": 76092.0,
+              "p95": 76386.4,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 57420.0,
+              "min": 56656.0,
+              "p50": 57276.0,
+              "p95": 57411.0,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 57.099948,
+              "min": 55.950036,
+              "p50": 56.493438,
+              "p95": 57.026434
+            }
+          },
+          "parse_setup": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 0.983417,
+              "min": 0.830489,
+              "p50": 0.854936,
+              "p95": 0.931876
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 57420.0,
+              "min": 56656.0,
+              "p50": 57276.0,
+              "p95": 57411.0,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 61640.0,
+              "min": 60876.0,
+              "p50": 61496.0,
+              "p95": 61631.0,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 57420.0,
+              "min": 56656.0,
+              "p50": 57276.0,
+              "p95": 57411.0,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 1.001585,
+              "min": 0.839673,
+              "p50": 0.860208,
+              "p95": 0.944324
+            }
+          },
+          "preprocess": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 52.321,
+              "min": 50.393181,
+              "p50": 51.475763,
+              "p95": 52.192912
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 57420.0,
+              "min": 56656.0,
+              "p50": 57276.0,
+              "p95": 57411.0,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 61640.0,
+              "min": 60876.0,
+              "p50": 61496.0,
+              "p95": 61631.0,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 41332.0,
+              "min": 40860.0,
+              "p50": 41054.0,
+              "p95": 41272.6,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 52.597914,
+              "min": 50.596537,
+              "p50": 51.729596,
+              "p95": 52.474095
+            }
+          },
+          "preprocess_setup": {
+            "cpu_time_ms": {
+              "count": 10,
+              "max": 1.080881,
+              "min": 0.933263,
+              "p50": 0.953356,
+              "p95": 1.070998
+            },
+            "rss_end_kib": {
+              "count": 10,
+              "max": 41332.0,
+              "min": 40860.0,
+              "p50": 41054.0,
+              "p95": 41272.6,
+              "supported": true
+            },
+            "rss_peak_kib": {
+              "count": 10,
+              "max": 41332.0,
+              "min": 40860.0,
+              "p50": 41054.0,
+              "p95": 41272.6,
+              "supported": true
+            },
+            "rss_start_kib": {
+              "count": 10,
+              "max": 40644.0,
+              "min": 40236.0,
+              "p50": 40536.0,
+              "p95": 40618.8,
+              "supported": true
+            },
+            "wall_time_ms": {
+              "count": 10,
+              "max": 1.086283,
+              "min": 0.93945,
+              "p50": 0.958825,
+              "p95": 1.076428
+            }
+          }
+        },
+        "process_cpu_time_ms": {
+          "count": 10,
+          "max": 864.57,
+          "min": 851.255,
+          "p50": 861.927,
+          "p95": 864.2469
+        },
+        "process_wall_time_ms": {
+          "count": 10,
+          "max": 864.791756,
+          "min": 851.639974,
+          "p50": 862.008513,
+          "p95": 864.457418
+        },
+        "rss_kib": {
+          "end": {
+            "count": 10,
+            "max": 137056.0,
+            "min": 134696.0,
+            "p50": 136958.0,
+            "p95": 137054.2,
+            "supported": true
+          },
+          "peak": {
+            "count": 10,
+            "max": 137056.0,
+            "min": 134696.0,
+            "p50": 136958.0,
+            "p95": 137054.2,
+            "supported": true
+          },
+          "start": {
+            "count": 10,
+            "max": 20360.0,
+            "min": 20236.0,
+            "p50": 20284.0,
+            "p95": 20358.2,
+            "supported": true
+          }
+        },
+        "sample_count": 10,
+        "samples": [
+          {
+            "full_diagnostic_fingerprint_sha256": "89f693c59040e4111aeb81c035e023fe4942c63371ecdd26a70642b4ab0480ff",
+            "process_cpu_time_ms": 860.941,
+            "process_rss_kib": {
+              "end": 136916,
+              "peak": 136916,
+              "start": 20296
+            },
+            "process_wall_time_ms": 861.029761,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
+            "worker_cpu_time_ms": 783.414892,
+            "worker_wall_time_ms": 783.472766
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "34240ae2f59625df4e5f04b38a12c2379f1fcb36ad78417e6acf71b1ed94db3b",
+            "process_cpu_time_ms": 863.852,
+            "process_rss_kib": {
+              "end": 137012,
+              "peak": 137012,
+              "start": 20336
+            },
+            "process_wall_time_ms": 864.048783,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
+            "worker_cpu_time_ms": 781.323374,
+            "worker_wall_time_ms": 781.421195
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "f12e28570b7f86589f05bf5a802f019ec1ee65150f86c47b123658eb4adad4c7",
+            "process_cpu_time_ms": 862.913,
+            "process_rss_kib": {
+              "end": 136688,
+              "peak": 136688,
+              "start": 20236
+            },
+            "process_wall_time_ms": 862.987266,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "90a80ec30116637ce0a0087c21cb1027a77b3bc6889a2f8372dcc9c601820d40",
+            "worker_cpu_time_ms": 780.783131,
+            "worker_wall_time_ms": 780.818553
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "07a206cdaf732cf5ad80eee1d5ea9bdf5dcf674a61c1d72d7d7e312895227dd7",
+            "process_cpu_time_ms": 857.362,
+            "process_rss_kib": {
+              "end": 137056,
+              "peak": 137056,
+              "start": 20272
+            },
+            "process_wall_time_ms": 857.428645,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "99a3a9e513ca5076b8999c11e52a8c8a76b045001ca601ee8adbb64c6d83df69",
+            "worker_cpu_time_ms": 780.651264,
+            "worker_wall_time_ms": 780.848559
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "89f693c59040e4111aeb81c035e023fe4942c63371ecdd26a70642b4ab0480ff",
+            "process_cpu_time_ms": 860.853,
+            "process_rss_kib": {
+              "end": 137052,
+              "peak": 137052,
+              "start": 20356
+            },
+            "process_wall_time_ms": 860.84729,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
+            "worker_cpu_time_ms": 787.640523,
+            "worker_wall_time_ms": 787.644384
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "387d4760b606c939107b4ad550304c50244dc66dcbd93e081833b8981299a071",
+            "process_cpu_time_ms": 863.474,
+            "process_rss_kib": {
+              "end": 134944,
+              "peak": 134944,
+              "start": 20296
+            },
+            "process_wall_time_ms": 863.334583,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "b59de66b976dd534581784d9ae836b6a351a7ad202090769fd53e39be098129d",
+            "worker_cpu_time_ms": 784.758259,
+            "worker_wall_time_ms": 784.628969
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "f12e28570b7f86589f05bf5a802f019ec1ee65150f86c47b123658eb4adad4c7",
+            "process_cpu_time_ms": 863.751,
+            "process_rss_kib": {
+              "end": 137000,
+              "peak": 137000,
+              "start": 20260
+            },
+            "process_wall_time_ms": 863.576533,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "90a80ec30116637ce0a0087c21cb1027a77b3bc6889a2f8372dcc9c601820d40",
+            "worker_cpu_time_ms": 790.284854,
+            "worker_wall_time_ms": 790.013496
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "845d601830cf80ba035236913fa262d4b361974100b2ad7381bdbf0603df3b8f",
+            "process_cpu_time_ms": 864.57,
+            "process_rss_kib": {
+              "end": 135076,
+              "peak": 135076,
+              "start": 20256
+            },
+            "process_wall_time_ms": 864.791756,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "ff9ecb20266ba2a2d7712de0bec6ef497635a5071ca5d07460f7f44cce3efb63",
+            "worker_cpu_time_ms": 789.810648,
+            "worker_wall_time_ms": 790.04751
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "95003091773d242c8a6fa850ac917ed9a5826f975e4d39d5d0f5e3d929f36507",
+            "process_cpu_time_ms": 859.296,
+            "process_rss_kib": {
+              "end": 137016,
+              "peak": 137016,
+              "start": 20236
+            },
+            "process_wall_time_ms": 859.604526,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
+            "worker_cpu_time_ms": 782.904462,
+            "worker_wall_time_ms": 783.08839
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "387d4760b606c939107b4ad550304c50244dc66dcbd93e081833b8981299a071",
+            "process_cpu_time_ms": 851.255,
+            "process_rss_kib": {
+              "end": 134696,
+              "peak": 134696,
+              "start": 20360
+            },
+            "process_wall_time_ms": 851.639974,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "b59de66b976dd534581784d9ae836b6a351a7ad202090769fd53e39be098129d",
+            "worker_cpu_time_ms": 779.258463,
+            "worker_wall_time_ms": 779.530143
+          }
+        ],
+        "stable_semantics": false
+      },
+      "compile_cwd": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb",
+      "compile_log": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
+      "compile_log_status": "available_local_real_workload",
+      "diagnostic_policy": {
+        "excluded_inputs": {
+          "native_dpi_implementations": "C/C++/object/shared-library inputs are recorded but not parsed",
+          "protected_source": "legacy envelopes are enabled; encrypted payloads that the frontend cannot decode must remain an explicit blocker, never a fallback",
+          "runtime_system_tasks": "unknown simulator system-task diagnostics are suppressed only; HDL arguments and surrounding processes remain parsed"
+        },
+        "reason": "Xcelium UVM and testbench sources call vendor atomics, stack helpers, and FSDB dump tasks that are external to HDL connectivity",
+        "risk": "DPI/system-call behavior is excluded; any connectivity created only by those calls remains unsupported",
+        "suppressed_option": "unknown-sys-name"
+      },
+      "environment": {
+        "DUT_SRC_DIR": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog",
+        "TB_DIR": "/home/robin/Projects/mcp_practise/uvm_demo_cc29",
+        "UVM_HOME": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv"
+      },
+      "environment_provenance": {
+        "DUT_SRC_DIR": "inferred_from_compile_log_source_record",
+        "TB_DIR": "inferred_from_compile_log_parent",
+        "UVM_HOME": "inferred_from_absolute_uvm_source"
+      },
+      "filelists": [
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/des_rtl.f",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/filelist.f"
+      ],
+      "kind": "local_xcelium_uvm_package_vendor_options",
+      "manual_oracle": {
+        "expected_instance_paths": [
+          "top_tb"
+        ],
+        "expected_source_locations": [],
+        "oracle_type": "Xcelium_compile_log",
+        "simulator_version": "26.03-s001-20260323",
+        "top": "top_tb"
+      },
+      "name": "real_uvm",
+      "oracle_comparison": {
+        "all_available_oracles_match": true,
+        "comparisons": [
+          {
+            "available": true,
+            "expected_top": "top_tb",
+            "matches": true,
+            "missing_instance_paths": [],
+            "missing_signal_parent_scopes": [],
+            "missing_source_locations": [],
+            "oracle": "manual",
+            "recovered_tops": [
+              "top_tb"
+            ],
+            "signal_paths_checked": []
+          },
+          {
+            "available": true,
+            "expected_top": "top_tb",
+            "matches": true,
+            "missing_instance_paths": [],
+            "missing_signal_parent_scopes": [],
+            "missing_source_locations": [],
+            "oracle": "annotated_source",
+            "recovered_tops": [
+              "top_tb"
+            ],
+            "signal_paths_checked": []
+          },
+          {
+            "available": true,
+            "expected_top": "top_tb",
+            "matches": true,
+            "missing_instance_paths": [],
+            "missing_signal_parent_scopes": [],
+            "missing_source_locations": [],
+            "oracle": "fsdb_hierarchy",
+            "recovered_tops": [
+              "top_tb"
+            ],
+            "signal_paths_checked": [
+              "top_tb.my_dut.bus_cmd_valid",
+              "top_tb.b_if.bus_cmd_valid",
+              "top_tb.u0.Lout_edc[1]",
+              "top_tb.u0.desOut[63:0]"
+            ]
+          },
+          {
+            "available": false,
+            "blocker": "No KDB accompanies this Xcelium run; NPI is a development oracle only and was not made a frontend dependency.",
+            "matches": null,
+            "oracle": "kdb_npi"
+          },
+          {
+            "available": true,
+            "expected_top": "top_tb",
+            "matches": true,
+            "missing_instance_paths": [],
+            "missing_signal_parent_scopes": [],
+            "missing_source_locations": [],
+            "oracle": "xcelium_elaboration",
+            "recovered_tops": [
+              "top_tb"
+            ],
+            "signal_paths_checked": []
+          }
+        ],
+        "development_oracle_policy": "FSDB/KDB/NPI evidence is optional input to this harness and is never a frontend or automated-test dependency"
+      },
+      "representative_frontend_result": {
+        "blockers": [
+          {
+            "code": "blocking_frontend_diagnostics",
+            "message": "1 effective error/fatal diagnostics remain",
+            "phase": "elaboration"
+          }
+        ],
+        "diagnostics": {
+          "blocking_error_count": 1,
+          "by_code": {
+            "ArithOpMismatch": 98,
+            "BadBinaryExpression": 1,
+            "BitwiseOpMismatch": 183,
+            "CaseDefault": 38,
+            "CaseTypeMismatch": 24,
+            "ComparisonMismatch": 2,
+            "ConstantConversion": 14,
+            "DanglingElse": 1,
+            "DuplicateImport": 1,
+            "DynamicCastConst": 45,
+            "EmptyBody": 3,
+            "EmptyOutputPortConn": 8,
+            "EmptyStatement": 246,
+            "FloatIntConv": 12,
+            "IncDecBit": 2,
+            "IntBoolConv": 310,
+            "IntFloatConv": 4,
+            "InvalidUTF8Seq": 1,
+            "LogicalOpParentheses": 9,
+            "MisleadingIndentation": 6,
+            "NonstandardEscapeCode": 2,
+            "SignCompare": 70,
+            "SignConversion": 347,
+            "SignedLogicalShift": 1,
+            "UnknownSystemName": 5,
+            "UselessCast": 1,
+            "VacuousCover": 3,
+            "WidthExpand": 114,
+            "WidthTruncate": 69
+          },
+          "by_effective_severity": {
+            "Error": 1,
+            "Ignored": 1615,
+            "Warning": 4
+          },
+          "explicitly_suppressed_unknown_system_count": 5,
+          "items": [
+            {
+              "code": "UnknownSystemName",
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 84,
+              "message": "unknown system name '$fsdbDumpfile'",
+              "option": "unknown-sys-name",
+              "severity": "Ignored"
+            },
+            {
+              "code": "UnknownSystemName",
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 85,
+              "message": "unknown system name '$fsdbDumpvars'",
+              "option": "unknown-sys-name",
+              "severity": "Ignored"
+            },
+            {
+              "code": "UnknownSystemName",
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 86,
+              "message": "unknown system name '$fsdbDumpSVA'",
+              "option": "unknown-sys-name",
+              "severity": "Ignored"
+            },
+            {
+              "code": "UnknownSystemName",
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 87,
+              "message": "unknown system name '$fsdbDumpMDA'",
+              "option": "unknown-sys-name",
+              "severity": "Ignored"
+            },
+            {
+              "code": "UnknownSystemName",
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 88,
+              "message": "unknown system name '$fsdbDumpflush'",
+              "option": "unknown-sys-name",
+              "severity": "Ignored"
+            },
+            {
+              "code": "EmptyBody",
+              "column": 76,
+              "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_resource.svh",
+              "line": 1687,
+              "message": "for loop has empty body (put the semicolon on a separate line to silence this warning)",
+              "option": "empty-body",
+              "severity": "Warning"
+            },
+            {
+              "code": "BadBinaryExpression",
+              "column": 15,
+              "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_port_base.svh",
+              "line": 714,
+              "message": "invalid operands to binary expression ('this_type' (aka 'uvm_port_base#(uvm_tlm_if_base#(T (aka 'uvm_reg_item'),T (aka 'uvm_reg_item')))') and 'bit')",
+              "option": null,
+              "severity": "Error"
+            },
+            {
+              "code": "InvalidUTF8Seq",
+              "column": 20,
+              "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "invalid UTF-8 sequence in source text",
+              "option": "invalid-source-encoding",
+              "severity": "Warning"
+            },
+            {
+              "code": "EmptyBody",
+              "column": 34,
+              "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer.svh",
+              "line": 135,
+              "message": "while loop has empty body (put the semicolon on a separate line to silence this warning)",
+              "option": "empty-body",
+              "severity": "Warning"
+            },
+            {
+              "code": "EmptyBody",
+              "column": 25,
+              "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/reg/uvm_reg_map.svh",
+              "line": 1317,
+              "message": "if statement has empty body (put the semicolon on a separate line to silence this warning)",
+              "option": "empty-body",
+              "severity": "Warning"
+            }
+          ],
+          "items_truncated": false,
+          "suppression_receipt": {
+            "not_modeled": "DPI/system-task behavior",
+            "option": "-Wno-unknown-sys-name",
+            "scope": "external simulator runtime hooks only"
+          },
+          "total": 1620
+        },
+        "frontend": {
+          "name": "Slang/pyslang",
+          "package": "pyslang",
+          "source": "https://pypi.org/project/pyslang/11.0.0/",
+          "version": "11.0.0"
+        },
+        "invocation": {
+          "api": "pyslang.driver.Driver",
+          "arguments": [
+            "--compat",
+            "all",
+            "--enable-legacy-protect",
+            "--single-unit",
+            "-Wno-unknown-sys-name",
+            "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+            "--std",
+            "1800-2017",
+            "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+            "-I",
+            "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+            "+define+UVM_NO_DEPRECATED",
+            "+define+XCELIUM",
+            "+define+DUMP_FSDB",
+            "-I",
+            "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb",
+            "-f",
+            "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f",
+            "--timescale",
+            "1ns/10ps",
+            "--top",
+            "top_tb"
+          ],
+          "environment": {
+            "DUT_SRC_DIR": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog",
+            "TB_DIR": "/home/robin/Projects/mcp_practise/uvm_demo_cc29",
+            "UVM_HOME": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv"
+          },
+          "rendered": "pyslang.driver.Driver.parseCommandLine('--compat all --enable-legacy-protect --single-unit -Wno-unknown-sys-name +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL --std 1800-2017 /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv -I /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB -I /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f --timescale 1ns/10ps --top top_tb')"
+        },
+        "phase_measurements": {
+          "elaboration": {
+            "cpu_time_ms": 205.855489,
+            "rss_end_kib": 132060,
+            "rss_peak_kib": 132060,
+            "rss_start_kib": 76296,
+            "wall_time_ms": 206.601926
+          },
+          "frontend_import": {
+            "cpu_time_ms": 49.896784,
+            "rss_end_kib": 40548,
+            "rss_peak_kib": 40548,
+            "rss_start_kib": 20296,
+            "wall_time_ms": 50.098298
+          },
+          "object_extraction": {
+            "cpu_time_ms": 409.015034,
+            "rss_end_kib": 136916,
+            "rss_peak_kib": 136916,
+            "rss_start_kib": 132060,
+            "wall_time_ms": 410.021064
+          },
+          "parse": {
+            "cpu_time_ms": 58.351658,
+            "rss_end_kib": 76296,
+            "rss_peak_kib": 76296,
+            "rss_start_kib": 57392,
+            "wall_time_ms": 56.192016
+          },
+          "parse_setup": {
+            "cpu_time_ms": 0.84695,
+            "rss_end_kib": 57392,
+            "rss_peak_kib": 61612,
+            "rss_start_kib": 57392,
+            "wall_time_ms": 0.852087
+          },
+          "preprocess": {
+            "cpu_time_ms": 51.473315,
+            "rss_end_kib": 57392,
+            "rss_peak_kib": 61612,
+            "rss_start_kib": 40992,
+            "wall_time_ms": 51.742851
+          },
+          "preprocess_setup": {
+            "cpu_time_ms": 0.951337,
+            "rss_end_kib": 40992,
+            "rss_peak_kib": 40992,
+            "rss_start_kib": 40548,
+            "wall_time_ms": 0.95623
+          }
+        },
+        "phase_semantics": {
+          "elaboration": "createCompilation + getRoot + getAllDiagnostics",
+          "object_extraction": "read-only elaborated symbol/count projection",
+          "parse": "Driver.parseAllSources; includes preprocessing again because pyslang does not expose a reusable preprocessed-token handoff in this driver API",
+          "preprocess": "independent Driver.runPreprocessor pass; emitted text discarded"
+        },
+        "process_rss_kib": {
+          "end": 136916,
+          "peak": 136916,
+          "start": 20296
+        },
+        "recovered": {
+          "count_scope": "facts exposed by pyslang's syntax trees, source manager, compilation, and elaborated symbol visitor; not inferred graph edges",
+          "definitions": [
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "instance_count": 1,
+              "line": 8,
+              "name": "FSM_IDLE2START_CHK"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "instance_count": 15,
+              "line": 29,
+              "name": "FSM_REALFINISH2IDLE_CHK"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "instance_count": 15,
+              "line": 17,
+              "name": "FSM_START2REALSTART_CHK"
+            },
+            {
+              "column": 11,
+              "definition_kind": "Interface",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/bus_if.sv",
+              "instance_count": 1,
+              "line": 4,
+              "name": "bus_if"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "crp"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "des"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+              "instance_count": 1,
+              "line": 1,
+              "name": "dut"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+              "instance_count": 7,
+              "line": 1,
+              "name": "edc_32_6"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+              "instance_count": 7,
+              "line": 1,
+              "name": "edc_32_chk_wrap"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+              "instance_count": 7,
+              "line": 1,
+              "name": "edc_chk"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "key_sel"
+            },
+            {
+              "column": 11,
+              "definition_kind": "Interface",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/my_if.sv",
+              "instance_count": 2,
+              "line": 4,
+              "name": "my_if"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox1"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox2"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox3"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox4"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox5"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox6"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox7"
+            },
+            {
+              "column": 9,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+              "instance_count": 1,
+              "line": 1,
+              "name": "sbox8"
+            },
+            {
+              "column": 8,
+              "definition_kind": "Module",
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "instance_count": 1,
+              "line": 26,
+              "name": "top_tb"
+            }
+          ],
+          "graph_object_counts": {
+            "available": false,
+            "reason": "Phase 0B does not build a TraceWeave Connectivity IR; reporting only objects directly exposed by the frontend"
+          },
+          "instances": [
+            {
+              "definition": "top_tb",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 26
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 26
+              },
+              "name": "top_tb",
+              "path": "top_tb",
+              "port_connection_count": 0
+            },
+            {
+              "definition": "bus_if",
+              "definition_location": {
+                "column": 11,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/bus_if.sv",
+                "line": 4
+              },
+              "instance_kind": "interface",
+              "instance_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 38
+              },
+              "name": "b_if",
+              "path": "top_tb.b_if",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[10].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[11].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[12].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[13].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[14].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[15].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[1].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[2].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[3].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[4].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[5].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[6].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[7].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[8].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_REALFINISH2IDLE_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 29
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 631
+              },
+              "name": "m_FSM_REALFINISH2IDLE_CHK",
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[9].m_FSM_REALFINISH2IDLE_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[10].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[11].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[12].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[13].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[14].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[15].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[1].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[2].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[3].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[4].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[5].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[6].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[7].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[8].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_START2REALSTART_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 17
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 616
+              },
+              "name": "m_FSM_START2REALSTART_CHK",
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[9].m_FSM_START2REALSTART_CHK",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "my_if",
+              "definition_location": {
+                "column": 11,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/my_if.sv",
+                "line": 4
+              },
+              "instance_kind": "interface",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 35
+              },
+              "name": "input_if",
+              "path": "top_tb.input_if",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 597
+              },
+              "name": "m1_edc_32_6",
+              "path": "top_tb.m1_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 605
+              },
+              "name": "m1_edc_32_chk_wrap",
+              "path": "top_tb.m1_edc_32_chk_wrap",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.m1_edc_32_chk_wrap.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.m1_edc_32_chk_wrap.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 575
+              },
+              "name": "m_edc_32_6",
+              "path": "top_tb.m_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 583
+              },
+              "name": "m_edc_32_chk_wrap",
+              "path": "top_tb.m_edc_32_chk_wrap",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.m_edc_32_chk_wrap.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.m_edc_32_chk_wrap.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "dut",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 5,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 41
+              },
+              "name": "my_dut",
+              "path": "top_tb.my_dut",
+              "port_connection_count": 11
+            },
+            {
+              "definition": "my_if",
+              "definition_location": {
+                "column": 11,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/my_if.sv",
+                "line": 4
+              },
+              "instance_kind": "interface",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+                "line": 36
+              },
+              "name": "output_if",
+              "path": "top_tb.output_if",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "des",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 5,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 484
+              },
+              "name": "u0",
+              "path": "top_tb.u0",
+              "port_connection_count": 10
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 218
+              },
+              "name": "edc_32_6_L",
+              "path": "top_tb.u0.edc_32_6_L",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 197
+              },
+              "name": "edc_32_6_Lout",
+              "path": "top_tb.u0.edc_32_6_Lout",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 211
+              },
+              "name": "edc_32_6_R",
+              "path": "top_tb.u0.edc_32_6_R",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 10,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 204
+              },
+              "name": "edc_32_6_Rout",
+              "path": "top_tb.u0.edc_32_6_Rout",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 231
+              },
+              "name": "edc_32_chk_wrap_L",
+              "path": "top_tb.u0.edc_32_chk_wrap_L",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.u0.edc_32_chk_wrap_L.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.u0.edc_32_chk_wrap_L.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 237
+              },
+              "name": "edc_32_chk_wrap_Lout",
+              "path": "top_tb.u0.edc_32_chk_wrap_Lout",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.u0.edc_32_chk_wrap_Lout.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.u0.edc_32_chk_wrap_Lout.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 225
+              },
+              "name": "edc_32_chk_wrap_R",
+              "path": "top_tb.u0.edc_32_chk_wrap_R",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.u0.edc_32_chk_wrap_R.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.u0.edc_32_chk_wrap_R.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 243
+              },
+              "name": "edc_32_chk_wrap_Rout",
+              "path": "top_tb.u0.edc_32_chk_wrap_Rout",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.u0.edc_32_chk_wrap_Rout.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.u0.edc_32_chk_wrap_Rout.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            },
+            {
+              "definition": "FSM_IDLE2START_CHK",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+                "line": 8
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 29,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_bindings.sv",
+                "line": 1
+              },
+              "name": "m_FSM_IDLE2START_CHK",
+              "path": "top_tb.u0.m_FSM_IDLE2START_CHK",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "crp",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 5,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 267
+              },
+              "name": "u0",
+              "path": "top_tb.u0.u0",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "sbox1",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 20
+              },
+              "name": "u0",
+              "path": "top_tb.u0.u0.u0",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox2",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 21
+              },
+              "name": "u1",
+              "path": "top_tb.u0.u0.u1",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox3",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 22
+              },
+              "name": "u2",
+              "path": "top_tb.u0.u0.u2",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox4",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 23
+              },
+              "name": "u3",
+              "path": "top_tb.u0.u0.u3",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox5",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 24
+              },
+              "name": "u4",
+              "path": "top_tb.u0.u0.u4",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox6",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 25
+              },
+              "name": "u5",
+              "path": "top_tb.u0.u0.u5",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox7",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 26
+              },
+              "name": "u6",
+              "path": "top_tb.u0.u0.u6",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "sbox8",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 7,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+                "line": 27
+              },
+              "name": "u7",
+              "path": "top_tb.u0.u0.u7",
+              "port_connection_count": 2
+            },
+            {
+              "definition": "key_sel",
+              "definition_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+                "line": 276
+              },
+              "name": "u1",
+              "path": "top_tb.u0.u1",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_32_chk_wrap",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 17,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+                "line": 590
+              },
+              "name": "u_edc_32_chk_wrap",
+              "path": "top_tb.u_edc_32_chk_wrap",
+              "port_connection_count": 4
+            },
+            {
+              "definition": "edc_chk",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 9,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+                "line": 10
+              },
+              "name": "I_edc_chk",
+              "path": "top_tb.u_edc_32_chk_wrap.I_edc_chk",
+              "port_connection_count": 3
+            },
+            {
+              "definition": "edc_32_6",
+              "definition_location": {
+                "column": 8,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+                "line": 1
+              },
+              "instance_kind": "module",
+              "instance_location": {
+                "column": 14,
+                "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+                "line": 17
+              },
+              "name": "u_edc_32_6",
+              "path": "top_tb.u_edc_32_chk_wrap.I_edc_chk.u_edc_32_6",
+              "port_connection_count": 5
+            }
+          ],
+          "instances_truncated": false,
+          "object_counts": {
+            "compilation_units": 1,
+            "definitions": 21,
+            "dpi_exports": 0,
+            "packages": 2,
+            "port_connections": 303,
+            "procedural_blocks_by_kind": {
+              "Always": 90,
+              "Initial": 16
+            },
+            "source_buffers": 11330,
+            "source_buffers_by_kind": {
+              "DesignFile": 26,
+              "IncludeFile": 157,
+              "Macro": 4120,
+              "MacroArg": 7027
+            },
+            "symbols_by_kind": {
+              "ContinuousAssign": 553,
+              "GenerateBlock": 30,
+              "GenerateBlockArray": 2,
+              "Instance": 74,
+              "Net": 381,
+              "Package": 1,
+              "Port": 303,
+              "ProceduralBlock": 106,
+              "Variable": 9740
+            },
+            "syntax_trees": 1
+          },
+          "procedural_blocks": [
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 13,
+              "path": "top_tb.u0.m_FSM_IDLE2START_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 14,
+              "path": "top_tb.u0.m_FSM_IDLE2START_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[10].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[11].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[12].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[13].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[14].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[15].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[1].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[2].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[3].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[4].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[5].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[6].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[7].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[8].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 24,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[9].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[10].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[11].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[12].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[13].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[14].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[15].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[1].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[2].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[3].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[4].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[5].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[6].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[7].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[8].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 25,
+              "path": "top_tb.gen_FSM_START2REALSTART_CHK[9].m_FSM_START2REALSTART_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[10].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[11].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[12].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[13].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[14].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[15].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[1].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[2].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[3].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[4].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[5].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[6].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[7].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[8].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 36,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[9].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[10].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[11].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[12].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[13].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[14].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[15].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[1].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[2].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[3].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[4].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[5].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[6].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[7].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[8].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 5,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+              "line": 37,
+              "path": "top_tb.gen_FSM_REALFINISH2IDLE_CHK[9].m_FSM_REALFINISH2IDLE_CHK",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 62,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 72,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 82,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 101,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 111,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 116,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 124,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 142,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 179,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 185,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 255,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 269,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+              "line": 272,
+              "path": "top_tb.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+              "line": 14,
+              "path": "top_tb.u0.u1",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u0",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u1",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u2",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u3",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u4",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u5",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u6",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+              "line": 6,
+              "path": "top_tb.u0.u0.u7",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+              "line": 18,
+              "path": "top_tb.my_dut",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+              "line": 33,
+              "path": "top_tb.my_dut",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+              "line": 48,
+              "path": "top_tb.my_dut",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 21,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 454,
+              "path": "top_tb",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 462,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 469,
+              "path": "top_tb",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 506,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 523,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 560,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 642,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/des_test_ao.sv",
+              "line": 696,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/test1.sv",
+              "line": 9,
+              "path": "top_tb",
+              "procedure_kind": "Always"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/test1.sv",
+              "line": 20,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/test1.sv",
+              "line": 25,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 53,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 60,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 66,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 70,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 82,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 96,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            },
+            {
+              "column": 1,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 105,
+              "path": "top_tb",
+              "procedure_kind": "Initial"
+            }
+          ],
+          "procedural_blocks_truncated": false,
+          "tops": [
+            "top_tb"
+          ]
+        },
+        "status": "blocked",
+        "worker_cpu_time_ms": 783.414892,
+        "worker_wall_time_ms": 783.472766
+      },
+      "simulator": "xcelium",
+      "simulator_version": "26.03-s001-20260323",
+      "source_facts": {
+        "existing_source_count": 19,
+        "missing_sources": [],
+        "source_bytes_total": 51742,
+        "source_count": 19,
+        "source_paths": [
+          "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_bindings.sv",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv"
+        ],
+        "source_set_origin": "frontend workload input records"
+      },
+      "status": "blocked",
+      "top": "top_tb",
+      "translation": {
+        "frontend_args": [
+          "--compat",
+          "all",
+          "--enable-legacy-protect",
+          "--single-unit",
+          "-Wno-unknown-sys-name",
+          "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+          "--std",
+          "1800-2017",
+          "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+          "-I",
+          "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+          "+define+UVM_NO_DEPRECATED",
+          "+define+XCELIUM",
+          "+define+DUMP_FSDB",
+          "-I",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb",
+          "-f",
+          "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f",
+          "--timescale",
+          "1ns/10ps",
+          "--top",
+          "top_tb"
+        ],
+        "frontend_invocation": "pyslang.driver.Driver.parseCommandLine('--compat all --enable-legacy-protect --single-unit -Wno-unknown-sys-name +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL --std 1800-2017 /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv -I /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB -I /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f --timescale 1ns/10ps --top top_tb')",
+        "original_invocation": "xrun -elaborate +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL -sv -64bit -mess -disable_sem2009 -verbose -uvmpackagename /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv -incdir /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB -incdir /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f -timescale 1ns/10ps -access +rc -64bit -mess +xmnontcglitch -top top_tb -notimingchecks -nospecify -log /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
+        "translated_options": [
+          {
+            "input": "simulator=xcelium",
+            "output": [
+              "--compat",
+              "all"
+            ],
+            "reason": "Slang 11 has no xcelium-specific compatibility value; use its documented aggregate vendor-compatibility profile"
+          },
+          {
+            "input": "legacy protected source envelopes",
+            "output": [
+              "--enable-legacy-protect"
+            ],
+            "reason": "parse legacy `protected/`endprotected envelopes when present"
+          },
+          {
+            "input": "Xcelium compilation-unit source ordering",
+            "output": [
+              "--single-unit"
+            ],
+            "reason": "preserve macro guards and source order across the captured file list"
+          },
+          {
+            "input": "external simulator runtime system tasks",
+            "output": [
+              "-Wno-unknown-sys-name"
+            ],
+            "reason": "record but do not reject FSDB/Xcelium runtime hooks outside HDL connectivity"
+          },
+          {
+            "input": "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+            "output": [
+              "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL"
+            ],
+            "reason": "Slang accepts this vendor spelling"
+          },
+          {
+            "input": "-sv",
+            "output": [
+              "--std",
+              "1800-2017"
+            ],
+            "reason": "select the SystemVerilog revision used by this probe"
+          },
+          {
+            "input": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+            "output": [
+              "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv"
+            ],
+            "reason": "HDL source input"
+          },
+          {
+            "input": "-incdir /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+            "output": [
+              "-I",
+              "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src"
+            ],
+            "reason": "translate Xcelium include-directory spelling"
+          },
+          {
+            "input": "+define+UVM_NO_DEPRECATED",
+            "output": [
+              "+define+UVM_NO_DEPRECATED"
+            ],
+            "reason": "Slang accepts this vendor spelling"
+          },
+          {
+            "input": "+define+XCELIUM",
+            "output": [
+              "+define+XCELIUM"
+            ],
+            "reason": "Slang accepts this vendor spelling"
+          },
+          {
+            "input": "+define+DUMP_FSDB",
+            "output": [
+              "+define+DUMP_FSDB"
+            ],
+            "reason": "Slang accepts this vendor spelling"
+          },
+          {
+            "input": "-incdir /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb",
+            "output": [
+              "-I",
+              "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb"
+            ],
+            "reason": "translate Xcelium include-directory spelling"
+          },
+          {
+            "input": "-f /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f",
+            "output": [
+              "-f",
+              "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../dut/filelist.f"
+            ],
+            "reason": "Slang command files support nested filelists and environment expansion"
+          },
+          {
+            "input": "-timescale 1ns/10ps",
+            "output": [
+              "--timescale",
+              "1ns/10ps"
+            ],
+            "reason": "default time scale"
+          },
+          {
+            "input": "-top top_tb",
+            "output": [
+              "--top",
+              "top_tb"
+            ],
+            "reason": "explicit top"
+          }
+        ],
+        "translator_scope": "Phase 0B probe only; not a production DesignInputs implementation",
+        "unsupported_options": [
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-elaborate",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-64bit",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-mess",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "semantic_compatibility_oracle_required",
+            "option": "-disable_sem2009",
+            "reason": "Xcelium pre-2009 compatibility semantics have no exact Slang switch; hierarchy and source fidelity require oracle validation"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-verbose",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-uvmpackagename /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+            "reason": "Xcelium library, output, debug, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-access +rc",
+            "reason": "Xcelium library, output, debug, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-64bit",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-mess",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "+xmnontcglitch",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-notimingchecks",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-nospecify",
+            "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+          },
+          {
+            "impact": "frontend_irrelevant",
+            "option": "-log /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
+            "reason": "Xcelium library, output, debug, coverage, or runtime option"
+          }
+        ]
+      },
+      "waveform": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/work_my_case0_/top_tb.fsdb",
+      "waveform_role": "development_oracle_only_not_opened_by_frontend_worker"
+    }
+  ]
+}

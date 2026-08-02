@@ -74,6 +74,7 @@ DEFAULT_REAL_COMPILE_LOG = Path(
 )
 
 WORKLOAD_NAMES = ("deep_x_npi", "hand_fixture", "real_uvm")
+REAL_SIMULATORS = ("auto", "vcs", "xcelium")
 HDL_SUFFIXES = {".v", ".vh", ".sv", ".svh", ".sva", ".svp"}
 _DESIGN_FILE_RE = re.compile(r"Parsing design file\s+['\"]([^'\"]+)['\"]")
 _ENV_REF_RE = re.compile(
@@ -142,6 +143,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--real-compile-log", type=Path, default=DEFAULT_REAL_COMPILE_LOG
+    )
+    parser.add_argument(
+        "--real-simulator",
+        choices=REAL_SIMULATORS,
+        default="auto",
+        help="Simulator syntax used by the real compile log (default: detect).",
+    )
+    parser.add_argument(
+        "--real-waveform",
+        type=Path,
+        help="Optional local FSDB/VCD oracle path; the frontend worker never opens it.",
     )
     parser.add_argument(
         "--real-env",
@@ -233,6 +245,13 @@ def _expand_with_env(value: str, environment: dict[str, str]) -> str:
     return _ENV_REF_RE.sub(replace, value)
 
 
+def _read_command_file(path: Path) -> str:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("//")
+    )
+
+
 def _extract_direct_design_files(log_path: Path) -> list[Path]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     seen: set[Path] = set()
@@ -249,12 +268,98 @@ def _extract_direct_design_files(log_path: Path) -> list[Path]:
     return result
 
 
+def _detect_real_simulator(log_path: Path) -> str:
+    prefix = log_path.read_text(encoding="utf-8", errors="replace")[:32_768].lower()
+    if re.search(r"(?:^|\n)\s*(?:tool:\s*)?(?:xrun|irun)(?:\(64\))?\b", prefix):
+        return "xcelium"
+    if "chronologic vcs" in prefix or re.search(
+        r"(?:^|\n)\s*(?:command:\s*)?vcs\b", prefix
+    ):
+        return "vcs"
+    raise SpikeInputError(
+        "simulator_unknown",
+        f"cannot detect VCS or Xcelium from real compile log: {log_path}",
+    )
+
+
+def _extract_xcelium_invocation(log_path: Path) -> tuple[str, list[Path]]:
+    """Recover the leading xrun option block without consuming later diagnostics."""
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.fullmatch(r"\s*(?:xrun|irun)\s*", line)
+        ),
+        None,
+    )
+    if start is None:
+        raise SpikeInputError(
+            "compile_log_invalid",
+            f"Xcelium log has no leading xrun/irun option block: {log_path}",
+        )
+
+    block: list[tuple[int, str]] = []
+    base_indent: int | None = None
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 or stripped == "|":
+            break
+        if base_indent is None:
+            base_indent = indent
+        block.append((indent, stripped))
+
+    if not block or base_indent is None:
+        raise SpikeInputError(
+            "compile_log_invalid",
+            f"Xcelium log has an empty xrun/irun option block: {log_path}",
+        )
+
+    top_level_tokens: list[str] = ["xrun"]
+    expanded_sources: list[Path] = []
+    for indent, rendered in block:
+        try:
+            tokens = shlex.split(rendered)
+        except ValueError as exc:
+            raise SpikeInputError(
+                "compile_command_invalid",
+                f"cannot tokenize Xcelium option line {rendered!r}: {exc}",
+            ) from exc
+        if indent == base_indent:
+            top_level_tokens.extend(tokens)
+        for token in tokens:
+            if Path(token).suffix.lower() not in HDL_SUFFIXES:
+                continue
+            path = Path(token).expanduser()
+            if not path.is_absolute():
+                path = log_path.parent / path
+            expanded_sources.append(path.resolve())
+
+    return shlex.join(top_level_tokens), expanded_sources
+
+
+def _real_project_root(log_path: Path) -> Path:
+    for candidate in (log_path.parent, *log_path.parents):
+        if (candidate / "dut").is_dir() and (candidate / "tb").is_dir():
+            return candidate
+    return log_path.parent.parent
+
+
+def _real_compile_cwd(log_path: Path) -> Path:
+    project_root = _real_project_root(log_path)
+    tb_dir = project_root / "tb"
+    return tb_dir if tb_dir.is_dir() else log_path.parent
+
+
 def _infer_real_environment(
     compile_log: Path, command: str, source_paths: Sequence[Path]
 ) -> tuple[dict[str, str], dict[str, str]]:
     environment: dict[str, str] = {}
     provenance: dict[str, str] = {}
-    project_root = compile_log.parent.parent
+    project_root = _real_project_root(compile_log)
     if (project_root / "dut").is_dir() and (project_root / "tb").is_dir():
         environment["TB_DIR"] = str(project_root)
         provenance["TB_DIR"] = "inferred_from_compile_log_parent"
@@ -272,7 +377,7 @@ def _infer_real_environment(
         if marker in rendered:
             prefix = rendered.split(marker, 1)[0]
             environment["DUT_SRC_DIR"] = prefix + f"{os.sep}rtl{os.sep}verilog"
-            provenance["DUT_SRC_DIR"] = "inferred_from_vcs_design_file_record"
+            provenance["DUT_SRC_DIR"] = "inferred_from_compile_log_source_record"
             break
     return environment, provenance
 
@@ -302,7 +407,7 @@ def _discover_filelist_requirements(
         visited.append(str(path))
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = _read_command_file(path)
         unresolved.update(_extract_env_refs(text) - environment.keys())
         expanded = _expand_with_env(text, environment)
         try:
@@ -317,6 +422,84 @@ def _discover_filelist_requirements(
                 nested = cwd / nested if token == "-f" else path.parent / nested
             pending.append(nested.resolve())
     return sorted(visited), sorted(unresolved)
+
+
+def _discover_filelist_sources(
+    command: str, cwd: Path, environment: dict[str, str]
+) -> list[Path]:
+    pending: list[tuple[Path, str]] = []
+    tokens = shlex.split(command)
+    for index, token in enumerate(tokens[:-1]):
+        if token not in {"-f", "-F"}:
+            continue
+        raw = _expand_with_env(tokens[index + 1], environment)
+        path = Path(raw)
+        if not path.is_absolute():
+            path = cwd / path
+        pending.append((path.resolve(), token))
+
+    sources: list[Path] = []
+    seen_sources: set[Path] = set()
+    seen_filelists: set[Path] = set()
+    while pending:
+        path, mode = pending.pop()
+        if path in seen_filelists or not path.is_file():
+            continue
+        seen_filelists.add(path)
+        expanded = _expand_with_env(_read_command_file(path), environment)
+        try:
+            file_tokens = shlex.split(expanded, comments=True)
+        except ValueError:
+            continue
+        index = 0
+        while index < len(file_tokens):
+            token = file_tokens[index]
+            if token in {"-f", "-F"} and index + 1 < len(file_tokens):
+                nested = Path(file_tokens[index + 1])
+                if not nested.is_absolute():
+                    nested = cwd / nested if token == "-f" else path.parent / nested
+                pending.append((nested.resolve(), token))
+                index += 2
+                continue
+            if Path(token).suffix.lower() in HDL_SUFFIXES:
+                source = Path(token).expanduser()
+                if not source.is_absolute():
+                    source = cwd / source if mode == "-f" else path.parent / source
+                source = source.resolve()
+                if source not in seen_sources:
+                    seen_sources.add(source)
+                    sources.append(source)
+            index += 1
+    return sources
+
+
+def _direct_command_sources(
+    command: str, cwd: Path, environment: dict[str, str]
+) -> list[Path]:
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for token in shlex.split(_expand_with_env(command, environment)):
+        if Path(token).suffix.lower() not in HDL_SUFFIXES:
+            continue
+        path = Path(token).expanduser()
+        if not path.is_absolute():
+            path = cwd / path
+        path = path.resolve()
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+    return result
+
+
+def _simulator_version_from_log(log_path: Path, simulator: str) -> str | None:
+    text = log_path.read_text(encoding="utf-8", errors="replace")[:16_384]
+    if simulator == "xcelium":
+        match = re.search(r"(?:xrun|irun)(?:\(64\))?:\s*([^:\n]+)", text)
+    else:
+        match = re.search(r"Compiler version\s*=\s*([^\n]+)", text)
+        if match is None:
+            match = re.search(r"VCS[^\n]*?([A-Z]-\d{4}\.\d+(?:-[A-Za-z0-9.-]+)?)", text)
+    return match.group(1).strip() if match else None
 
 
 def _record_translation(
@@ -598,6 +781,290 @@ def translate_vcs_invocation(
     }
 
 
+def translate_xcelium_invocation(
+    command: str,
+    *,
+    top: str,
+    fallback_sources: Sequence[Path],
+) -> dict[str, Any]:
+    """Translate the Phase 0B-relevant portion of an xrun invocation."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise SpikeInputError(
+            "compile_command_invalid", f"cannot tokenize Xcelium command: {exc}"
+        ) from exc
+    if tokens and Path(tokens[0]).name in {"xrun", "irun"}:
+        tokens = tokens[1:]
+
+    frontend_args = [
+        "--compat",
+        "all",
+        "--enable-legacy-protect",
+        "--single-unit",
+        "-Wno-unknown-sys-name",
+    ]
+    translated: list[dict[str, Any]] = []
+    unsupported: list[dict[str, Any]] = []
+    _record_translation(
+        translated,
+        "simulator=xcelium",
+        ["--compat", "all"],
+        (
+            "Slang 11 has no xcelium-specific compatibility value; use its "
+            "documented aggregate vendor-compatibility profile"
+        ),
+    )
+    _record_translation(
+        translated,
+        "legacy protected source envelopes",
+        ["--enable-legacy-protect"],
+        "parse legacy `protected/`endprotected envelopes when present",
+    )
+    _record_translation(
+        translated,
+        "Xcelium compilation-unit source ordering",
+        ["--single-unit"],
+        "preserve macro guards and source order across the captured file list",
+    )
+    _record_translation(
+        translated,
+        "external simulator runtime system tasks",
+        ["-Wno-unknown-sys-name"],
+        "record but do not reject FSDB/Xcelium runtime hooks outside HDL connectivity",
+    )
+
+    source_input_seen = False
+    top_seen = False
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        suffix = Path(token).suffix.lower()
+        if suffix in HDL_SUFFIXES:
+            frontend_args.append(token)
+            source_input_seen = True
+            _record_translation(translated, token, [token], "HDL source input")
+            index += 1
+            continue
+        if suffix in {".c", ".cc", ".cpp", ".o", ".a", ".so"}:
+            _record_unsupported(
+                unsupported,
+                token,
+                "C/C++/binary DPI input is outside source connectivity elaboration",
+                "external_runtime_not_modeled",
+            )
+            index += 1
+            continue
+        if token.startswith("+define+"):
+            frontend_args.append(token)
+            _record_translation(
+                translated, token, [token], "Slang accepts this vendor spelling"
+            )
+            index += 1
+            continue
+        if token.startswith("+incdir+"):
+            frontend_args.append(token)
+            _record_translation(
+                translated, token, [token], "Slang accepts this vendor spelling"
+            )
+            index += 1
+            continue
+        if token.startswith("+libext+"):
+            frontend_args.append(token)
+            _record_translation(
+                translated, token, [token], "Slang supports library extensions"
+            )
+            index += 1
+            continue
+        if token == "-sv":
+            frontend_args.extend(["--std", "1800-2017"])
+            _record_translation(
+                translated,
+                token,
+                ["--std", "1800-2017"],
+                "select the SystemVerilog revision used by this probe",
+            )
+            index += 1
+            continue
+        if token in {"-f", "-F"} and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend([token, value])
+            source_input_seen = True
+            _record_translation(
+                translated,
+                f"{token} {value}",
+                [token, value],
+                "Slang command files support nested filelists and environment expansion",
+            )
+            index += 2
+            continue
+        if token == "-incdir" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend(["-I", value])
+            _record_translation(
+                translated,
+                f"-incdir {value}",
+                ["-I", value],
+                "translate Xcelium include-directory spelling",
+            )
+            index += 2
+            continue
+        if token == "-define" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend(["-D", value])
+            _record_translation(
+                translated,
+                f"-define {value}",
+                ["-D", value],
+                "translate Xcelium macro-definition spelling",
+            )
+            index += 2
+            continue
+        if token == "-timescale" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend(["--timescale", value])
+            _record_translation(
+                translated,
+                f"-timescale {value}",
+                ["--timescale", value],
+                "default time scale",
+            )
+            index += 2
+            continue
+        if token == "-top" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend(["--top", value])
+            top_seen = top_seen or value == top
+            _record_translation(
+                translated, f"-top {value}", ["--top", value], "explicit top"
+            )
+            index += 2
+            continue
+        if token in {"-I", "-D", "-U", "-y", "-v"} and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            frontend_args.extend([token, value])
+            _record_translation(
+                translated,
+                f"{token} {value}",
+                [token, value],
+                "Slang-compatible compile input",
+            )
+            index += 2
+            continue
+        if token.startswith(("-I", "-D", "-U")) and len(token) > 2:
+            frontend_args.append(token)
+            _record_translation(
+                translated, token, [token], "Slang-compatible compile input"
+            )
+            index += 1
+            continue
+        if token == "-disable_sem2009":
+            _record_unsupported(
+                unsupported,
+                token,
+                (
+                    "Xcelium pre-2009 compatibility semantics have no exact Slang "
+                    "switch; hierarchy and source fidelity require oracle validation"
+                ),
+                "semantic_compatibility_oracle_required",
+            )
+            index += 1
+            continue
+        if token in {
+            "-access",
+            "-input",
+            "-log",
+            "-l",
+            "-snapshot",
+            "-xmlibdirname",
+            "-work",
+            "-uvmpackagename",
+            "-covworkdir",
+            "-covtest",
+            "-seed",
+            "-svseed",
+        }:
+            value = tokens[index + 1] if index + 1 < len(tokens) else None
+            rendered = f"{token} {value}" if value is not None else token
+            _record_unsupported(
+                unsupported,
+                rendered,
+                "Xcelium library, output, debug, coverage, or runtime option",
+                "frontend_irrelevant",
+            )
+            index += 2 if value is not None else 1
+            continue
+        if token in {
+            "-64bit",
+            "-elaborate",
+            "-mess",
+            "-messages",
+            "-notimingchecks",
+            "-nospecify",
+            "-quiet",
+            "-status",
+            "-verbose",
+        } or token.startswith(("+xm", "-coverage", "-covoverwrite")):
+            _record_unsupported(
+                unsupported,
+                token,
+                "Xcelium execution, timing, diagnostics, coverage, or runtime option",
+                "frontend_irrelevant",
+            )
+            index += 1
+            continue
+        if token.startswith(("+", "-")):
+            _record_unsupported(
+                unsupported,
+                token,
+                "unclassified Xcelium option was not forwarded",
+                "requires_workload_review",
+            )
+            index += 1
+            continue
+        _record_unsupported(
+            unsupported,
+            token,
+            "non-option token was not recognized as HDL source",
+            "requires_workload_review",
+        )
+        index += 1
+
+    if not source_input_seen:
+        for path in fallback_sources:
+            rendered = str(path)
+            frontend_args.append(rendered)
+            _record_translation(
+                translated,
+                "compile-log source record",
+                [rendered],
+                "fallback because the captured command had no HDL/filelist input",
+            )
+    if not top_seen:
+        frontend_args.extend(["--top", top])
+        _record_translation(
+            translated,
+            "compile-log recovered top",
+            ["--top", top],
+            "the captured Xcelium command did not name the elaboration top",
+        )
+
+    return {
+        "original_invocation": command,
+        "translated_options": translated,
+        "unsupported_options": unsupported,
+        "frontend_args": frontend_args,
+        "frontend_invocation": (
+            "pyslang.driver.Driver.parseCommandLine("
+            + repr(shlex.join(frontend_args))
+            + ")"
+        ),
+        "translator_scope": (
+            "Phase 0B probe only; not a production DesignInputs implementation"
+        ),
+    }
+
+
 def _source_facts(paths: Sequence[Path]) -> dict[str, Any]:
     resolved: list[Path] = []
     seen: set[Path] = set()
@@ -735,11 +1202,21 @@ def build_hand_workload() -> dict[str, Any]:
 
 
 def build_real_workload(
-    compile_log: Path, explicit_environment: dict[str, str]
+    compile_log: Path,
+    explicit_environment: dict[str, str],
+    simulator: str = "auto",
+    waveform: Path | None = None,
 ) -> dict[str, Any]:
-    log_path = _require_nonempty_file(compile_log, "real VCS compile log")
-    compile_result = _load_compile_result(log_path, "vcs")
-    command = str(compile_result.get("compile_command") or "")
+    log_path = _require_nonempty_file(compile_log, "real compile log")
+    selected_simulator = (
+        _detect_real_simulator(log_path) if simulator == "auto" else simulator
+    )
+    compile_result = _load_compile_result(log_path, selected_simulator)
+    xcelium_sources: list[Path] = []
+    if selected_simulator == "xcelium":
+        command, xcelium_sources = _extract_xcelium_invocation(log_path)
+    else:
+        command = str(compile_result.get("compile_command") or "")
     if not command:
         raise SpikeInputError(
             "compile_log_invalid",
@@ -752,59 +1229,88 @@ def build_real_workload(
             f"real compile log recovered no top module: {log_path}",
         )
     top = str(tops[0])
-    source_paths = _extract_direct_design_files(log_path)
+    compile_cwd = _real_compile_cwd(log_path)
+    source_paths = [*_extract_direct_design_files(log_path), *xcelium_sources]
     inferred, provenance = _infer_real_environment(log_path, command, source_paths)
     environment = {**inferred, **explicit_environment}
     for name in explicit_environment:
         provenance[name] = "explicit_cli"
     filelists, unresolved = _discover_filelist_requirements(
-        command, log_path.parent, environment
+        command, compile_cwd, environment
     )
     if unresolved:
         raise SpikeInputError(
             "missing_environment",
-            "real VCS filelists reference unresolved environment variables: "
+            "real compile filelists reference unresolved environment variables: "
             + ", ".join(unresolved),
         )
+    source_paths.extend(_direct_command_sources(command, compile_cwd, environment))
+    source_paths.extend(_discover_filelist_sources(command, compile_cwd, environment))
     facts = _source_facts(source_paths)
     if facts["existing_source_count"] == 0:
         raise SpikeInputError(
             "fixture_missing",
-            "real VCS compile log has no existing design-file records",
+            "real compile log has no existing HDL inputs",
         )
+    translation = (
+        translate_xcelium_invocation(command, top=top, fallback_sources=source_paths)
+        if selected_simulator == "xcelium"
+        else translate_vcs_invocation(command, top=top, fallback_sources=source_paths)
+    )
+    waveform_path = (
+        str(waveform.expanduser().resolve())
+        if waveform is not None
+        else str(log_path.parent / "top_tb.fsdb")
+    )
+    simulator_label = "Xcelium" if selected_simulator == "xcelium" else "VCS"
     return {
         "name": "real_uvm",
-        "kind": "local_vcs_uvm_package_vendor_options",
-        "simulator": "vcs",
+        "kind": f"local_{selected_simulator}_uvm_package_vendor_options",
+        "simulator": selected_simulator,
+        "simulator_version": _simulator_version_from_log(log_path, selected_simulator),
         "top": top,
         "compile_log": str(log_path),
         "compile_log_status": "available_local_real_workload",
-        "waveform": str(log_path.parent / "top_tb.fsdb"),
+        "compile_cwd": str(compile_cwd),
+        "waveform": waveform_path,
         "waveform_role": "development_oracle_only_not_opened_by_frontend_worker",
         "environment": environment,
         "environment_provenance": provenance,
         "filelists": filelists,
         "source_facts": facts,
-        "translation": translate_vcs_invocation(
-            command, top=top, fallback_sources=source_paths
-        ),
+        "translation": translation,
         "manual_oracle": {
-            "oracle_type": "VCS_compile_log",
+            "oracle_type": f"{simulator_label}_compile_log",
             "top": top,
             "expected_instance_paths": [top],
             "expected_source_locations": [],
-            "vcs_version": "V-2023.12-SP2",
+            "simulator_version": _simulator_version_from_log(
+                log_path, selected_simulator
+            ),
         },
         "diagnostic_policy": {
             "suppressed_option": "unknown-sys-name",
             "reason": (
-                "VCS UVM and testbench sources call vendor atomics, stack helpers, "
+                f"{simulator_label} UVM and testbench sources call vendor atomics, stack helpers, "
                 "and FSDB dump tasks that are external to HDL connectivity"
             ),
             "risk": (
                 "DPI/system-call behavior is excluded; any connectivity created only "
                 "by those calls remains unsupported"
             ),
+            "excluded_inputs": {
+                "native_dpi_implementations": (
+                    "C/C++/object/shared-library inputs are recorded but not parsed"
+                ),
+                "runtime_system_tasks": (
+                    "unknown simulator system-task diagnostics are suppressed only; "
+                    "HDL arguments and surrounding processes remain parsed"
+                ),
+                "protected_source": (
+                    "legacy envelopes are enabled; encrypted payloads that the frontend "
+                    "cannot decode must remain an explicit blocker, never a fallback"
+                ),
+            },
         },
     }
 
@@ -816,7 +1322,10 @@ def build_workloads(args: argparse.Namespace) -> list[dict[str, Any]]:
         "deep_x_npi": build_deep_workload,
         "hand_fixture": build_hand_workload,
         "real_uvm": lambda: build_real_workload(
-            args.real_compile_log, explicit_environment
+            args.real_compile_log,
+            explicit_environment,
+            simulator=args.real_simulator,
+            waveform=args.real_waveform,
         ),
     }
     result: list[dict[str, Any]] = []

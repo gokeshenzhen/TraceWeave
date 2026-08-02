@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Development-only Xcelium compile, FSDB hierarchy, and hand-annotated source evidence for the Phase 0B frontend comparison; automated tests do not load this file.",
+  "workloads": {
+    "real_uvm": {
+      "annotated_source": {
+        "available": true,
+        "top": "top_tb",
+        "expected_instance_paths": [
+          "top_tb",
+          "top_tb.my_dut",
+          "top_tb.u0"
+        ],
+        "expected_source_locations": [
+          {
+            "kind": "definition",
+            "name": "top_tb",
+            "file_suffix": "uvm_demo_cc29/tb/top_tb.sv",
+            "line": 26
+          },
+          {
+            "kind": "definition",
+            "name": "dut",
+            "file_suffix": "uvm_demo_cc29/dut/dut.sv",
+            "line": 1
+          },
+          {
+            "kind": "definition",
+            "name": "des",
+            "file_suffix": "uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+            "line": 1
+          },
+          {
+            "kind": "procedural_block",
+            "procedure_kind": "Always",
+            "file_suffix": "uvm_demo_cc29/dut/dut.sv",
+            "line": 48
+          }
+        ],
+        "evidence": {
+          "method": "line-numbered inspection after TraceWeave compile-set verification",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "fsdb_hierarchy": {
+        "available": true,
+        "top": "top_tb",
+        "signal_paths": [
+          "top_tb.my_dut.bus_cmd_valid",
+          "top_tb.b_if.bus_cmd_valid",
+          "top_tb.u0.Lout_edc[1]",
+          "top_tb.u0.desOut[63:0]"
+        ],
+        "evidence": {
+          "tool": "get_waveform_summary + search_signals",
+          "waveform_format": "FSDB",
+          "scale_unit": "1ps",
+          "total_signals": 1838,
+          "simulation_duration_ps": 6866900000,
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "xcelium_elaboration": {
+        "available": true,
+        "top": "top_tb",
+        "expected_instance_paths": [
+          "top_tb"
+        ],
+        "evidence": {
+          "simulator": "Xcelium 26.03-s001-20260323",
+          "source": "/tools/cadence/XCELIUM2603",
+          "invocation": "env TB_DIR=/home/robin/Projects/mcp_practise/uvm_demo_cc29 DUT_SRC_DIR=/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog UVM_HOME=/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv xrun -elaborate +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL -sv -64bit -mess -disable_sem2009 -uvmpackagename /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv -incdir /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB -incdir /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb -f /home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/filelist.f -timescale 1ns/10ps -access +rc -top top_tb -notimingchecks -nospecify -xmlibdirname /tmp/traceweave-phase0b-cc29-xrun/xcelium.d -log /tmp/traceweave-phase0b-cc29-xrun/elab.log",
+          "isolation": "/tmp/traceweave-phase0b-cc29-xrun",
+          "exit_status": 0,
+          "compile_errors": 0,
+          "compile_warnings": 12,
+          "runtime_errors": 0,
+          "wall_time_seconds": 2.85,
+          "cpu_time_seconds": 2.82,
+          "peak_rss_kib": 110764,
+          "hierarchy_counts": {
+            "module_instances": 71,
+            "unique_modules": 19,
+            "interface_instances": 3,
+            "unique_interfaces": 2,
+            "sv_class_declarations": 201,
+            "sv_class_specializations": 419
+          },
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "kdb_npi": {
+        "available": false,
+        "blocker": "No KDB accompanies this Xcelium run; NPI is a development oracle only and was not made a frontend dependency."
+      }
+    }
+  }
+}
