@@ -1761,12 +1761,23 @@ def _diag_code_name(code: Any) -> str:
     return rendered
 
 
+def _prioritize_diagnostic_items(
+    blocking: Sequence[dict[str, Any]],
+    warnings: Sequence[dict[str, Any]],
+    suppressed: Sequence[dict[str, Any]],
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    return [*blocking, *warnings, *suppressed][:limit]
+
+
 def _diagnostics_payload(driver: Any, diagnostics: Sequence[Any]) -> dict[str, Any]:
     engine = driver.diagEngine
     source_manager = driver.sourceManager
     by_severity: collections.Counter[str] = collections.Counter()
     by_code: collections.Counter[str] = collections.Counter()
-    items: list[dict[str, Any]] = []
+    blocking_items: list[dict[str, Any]] = []
+    warning_items: list[dict[str, Any]] = []
+    suppressed_items: list[dict[str, Any]] = []
     suppressed_unknown = 0
     for diagnostic in diagnostics:
         code = _diag_code_name(diagnostic.code)
@@ -1780,30 +1791,32 @@ def _diagnostics_payload(driver: Any, diagnostics: Sequence[Any]) -> dict[str, A
         if option == "unknown-sys-name" and severity == "Ignored":
             suppressed_unknown += 1
         if severity in {"Error", "Fatal", "Warning"} or option == "unknown-sys-name":
-            if len(items) < 100:
-                items.append(
-                    {
-                        "code": code,
-                        "option": option or None,
-                        "severity": severity,
-                        "message": engine.formatMessage(diagnostic),
-                        **_location(source_manager, diagnostic.location),
-                    }
-                )
+            item = {
+                "code": code,
+                "option": option or None,
+                "severity": severity,
+                "message": engine.formatMessage(diagnostic),
+                **_location(source_manager, diagnostic.location),
+            }
+            if severity in {"Error", "Fatal"}:
+                blocking_items.append(item)
+            elif severity == "Warning":
+                warning_items.append(item)
+            else:
+                suppressed_items.append(item)
     blocking = by_severity["Error"] + by_severity["Fatal"]
+    candidate_count = len(blocking_items) + len(warning_items) + len(suppressed_items)
+    items = _prioritize_diagnostic_items(
+        blocking_items, warning_items, suppressed_items
+    )
     return {
         "total": len(diagnostics),
         "blocking_error_count": blocking,
         "by_effective_severity": dict(sorted(by_severity.items())),
         "by_code": dict(sorted(by_code.items())),
         "items": items,
-        "items_truncated": len(items)
-        < sum(
-            count
-            for severity, count in by_severity.items()
-            if severity in {"Error", "Fatal", "Warning"}
-        )
-        + suppressed_unknown,
+        "items_truncated": len(items) < candidate_count,
+        "item_ordering": "Error/Fatal, then Warning, then suppressed unknown-system",
         "explicitly_suppressed_unknown_system_count": suppressed_unknown,
         "suppression_receipt": {
             "option": "-Wno-unknown-sys-name",

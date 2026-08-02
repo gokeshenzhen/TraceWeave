@@ -732,3 +732,17 @@ def test_frontend_ipc_serialization_scope_contains_only_frontend_facts():
     }
     assert "phase_measurements" not in payload
     assert "invocation" not in payload
+
+
+def test_diagnostic_detail_cap_prioritizes_every_blocker_before_warnings():
+    blocking = [{"severity": "Error", "id": index} for index in range(65)]
+    warnings = [{"severity": "Warning", "id": index} for index in range(80)]
+    suppressed = [{"severity": "Ignored", "id": index} for index in range(20)]
+
+    items = spike._prioritize_diagnostic_items(
+        blocking, warnings, suppressed, limit=100
+    )
+
+    assert items[:65] == blocking
+    assert items[65:] == warnings[:35]
+    assert not any(item["severity"] == "Ignored" for item in items)
