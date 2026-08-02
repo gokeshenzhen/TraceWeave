@@ -406,6 +406,36 @@ def test_plan_output_file_has_machine_readable_receipt(tmp_path):
     assert json.loads(payload)["status"] == "planned"
 
 
+def test_worker_runs_from_captured_compile_working_directory(
+    tmp_path, monkeypatch
+):
+    compile_cwd = tmp_path / "fusesoc-work"
+    compile_cwd.mkdir()
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        return subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout=json.dumps({"status": "supported"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(spike.subprocess, "run", fake_run)
+
+    payload, receipt = spike._invoke_worker(
+        Path("/tmp/frontend-venv/bin/python"),
+        {"compile_cwd": str(compile_cwd)},
+        timeout=10,
+    )
+
+    assert captured["cwd"] == compile_cwd.resolve()
+    assert payload == {"status": "supported"}
+    assert receipt["returncode"] == 0
+
+
 def test_assessment_does_not_request_second_frontend_without_a_key_gap():
     results = [
         {

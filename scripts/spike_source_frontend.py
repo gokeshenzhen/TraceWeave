@@ -1817,6 +1817,7 @@ def run_frontend_worker(spec: dict[str, Any]) -> dict[str, Any]:
             "arguments": frontend_args,
             "rendered": spec["translation"]["frontend_invocation"],
             "environment": dict(spec.get("environment") or {}),
+            "working_directory": str(Path.cwd().resolve()),
         },
         "phase_measurements": phases,
         "phase_semantics": {
@@ -2027,6 +2028,17 @@ def _worker_command(frontend_python: Path, spec_path: Path) -> list[str]:
 def _invoke_worker(
     frontend_python: Path, spec: dict[str, Any], timeout: float
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    configured_cwd = spec.get("compile_cwd")
+    worker_cwd = (
+        Path(str(configured_cwd)).expanduser().resolve()
+        if configured_cwd is not None
+        else ROOT
+    )
+    if not worker_cwd.is_dir():
+        raise SpikeExecutionError(
+            "worker_cwd_missing",
+            f"frontend worker compile working directory is unavailable: {worker_cwd}",
+        )
     with tempfile.TemporaryDirectory(prefix="traceweave-frontend-spike-") as tmp:
         spec_path = Path(tmp) / "workload.json"
         spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
@@ -2035,7 +2047,7 @@ def _invoke_worker(
         try:
             process = subprocess.run(
                 _worker_command(frontend_python, spec_path),
-                cwd=ROOT,
+                cwd=worker_cwd,
                 env={**os.environ, "PYTHONHASHSEED": "0"},
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
