@@ -588,10 +588,11 @@ def _extract_xcelium_command(lines: list[str]) -> str | None:
 
     xrun logs emit each argument on its own indented line. Sources and
     flags interleave freely — ``-incdir`` paths and additional source
-    files commonly appear *after* the first source file — so we keep
-    reading until a blank line or an obvious section header (line
-    ending with ':'), not until the first source extension. This
-    preserves all include paths and source files regardless of order.
+    files commonly appear *after* the first source file.  The emitted
+    invocation block is indentation-bounded: arguments (including nested
+    filelist expansions) are indented, while library definitions,
+    diagnostics, and compile output resume in column zero.  Stop at that
+    boundary so later log text cannot become command-line input.
     """
     for idx, line in enumerate(lines):
         if line.strip() == "xrun":
@@ -602,7 +603,7 @@ def _extract_xcelium_command(lines: list[str]) -> str | None:
                 stripped = cont.strip()
                 if not stripped:
                     break
-                if stripped.endswith(":") and " " not in stripped:
+                if cont == cont.lstrip(" \t"):
                     break
                 parts.append(stripped.rstrip(" \\"))
                 i += 1

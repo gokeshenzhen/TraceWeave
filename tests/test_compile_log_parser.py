@@ -100,6 +100,33 @@ file: {root / 'tb' / 'top_tb.sv'}
         finally:
             tmp.cleanup()
 
+    def test_xcelium_command_stops_before_unindented_log_output(self, tmp_path):
+        source = tmp_path / "top_tb.sv"
+        _write(source, "module top_tb; endmodule\n")
+        log = tmp_path / "elab.log"
+        _write(
+            log,
+            "xrun(64): 26.03-s001-20260323: started\n"
+            "xrun\n"
+            "\t-elaborate\n"
+            f"\t{source}\n"
+            "\t-timescale 1ns/10ps\n"
+            "\t-top top_tb\n"
+            "DEFINE std ./STD\n"
+            "|\n"
+            "xrun: *W,DLCPTH: library warning\n"
+            f"file: {source}\n"
+            "\tmodule worklib.top_tb:sv\n",
+        )
+
+        result = parse_compile_log(str(log), "xcelium")
+
+        assert result["compile_command"] == (
+            f"xrun -elaborate {source} -timescale 1ns/10ps -top top_tb"
+        )
+        assert "DEFINE" not in result["compile_command"]
+        assert "*W,DLCPTH" not in result["compile_command"]
+
     def test_vcs_incremental_command_recovers_direct_sources_and_top(self, tmp_path):
         rtl = tmp_path / "rtl" / "deep uart.sv"
         tb = tmp_path / "tb" / "deep_x_tb.sv"
