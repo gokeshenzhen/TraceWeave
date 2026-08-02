@@ -1,0 +1,3539 @@
+{
+  "assessment": {
+    "dependency_model": "Slang optional extra; no Surelog dependency",
+    "evidence_scope": "frontend feasibility only; no Source Graph edges, production accuracy, or production performance claim",
+    "slang_primary_frontend": {
+      "decision": "retain_for_phase1_prototype",
+      "production_status": "not_implemented_not_production_validated",
+      "reason": "Slang completed elaboration and recovered oracle-matching hierarchy/source facts; this Surelog comparison does not reach elaboration"
+    },
+    "surelog_uhdm_fallback": {
+      "decision": "do_not_add",
+      "future_recheck": "only against reproducibly obtained official Surelog v1.86+ if a future Slang blocker prevents required source-graph facts",
+      "reason": "measured comparison supplies no recovery for the Slang UVM diagnostic and uses an archived third-party binary distribution"
+    },
+    "worker_model": "isolated worker process"
+  },
+  "blockers": [
+    {
+      "code": "frontend_crash",
+      "message": "Surelog 1.84 exits by SIGSEGV after CP0300 Compilation begins; the same crash occurs with -noelab, so elaboration is not reached",
+      "phase": "compilation_before_elaboration"
+    }
+  ],
+  "cold_repeats_per_phase": 3,
+  "dependency": {
+    "binary_build_date": "Aug 23 2024",
+    "binary_reported_version": "1.84",
+    "comparison_scope": "diagnostic fallback comparison only; this archived wrapper is not a candidate TraceWeave dependency",
+    "package": "sc-surelog",
+    "package_project": "https://github.com/siliconcompiler/sc-surelog",
+    "package_project_status": "archived_2025-03-10",
+    "package_source": "https://pypi.org/project/sc-surelog/1.84.1/",
+    "package_version": "1.84.1",
+    "preferred_upstream_recheck": {
+      "commit": "1efe418724de9dc36613869e5d0e5e6ac5cca972",
+      "status": "source_fetch_failed_in_this_environment_not_capability_evidence",
+      "tag": "v1.86"
+    },
+    "production_distribution_accepted": false,
+    "reproduction_commands": [
+      "python3.11 -m venv /tmp/traceweave-phase0b-surelog-wheel",
+      "/tmp/traceweave-phase0b-surelog-wheel/bin/python -m pip install --only-binary=:all: --no-deps --require-hashes -r /home/robin/Projects/mcp/TraceWeave/scripts/frontend_spike_surelog_comparison_requirements_cp311_linux_x86_64.txt",
+      "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog --version"
+    ],
+    "requirements_file": "/home/robin/Projects/mcp/TraceWeave/scripts/frontend_spike_surelog_comparison_requirements_cp311_linux_x86_64.txt",
+    "runtime_dependency": false,
+    "selected_executable": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog",
+    "system_python_modified": false,
+    "upstream_source": "https://github.com/chipsalliance/Surelog",
+    "wheel": {
+      "filename": "sc_surelog-1.84.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "platform": "CPython 3.11 manylinux_2_17 x86_64",
+      "sha256": "bb0cd40141eb96af21aebfa2b8f25a53a7708b847352f30e591853b6a6201af6",
+      "url": "https://files.pythonhosted.org/packages/21/26/4fb2e1552020dcab2506258c4da880b3793d1401e4c4d3d6165b33d72cb5/sc_surelog-1.84.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    }
+  },
+  "environment": {
+    "machine": "x86_64",
+    "platform": "Linux-4.18.0-553.115.1.el8_10.x86_64-x86_64-with-glibc2.28",
+    "python": "3.11.13"
+  },
+  "methodology": {
+    "cache_state": "fresh output directory per child; host filesystem cache not flushed",
+    "no_fallback": true,
+    "phase_timing": "Surelog -profile supplies internal wall time where a phase completes; process wall/CPU/RSS measurements are cumulative per documented mode",
+    "process_model": "fresh isolated single-process Surelog child per phase"
+  },
+  "oracle_comparison": {
+    "comparisons": [
+      {
+        "available": true,
+        "expected_top": "top_tb",
+        "oracle": "annotated_source",
+        "status": "not_compared_frontend_failure",
+        "top_match": null
+      },
+      {
+        "available": true,
+        "expected_top": "top_tb",
+        "oracle": "fsdb_hierarchy",
+        "status": "not_compared_frontend_failure",
+        "top_match": null
+      },
+      {
+        "available": true,
+        "expected_top": "top_tb",
+        "oracle": "xcelium_elaboration",
+        "status": "not_compared_frontend_failure",
+        "top_match": null
+      },
+      {
+        "available": false,
+        "expected_top": null,
+        "oracle": "kdb_npi",
+        "status": "unavailable",
+        "top_match": null
+      }
+    ],
+    "development_oracle_policy": "FSDB/Xcelium/KDB/NPI evidence is comparison-only and never a frontend or automated-test dependency"
+  },
+  "phase_aggregate": {
+    "compile": {
+      "cpu_time_ms": {
+        "max": 5100.816,
+        "min": 5023.16,
+        "p50": 5099.334
+      },
+      "repeat_count": 3,
+      "return_codes": [
+        -11,
+        -11,
+        -11
+      ],
+      "rss_peak_kib": {
+        "max": 465832,
+        "min": 464304,
+        "p50": 465344
+      },
+      "semantic_fingerprints": [
+        "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999",
+        "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999",
+        "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999"
+      ],
+      "signals": [
+        "SIGSEGV",
+        "SIGSEGV",
+        "SIGSEGV"
+      ],
+      "stable_semantics": true,
+      "wall_time_ms": {
+        "max": 5307.915818,
+        "min": 5242.026379,
+        "p50": 5305.895025
+      }
+    },
+    "elaboration": {
+      "cpu_time_ms": {
+        "max": 5117.659,
+        "min": 5026.507,
+        "p50": 5060.596
+      },
+      "repeat_count": 3,
+      "return_codes": [
+        -11,
+        -11,
+        -11
+      ],
+      "rss_peak_kib": {
+        "max": 466228,
+        "min": 463484,
+        "p50": 465180
+      },
+      "semantic_fingerprints": [
+        "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684",
+        "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684",
+        "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684"
+      ],
+      "signals": [
+        "SIGSEGV",
+        "SIGSEGV",
+        "SIGSEGV"
+      ],
+      "stable_semantics": true,
+      "wall_time_ms": {
+        "max": 5364.839439,
+        "min": 5251.268692,
+        "p50": 5304.332885
+      }
+    },
+    "parse": {
+      "cpu_time_ms": {
+        "max": 5442.576,
+        "min": 5188.077,
+        "p50": 5252.534
+      },
+      "repeat_count": 3,
+      "return_codes": [
+        0,
+        0,
+        0
+      ],
+      "rss_peak_kib": {
+        "max": 463420,
+        "min": 462788,
+        "p50": 463308
+      },
+      "semantic_fingerprints": [
+        "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11",
+        "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11",
+        "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11"
+      ],
+      "signals": [
+        null,
+        null,
+        null
+      ],
+      "stable_semantics": true,
+      "wall_time_ms": {
+        "max": 5458.983954,
+        "min": 5205.188216,
+        "p50": 5269.339569
+      }
+    },
+    "preprocess": {
+      "cpu_time_ms": {
+        "max": 1323.094,
+        "min": 1303.25,
+        "p50": 1306.274
+      },
+      "repeat_count": 3,
+      "return_codes": [
+        0,
+        0,
+        0
+      ],
+      "rss_peak_kib": {
+        "max": 353168,
+        "min": 351996,
+        "p50": 352920
+      },
+      "semantic_fingerprints": [
+        "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd",
+        "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd",
+        "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd"
+      ],
+      "signals": [
+        null,
+        null,
+        null
+      ],
+      "stable_semantics": true,
+      "wall_time_ms": {
+        "max": 1328.814561,
+        "min": 1309.875427,
+        "p50": 1312.811084
+      }
+    }
+  },
+  "repository_baseline": "02cc7c11f62daf6a9fdf8fcee3eb40c98afbdea0",
+  "representative_elaboration_result": {
+    "evidence": {
+      "diagnostics": {
+        "items": [
+          {
+            "code": "CM0023",
+            "column": null,
+            "file": null,
+            "line": null,
+            "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-01/slpp_all/surelog.log\".",
+            "severity": "Info"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 1541,
+            "message": "Unused macro argument \"VAL\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 1548,
+            "message": "Unused macro argument \"ARG\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 1548,
+            "message": "Unused macro argument \"VAL\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 13,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 3254,
+            "message": "Unused macro argument \"NAME\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 13,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 3254,
+            "message": "Unused macro argument \"TR_HANDLE\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 13,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 3254,
+            "message": "Unused macro argument \"VALUE\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+            "line": 3284,
+            "message": "Unused macro argument \"SIZE\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+            "line": 396,
+            "message": "Unused macro argument \"KEY\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+            "line": 294,
+            "message": "Unused macro argument \"CB\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+            "line": 294,
+            "message": "Unused macro argument \"OPER\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+            "line": 295,
+            "message": "Unused macro argument \"CB\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+            "line": 295,
+            "message": "Unused macro argument \"OBJ\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0113",
+            "column": 9,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+            "line": 295,
+            "message": "Unused macro argument \"OPER\".",
+            "severity": "Warning"
+          },
+          {
+            "code": "PP0128",
+            "column": null,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+            "line": 123,
+            "message": "Non ASCII character detected, replaced by space.",
+            "severity": "Note"
+          },
+          {
+            "code": "PP0105",
+            "column": 1,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+            "line": 1102,
+            "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+            "severity": "Note"
+          },
+          {
+            "code": "PP0128",
+            "column": null,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+            "line": 1550,
+            "message": "Non ASCII character detected, replaced by space.",
+            "severity": "Note"
+          },
+          {
+            "code": "PP0128",
+            "column": null,
+            "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+            "line": 119,
+            "message": "Non ASCII character detected, replaced by space.",
+            "severity": "Note"
+          },
+          {
+            "code": "PP0128",
+            "column": 60,
+            "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+            "line": 100,
+            "message": "Non ASCII character detected, replaced by space.",
+            "severity": "Note"
+          },
+          {
+            "code": "CM0029",
+            "column": null,
+            "file": null,
+            "line": null,
+            "message": "Using global timescale: \"1ns/10ps\".",
+            "severity": "Info"
+          },
+          {
+            "code": "CP0300",
+            "column": null,
+            "file": null,
+            "line": null,
+            "message": "Compilation...",
+            "severity": "Info"
+          }
+        ],
+        "items_truncated": false,
+        "observed_by_code": {
+          "CM0023": 1,
+          "CM0029": 1,
+          "CP0300": 1,
+          "PP0105": 1,
+          "PP0113": 13,
+          "PP0128": 4
+        },
+        "observed_by_severity": {
+          "Info": 3,
+          "Note": 5,
+          "Warning": 13
+        },
+        "summary": {},
+        "summary_available": false
+      },
+      "frontend_object_counts": {
+        "available": false,
+        "counts": {},
+        "scope": "Surelog EL0508-EL0511 summary facts only"
+      },
+      "frontend_profile": {
+        "parsing_wall_time_ms": 3870.0,
+        "preprocessing_wall_time_ms": 1168.0
+      },
+      "graph_object_counts": {
+        "available": false,
+        "reason": "comparison does not build a TraceWeave Connectivity IR"
+      },
+      "recovered": {
+        "file_line_fidelity": "not_reached_before_failure",
+        "instance_path_naming": "not_recovered_before_failure",
+        "tops": []
+      }
+    },
+    "generated_output": {
+      "retained": false,
+      "surelog_log_available": true,
+      "surelog_log_bytes": 3715,
+      "uhdm_available": false
+    },
+    "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-01/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -elabuhdm",
+    "measurement_scope": "fresh-process full preprocessing, parsing, compilation, and UHDM elaboration",
+    "phase": "elaboration",
+    "process": {
+      "cpu_time_ms": 5060.596,
+      "return_code": -11,
+      "rss_end_kib": 465180,
+      "rss_peak_kib": 465180,
+      "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+      "rss_start_kib": 12104,
+      "shell_exit_code": 139,
+      "signal": "SIGSEGV",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 5025,
+      "stdout_sha256": "04c7e7e81495b857665a309ea1f46d9072b9a7a3911d55b4952dba15667ed926",
+      "system_cpu_time_ms": 171.445,
+      "timed_out": false,
+      "user_cpu_time_ms": 4889.151,
+      "wall_time_ms": 5304.332885
+    },
+    "repeat": 1,
+    "semantic_fingerprint_sha256": "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684"
+  },
+  "runs": [
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-01/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {},
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3876,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-01/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -noparse",
+      "measurement_scope": "fresh-process preprocessing only",
+      "phase": "preprocess",
+      "process": {
+        "cpu_time_ms": 1323.094,
+        "return_code": 0,
+        "rss_end_kib": 339556,
+        "rss_peak_kib": 353168,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12028,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "system_cpu_time_ms": 166.514,
+        "timed_out": false,
+        "user_cpu_time_ms": 1156.58,
+        "wall_time_ms": 1328.814561
+      },
+      "repeat": 1,
+      "semantic_fingerprint_sha256": "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/parse-01/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3852.0,
+          "preprocessing_wall_time_ms": 1178.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 8407,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/parse-01/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -nocomp",
+      "measurement_scope": "fresh-process cumulative preprocessing plus parsing",
+      "phase": "parse",
+      "process": {
+        "cpu_time_ms": 5188.077,
+        "return_code": 0,
+        "rss_end_kib": 446500,
+        "rss_peak_kib": 462788,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12060,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 9444,
+        "stdout_sha256": "1a56ddfa60a8aa94bb3b28f4b85cf2230cb476181fc9a5f68468b4bf8bca85d1",
+        "system_cpu_time_ms": 185.517,
+        "timed_out": false,
+        "user_cpu_time_ms": 5002.56,
+        "wall_time_ms": 5205.188216
+      },
+      "repeat": 1,
+      "semantic_fingerprint_sha256": "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/compile-01/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3828.0,
+          "preprocessing_wall_time_ms": 1172.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3705,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/compile-01/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -noelab",
+      "measurement_scope": "fresh-process cumulative preprocessing, parsing, and compilation",
+      "phase": "compile",
+      "process": {
+        "cpu_time_ms": 5023.16,
+        "return_code": -11,
+        "rss_end_kib": 465832,
+        "rss_peak_kib": 465832,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12088,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 4953,
+        "stdout_sha256": "4e7d1bd4792b9af6e18aafff547c5cb53ee3d7ed184c931e38b579f8cfd668bf",
+        "system_cpu_time_ms": 199.411,
+        "timed_out": false,
+        "user_cpu_time_ms": 4823.749,
+        "wall_time_ms": 5242.026379
+      },
+      "repeat": 1,
+      "semantic_fingerprint_sha256": "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-01/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3870.0,
+          "preprocessing_wall_time_ms": 1168.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3715,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-01/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -elabuhdm",
+      "measurement_scope": "fresh-process full preprocessing, parsing, compilation, and UHDM elaboration",
+      "phase": "elaboration",
+      "process": {
+        "cpu_time_ms": 5060.596,
+        "return_code": -11,
+        "rss_end_kib": 465180,
+        "rss_peak_kib": 465180,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12104,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 5025,
+        "stdout_sha256": "04c7e7e81495b857665a309ea1f46d9072b9a7a3911d55b4952dba15667ed926",
+        "system_cpu_time_ms": 171.445,
+        "timed_out": false,
+        "user_cpu_time_ms": 4889.151,
+        "wall_time_ms": 5304.332885
+      },
+      "repeat": 1,
+      "semantic_fingerprint_sha256": "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-02/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {},
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3876,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-02/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -noparse",
+      "measurement_scope": "fresh-process preprocessing only",
+      "phase": "preprocess",
+      "process": {
+        "cpu_time_ms": 1306.274,
+        "return_code": 0,
+        "rss_end_kib": 339552,
+        "rss_peak_kib": 351996,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12900,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "system_cpu_time_ms": 143.602,
+        "timed_out": false,
+        "user_cpu_time_ms": 1162.672,
+        "wall_time_ms": 1312.811084
+      },
+      "repeat": 2,
+      "semantic_fingerprint_sha256": "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/parse-02/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 4102.0,
+          "preprocessing_wall_time_ms": 1182.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 8407,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/parse-02/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -nocomp",
+      "measurement_scope": "fresh-process cumulative preprocessing plus parsing",
+      "phase": "parse",
+      "process": {
+        "cpu_time_ms": 5442.576,
+        "return_code": 0,
+        "rss_end_kib": 446472,
+        "rss_peak_kib": 463420,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12128,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 9444,
+        "stdout_sha256": "d91a6df2fc76ae0ffcf2c4f291422231c6a815b94f750396809a09ad26d78d68",
+        "system_cpu_time_ms": 195.423,
+        "timed_out": false,
+        "user_cpu_time_ms": 5247.153,
+        "wall_time_ms": 5458.983954
+      },
+      "repeat": 2,
+      "semantic_fingerprint_sha256": "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/compile-02/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3890.0,
+          "preprocessing_wall_time_ms": 1188.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3705,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/compile-02/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -noelab",
+      "measurement_scope": "fresh-process cumulative preprocessing, parsing, and compilation",
+      "phase": "compile",
+      "process": {
+        "cpu_time_ms": 5099.334,
+        "return_code": -11,
+        "rss_end_kib": 464304,
+        "rss_peak_kib": 464304,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12936,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 4953,
+        "stdout_sha256": "7b60082a71a028b24c0b75b3e520b487d7242636728bcc176cb9464ca020fc10",
+        "system_cpu_time_ms": 189.478,
+        "timed_out": false,
+        "user_cpu_time_ms": 4909.856,
+        "wall_time_ms": 5307.915818
+      },
+      "repeat": 2,
+      "semantic_fingerprint_sha256": "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-02/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3834.0,
+          "preprocessing_wall_time_ms": 1170.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3715,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-02/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -elabuhdm",
+      "measurement_scope": "fresh-process full preprocessing, parsing, compilation, and UHDM elaboration",
+      "phase": "elaboration",
+      "process": {
+        "cpu_time_ms": 5026.507,
+        "return_code": -11,
+        "rss_end_kib": 466228,
+        "rss_peak_kib": 466228,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12176,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 5025,
+        "stdout_sha256": "b21d81c2d983c7e187ffcbd1757bbecb767cb36a93ce80208cc902f0594233c8",
+        "system_cpu_time_ms": 190.431,
+        "timed_out": false,
+        "user_cpu_time_ms": 4836.076,
+        "wall_time_ms": 5251.268692
+      },
+      "repeat": 2,
+      "semantic_fingerprint_sha256": "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-03/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {},
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3876,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/preprocess-03/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -noparse",
+      "measurement_scope": "fresh-process preprocessing only",
+      "phase": "preprocess",
+      "process": {
+        "cpu_time_ms": 1303.25,
+        "return_code": 0,
+        "rss_end_kib": 339572,
+        "rss_peak_kib": 352920,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12988,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "system_cpu_time_ms": 148.712,
+        "timed_out": false,
+        "user_cpu_time_ms": 1154.538,
+        "wall_time_ms": 1309.875427
+      },
+      "repeat": 3,
+      "semantic_fingerprint_sha256": "7c983fcb548ef7cf849007303ee9e4f38a77267046abab882cceb3c145a5bfdd"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/parse-03/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 2,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {
+            "error": 0,
+            "fatal": 0,
+            "note": 5,
+            "syntax": 0,
+            "warning": 13
+          },
+          "summary_available": true
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3914.0,
+          "preprocessing_wall_time_ms": 1176.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 8407,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/parse-03/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -nocomp",
+      "measurement_scope": "fresh-process cumulative preprocessing plus parsing",
+      "phase": "parse",
+      "process": {
+        "cpu_time_ms": 5252.534,
+        "return_code": 0,
+        "rss_end_kib": 446512,
+        "rss_peak_kib": 463308,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12220,
+        "shell_exit_code": 0,
+        "signal": null,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 9444,
+        "stdout_sha256": "da699600d693aa6efee97ba42f52dce3dfcd8efc9c0d58760aad26beb78e8b7a",
+        "system_cpu_time_ms": 173.569,
+        "timed_out": false,
+        "user_cpu_time_ms": 5078.965,
+        "wall_time_ms": 5269.339569
+      },
+      "repeat": 3,
+      "semantic_fingerprint_sha256": "9261d93ee711c7e8b46227eddca5485424adf6fb322252471ede11d821916c11"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/compile-03/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3874.0,
+          "preprocessing_wall_time_ms": 1208.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3705,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/compile-03/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -noelab",
+      "measurement_scope": "fresh-process cumulative preprocessing, parsing, and compilation",
+      "phase": "compile",
+      "process": {
+        "cpu_time_ms": 5100.816,
+        "return_code": -11,
+        "rss_end_kib": 465344,
+        "rss_peak_kib": 465344,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12428,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 4953,
+        "stdout_sha256": "efa6a5932335d645dc3bc903eff31672c53aa1f853ca4189038a1e32adda7688",
+        "system_cpu_time_ms": 169.488,
+        "timed_out": false,
+        "user_cpu_time_ms": 4931.328,
+        "wall_time_ms": 5305.895025
+      },
+      "repeat": 3,
+      "semantic_fingerprint_sha256": "be72634c5d8a763a42976fe0082b4530fe0df1567a675521c639645200974999"
+    },
+    {
+      "evidence": {
+        "diagnostics": {
+          "items": [
+            {
+              "code": "CM0023",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Creating log file \"/tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-03/slpp_all/surelog.log\".",
+              "severity": "Info"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1541,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"ARG\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 1548,
+              "message": "Unused macro argument \"VAL\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"NAME\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"TR_HANDLE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 13,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3254,
+              "message": "Unused macro argument \"VALUE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_object_defines.svh",
+              "line": 3284,
+              "message": "Unused macro argument \"SIZE\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_printer_defines.svh",
+              "line": 396,
+              "message": "Unused macro argument \"KEY\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 294,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"CB\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OBJ\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0113",
+              "column": 9,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_callback_defines.svh",
+              "line": 295,
+              "message": "Unused macro argument \"OPER\".",
+              "severity": "Warning"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/macros/uvm_deprecated_defines.svh",
+              "line": 123,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0105",
+              "column": 1,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_objection.svh",
+              "line": 1102,
+              "message": "Multiply defined macro \"UVM_DEFAULT_TIMEOUT\",",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_base.svh",
+              "line": 1550,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": null,
+              "file": "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src/seq/uvm_sequencer_param_base.svh",
+              "line": 119,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "PP0128",
+              "column": 60,
+              "file": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv",
+              "line": 100,
+              "message": "Non ASCII character detected, replaced by space.",
+              "severity": "Note"
+            },
+            {
+              "code": "CM0029",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Using global timescale: \"1ns/10ps\".",
+              "severity": "Info"
+            },
+            {
+              "code": "CP0300",
+              "column": null,
+              "file": null,
+              "line": null,
+              "message": "Compilation...",
+              "severity": "Info"
+            }
+          ],
+          "items_truncated": false,
+          "observed_by_code": {
+            "CM0023": 1,
+            "CM0029": 1,
+            "CP0300": 1,
+            "PP0105": 1,
+            "PP0113": 13,
+            "PP0128": 4
+          },
+          "observed_by_severity": {
+            "Info": 3,
+            "Note": 5,
+            "Warning": 13
+          },
+          "summary": {},
+          "summary_available": false
+        },
+        "frontend_object_counts": {
+          "available": false,
+          "counts": {},
+          "scope": "Surelog EL0508-EL0511 summary facts only"
+        },
+        "frontend_profile": {
+          "parsing_wall_time_ms": 3912.0,
+          "preprocessing_wall_time_ms": 1186.0
+        },
+        "graph_object_counts": {
+          "available": false,
+          "reason": "comparison does not build a TraceWeave Connectivity IR"
+        },
+        "recovered": {
+          "file_line_fidelity": "not_reached_before_failure",
+          "instance_path_naming": "not_recovered_before_failure",
+          "tops": []
+        }
+      },
+      "generated_output": {
+        "retained": false,
+        "surelog_log_available": true,
+        "surelog_log_bytes": 3715,
+        "uhdm_available": false
+      },
+      "invocation": "/tmp/traceweave-phase0b-surelog-wheel/lib/python3.11/site-packages/surelog/bin/surelog +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f /tmp/traceweave-surelog-phase0b-964ewo3x/elaboration-03/inputs.f -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -elabuhdm",
+      "measurement_scope": "fresh-process full preprocessing, parsing, compilation, and UHDM elaboration",
+      "phase": "elaboration",
+      "process": {
+        "cpu_time_ms": 5117.659,
+        "return_code": -11,
+        "rss_end_kib": 463484,
+        "rss_peak_kib": 463484,
+        "rss_sampling": "single-process /proc/<pid>/status at 5ms intervals",
+        "rss_start_kib": 12444,
+        "shell_exit_code": 139,
+        "signal": "SIGSEGV",
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_bytes": 5025,
+        "stdout_sha256": "6d3d1fbbd76909a0ac92cad1d6125aa6af85e5ae4e57f0d104a2e58b9f386724",
+        "system_cpu_time_ms": 197.413,
+        "timed_out": false,
+        "user_cpu_time_ms": 4920.246,
+        "wall_time_ms": 5364.839439
+      },
+      "repeat": 3,
+      "semantic_fingerprint_sha256": "7e847092081d5b9155a70a41c43475e7ef1b3b62b1ae23abf430cb3905354684"
+    }
+  ],
+  "schema_version": "1.0",
+  "spike": "source_graph_frontend_surelog_comparison",
+  "status": "blocked",
+  "translation": {
+    "base_args_template": [
+      "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+      "+define+UVM_NO_DEPRECATED",
+      "+define+XCELIUM",
+      "+define+DUMP_FSDB",
+      "+incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb",
+      "-f",
+      "<run_dir>/inputs.f",
+      "-timescale=1ns/10ps",
+      "-top",
+      "top_tb",
+      "-mt",
+      "0",
+      "-mp",
+      "0",
+      "-nopython",
+      "-nostdout"
+    ],
+    "defines": [
+      "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+      "+define+UVM_NO_DEPRECATED",
+      "+define+XCELIUM",
+      "+define+DUMP_FSDB"
+    ],
+    "execution_policy": {
+      "processes": 0,
+      "python": false,
+      "reason": "single-process comparison makes crash, CPU, and RSS attribution exact",
+      "threads": 0
+    },
+    "include_dirs": [
+      "/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb"
+    ],
+    "phase_invocations": {
+      "compile": "'<surelog>' +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f '<run_dir>/inputs.f' -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -noelab",
+      "elaboration": "'<surelog>' +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f '<run_dir>/inputs.f' -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -elabuhdm",
+      "parse": "'<surelog>' +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f '<run_dir>/inputs.f' -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -profile -parse -nocomp",
+      "preprocess": "'<surelog>' +define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL +define+UVM_NO_DEPRECATED +define+XCELIUM +define+DUMP_FSDB +incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb -f '<run_dir>/inputs.f' -timescale=1ns/10ps -top top_tb -mt 0 -mp 0 -nopython -nostdout -noparse"
+    },
+    "source_count": 19,
+    "source_paths": [
+      "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_bindings.sv",
+      "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv"
+    ],
+    "source_strategy": "flatten and deduplicate the captured Xcelium source order; the original command names Cadence uvm_pkg.sv both directly and through a filelist",
+    "timescale": "1ns/10ps",
+    "top": "top_tb",
+    "translated_options": [
+      {
+        "input": "captured Xcelium HDL source/filelist inputs",
+        "output": [
+          "-f",
+          "<run_dir>/inputs.f"
+        ],
+        "reason": "preserve order while removing duplicate uvm_pkg.sv"
+      },
+      {
+        "input": "captured Xcelium defines and include directories",
+        "output": [
+          "+define+UVM_REG_DATA_WIDTH=137+IGNORE_ERASE_REF_CELL",
+          "+define+UVM_NO_DEPRECATED",
+          "+define+XCELIUM",
+          "+define+DUMP_FSDB",
+          "+incdir+/tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src+/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/../tb"
+        ],
+        "reason": "Surelog standard simulator-compatible spellings"
+      },
+      {
+        "input": "Xcelium timescale and top",
+        "output": [
+          "-timescale=1ns/10ps",
+          "-top",
+          "top_tb"
+        ],
+        "reason": "Surelog documented compile inputs"
+      }
+    ],
+    "translator_scope": "Phase 0B comparison only; not a production DesignInputs implementation",
+    "unsupported_options": [
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-elaborate",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-64bit",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-mess",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "semantic_compatibility_oracle_required",
+        "option": "-disable_sem2009",
+        "reason": "Xcelium pre-2009 compatibility semantics have no exact Slang switch; hierarchy and source fidelity require oracle validation"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-verbose",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-uvmpackagename /tools/cadence/XCELIUM2603/tools/methodology/UVM/CDNS-1.1d/sv/src",
+        "reason": "Xcelium library, output, debug, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-access +rc",
+        "reason": "Xcelium library, output, debug, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-64bit",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-mess",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "+xmnontcglitch",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-notimingchecks",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-nospecify",
+        "reason": "Xcelium execution, timing, diagnostics, coverage, or runtime option"
+      },
+      {
+        "impact": "frontend_irrelevant",
+        "option": "-log /home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
+        "reason": "Xcelium library, output, debug, coverage, or runtime option"
+      }
+    ]
+  },
+  "workload": {
+    "compile_cwd": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb",
+    "compile_log": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
+    "diagnostic_policy": {
+      "excluded_inputs": {
+        "native_dpi_implementations": "C/C++/object/shared-library inputs are recorded but not parsed",
+        "protected_source": "legacy envelopes are enabled; encrypted payloads that the frontend cannot decode must remain an explicit blocker, never a fallback",
+        "runtime_system_tasks": "unknown simulator system-task diagnostics are suppressed only; HDL arguments and surrounding processes remain parsed"
+      },
+      "reason": "Xcelium UVM and testbench sources call vendor atomics, stack helpers, and FSDB dump tasks that are external to HDL connectivity",
+      "risk": "DPI/system-call behavior is excluded; any connectivity created only by those calls remains unsupported",
+      "suppressed_option": "unknown-sys-name"
+    },
+    "kind": "local_xcelium_uvm_package_vendor_options",
+    "name": "real_uvm",
+    "simulator": "xcelium",
+    "simulator_version": "26.03-s001-20260323",
+    "source_facts": {
+      "existing_source_count": 19,
+      "missing_sources": [],
+      "source_bytes_total": 51742,
+      "source_count": 19,
+      "source_paths": [
+        "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/uvm_pkg.sv",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/dut/dut.sv",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/crp.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox1.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox2.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox3.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox4.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox5.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox6.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox7.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/common/sbox8.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/des.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/area_opt/key_sel.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_6.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_chk.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/rtl/verilog/edc/edc_32_chk_wrap.v",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_assertion.sv",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/des_latest/des/trunk/bench/verilog/des_bindings.sv",
+        "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/top_tb.sv"
+      ],
+      "source_set_origin": "frontend workload input records"
+    },
+    "top": "top_tb",
+    "waveform": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/work_my_case0_/top_tb.fsdb",
+    "waveform_role": "development_oracle_only_not_opened_by_frontend_worker"
+  }
+}

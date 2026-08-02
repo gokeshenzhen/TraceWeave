@@ -1,0 +1,9 @@
+# Phase 0B comparison dependency only. This is not a TraceWeave runtime
+# dependency and is not an accepted production distribution strategy.
+#
+# sc-surelog is SiliconCompiler/ZeroASIC's archived binary wrapper for
+# Surelog.  Package 1.84.1 contains a binary that reports Surelog 1.84,
+# built 2024-08-23.  The official CHIPS Alliance v1.86 source remains the
+# preferred provenance for any future re-evaluation.
+sc-surelog @ https://files.pythonhosted.org/packages/21/26/4fb2e1552020dcab2506258c4da880b3793d1401e4c4d3d6165b33d72cb5/sc_surelog-1.84.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+    --hash=sha256:bb0cd40141eb96af21aebfa2b8f25a53a7708b847352f30e591853b6a6201af6
