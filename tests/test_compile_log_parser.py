@@ -102,6 +102,9 @@ file: {root / "tb" / "top_tb.sv"}
             assert result["filelist_tree"]["filelist.f"] == []
             assert result["interfaces"] == ["my_if"]
             assert result["top_modules"] == ["top_tb"]
+            assert result["compile_replay_command"] == (
+                f"xrun -f {root / 'dut' / 'filelist.f'} -top top_tb"
+            )
         finally:
             tmp.cleanup()
 
@@ -129,6 +132,7 @@ file: {root / "tb" / "top_tb.sv"}
         assert result["compile_command"] == (
             f"xrun -elaborate {source} -timescale 1ns/10ps -top top_tb"
         )
+        assert result["compile_replay_command"] == result["compile_command"]
         assert result["compile_cwd"] == str(tmp_path)
         assert "DEFINE" not in result["compile_command"]
         assert "*W,DLCPTH" not in result["compile_command"]
@@ -156,6 +160,7 @@ file: {root / "tb" / "top_tb.sv"}
         assert result["compile_command"] == (
             "xrun -elaborate -f design.scr -top top_earlgrey -top tb -snapshot tb"
         )
+        assert result["compile_replay_command"] == result["compile_command"]
         assert result["compile_cwd"] == str(work.resolve())
         assert result["top_modules"] == ["tb", "top_earlgrey"]
         assert result["filelist_tree"] == {"design.scr": []}

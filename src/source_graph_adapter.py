@@ -41,7 +41,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "1.0"
+SOURCE_GRAPH_ADAPTER_VERSION = "1.1"
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -135,6 +135,10 @@ _SOURCE_MARKERS: tuple[tuple[re.Pattern[bytes], str], ...] = (
         re.compile(rb"\b(?:uvm_pkg|uvm_[a-z0-9_]+)\b", re.IGNORECASE),
         "uvm_dynamic_connectivity",
     ),
+)
+_XCELIUM_UVM_RECORD_RE = re.compile(
+    r"Compiling UVM packages \((?P<packages>[^)]+)\) using uvmhome "
+    r"location (?P<location>[^\r\n]+)"
 )
 
 
@@ -240,6 +244,7 @@ class _TranslationState:
     inputs: list[str] = field(default_factory=list)
     options: list[str] = field(default_factory=list)
     command_tops: list[str] = field(default_factory=list)
+    simulator_library_inputs: set[str] = field(default_factory=set)
     support_files: set[Path] = field(default_factory=set)
     active_filelists: set[Path] = field(default_factory=set)
     visited_filelists: set[Path] = field(default_factory=set)
@@ -247,6 +252,7 @@ class _TranslationState:
     objective_exclusions: set[str] = field(default_factory=set)
     inputs_complete: bool = True
     options_complete: bool = True
+    uvmhome_resolved: bool = False
     token_count: int = 0
 
 
@@ -511,14 +517,19 @@ def _translate_tokens(
             code = _SEMANTIC_GAP_OPTIONS[token]
             state.gap_codes.add(code)
             state.objective_exclusions.add(code)
-            state.options_complete = False
             index += 1
             continue
         if token == "-uvmhome":
             state.objective_exclusions.add("uvm_dynamic_connectivity")
-            state.gap_codes.add("simulator_uvm_library_unresolved")
-            state.inputs_complete = False
-            index += 2 if index + 1 < len(tokens) else 1
+            if index + 1 >= len(tokens):
+                state.gap_codes.add("simulator_uvm_library_unresolved")
+                state.inputs_complete = False
+                index += 1
+                continue
+            if not state.uvmhome_resolved:
+                state.gap_codes.add("simulator_uvm_library_unresolved")
+                state.inputs_complete = False
+            index += 2
             continue
         if token == "-L" and index + 1 < len(tokens):
             state.objective_exclusions.add("dpi_runtime")
@@ -590,6 +601,52 @@ def _included_child_paths(compile_result: Mapping[str, Any]) -> set[Path]:
             Path(str(child)).resolve(strict=False) for child in children if child
         )
     return result
+
+
+def _extract_xcelium_uvm_library(
+    compile_log: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Recover only simulator-provided UVM sources explicitly recorded by xrun."""
+
+    match: re.Match[str] | None = None
+    try:
+        with Path(compile_log).open(encoding="utf-8", errors="replace") as stream:
+            for line_number, line in enumerate(stream, 1):
+                if line_number % 256 == 0:
+                    check_cancelled()
+                match = _XCELIUM_UVM_RECORD_RE.search(line)
+                if match is not None:
+                    break
+    except OSError:
+        return None
+    if match is None:
+        return None
+
+    location = Path(match.group("location").strip()).expanduser().resolve(strict=False)
+    search_dirs = (location / "sv" / "src", location / "additions" / "sv")
+    sources: list[str] = []
+    try:
+        package_names = shlex.split(match.group("packages"), posix=True)
+    except ValueError:
+        return None
+    for package_name in package_names:
+        source = next(
+            (
+                directory / package_name
+                for directory in search_dirs
+                if (directory / package_name).is_file()
+            ),
+            None,
+        )
+        if source is None:
+            return None
+        sources.append(str(source.resolve(strict=False)))
+    include_dirs = tuple(
+        str(directory.resolve(strict=False))
+        for directory in search_dirs
+        if directory.is_dir()
+    )
+    return include_dirs, tuple(sources)
 
 
 def _ordered_tops(
@@ -693,7 +750,11 @@ def _compile_manifest(
     command_dir = Path(str(raw_cwd)).resolve(strict=False)
     state = _TranslationState(simulator=simulator, command_dir=command_dir)
     state.options.extend(_BASE_OPTIONS.get(simulator, ()))
-    command = str(compile_result.get("compile_command") or "")
+    command = str(
+        compile_result.get("compile_replay_command")
+        or compile_result.get("compile_command")
+        or ""
+    )
     if not command:
         state.options_complete = False
         state.gap_codes.add("compile_command_missing")
@@ -706,6 +767,18 @@ def _compile_manifest(
             state.options_complete = False
             state.gap_codes.add("compile_command_parse_failed")
         if tokens:
+            if simulator == "xcelium" and "-uvmhome" in tokens:
+                uvm_library = _extract_xcelium_uvm_library(compile_log)
+                if uvm_library is not None:
+                    include_dirs, sources = uvm_library
+                    for include_dir in include_dirs:
+                        state.options.extend(("-I", include_dir))
+                    state.inputs.extend(sources)
+                    state.simulator_library_inputs.update(sources)
+                    # Kept as a private translation-state fact: it controls
+                    # whether the later -uvmhome token is a resolved input or
+                    # a conservative manifest blocker, and is never serialized.
+                    state.uvmhome_resolved = True
             _translate_tokens(
                 state,
                 tokens,
@@ -721,7 +794,7 @@ def _compile_manifest(
     elif reported:
         include_paths = {str(path) for path in _included_child_paths(compile_result)}
         reported_direct = set(reported) - include_paths
-        translated = set(state.inputs)
+        translated = set(state.inputs) - state.simulator_library_inputs
         if reported_direct and reported_direct != translated:
             state.inputs_complete = False
             state.gap_codes.add("compile_log_source_reconciliation_gap")

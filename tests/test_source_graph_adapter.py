@@ -6,6 +6,7 @@ import threading
 import pytest
 
 import src.cancellation as cancellation
+from src.compile_log_parser import parse_compile_log
 from src.source_graph_adapter import (
     AdapterStatus,
     SOURCE_GRAPH_ADAPTER_VERSION,
@@ -116,6 +117,67 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert receipt["adapter_version"] == SOURCE_GRAPH_ADAPTER_VERSION
     assert receipt["manifest"]["complete"] is True
     assert receipt["cross_request_reusable"] is True
+
+
+def test_native_xrun_replay_avoids_filelist_echo_duplication_and_resolves_uvmhome(
+    tmp_path,
+):
+    user_source = tmp_path / "rtl" / "top.sv"
+    native_source = tmp_path / "dpi" / "helper.c"
+    filelist = tmp_path / "design.scr"
+    uvmhome = tmp_path / "xcelium" / "UVM" / "CDNS-1.2"
+    uvm_pkg = uvmhome / "sv" / "src" / "uvm_pkg.sv"
+    cdns_uvm_pkg = uvmhome / "additions" / "sv" / "cdns_uvm_pkg.sv"
+    _write(user_source, "module tb; logic q; endmodule\n")
+    _write(native_source, "void helper(void) {}\n")
+    _write(uvm_pkg, "package uvm_pkg; endpackage\n")
+    _write(cdns_uvm_pkg, "package cdns_uvm_pkg; endpackage\n")
+    _write(filelist, "rtl/top.sv\ndpi/helper.c\n")
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "xrun\n"
+        "\t-ALLOWREDEFINITION\n"
+        "\t-f design.scr\n"
+        "\t\trtl/top.sv\n"
+        "\t\tdpi/helper.c\n"
+        "\t-uvmhome CDNS-1.2\n"
+        "\t-top bind_top\n"
+        "\t-top tb\n"
+        f"Compiling UVM packages (uvm_pkg.sv cdns_uvm_pkg.sv) using uvmhome location {uvmhome}\n"
+        "file: rtl/top.sv\n"
+        "\tmodule worklib.tb:sv\n",
+    )
+    compile_result = parse_compile_log(str(log), "xcelium")
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy={"component_tree": {"tb": {}}},
+    )
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (
+        str(uvm_pkg.resolve()),
+        str(cdns_uvm_pkg.resolve()),
+        str(user_source.resolve()),
+    )
+    assert manifest.ordered_tops == ("bind_top", "tb")
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "simulator_uvm_library_unresolved" not in plan.receipt.gap_codes
+    assert set(plan.receipt.gap_codes) == {
+        "definition_replacement_semantics",
+        "native_runtime_input_excluded",
+    }
+    assert {
+        "bind_semantics",
+        "definition_replacement_semantics",
+        "dpi_runtime",
+        "uvm_dynamic_connectivity",
+    } <= set(plan.receipt.objective_exclusions)
 
 
 def test_content_fingerprint_changes_when_an_input_changes(tmp_path):

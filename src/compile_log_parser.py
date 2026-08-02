@@ -518,7 +518,9 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         lines = f.readlines()
 
     log_dir = os.path.dirname(log_path)
-    compile_command, command_dir = _extract_xcelium_invocation(lines, log_dir)
+    compile_command, replay_command, command_dir = _extract_xcelium_invocation(
+        lines, log_dir
+    )
     file_info: dict[str, dict] = {}
     include_tree: dict[str, list[str]] = {}
     filelist_tree: dict[str, list[str]] = {}
@@ -609,12 +611,18 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
         "compile_command": compile_command,
+        # Native xrun logs indent expanded command-file contents beneath the
+        # top-level ``-f`` argument.  ``compile_command`` intentionally keeps
+        # that historical flattened view; the replay form removes only those
+        # deeper, echoed lines so an on-demand frontend does not expand the
+        # same command file twice.
+        "compile_replay_command": replay_command,
     }
 
 
 def _extract_xcelium_invocation(
     lines: list[str], log_dir: str
-) -> tuple[str | None, str]:
+) -> tuple[str | None, str | None, str]:
     """Recover an xrun command and the directory in which it executed.
 
     Native xrun logs use an indented argument block. Build orchestrators such
@@ -626,7 +634,7 @@ def _extract_xcelium_invocation(
     """
     command = _extract_xcelium_command(lines)
     if command:
-        return command, log_dir
+        return command, _extract_xcelium_replay_command(lines), log_dir
 
     for line in lines:
         match = _XCE_SHELL_COMMAND_RE.match(line.rstrip("\n"))
@@ -636,8 +644,42 @@ def _extract_xcelium_invocation(
         command = match.group("command")
         if command.startswith("/"):
             command = f"xrun{command[command.find('xrun') + len('xrun') :]}"
-        return command, command_dir
-    return None, log_dir
+        return command, command, command_dir
+    return None, None, log_dir
+
+
+def _extract_xcelium_replay_command(lines: list[str]) -> str | None:
+    """Return the top-level xrun invocation without echoed ``-f`` contents.
+
+    Xcelium prints command-file contents one indentation level below the
+    top-level arguments.  Retaining the historical flattened command is useful
+    for source discovery, but replaying it together with ``-f`` compiles every
+    command-file source twice.  Indentation is the simulator-provided boundary;
+    no token de-duplication is performed, so intentional repeated compilation
+    units in the original command remain intact.
+    """
+
+    for idx, line in enumerate(lines):
+        if line.strip() != "xrun":
+            continue
+        parts = ["xrun"]
+        base_indent: int | None = None
+        i = idx + 1
+        while i < len(lines):
+            rendered = lines[i].rstrip("\n")
+            stripped = rendered.strip()
+            if not stripped:
+                break
+            if rendered == rendered.lstrip(" \t"):
+                break
+            indent = len(rendered) - len(rendered.lstrip(" \t"))
+            if base_indent is None:
+                base_indent = indent
+            if indent == base_indent:
+                parts.append(stripped.rstrip(" \\"))
+            i += 1
+        return " ".join(parts) if len(parts) > 1 else "xrun"
+    return None
 
 
 def _extract_xcelium_command(lines: list[str]) -> str | None:
