@@ -1,5 +1,22 @@
 {
   "assessment": {
+    "cache_fingerprint_contract": {
+      "excludes": [
+        "formatted diagnostic message text",
+        "advisory or ignored diagnostic aggregate counts",
+        "timing and RSS measurements"
+      ],
+      "includes": [
+        "frontend name and version",
+        "blocking diagnostic count",
+        "diagnostic code/severity/file/line/column/option identities",
+        "suppressed unknown-system count",
+        "recovered frontend objects",
+        "explicit blockers"
+      ],
+      "reason": "generic specialization order can change formatted diagnostic text and advisory counts without changing source location, blocker, or recovered connectivity facts",
+      "recommendation": "semantic_identity_not_full_diagnostic_payload"
+    },
     "cold_frontend_worker_model": {
       "reason": "preserves hard timeout/crash and RSS isolation for a native frontend; future session caching can keep a successful worker warm",
       "recommendation": "isolated_worker_process"
@@ -228,18 +245,18 @@
           },
           "total": {
             "count": 10,
-            "max": 1620.0,
+            "max": 1622.0,
             "min": 1616.0,
-            "p50": 1620.0,
-            "p95": 1620.0
+            "p50": 1618.5,
+            "p95": 1621.1
           },
           "varying_by_code": {
             "DynamicCastConst": {
               "count": 10,
-              "max": 45.0,
+              "max": 47.0,
               "min": 41.0,
-              "p50": 45.0,
-              "p95": 45.0
+              "p50": 43.5,
+              "p95": 46.1
             }
           }
         },
@@ -247,468 +264,468 @@
           "elaboration": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 207.934733,
-              "min": 201.922042,
-              "p50": 205.034161,
-              "p95": 207.85992
+              "max": 217.239252,
+              "min": 203.152486,
+              "p50": 208.898377,
+              "p95": 214.256985
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 132216.0,
-              "min": 129844.0,
-              "p50": 132080.0,
-              "p95": 132207.0,
+              "max": 134200.0,
+              "min": 130044.0,
+              "p50": 132168.0,
+              "p95": 133336.0,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 132216.0,
-              "min": 129844.0,
-              "p50": 132080.0,
-              "p95": 132207.0,
+              "max": 134200.0,
+              "min": 130044.0,
+              "p50": 132168.0,
+              "p95": 133336.0,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 76444.0,
-              "min": 74004.0,
-              "p50": 76092.0,
-              "p95": 76386.4,
+              "max": 78432.0,
+              "min": 74328.0,
+              "p50": 76378.0,
+              "p95": 77562.6,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 208.740598,
-              "min": 202.707543,
-              "p50": 205.814024,
-              "p95": 208.655737
+              "max": 218.070805,
+              "min": 203.914401,
+              "p50": 209.918608,
+              "p95": 215.064634
             }
           },
           "frontend_import": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 52.952239,
-              "min": 49.896784,
-              "p50": 50.950923,
-              "p95": 52.772488
+              "max": 53.541052,
+              "min": 50.034368,
+              "p50": 51.811516,
+              "p95": 53.14457
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 40644.0,
-              "min": 40236.0,
-              "p50": 40536.0,
-              "p95": 40618.8,
+              "max": 40676.0,
+              "min": 40532.0,
+              "p50": 40594.0,
+              "p95": 40663.4,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 40644.0,
-              "min": 40236.0,
-              "p50": 40536.0,
-              "p95": 40618.8,
+              "max": 40676.0,
+              "min": 40532.0,
+              "p50": 40594.0,
+              "p95": 40663.4,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 20360.0,
-              "min": 20236.0,
-              "p50": 20284.0,
-              "p95": 20358.2,
+              "max": 20416.0,
+              "min": 20256.0,
+              "p50": 20360.0,
+              "p95": 20403.4,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 53.224791,
-              "min": 50.098298,
-              "p50": 51.177278,
-              "p95": 53.049455
+              "max": 53.779253,
+              "min": 50.422111,
+              "p50": 52.043245,
+              "p95": 53.381667
             }
           },
           "object_extraction": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 417.862318,
-              "min": 403.798886,
-              "p50": 408.117816,
-              "p95": 415.143246
+              "max": 413.069285,
+              "min": 402.458847,
+              "p50": 405.998338,
+              "p95": 412.813957
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 137056.0,
-              "min": 134696.0,
-              "p50": 136958.0,
-              "p95": 137054.2,
+              "max": 139056.0,
+              "min": 134904.0,
+              "p50": 137038.0,
+              "p95": 138179.4,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 137056.0,
-              "min": 134696.0,
-              "p50": 136958.0,
-              "p95": 137054.2,
+              "max": 139056.0,
+              "min": 134904.0,
+              "p50": 137038.0,
+              "p95": 138179.4,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 132216.0,
-              "min": 129844.0,
-              "p50": 132080.0,
-              "p95": 132207.0,
+              "max": 134200.0,
+              "min": 130044.0,
+              "p50": 132168.0,
+              "p95": 133336.0,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 418.830861,
-              "min": 404.792177,
-              "p50": 409.105119,
-              "p95": 416.113773
+              "max": 414.11019,
+              "min": 403.457281,
+              "p50": 406.979921,
+              "p95": 413.84208
             }
           },
           "parse": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 59.305736,
-              "min": 58.054957,
-              "p50": 58.767738,
-              "p95": 59.229568
+              "max": 59.667364,
+              "min": 58.515105,
+              "p50": 58.95575,
+              "p95": 59.624636
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 76444.0,
-              "min": 74004.0,
-              "p50": 76092.0,
-              "p95": 76386.4,
+              "max": 78432.0,
+              "min": 74328.0,
+              "p50": 76378.0,
+              "p95": 77562.6,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 76444.0,
-              "min": 74004.0,
-              "p50": 76092.0,
-              "p95": 76386.4,
+              "max": 78432.0,
+              "min": 74328.0,
+              "p50": 76378.0,
+              "p95": 77562.6,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 57420.0,
-              "min": 56656.0,
-              "p50": 57276.0,
-              "p95": 57411.0,
+              "max": 57508.0,
+              "min": 56964.0,
+              "p50": 57438.0,
+              "p95": 57497.2,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 57.099948,
-              "min": 55.950036,
-              "p50": 56.493438,
-              "p95": 57.026434
+              "max": 57.508729,
+              "min": 56.180916,
+              "p50": 56.817532,
+              "p95": 57.472598
             }
           },
           "parse_setup": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 0.983417,
-              "min": 0.830489,
-              "p50": 0.854936,
-              "p95": 0.931876
+              "max": 1.004787,
+              "min": 0.845157,
+              "p50": 0.857,
+              "p95": 0.991488
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 57420.0,
-              "min": 56656.0,
-              "p50": 57276.0,
-              "p95": 57411.0,
+              "max": 57508.0,
+              "min": 56964.0,
+              "p50": 57438.0,
+              "p95": 57497.2,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 61640.0,
-              "min": 60876.0,
-              "p50": 61496.0,
-              "p95": 61631.0,
+              "max": 61860.0,
+              "min": 61492.0,
+              "p50": 61694.0,
+              "p95": 61802.4,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 57420.0,
-              "min": 56656.0,
-              "p50": 57276.0,
-              "p95": 57411.0,
+              "max": 57508.0,
+              "min": 56964.0,
+              "p50": 57438.0,
+              "p95": 57497.2,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 1.001585,
-              "min": 0.839673,
-              "p50": 0.860208,
-              "p95": 0.944324
+              "max": 1.010402,
+              "min": 0.850403,
+              "p50": 0.860823,
+              "p95": 0.997512
             }
           },
           "preprocess": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 52.321,
-              "min": 50.393181,
-              "p50": 51.475763,
-              "p95": 52.192912
+              "max": 53.146092,
+              "min": 50.599257,
+              "p50": 51.540279,
+              "p95": 53.065035
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 57420.0,
-              "min": 56656.0,
-              "p50": 57276.0,
-              "p95": 57411.0,
+              "max": 57508.0,
+              "min": 56964.0,
+              "p50": 57438.0,
+              "p95": 57497.2,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 61640.0,
-              "min": 60876.0,
-              "p50": 61496.0,
-              "p95": 61631.0,
+              "max": 61860.0,
+              "min": 61492.0,
+              "p50": 61694.0,
+              "p95": 61802.4,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 41332.0,
-              "min": 40860.0,
-              "p50": 41054.0,
-              "p95": 41272.6,
+              "max": 41240.0,
+              "min": 40916.0,
+              "p50": 41102.0,
+              "p95": 41225.6,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 52.597914,
-              "min": 50.596537,
-              "p50": 51.729596,
-              "p95": 52.474095
+              "max": 53.397933,
+              "min": 50.820373,
+              "p50": 51.894638,
+              "p95": 53.316195
             }
           },
           "preprocess_setup": {
             "cpu_time_ms": {
               "count": 10,
-              "max": 1.080881,
-              "min": 0.933263,
-              "p50": 0.953356,
-              "p95": 1.070998
+              "max": 1.21988,
+              "min": 0.916541,
+              "p50": 0.964161,
+              "p95": 1.138742
             },
             "rss_end_kib": {
               "count": 10,
-              "max": 41332.0,
-              "min": 40860.0,
-              "p50": 41054.0,
-              "p95": 41272.6,
+              "max": 41240.0,
+              "min": 40916.0,
+              "p50": 41102.0,
+              "p95": 41225.6,
               "supported": true
             },
             "rss_peak_kib": {
               "count": 10,
-              "max": 41332.0,
-              "min": 40860.0,
-              "p50": 41054.0,
-              "p95": 41272.6,
+              "max": 41240.0,
+              "min": 40916.0,
+              "p50": 41102.0,
+              "p95": 41225.6,
               "supported": true
             },
             "rss_start_kib": {
               "count": 10,
-              "max": 40644.0,
-              "min": 40236.0,
-              "p50": 40536.0,
-              "p95": 40618.8,
+              "max": 40676.0,
+              "min": 40532.0,
+              "p50": 40594.0,
+              "p95": 40663.4,
               "supported": true
             },
             "wall_time_ms": {
               "count": 10,
-              "max": 1.086283,
-              "min": 0.93945,
-              "p50": 0.958825,
-              "p95": 1.076428
+              "max": 1.229469,
+              "min": 0.921806,
+              "p50": 0.969861,
+              "p95": 1.146718
             }
           }
         },
         "process_cpu_time_ms": {
           "count": 10,
-          "max": 864.57,
-          "min": 851.255,
-          "p50": 861.927,
-          "p95": 864.2469
+          "max": 880.554,
+          "min": 848.46,
+          "p50": 865.014,
+          "p95": 879.5028
         },
         "process_wall_time_ms": {
           "count": 10,
-          "max": 864.791756,
-          "min": 851.639974,
-          "p50": 862.008513,
-          "p95": 864.457418
+          "max": 880.615716,
+          "min": 848.602748,
+          "p50": 865.581692,
+          "p95": 879.648498
         },
         "rss_kib": {
           "end": {
             "count": 10,
-            "max": 137056.0,
-            "min": 134696.0,
-            "p50": 136958.0,
-            "p95": 137054.2,
+            "max": 139056.0,
+            "min": 134904.0,
+            "p50": 137038.0,
+            "p95": 138179.4,
             "supported": true
           },
           "peak": {
             "count": 10,
-            "max": 137056.0,
-            "min": 134696.0,
-            "p50": 136958.0,
-            "p95": 137054.2,
+            "max": 139056.0,
+            "min": 134904.0,
+            "p50": 137038.0,
+            "p95": 138179.4,
             "supported": true
           },
           "start": {
             "count": 10,
-            "max": 20360.0,
-            "min": 20236.0,
-            "p50": 20284.0,
-            "p95": 20358.2,
+            "max": 20416.0,
+            "min": 20256.0,
+            "p50": 20360.0,
+            "p95": 20403.4,
             "supported": true
           }
         },
         "sample_count": 10,
         "samples": [
           {
-            "full_diagnostic_fingerprint_sha256": "89f693c59040e4111aeb81c035e023fe4942c63371ecdd26a70642b4ab0480ff",
-            "process_cpu_time_ms": 860.941,
+            "full_diagnostic_fingerprint_sha256": "3547093cb26d1d6c90a5b076d4a34a5eed2f61f1648d9f3320b3fc0bf7da6046",
+            "process_cpu_time_ms": 848.46,
             "process_rss_kib": {
-              "end": 136916,
-              "peak": 136916,
-              "start": 20296
+              "end": 137076,
+              "peak": 137076,
+              "start": 20384
             },
-            "process_wall_time_ms": 861.029761,
+            "process_wall_time_ms": 848.602748,
             "returncode": 0,
-            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
-            "worker_cpu_time_ms": 783.414892,
-            "worker_wall_time_ms": 783.472766
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "34240ae2f59625df4e5f04b38a12c2379f1fcb36ad78417e6acf71b1ed94db3b",
-            "process_cpu_time_ms": 863.852,
-            "process_rss_kib": {
-              "end": 137012,
-              "peak": 137012,
-              "start": 20336
-            },
-            "process_wall_time_ms": 864.048783,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
-            "worker_cpu_time_ms": 781.323374,
-            "worker_wall_time_ms": 781.421195
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "f12e28570b7f86589f05bf5a802f019ec1ee65150f86c47b123658eb4adad4c7",
-            "process_cpu_time_ms": 862.913,
-            "process_rss_kib": {
-              "end": 136688,
-              "peak": 136688,
-              "start": 20236
-            },
-            "process_wall_time_ms": 862.987266,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "90a80ec30116637ce0a0087c21cb1027a77b3bc6889a2f8372dcc9c601820d40",
-            "worker_cpu_time_ms": 780.783131,
-            "worker_wall_time_ms": 780.818553
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "07a206cdaf732cf5ad80eee1d5ea9bdf5dcf674a61c1d72d7d7e312895227dd7",
-            "process_cpu_time_ms": 857.362,
-            "process_rss_kib": {
-              "end": 137056,
-              "peak": 137056,
-              "start": 20272
-            },
-            "process_wall_time_ms": 857.428645,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "99a3a9e513ca5076b8999c11e52a8c8a76b045001ca601ee8adbb64c6d83df69",
-            "worker_cpu_time_ms": 780.651264,
-            "worker_wall_time_ms": 780.848559
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "89f693c59040e4111aeb81c035e023fe4942c63371ecdd26a70642b4ab0480ff",
-            "process_cpu_time_ms": 860.853,
-            "process_rss_kib": {
-              "end": 137052,
-              "peak": 137052,
-              "start": 20356
-            },
-            "process_wall_time_ms": 860.84729,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
-            "worker_cpu_time_ms": 787.640523,
-            "worker_wall_time_ms": 787.644384
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "387d4760b606c939107b4ad550304c50244dc66dcbd93e081833b8981299a071",
-            "process_cpu_time_ms": 863.474,
-            "process_rss_kib": {
-              "end": 134944,
-              "peak": 134944,
-              "start": 20296
-            },
-            "process_wall_time_ms": 863.334583,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "b59de66b976dd534581784d9ae836b6a351a7ad202090769fd53e39be098129d",
-            "worker_cpu_time_ms": 784.758259,
-            "worker_wall_time_ms": 784.628969
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "f12e28570b7f86589f05bf5a802f019ec1ee65150f86c47b123658eb4adad4c7",
-            "process_cpu_time_ms": 863.751,
-            "process_rss_kib": {
-              "end": 137000,
-              "peak": 137000,
-              "start": 20260
-            },
-            "process_wall_time_ms": 863.576533,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "90a80ec30116637ce0a0087c21cb1027a77b3bc6889a2f8372dcc9c601820d40",
-            "worker_cpu_time_ms": 790.284854,
-            "worker_wall_time_ms": 790.013496
-          },
-          {
-            "full_diagnostic_fingerprint_sha256": "845d601830cf80ba035236913fa262d4b361974100b2ad7381bdbf0603df3b8f",
-            "process_cpu_time_ms": 864.57,
-            "process_rss_kib": {
-              "end": 135076,
-              "peak": 135076,
-              "start": 20256
-            },
-            "process_wall_time_ms": 864.791756,
-            "returncode": 0,
-            "semantic_fingerprint_sha256": "ff9ecb20266ba2a2d7712de0bec6ef497635a5071ca5d07460f7f44cce3efb63",
-            "worker_cpu_time_ms": 789.810648,
-            "worker_wall_time_ms": 790.04751
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 778.341758,
+            "worker_wall_time_ms": 778.528578
           },
           {
             "full_diagnostic_fingerprint_sha256": "95003091773d242c8a6fa850ac917ed9a5826f975e4d39d5d0f5e3d929f36507",
-            "process_cpu_time_ms": 859.296,
+            "process_cpu_time_ms": 878.218,
             "process_rss_kib": {
-              "end": 137016,
-              "peak": 137016,
-              "start": 20236
+              "end": 137036,
+              "peak": 137036,
+              "start": 20372
             },
-            "process_wall_time_ms": 859.604526,
+            "process_wall_time_ms": 878.466343,
             "returncode": 0,
-            "semantic_fingerprint_sha256": "856d71882ed9616296be334760d71bc0a8d58c7c4c61f74cf222caedaf40b1b4",
-            "worker_cpu_time_ms": 782.904462,
-            "worker_wall_time_ms": 783.08839
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 793.7241,
+            "worker_wall_time_ms": 793.916947
           },
           {
-            "full_diagnostic_fingerprint_sha256": "387d4760b606c939107b4ad550304c50244dc66dcbd93e081833b8981299a071",
-            "process_cpu_time_ms": 851.255,
+            "full_diagnostic_fingerprint_sha256": "89f693c59040e4111aeb81c035e023fe4942c63371ecdd26a70642b4ab0480ff",
+            "process_cpu_time_ms": 859.711,
             "process_rss_kib": {
-              "end": 134696,
-              "peak": 134696,
-              "start": 20360
+              "end": 137108,
+              "peak": 137108,
+              "start": 20276
             },
-            "process_wall_time_ms": 851.639974,
+            "process_wall_time_ms": 859.613453,
             "returncode": 0,
-            "semantic_fingerprint_sha256": "b59de66b976dd534581784d9ae836b6a351a7ad202090769fd53e39be098129d",
-            "worker_cpu_time_ms": 779.258463,
-            "worker_wall_time_ms": 779.530143
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 783.307341,
+            "worker_wall_time_ms": 783.240073
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "80a0aad158ce5ce50ae28302e1262655eb120755238f0107d5b24edaea3e5cae",
+            "process_cpu_time_ms": 858.685,
+            "process_rss_kib": {
+              "end": 136924,
+              "peak": 136924,
+              "start": 20348
+            },
+            "process_wall_time_ms": 858.654908,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 781.058861,
+            "worker_wall_time_ms": 781.149129
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "845d601830cf80ba035236913fa262d4b361974100b2ad7381bdbf0603df3b8f",
+            "process_cpu_time_ms": 868.619,
+            "process_rss_kib": {
+              "end": 137040,
+              "peak": 137040,
+              "start": 20416
+            },
+            "process_wall_time_ms": 869.367808,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 794.406,
+            "worker_wall_time_ms": 795.244078
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "34240ae2f59625df4e5f04b38a12c2379f1fcb36ad78417e6acf71b1ed94db3b",
+            "process_cpu_time_ms": 868.486,
+            "process_rss_kib": {
+              "end": 137008,
+              "peak": 137008,
+              "start": 20384
+            },
+            "process_wall_time_ms": 870.594743,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 789.763654,
+            "worker_wall_time_ms": 791.596324
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "34240ae2f59625df4e5f04b38a12c2379f1fcb36ad78417e6acf71b1ed94db3b",
+            "process_cpu_time_ms": 880.554,
+            "process_rss_kib": {
+              "end": 134908,
+              "peak": 134908,
+              "start": 20256
+            },
+            "process_wall_time_ms": 880.615716,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 793.715519,
+            "worker_wall_time_ms": 793.701776
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "afc1d767d01c1ab3ebb846149091ae894c63937ba91f4515d21bb67a21bd0845",
+            "process_cpu_time_ms": 853.037,
+            "process_rss_kib": {
+              "end": 137068,
+              "peak": 137068,
+              "start": 20276
+            },
+            "process_wall_time_ms": 853.029342,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 780.151941,
+            "worker_wall_time_ms": 780.243742
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "ce0770b37f3f7092fa32c78cb206232bf521b3591ce24b1c116944ad823ca357",
+            "process_cpu_time_ms": 870.441,
+            "process_rss_kib": {
+              "end": 134904,
+              "peak": 134904,
+              "start": 20256
+            },
+            "process_wall_time_ms": 870.546053,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 791.375457,
+            "worker_wall_time_ms": 791.410739
+          },
+          {
+            "full_diagnostic_fingerprint_sha256": "3f05af805d8afde0e0b501d8afa0407f3ccf67cc50ff29cb424ab454c7ec9084",
+            "process_cpu_time_ms": 861.542,
+            "process_rss_kib": {
+              "end": 139056,
+              "peak": 139056,
+              "start": 20388
+            },
+            "process_wall_time_ms": 861.795577,
+            "returncode": 0,
+            "semantic_fingerprint_sha256": "58abaab21ddf372580c0a35831642b59e1312cb5e62442e59999a31bf3f9273a",
+            "worker_cpu_time_ms": 785.008147,
+            "worker_wall_time_ms": 784.993257
           }
         ],
-        "stable_semantics": false
+        "stable_semantics": true
       },
       "compile_cwd": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb",
       "compile_log": "/home/robin/Projects/mcp_practise/uvm_demo_cc29/tb/work/elab.log",
@@ -837,7 +854,7 @@
             "ConstantConversion": 14,
             "DanglingElse": 1,
             "DuplicateImport": 1,
-            "DynamicCastConst": 45,
+            "DynamicCastConst": 47,
             "EmptyBody": 3,
             "EmptyOutputPortConn": 8,
             "EmptyStatement": 246,
@@ -860,7 +877,7 @@
           },
           "by_effective_severity": {
             "Error": 1,
-            "Ignored": 1615,
+            "Ignored": 1617,
             "Warning": 4
           },
           "explicitly_suppressed_unknown_system_count": 5,
@@ -924,7 +941,7 @@
               "column": 15,
               "file": "/tools/cadence/XCELIUM2603/tools.lnx86/methodology/UVM/CDNS-1.1d/sv/src/base/uvm_port_base.svh",
               "line": 714,
-              "message": "invalid operands to binary expression ('this_type' (aka 'uvm_port_base#(uvm_tlm_if_base#(T (aka 'uvm_reg_item'),T (aka 'uvm_reg_item')))') and 'bit')",
+              "message": "invalid operands to binary expression ('this_type' (aka 'uvm_port_base#(uvm_tlm_if_base#(T (aka 'uvm_sequence_item'),T (aka 'uvm_sequence_item')))') and 'bit')",
               "option": null,
               "severity": "Error"
             },
@@ -962,7 +979,7 @@
             "option": "-Wno-unknown-sys-name",
             "scope": "external simulator runtime hooks only"
           },
-          "total": 1620
+          "total": 1622
         },
         "frontend": {
           "name": "Slang/pyslang",
@@ -1005,53 +1022,53 @@
         },
         "phase_measurements": {
           "elaboration": {
-            "cpu_time_ms": 205.855489,
-            "rss_end_kib": 132060,
-            "rss_peak_kib": 132060,
-            "rss_start_kib": 76296,
-            "wall_time_ms": 206.601926
+            "cpu_time_ms": 203.152486,
+            "rss_end_kib": 132280,
+            "rss_peak_kib": 132280,
+            "rss_start_kib": 76500,
+            "wall_time_ms": 203.914401
           },
           "frontend_import": {
-            "cpu_time_ms": 49.896784,
-            "rss_end_kib": 40548,
-            "rss_peak_kib": 40548,
-            "rss_start_kib": 20296,
-            "wall_time_ms": 50.098298
+            "cpu_time_ms": 51.984745,
+            "rss_end_kib": 40604,
+            "rss_peak_kib": 40604,
+            "rss_start_kib": 20384,
+            "wall_time_ms": 52.22555
           },
           "object_extraction": {
-            "cpu_time_ms": 409.015034,
-            "rss_end_kib": 136916,
-            "rss_peak_kib": 136916,
-            "rss_start_kib": 132060,
-            "wall_time_ms": 410.021064
+            "cpu_time_ms": 403.942108,
+            "rss_end_kib": 137076,
+            "rss_peak_kib": 137076,
+            "rss_start_kib": 132280,
+            "wall_time_ms": 404.970248
           },
           "parse": {
-            "cpu_time_ms": 58.351658,
-            "rss_end_kib": 76296,
-            "rss_peak_kib": 76296,
-            "rss_start_kib": 57392,
-            "wall_time_ms": 56.192016
+            "cpu_time_ms": 59.572412,
+            "rss_end_kib": 76500,
+            "rss_peak_kib": 76500,
+            "rss_start_kib": 57476,
+            "wall_time_ms": 57.508729
           },
           "parse_setup": {
-            "cpu_time_ms": 0.84695,
-            "rss_end_kib": 57392,
-            "rss_peak_kib": 61612,
-            "rss_start_kib": 57392,
-            "wall_time_ms": 0.852087
+            "cpu_time_ms": 0.864073,
+            "rss_end_kib": 57476,
+            "rss_peak_kib": 61700,
+            "rss_start_kib": 57476,
+            "wall_time_ms": 0.868888
           },
           "preprocess": {
-            "cpu_time_ms": 51.473315,
-            "rss_end_kib": 57392,
-            "rss_peak_kib": 61612,
-            "rss_start_kib": 40992,
-            "wall_time_ms": 51.742851
+            "cpu_time_ms": 51.034229,
+            "rss_end_kib": 57476,
+            "rss_peak_kib": 61700,
+            "rss_start_kib": 41108,
+            "wall_time_ms": 51.263999
           },
           "preprocess_setup": {
-            "cpu_time_ms": 0.951337,
-            "rss_end_kib": 40992,
-            "rss_peak_kib": 40992,
-            "rss_start_kib": 40548,
-            "wall_time_ms": 0.95623
+            "cpu_time_ms": 0.960203,
+            "rss_end_kib": 41108,
+            "rss_peak_kib": 41108,
+            "rss_start_kib": 40604,
+            "wall_time_ms": 0.965959
           }
         },
         "phase_semantics": {
@@ -1061,9 +1078,9 @@
           "preprocess": "independent Driver.runPreprocessor pass; emitted text discarded"
         },
         "process_rss_kib": {
-          "end": 136916,
-          "peak": 136916,
-          "start": 20296
+          "end": 137076,
+          "peak": 137076,
+          "start": 20384
         },
         "recovered": {
           "count_scope": "facts exposed by pyslang's syntax trees, source manager, compilation, and elaborated symbol visitor; not inferred graph edges",
@@ -3282,8 +3299,8 @@
           ]
         },
         "status": "blocked",
-        "worker_cpu_time_ms": 783.414892,
-        "worker_wall_time_ms": 783.472766
+        "worker_cpu_time_ms": 778.341758,
+        "worker_wall_time_ms": 778.528578
       },
       "simulator": "xcelium",
       "simulator_version": "26.03-s001-20260323",

@@ -434,18 +434,35 @@ def test_assessment_does_not_request_second_frontend_without_a_key_gap():
     assert assessment["cold_frontend_worker_model"]["recommendation"] == (
         "isolated_worker_process"
     )
+    assert assessment["cache_fingerprint_contract"]["recommendation"] == (
+        "semantic_identity_not_full_diagnostic_payload"
+    )
+    assert (
+        "formatted diagnostic message text"
+        in assessment["cache_fingerprint_contract"]["excludes"]
+    )
 
 
 def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
     worker = {
-        "status": "supported",
+        "status": "blocked",
         "frontend": {"name": "Slang/pyslang", "version": "11.0.0"},
         "diagnostics": {
-            "total": 10,
-            "blocking_error_count": 0,
-            "by_code": {"AdvisoryLint": 10},
-            "by_effective_severity": {"Ignored": 10},
-            "items": [],
+            "total": 11,
+            "blocking_error_count": 1,
+            "by_code": {"AdvisoryLint": 10, "BadBinaryExpression": 1},
+            "by_effective_severity": {"Error": 1, "Ignored": 10},
+            "items": [
+                {
+                    "code": "BadBinaryExpression",
+                    "option": None,
+                    "severity": "Error",
+                    "message": "specialization T=first",
+                    "file": "/vendor/uvm.svh",
+                    "line": 714,
+                    "column": 15,
+                }
+            ],
             "items_truncated": False,
             "explicitly_suppressed_unknown_system_count": 0,
         },
@@ -456,15 +473,22 @@ def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
             "procedural_blocks": [],
             "object_counts": {},
         },
-        "blockers": [],
+        "blockers": [
+            {
+                "code": "blocking_frontend_diagnostics",
+                "phase": "elaboration",
+                "message": "1 effective error remains",
+            }
+        ],
         "phase_measurements": {},
         "worker_wall_time_ms": 1.0,
         "worker_cpu_time_ms": 1.0,
         "process_rss_kib": {"start": 10, "peak": 20, "end": 20},
     }
     jittered = deepcopy(worker)
-    jittered["diagnostics"]["total"] = 12
+    jittered["diagnostics"]["total"] = 13
     jittered["diagnostics"]["by_code"]["AdvisoryLint"] = 12
+    jittered["diagnostics"]["items"][0]["message"] = "specialization T=second"
     receipt = {"process_wall_time_ms": 2.0, "process_cpu_time_ms": 2.0}
 
     result = spike._summarize_workload(
@@ -487,3 +511,13 @@ def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
         "p95": 11.9,
         "max": 12.0,
     }
+    assert spike._diagnostic_semantic_identities(worker["diagnostics"]) == [
+        {
+            "code": "BadBinaryExpression",
+            "option": None,
+            "severity": "Error",
+            "file": "/vendor/uvm.svh",
+            "line": 714,
+            "column": 15,
+        }
+    ]

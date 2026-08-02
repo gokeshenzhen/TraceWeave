@@ -1849,6 +1849,22 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _diagnostic_semantic_identities(
+    diagnostics: dict[str, Any],
+) -> list[dict[str, Any]]:
+    fields = ("code", "option", "severity", "file", "line", "column")
+    identities = [
+        {field: item.get(field) for field in fields}
+        for item in (diagnostics.get("items") or [])
+    ]
+    return sorted(
+        identities,
+        key=lambda item: tuple(
+            "" if item[field] is None else str(item[field]) for field in fields
+        ),
+    )
+
+
 def _semantic_projection(worker: dict[str, Any]) -> dict[str, Any]:
     diagnostics = worker.get("diagnostics") or {}
     return {
@@ -1856,15 +1872,16 @@ def _semantic_projection(worker: dict[str, Any]) -> dict[str, Any]:
         "frontend": worker.get("frontend"),
         # Ignore purely advisory diagnostic aggregate jitter when deciding
         # whether recovered connectivity semantics are stable.  Blocking
-        # counts and every emitted error/warning/unknown-system receipt remain
-        # part of this projection; full diagnostic stability is reported
-        # separately by _summarize_workload.
+        # counts and every emitted error/warning/unknown-system identity remain
+        # part of this projection. Formatted messages can name whichever generic
+        # specialization Slang visited first, so they remain in the evidence but
+        # are not cache identity. Full diagnostic stability is reported separately.
         "diagnostics": {
             "blocking_error_count": diagnostics.get("blocking_error_count"),
             "explicitly_suppressed_unknown_system_count": diagnostics.get(
                 "explicitly_suppressed_unknown_system_count"
             ),
-            "items": diagnostics.get("items") or [],
+            "item_identities": _diagnostic_semantic_identities(diagnostics),
             "items_truncated": diagnostics.get("items_truncated"),
         },
         "recovered": worker.get("recovered"),
@@ -2331,6 +2348,27 @@ def _assessment(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "reason": (
                 "preserves hard timeout/crash and RSS isolation for a native frontend; "
                 "future session caching can keep a successful worker warm"
+            ),
+        },
+        "cache_fingerprint_contract": {
+            "recommendation": "semantic_identity_not_full_diagnostic_payload",
+            "includes": [
+                "frontend name and version",
+                "blocking diagnostic count",
+                "diagnostic code/severity/file/line/column/option identities",
+                "suppressed unknown-system count",
+                "recovered frontend objects",
+                "explicit blockers",
+            ],
+            "excludes": [
+                "formatted diagnostic message text",
+                "advisory or ignored diagnostic aggregate counts",
+                "timing and RSS measurements",
+            ],
+            "reason": (
+                "generic specialization order can change formatted diagnostic text "
+                "and advisory counts without changing source location, blocker, or "
+                "recovered connectivity facts"
             ),
         },
         "open_questions": [
