@@ -1,0 +1,162 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Development-only hand annotation and successful Xcelium elaboration evidence for the OpenTitan Phase 0B scale comparison; automated tests do not load this file.",
+  "assessment_context": {
+    "evidence_receipt": {
+      "scope": "Explicit repository-level Phase 0B synthesis across the original three Slang workloads, cc29 Xcelium/FSDB evidence, the Surelog comparison, and this OpenTitan scale workload.",
+      "results": [
+        {
+          "path": "benchmarks/source_graph_frontend_phase0b_results.json",
+          "sha256": "de7419972500a7706856ee82a08d2bf1f732b1effe10bf3f7054b22083a84f75"
+        },
+        {
+          "path": "benchmarks/source_graph_frontend_phase0b_xcelium_slang_results.json",
+          "sha256": "2fe0df2604e78402790200b4c593a22cc847494fa5d08c4902a2062ac7c0cea1"
+        },
+        {
+          "path": "benchmarks/source_graph_frontend_phase0b_surelog_results.json",
+          "sha256": "3591ff7346bfd883ea288d92db429ce9c10a49e5d009002c93091fc5ca8d17e4"
+        },
+        {
+          "path": "benchmarks/source_graph_frontend_phase0b_opentitan_results.json",
+          "sha256_receipt": "benchmarks/source_graph_frontend_phase0b_opentitan_worker_model.json"
+        }
+      ]
+    },
+    "assessment_overrides": {
+      "slang_primary_frontend": {
+        "decision": "recommended_for_phase_1_prototype_with_known_limitations",
+        "production_status": "not_implemented_not_production_validated",
+        "scope": "Primary for the prototype and synthesizable/core hierarchy; full OpenTitan UVM, bind, procedural-force, and simulator-extension semantics remain incomplete."
+      },
+      "surelog_uhdm_comparison": {
+        "performed": true,
+        "fallback_needed": false,
+        "fallback_selected": false,
+        "capability_gap_remains": true,
+        "reason": "Slang's evidenced gaps triggered comparison, but pinned sc-surelog 1.84.1 segfaulted before producing a recovered top or UHDM objects on the smaller cc29 Xcelium workload; the official 1.86 source fetch was network-blocked and is availability evidence only. No automatic Surelog/UHDM fallback is justified."
+      },
+      "dependency_model": {
+        "recommendation": "optional_extra",
+        "base_dependency": false,
+        "bundled_artifact": false,
+        "validated_platform": "CPython 3.11 Linux x86_64 manylinux wheel only",
+        "unsupported_platform_policy": "structured optional-dependency blocker; no global install, silent source build, or bundled fallback"
+      },
+      "cold_frontend_worker_model": {
+        "recommendation": "isolated_worker_process",
+        "default_admission": "one active cold build per server until Phase 1 adds memory-aware single-flight/resource admission",
+        "reason": "The 2s timeout test reaped the worker without residue, native crash containment is required, and OpenTitan peaks near 2.14 GiB RSS per worker."
+      },
+      "open_questions": [],
+      "known_limitations": [
+        "The full OpenTitan chip workload has 65 stable effective Slang errors: unresolved bind/hierarchical paths, procedural-force/runtime assertion constructs, Cadence UVM extension hooks, and UVM sequence type conversions. The result remains blocked even though all annotated hierarchy/file-line oracles match.",
+        "Native DPI implementations and simulator runtime system tasks are outside HDL connectivity; encrypted payloads or missing simulator-provided source libraries are explicit blockers, never silent fallback.",
+        "Aggregate frontend visitor counts can vary with native specialization traversal and are reported benchmark facts, not cache/connectivity identity."
+      ],
+      "phase_1_acceptance_items": [
+        "Implement and validate Connectivity IR edge semantics for named/positional ports, slice/concat bit mapping, continuous/procedural drivers, and sequential dependencies.",
+        "Measure persistent-worker warm behavior, cache artifact size, storage-cold build, cancellation during projection, and single-flight only after the Phase 1 worker/cache design exists.",
+        "Keep explicit coverage/inconclusive receipts for unsupported bind, force, protected-source, DPI, and simulator-extension regions; do not call partial OpenTitan elaboration production-accurate."
+      ]
+    }
+  },
+  "workloads": {
+    "real_uvm": {
+      "annotated_source": {
+        "available": true,
+        "top": "tb",
+        "expected_instance_paths": [
+          "tb",
+          "tb.dut",
+          "tb.dut.top_earlgrey",
+          "tb.dut.top_earlgrey.u_rv_core_ibex",
+          "tb.dut.top_earlgrey.u_xbar_main"
+        ],
+        "expected_source_locations": [
+          {
+            "kind": "definition",
+            "name": "tb",
+            "file_suffix": "lowrisc_dv_top_earlgrey_chip_sim_0.1/tb/tb.sv",
+            "line": 5
+          },
+          {
+            "kind": "definition",
+            "name": "chip_earlgrey_asic",
+            "file_suffix": "lowrisc_systems_chip_earlgrey_asic_0.1/rtl/autogen/chip_earlgrey_asic.sv",
+            "line": 12
+          },
+          {
+            "kind": "definition",
+            "name": "top_earlgrey",
+            "file_suffix": "lowrisc_systems_top_earlgrey_0.1/rtl/autogen/top_earlgrey.sv",
+            "line": 11
+          }
+        ],
+        "evidence": {
+          "method": "line-numbered inspection of the exact FuseSoC work tree compiled by Xcelium",
+          "opentitan_commit": "5b8f6746131e231116e685585432b70359d2c727",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "xcelium_elaboration": {
+        "available": true,
+        "top": "tb",
+        "expected_instance_paths": [
+          "tb",
+          "tb.dut",
+          "tb.dut.top_earlgrey",
+          "tb.dut.top_earlgrey.u_rv_core_ibex",
+          "tb.dut.top_earlgrey.u_xbar_main"
+        ],
+        "evidence": {
+          "simulator": "Xcelium 26.03-s001-20260323",
+          "source": "/tools/cadence/XCELIUM2603",
+          "flow": "OpenTitan util/dvsim/dvsim.py chip_sw_uart_smoketest --build-only",
+          "invocation": "env XDG_CONFIG_HOME=/tmp/traceweave-phase0b-opentitan-xdg PATH=/tmp/traceweave-phase0b-opentitan-tools/bin:/tools/cadence/XCELIUM2603/tools/bin/64bit:/tools/cadence/XCELIUM2603/tools/bin:/usr/local/bin:/usr/bin:/bin /tmp/traceweave-phase0b-opentitan-tools/bin/python util/dvsim/dvsim.py hw/top_earlgrey/dv/chip_sim_cfg.hjson --tool xcelium --scratch-root /tmp/traceweave-phase0b-opentitan-dvsim --branch phase0b-cold --local --max-parallel 1 --build-only --items chip_sw_uart_smoketest --print-interval 10 --build-timeout-mins 15 --build-opts=-L/tmp/traceweave-phase0b-opentitan-lib",
+          "working_directory": "/home/robin/Projects/opentitan",
+          "isolated_dependencies": "/tmp/traceweave-phase0b-opentitan-tools",
+          "isolated_fusesoc_config": "/tmp/traceweave-phase0b-opentitan-xdg/fusesoc/fusesoc.conf",
+          "isolated_link_shim": "/tmp/traceweave-phase0b-opentitan-lib/libelf.so -> /usr/lib64/libelf.so.1",
+          "exit_status": 0,
+          "compile_errors": 0,
+          "compile_warnings": 12,
+          "wall_time_seconds": 69.48,
+          "cpu_time_seconds": 68.79,
+          "peak_rss_kib": 642792,
+          "tool_reported_total_seconds": 59,
+          "hierarchy_counts": {
+            "module_instances": 31623,
+            "unique_modules": 503,
+            "interface_instances": 506,
+            "unique_interfaces": 46,
+            "packages": 198,
+            "registers": 408970,
+            "unique_registers": 88811,
+            "always_blocks": 106313,
+            "unique_always_blocks": 10830,
+            "initial_blocks": 33179,
+            "unique_initial_blocks": 4008,
+            "assertions": 40627,
+            "unique_assertions": 2549,
+            "class_declarations": 1859,
+            "unique_class_declarations": 1568,
+            "class_specializations": 3781
+          },
+          "count_comparison_policy": "Reference facts only: Xcelium report categories and pyslang visitor categories are not definitionally identical, so exact count equality is not asserted.",
+          "artifact_role": "local_development_oracle",
+          "artifact_tracked": false
+        }
+      },
+      "fsdb_hierarchy": {
+        "available": false,
+        "blocker": "The selected official OpenTitan run was build-only and produced no waveform; FSDB hierarchy/path naming was already checked on the cc29 real Xcelium workload."
+      },
+      "kdb_npi": {
+        "available": false,
+        "blocker": "No KDB accompanies the OpenTitan Xcelium build; NPI remains a development oracle only and is not a frontend or automated-test dependency."
+      }
+    }
+  }
+}

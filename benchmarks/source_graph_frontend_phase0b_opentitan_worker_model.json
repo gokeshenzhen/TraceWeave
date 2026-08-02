@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Phase 0B isolated-worker timeout and concurrent-cold-build evidence for the OpenTitan Slang workload; this is a benchmark receipt, not a production worker, cache, or single-flight implementation.",
+  "workload_result": {
+    "path": "benchmarks/source_graph_frontend_phase0b_opentitan_results.json",
+    "sha256": "77c0d121064eb05c7253ba8f4120e32ad93317fbaa62c46b63ec850aac32f983"
+  },
+  "hard_timeout": {
+    "invocation": "/tmp/traceweave-phase0b-pyslang-11.0.0/bin/python scripts/spike_source_frontend.py --frontend-python /tmp/traceweave-phase0b-pyslang-11.0.0/bin/python --workload real_uvm --real-compile-log /tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/xrun.log --real-simulator xcelium --oracle-json benchmarks/source_graph_frontend_phase0b_opentitan_oracles.json --cold-repeats 1 --child-timeout-seconds 2 --output benchmarks/source_graph_frontend_phase0b_opentitan_timeout_results.json",
+    "configured_timeout_seconds": 2.0,
+    "observed_parent_wall_seconds": 2.5,
+    "result": {
+      "path": "benchmarks/source_graph_frontend_phase0b_opentitan_timeout_results.json",
+      "sha256": "3b044f148713cc17742c275f82ee5f911f195813c145dd4e7ba3da7ff26fd8a1",
+      "status": "blocked",
+      "blocker_code": "worker_timeout",
+      "blocker_message": "frontend worker exceeded 2s"
+    },
+    "residual_process_check": {
+      "command": "ps -ef | rg '[s]pike_source_frontend.py --_worker-spec'",
+      "matching_process_count": 0
+    },
+    "fallback_performed": false
+  },
+  "two_worker_concurrency": {
+    "method": "Start two independent one-sample OpenTitan spike parents in one shell, wait for both, and measure the shell with GNU time. Both frontend workers use separate processes and overlap in wall time.",
+    "overall": {
+      "elapsed_seconds": 55.51,
+      "user_seconds": 106.29,
+      "system_seconds": 3.62,
+      "gnu_time_max_child_rss_kib": 2136760,
+      "parent_exit_status": 0,
+      "child_exit_statuses": [
+        3,
+        3
+      ],
+      "child_status_interpretation": "Both children emitted valid blocked feasibility results because the same 65 frontend diagnostics remain; neither crashed or timed out."
+    },
+    "workers": [
+      {
+        "label": "a",
+        "ephemeral_result": "/tmp/traceweave-phase0b-opentitan-concurrent-a.json",
+        "result_sha256": "722d9bfdb6651086fa83be748a5c3d8fbbc00b100d935154c93be692a4e78dca",
+        "process_wall_time_ms": 55093.140813,
+        "process_cpu_time_ms": 54734.41,
+        "peak_rss_kib": 2136692,
+        "blocking_error_count": 65,
+        "instance_count": 32169,
+        "variable_count": 319721,
+        "oracle_match": true,
+        "full_diagnostic_fingerprint_sha256": "69cd30b6a50b541149faf83c81fb4c5866c9edbe93d49a4a854b981547a2fcaa",
+        "retained_evidence_fingerprint_sha256": "84faa0b96981cd4326d75325ce98eb5ce96ec4e6f4ec76173545c632b39f78e7"
+      },
+      {
+        "label": "b",
+        "ephemeral_result": "/tmp/traceweave-phase0b-opentitan-concurrent-b.json",
+        "result_sha256": "693d0a3fef63d28fd542be8e5b77fc89fda2607b5abf9679807aeacdc7c1b99b",
+        "process_wall_time_ms": 54429.629793,
+        "process_cpu_time_ms": 54348.355,
+        "peak_rss_kib": 2136760,
+        "blocking_error_count": 65,
+        "instance_count": 32169,
+        "variable_count": 319762,
+        "oracle_match": true,
+        "full_diagnostic_fingerprint_sha256": "69cd30b6a50b541149faf83c81fb4c5866c9edbe93d49a4a854b981547a2fcaa",
+        "retained_evidence_fingerprint_sha256": "cc7f6084880e1d9e3f305a3150b9e6342d4af50454d2dfeffb5b18b08abb33fe"
+      }
+    ],
+    "current_semantic_projection": {
+      "recomputed_worker_a_sha256": "54a32767407c0a1119b70d4005fa5cc5d39b661e0ebb46d1ac0607a3da4fb0ca",
+      "recomputed_worker_b_sha256": "54a32767407c0a1119b70d4005fa5cc5d39b661e0ebb46d1ac0607a3da4fb0ca",
+      "difference_excluded_from_semantic_identity": "symbols_by_kind.Variable aggregate was 319721 versus 319762; exact diagnostics, tops, definitions, instance count, and oracle memberships matched.",
+      "policy": "Aggregate frontend visitor counts remain reported facts but are not connectivity or cache identity."
+    },
+    "memory_interpretation": {
+      "sum_of_individual_peak_rss_kib": 4273452,
+      "sum_is": "a conservative inferred bound, not a sampled aggregate process-tree peak",
+      "overlap_evidence": "Overall 55.51s wall is approximately one worker wall, while user+system CPU is approximately the sum of both workers."
+    }
+  },
+  "decision": {
+    "cold_frontend_model": "isolated_worker_process",
+    "default_cold_build_admission": "one active cold frontend build per TraceWeave server until Phase 1 implements memory-aware single-flight/resource admission",
+    "reasons": [
+      "A native frontend needs hard timeout and crash containment.",
+      "The measured large workload peaks near 2.14 GiB RSS per worker.",
+      "A two-worker run overlaps successfully but requires a conservative combined memory budget near 4.27 GiB.",
+      "A thread cannot reclaim a crashed or wedged native frontend or release its process RSS independently."
+    ],
+    "persistent_warm_worker_measured": false,
+    "persistent_warm_worker_policy": "No persistent worker or cache is implemented in Phase 0B. Fresh-process samples with uncontrolled OS page cache must not be labeled cache hits; persistent-worker/cache behavior is a Phase 1 acceptance measurement."
+  }
+}
