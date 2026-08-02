@@ -38,6 +38,31 @@ def test_dependency_receipt_pins_the_isolated_cp311_wheel_by_hash():
     assert receipt["system_python_modified"] is False
     assert "--only-binary=:all:" in receipt["reproduction_commands"][1]
     assert "--require-hashes" in receipt["reproduction_commands"][1]
+    assert receipt["platform_policy"]["validated_target"].startswith("CPython 3.11")
+
+
+def test_frontend_platform_policy_never_silently_builds_an_unvalidated_wheel():
+    supported = spike._frontend_platform_policy(
+        system="Linux",
+        machine="x86_64",
+        implementation="CPython",
+        python_major=3,
+        python_minor=11,
+    )
+    unsupported = spike._frontend_platform_policy(
+        system="Darwin",
+        machine="arm64",
+        implementation="CPython",
+        python_major=3,
+        python_minor=12,
+    )
+
+    assert supported["status"] == "validated_binary_wheel_platform"
+    assert unsupported["status"] == "optional_extra_dependency_blocker"
+    assert unsupported["source_build_evaluated"] is False
+    assert "do not infer frontend incompatibility" in unsupported[
+        "unsupported_platform_policy"
+    ]
 
 
 def test_hand_fixture_and_oracle_cover_required_frontend_features():

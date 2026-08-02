@@ -2671,6 +2671,49 @@ def _dependency_receipt(frontend_python: Path) -> dict[str, Any]:
             ),
         ],
         "system_python_modified": False,
+        "platform_policy": _frontend_platform_policy(
+            system=platform.system(),
+            machine=platform.machine(),
+            implementation=platform.python_implementation(),
+            python_major=sys.version_info.major,
+            python_minor=sys.version_info.minor,
+        ),
+    }
+
+
+def _frontend_platform_policy(
+    *,
+    system: str,
+    machine: str,
+    implementation: str,
+    python_major: int,
+    python_minor: int,
+) -> dict[str, Any]:
+    supported = (
+        system == "Linux"
+        and machine in {"x86_64", "AMD64"}
+        and implementation == "CPython"
+        and (python_major, python_minor) == (3, 11)
+    )
+    return {
+        "status": (
+            "validated_binary_wheel_platform"
+            if supported
+            else "optional_extra_dependency_blocker"
+        ),
+        "validated_target": "CPython 3.11 Linux x86_64 manylinux_2_27/2_28",
+        "detected": {
+            "system": system,
+            "machine": machine,
+            "implementation": implementation,
+            "python": f"{python_major}.{python_minor}",
+        },
+        "source_build_evaluated": False,
+        "unsupported_platform_policy": (
+            "report the optional frontend dependency as unavailable; do not infer "
+            "frontend incompatibility, install globally, source-build, or bundle an "
+            "unvalidated artifact"
+        ),
     }
 
 
