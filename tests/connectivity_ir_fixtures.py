@@ -563,7 +563,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
         ports=(
             _plain_port("clk", PortDirection.INPUT, 1, 0, HAND_RTL, 54),
             _plain_port("rst_n", PortDirection.INPUT, 1, 1, HAND_RTL, 55),
-            _interface_port("bus", "sg_bus_if", "consumer", 2, 56),
+            _interface_port("bus", "sg_bus_if#WIDTH=16", "consumer", 2, 56),
             _plain_port("lane_data", PortDirection.OUTPUT, 16, 3, HAND_RTL, 57),
         ),
         assignments=(
@@ -595,7 +595,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
             _plain_port("clk", PortDirection.INPUT, 1, 0, HAND_RTL, 72),
             _plain_port("rst_n", PortDirection.INPUT, 1, 1, HAND_RTL, 73),
             _plain_port("seed", PortDirection.OUTPUT, 16, 2, HAND_RTL, 74),
-            _interface_port("bus", "sg_bus_if", "producer", 3, 75),
+            _interface_port("bus", "sg_bus_if#WIDTH=16", "producer", 3, 75),
         ),
         assignments=(
             AssignmentFact(

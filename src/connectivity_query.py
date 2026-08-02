@@ -360,6 +360,9 @@ class ConnectivityQueryEngine:
         return interface_definition.direct_signal_range(member_name)
 
     def _definition_by_name(self, name: str) -> DefinitionTemplate:
+        exact = self._definitions.get(name)
+        if exact is not None:
+            return exact
         matches = [item for item in self.ir.definitions if item.name == name]
         if len(matches) != 1:
             raise KeyError(f"interface definition {name!r} is not uniquely available")
