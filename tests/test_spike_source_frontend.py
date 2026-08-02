@@ -662,6 +662,36 @@ def test_assessment_does_not_request_second_frontend_without_a_key_gap():
     )
 
 
+def test_assessment_context_combines_explicit_repository_evidence_without_mutation():
+    base = spike._assessment([])
+    context = {
+        "assessment_overrides": {
+            "slang_primary_frontend": {"decision": "conditional_primary"},
+            "surelog_uhdm_comparison": {
+                "performed": True,
+                "fallback_selected": False,
+            },
+            "open_questions": [],
+            "known_limitations": ["bind gap"],
+            "phase_1_acceptance_items": ["IR edge fidelity"],
+        },
+        "evidence_receipt": {"results": ["tracked.json"]},
+    }
+
+    combined = spike._apply_assessment_context(base, context)
+
+    assert combined["slang_primary_frontend"]["decision"] == "conditional_primary"
+    assert combined["surelog_uhdm_comparison"]["performed"] is True
+    assert combined["surelog_uhdm_comparison"]["fallback_selected"] is False
+    assert combined["open_questions"] == []
+    assert combined["known_limitations"] == ["bind gap"]
+    assert combined["phase_1_acceptance_items"] == ["IR edge fidelity"]
+    assert combined["repository_evidence_context"] == {
+        "results": ["tracked.json"]
+    }
+    assert base["slang_primary_frontend"]["decision"] != "conditional_primary"
+
+
 def test_semantic_stability_separates_advisory_diagnostic_count_jitter():
     worker = {
         "status": "blocked",

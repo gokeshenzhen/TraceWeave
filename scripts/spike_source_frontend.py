@@ -2871,6 +2871,35 @@ def _assessment(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _apply_assessment_context(
+    assessment: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge an explicit multi-result evidence receipt into one spike result."""
+    result = dict(assessment)
+    overrides = context.get("assessment_overrides")
+    if not isinstance(overrides, dict):
+        return result
+    mapping_keys = {
+        "slang_primary_frontend",
+        "surelog_uhdm_comparison",
+        "dependency_model",
+        "cold_frontend_worker_model",
+    }
+    list_keys = {"open_questions", "known_limitations", "phase_1_acceptance_items"}
+    for key in mapping_keys:
+        value = overrides.get(key)
+        if isinstance(value, dict):
+            result[key] = {**(result.get(key) or {}), **value}
+    for key in list_keys:
+        value = overrides.get(key)
+        if isinstance(value, list):
+            result[key] = list(value)
+    evidence_receipt = context.get("evidence_receipt")
+    if isinstance(evidence_receipt, dict):
+        result["repository_evidence_context"] = evidence_receipt
+    return result
+
+
 def run_spike(args: argparse.Namespace) -> dict[str, Any]:
     # Preserve a virtual-environment launcher as such.  Path.resolve() follows
     # ``bin/python`` to the base interpreter and silently loses the isolated
@@ -2986,13 +3015,17 @@ def run_spike(args: argparse.Namespace) -> dict[str, Any]:
         status = "blocked"
     else:
         status = "partial"
+    assessment = _assessment(results)
+    assessment_context = oracle_doc.get("assessment_context")
+    if isinstance(assessment_context, dict):
+        assessment = _apply_assessment_context(assessment, assessment_context)
     return {
         **base,
         "status": status,
         "workload_count": len(results),
         "cold_repeats_per_workload": args.cold_repeats,
         "workloads": results,
-        "assessment": _assessment(results),
+        "assessment": assessment,
     }
 
 
