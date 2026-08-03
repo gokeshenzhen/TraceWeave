@@ -25,9 +25,11 @@ from typing import Any, Mapping, Sequence
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 
 
-SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "1.0"
+SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "2.0"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
 SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.0"
+DEFAULT_PATH_TRAVERSAL_LIMIT = 4096
+DEFAULT_PATH_OUTPUT_LIMIT = 256
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -35,6 +37,7 @@ _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 class QueryOperation(str, Enum):
     DRIVER = "driver"
     LOADS = "loads"
+    PATH = "path"
 
 
 class BoundaryMode(str, Enum):
@@ -254,6 +257,8 @@ class ConnectivityTarget:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "operation", QueryOperation(self.operation))
+        if self.operation is QueryOperation.PATH:
+            raise ValueError("path queries require a dual-endpoint path target")
         signal_path = _hier_path(self.signal_path, "target signal_path")
         if "." not in signal_path:
             raise ValueError("target signal_path must include an instance and signal")
@@ -278,6 +283,179 @@ class ConnectivityTarget:
         return cls(
             operation=QueryOperation(value["operation"]),
             signal_path=value["signal_path"],
+        )
+
+
+def _positive_limit(value: int, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
+
+
+@dataclass(frozen=True)
+class ConnectivityPathTarget:
+    """Target-specific identity for one bounded structural path query."""
+
+    operation: QueryOperation
+    from_signal: str
+    to_signal: str
+    from_instance_path: str
+    to_instance_path: str
+    expand_assigns: bool = False
+    traversal_limit: int = DEFAULT_PATH_TRAVERSAL_LIMIT
+    output_limit: int = DEFAULT_PATH_OUTPUT_LIMIT
+
+    def __post_init__(self) -> None:
+        operation = QueryOperation(self.operation)
+        if operation is not QueryOperation.PATH:
+            raise ValueError("dual-endpoint target operation must be path")
+        object.__setattr__(self, "operation", operation)
+        for field_name in ("from_signal", "to_signal"):
+            signal_path = _hier_path(
+                getattr(self, field_name), f"path target {field_name}"
+            )
+            if "." not in signal_path:
+                raise ValueError(
+                    f"path target {field_name} must include an instance and signal"
+                )
+            object.__setattr__(self, field_name, signal_path)
+        for endpoint in ("from", "to"):
+            instance_field = f"{endpoint}_instance_path"
+            signal_field = f"{endpoint}_signal"
+            instance_path = _hier_path(
+                getattr(self, instance_field), f"path target {instance_field}"
+            )
+            signal_path = getattr(self, signal_field)
+            if not signal_path.startswith(f"{instance_path}."):
+                raise ValueError(
+                    f"path target {signal_field} must be within {instance_field}"
+                )
+            object.__setattr__(self, instance_field, instance_path)
+        if not isinstance(self.expand_assigns, bool):
+            raise ValueError("path target expand_assigns must be boolean")
+        object.__setattr__(
+            self,
+            "traversal_limit",
+            _positive_limit(self.traversal_limit, "path traversal_limit"),
+        )
+        object.__setattr__(
+            self,
+            "output_limit",
+            _positive_limit(self.output_limit, "path output_limit"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation.value,
+            "from_signal": self.from_signal,
+            "to_signal": self.to_signal,
+            "from_instance_path": self.from_instance_path,
+            "to_instance_path": self.to_instance_path,
+            "expand_assigns": self.expand_assigns,
+            "traversal_limit": self.traversal_limit,
+            "output_limit": self.output_limit,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> ConnectivityPathTarget:
+        return cls(
+            operation=QueryOperation(value["operation"]),
+            from_signal=value["from_signal"],
+            to_signal=value["to_signal"],
+            from_instance_path=value["from_instance_path"],
+            to_instance_path=value["to_instance_path"],
+            expand_assigns=value.get("expand_assigns", False),
+            traversal_limit=value.get("traversal_limit", DEFAULT_PATH_TRAVERSAL_LIMIT),
+            output_limit=value.get("output_limit", DEFAULT_PATH_OUTPUT_LIMIT),
+        )
+
+
+def _target_from_dict(
+    value: Mapping[str, Any],
+) -> ConnectivityTarget | ConnectivityPathTarget:
+    operation = QueryOperation(value["operation"])
+    if operation is QueryOperation.PATH:
+        return ConnectivityPathTarget.from_dict(value)
+    return ConnectivityTarget.from_dict(value)
+
+
+def _ancestor_chain(values: Sequence[str], label: str) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{label} collection must be a sequence")
+    chain = tuple(_hier_path(value, label) for value in values)
+    if not chain:
+        raise ValueError(f"{label} must not be empty")
+    for parent, child in zip(chain, chain[1:]):
+        if not child.startswith(parent + "."):
+            raise ValueError(f"{label} must be ordered root-to-leaf")
+    return chain
+
+
+def _path_union(*chains: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(sorted(set().union(*chains), key=lambda path: (path.count("."), path)))
+
+
+@dataclass(frozen=True)
+class PathHierarchyScope:
+    """Proof receipt for two endpoint chains and their bounded common scope."""
+
+    from_ancestors: tuple[str, ...]
+    to_ancestors: tuple[str, ...]
+    ancestor_union: tuple[str, ...]
+    lca: str
+
+    def __post_init__(self) -> None:
+        from_ancestors = _ancestor_chain(
+            self.from_ancestors, "from endpoint hierarchy ancestor"
+        )
+        to_ancestors = _ancestor_chain(
+            self.to_ancestors, "to endpoint hierarchy ancestor"
+        )
+        if from_ancestors[0] != to_ancestors[0]:
+            raise ValueError("path endpoint ancestor chains must share one top")
+        common = from_ancestors[0]
+        for left, right in zip(from_ancestors, to_ancestors):
+            if left != right:
+                break
+            common = left
+        lca = _hier_path(self.lca, "path hierarchy lca")
+        if lca != common:
+            raise ValueError(
+                "path hierarchy lca must be the proved lowest common ancestor"
+            )
+        ancestor_union = tuple(
+            _hier_path(path, "path hierarchy ancestor union")
+            for path in self.ancestor_union
+        )
+        expected_union = _path_union(from_ancestors, to_ancestors)
+        if ancestor_union != expected_union:
+            raise ValueError(
+                "path hierarchy ancestor_union must exactly cover both endpoint chains"
+            )
+        object.__setattr__(self, "from_ancestors", from_ancestors)
+        object.__setattr__(self, "to_ancestors", to_ancestors)
+        object.__setattr__(self, "ancestor_union", ancestor_union)
+        object.__setattr__(self, "lca", lca)
+
+    @property
+    def top(self) -> str:
+        return self.from_ancestors[0]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "from_ancestors": list(self.from_ancestors),
+            "to_ancestors": list(self.to_ancestors),
+            "ancestor_union": list(self.ancestor_union),
+            "lca": self.lca,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> PathHierarchyScope:
+        return cls(
+            from_ancestors=tuple(value.get("from_ancestors", ())),
+            to_ancestors=tuple(value.get("to_ancestors", ())),
+            ancestor_union=tuple(value.get("ancestor_union", ())),
+            lca=value["lca"],
         )
 
 
@@ -371,10 +549,11 @@ class CoverageBoundary:
 class SourceGraphBuildScope:
     design: str
     top: str
-    target: ConnectivityTarget
+    target: ConnectivityTarget | ConnectivityPathTarget
     hierarchy_ancestors: tuple[str, ...]
     requested_cone: RequestedCone
     coverage_boundary: CoverageBoundary
+    path_hierarchy: PathHierarchyScope | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "design", _required_text(self.design, "design"))
@@ -383,17 +562,41 @@ class SourceGraphBuildScope:
         ancestors = tuple(
             _hier_path(path, "hierarchy ancestor") for path in self.hierarchy_ancestors
         )
-        if not ancestors or ancestors[0] != top:
-            raise ValueError("hierarchy ancestors must start at top")
-        if ancestors[-1] != self.target.instance_path:
-            raise ValueError("hierarchy ancestors must end at the target instance")
-        for parent, child in zip(ancestors, ancestors[1:]):
-            if not child.startswith(parent + "."):
-                raise ValueError("hierarchy ancestors must be ordered root-to-leaf")
+        if isinstance(self.target, ConnectivityPathTarget):
+            if self.path_hierarchy is None:
+                raise ValueError("path target requires a dual-endpoint hierarchy scope")
+            if self.path_hierarchy.top != top:
+                raise ValueError("path endpoint hierarchy must belong to the scope top")
+            if (
+                self.path_hierarchy.from_ancestors[-1] != self.target.from_instance_path
+                or self.path_hierarchy.to_ancestors[-1] != self.target.to_instance_path
+            ):
+                raise ValueError(
+                    "path endpoint hierarchy must end at both target instances"
+                )
+            if ancestors != self.path_hierarchy.ancestor_union:
+                raise ValueError(
+                    "path hierarchy ancestors must equal the proved endpoint ancestor union"
+                )
+            target_instances = {
+                self.target.from_instance_path,
+                self.target.to_instance_path,
+            }
+        else:
+            if self.path_hierarchy is not None:
+                raise ValueError("single-endpoint target cannot carry path hierarchy")
+            if not ancestors or ancestors[0] != top:
+                raise ValueError("hierarchy ancestors must start at top")
+            if ancestors[-1] != self.target.instance_path:
+                raise ValueError("hierarchy ancestors must end at the target instance")
+            for parent, child in zip(ancestors, ancestors[1:]):
+                if not child.startswith(parent + "."):
+                    raise ValueError("hierarchy ancestors must be ordered root-to-leaf")
+            target_instances = {self.target.instance_path}
         if self.requested_cone.operation is not self.target.operation:
             raise ValueError("requested cone operation must match target operation")
-        if self.target.instance_path not in self.requested_cone.instance_paths:
-            raise ValueError("requested cone must include the target instance")
+        if not target_instances.issubset(self.requested_cone.instance_paths):
+            raise ValueError("requested cone must include every target instance")
         if self.coverage_boundary.explicit:
             boundary = set(self.coverage_boundary.instance_paths)
             required_paths = set(ancestors) | set(self.requested_cone.instance_paths)
@@ -411,6 +614,11 @@ class SourceGraphBuildScope:
             "hierarchy_ancestors": list(self.hierarchy_ancestors),
             "requested_cone": self.requested_cone.to_dict(),
             "coverage_boundary": self.coverage_boundary.to_dict(),
+            "path_hierarchy": (
+                self.path_hierarchy.to_dict()
+                if self.path_hierarchy is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -418,6 +626,7 @@ class SourceGraphBuildScope:
         target = value.get("target")
         cone = value.get("requested_cone")
         boundary = value.get("coverage_boundary")
+        path_hierarchy = value.get("path_hierarchy")
         if not all(isinstance(item, Mapping) for item in (target, cone, boundary)):
             raise ValueError(
                 "target, requested_cone, and coverage_boundary are required"
@@ -425,10 +634,15 @@ class SourceGraphBuildScope:
         return cls(
             design=value["design"],
             top=value["top"],
-            target=ConnectivityTarget.from_dict(target),
+            target=_target_from_dict(target),
             hierarchy_ancestors=tuple(value.get("hierarchy_ancestors", ())),
             requested_cone=RequestedCone.from_dict(cone),
             coverage_boundary=CoverageBoundary.from_dict(boundary),
+            path_hierarchy=(
+                PathHierarchyScope.from_dict(path_hierarchy)
+                if isinstance(path_hierarchy, Mapping)
+                else None
+            ),
         )
 
 

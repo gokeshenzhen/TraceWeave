@@ -1,19 +1,19 @@
-"""Internal Phase 1A driver/load queries over :mod:`connectivity_ir`.
+"""Internal structural connectivity queries over :mod:`connectivity_ir`.
 
-The prototype intentionally has no MCP registration and no relationship to the
-production NPI -> Legacy Static route.  Port and interface bindings are
-transparent hierarchy edges.  Source assignments are terminal driver/consumer
-facts, and sequential boundaries are never crossed.
+Port and interface bindings are transparent hierarchy edges. Source assignments
+are terminal driver/consumer facts for driver/load queries and directed
+combinational edges for path queries. Sequential boundaries are never crossed.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 from typing import Any, Iterable
 
+from .cancellation import check_cancelled
 from .connectivity_ir import (
     AssignmentFact,
     BindingStyle,
@@ -25,6 +25,7 @@ from .connectivity_ir import (
     CoverageStatus,
     DefinitionTemplate,
     DependencyFact,
+    DependencyRole,
     EdgeKind,
     PortBinding,
     PortDirection,
@@ -32,6 +33,10 @@ from .connectivity_ir import (
     SignalSelection,
     SourceEvidence,
     SourceLocation,
+)
+from .source_graph_contract import (
+    DEFAULT_PATH_OUTPUT_LIMIT,
+    DEFAULT_PATH_TRAVERSAL_LIMIT,
 )
 
 
@@ -45,6 +50,16 @@ class QueryConfidence(str, Enum):
     EXACT_SOURCE = "exact_source"
     CONDITIONAL = "conditional"
     PARTIAL = "partial"
+
+
+class PathQueryStatus(str, Enum):
+    FOUND = "found"
+    NOT_CONNECTED = "not_connected"
+    FROM_UNRESOLVED = "from_unresolved"
+    TO_UNRESOLVED = "to_unresolved"
+    ENDPOINTS_UNRESOLVED = "endpoints_unresolved"
+    INCONCLUSIVE = "inconclusive"
+    TRUNCATED = "truncated"
 
 
 @dataclass(frozen=True)
@@ -100,10 +115,62 @@ class ConnectivityQueryResult:
 
 
 @dataclass(frozen=True)
+class PathTraversalEdge:
+    edge_id: str
+    edge_kind: EdgeKind
+    source: SignalSelection
+    target: SignalSelection
+    evidence: SourceEvidence
+    exact_bit_mapping: bool
+    binding_style: BindingStyle | None = None
+    dependency_role: str | None = None
+    boundary: BoundaryKind | None = None
+    procedure_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class ConnectivityPathQueryResult:
+    operation: str
+    from_signal: str
+    to_signal: str
+    from_endpoint: SignalSelection | None
+    to_endpoint: SignalSelection | None
+    status: PathQueryStatus
+    coverage_status: CoverageStatus
+    path: tuple[PathTraversalEdge, ...]
+    unresolved_boundaries: tuple[CoverageGap, ...]
+    endpoint_alias_equivalent: bool
+    expand_assigns: bool
+    traversed_edge_count: int
+    visited_state_count: int
+    traversal_limit: int
+    output_limit: int
+    traversal_truncated: bool
+    output_truncated: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return _enum_values(asdict(self))
+
+
+@dataclass(frozen=True)
 class _FlowSegment:
     source: SignalSelection
     target: SignalSelection
     binding: PortBinding
+
+
+@dataclass(frozen=True)
+class _PathEdge:
+    edge_id: str
+    edge_kind: EdgeKind
+    source: SignalSelection
+    target: SignalSelection
+    evidence: SourceEvidence
+    exact_bit_mapping: bool
+    binding_style: BindingStyle | None = None
+    dependency_role: str | None = None
+    boundary: BoundaryKind | None = None
+    procedure_kind: str | None = None
 
 
 _TRAILING_SELECT_RE = re.compile(
@@ -112,7 +179,7 @@ _TRAILING_SELECT_RE = re.compile(
 
 
 class ConnectivityQueryEngine:
-    """Build lightweight indexes and answer internal driver/load queries."""
+    """Build lightweight indexes and answer driver/load/path queries."""
 
     def __init__(self, ir: ConnectivityIR):
         self.ir = ir
@@ -124,6 +191,10 @@ class ConnectivityQueryEngine:
         self._writes: dict[tuple[str, str], list[AssignmentFact]] = defaultdict(list)
         self._reads: dict[
             tuple[str, str], list[tuple[AssignmentFact, DependencyFact]]
+        ] = defaultdict(list)
+        self._path_outgoing: dict[tuple[str, str], list[_PathEdge]] = defaultdict(list)
+        self._path_exclusions: dict[
+            tuple[str, str], list[tuple[SignalSelection, CoverageGap]]
         ] = defaultdict(list)
         self._build_indexes()
 
@@ -271,6 +342,259 @@ class ConnectivityQueryEngine:
             max_depth=max_depth,
         )
 
+    def query_path(
+        self,
+        from_signal: str,
+        to_signal: str,
+        *,
+        expand_assigns: bool = False,
+        traversal_limit: int = DEFAULT_PATH_TRAVERSAL_LIMIT,
+        output_limit: int = DEFAULT_PATH_OUTPUT_LIMIT,
+    ) -> ConnectivityPathQueryResult:
+        """Return the deterministic shortest structural data-flow path.
+
+        Port bindings and combinational assignment dependencies are directed
+        structural edges.  Sequential and control-only dependencies are
+        deliberately not crossed; if one is encountered while searching for a
+        negative result it remains an explicit inconclusive boundary.
+        """
+
+        if not isinstance(expand_assigns, bool):
+            raise ValueError("expand_assigns must be boolean")
+        if (
+            not isinstance(traversal_limit, int)
+            or isinstance(traversal_limit, bool)
+            or traversal_limit < 1
+        ):
+            raise ValueError("traversal_limit must be a positive integer")
+        if (
+            not isinstance(output_limit, int)
+            or isinstance(output_limit, bool)
+            or output_limit < 1
+        ):
+            raise ValueError("output_limit must be a positive integer")
+        check_cancelled()
+
+        from_endpoint, from_error = self._try_resolve_path_endpoint(
+            from_signal, label="from"
+        )
+        to_endpoint, to_error = self._try_resolve_path_endpoint(to_signal, label="to")
+        endpoint_gaps = tuple(gap for gap in (from_error, to_error) if gap is not None)
+        if from_endpoint is None or to_endpoint is None:
+            if from_endpoint is None and to_endpoint is None:
+                status = PathQueryStatus.ENDPOINTS_UNRESOLVED
+            elif from_endpoint is None:
+                status = PathQueryStatus.FROM_UNRESOLVED
+            else:
+                status = PathQueryStatus.TO_UNRESOLVED
+            return ConnectivityPathQueryResult(
+                operation="path",
+                from_signal=from_signal,
+                to_signal=to_signal,
+                from_endpoint=from_endpoint,
+                to_endpoint=to_endpoint,
+                status=status,
+                coverage_status=CoverageStatus.INCONCLUSIVE,
+                path=(),
+                unresolved_boundaries=endpoint_gaps,
+                endpoint_alias_equivalent=False,
+                expand_assigns=expand_assigns,
+                traversed_edge_count=0,
+                visited_state_count=0,
+                traversal_limit=traversal_limit,
+                output_limit=output_limit,
+                traversal_truncated=False,
+                output_truncated=False,
+            )
+
+        if _same_path_endpoint(from_endpoint, to_endpoint):
+            coverage_gaps = _relevant_gaps(
+                self.ir.coverage.gaps,
+                {from_endpoint.path(), to_endpoint.path()},
+            )
+            return ConnectivityPathQueryResult(
+                operation="path",
+                from_signal=from_signal,
+                to_signal=to_signal,
+                from_endpoint=from_endpoint,
+                to_endpoint=to_endpoint,
+                status=PathQueryStatus.FOUND,
+                coverage_status=_query_coverage(self.ir.coverage, coverage_gaps),
+                path=(),
+                unresolved_boundaries=coverage_gaps,
+                endpoint_alias_equivalent=True,
+                expand_assigns=expand_assigns,
+                traversed_edge_count=0,
+                visited_state_count=1,
+                traversal_limit=traversal_limit,
+                output_limit=output_limit,
+                traversal_truncated=False,
+                output_truncated=False,
+            )
+
+        queue: deque[tuple[SignalSelection, tuple[PathTraversalEdge, ...]]] = deque(
+            [(from_endpoint, ())]
+        )
+        visited = {_state_key(from_endpoint)}
+        touched_paths = {from_endpoint.path(), to_endpoint.path()}
+        query_gaps: dict[tuple[str, str, int, str], CoverageGap] = {}
+        traversed_edges = 0
+        traversal_truncated = False
+
+        while queue and not traversal_truncated:
+            check_cancelled()
+            current, current_path = queue.popleft()
+            touched_paths.add(current.path())
+            for excluded_source, gap in self._path_exclusions.get(
+                _endpoint_key(current), ()
+            ):
+                if _overlaps(excluded_source.bits, current.bits):
+                    query_gaps[_gap_key(gap)] = gap
+
+            edges = self._path_outgoing.get(_endpoint_key(current), ())
+            for edge in edges:
+                check_cancelled()
+                if not _overlaps(edge.source.bits, current.bits):
+                    continue
+                if traversed_edges >= traversal_limit:
+                    traversal_truncated = True
+                    break
+                traversed_edges += 1
+                downstream = _follow_path_edge(current, edge)
+                touched_paths.add(downstream.path())
+                path_gap = None
+                if edge.evidence.resolution is ResolutionKind.UNRESOLVED:
+                    path_gap = CoverageGap(
+                        code="path_edge_evidence_unresolved",
+                        message="path edge source evidence is unresolved",
+                        impact=CoverageStatus.INCONCLUSIVE,
+                        scopes=(edge.source.path(), edge.target.path()),
+                        location=edge.evidence.location,
+                    )
+                    query_gaps[_gap_key(path_gap)] = path_gap
+                hop = _public_path_edge(edge, current, downstream)
+                next_path = current_path + (hop,)
+                if _same_path_endpoint(downstream, to_endpoint):
+                    path_touched = {
+                        from_endpoint.path(),
+                        to_endpoint.path(),
+                        *(
+                            endpoint.path()
+                            for path_hop in next_path
+                            for endpoint in (path_hop.source, path_hop.target)
+                        ),
+                    }
+                    relevant_gaps = _merge_path_gaps(
+                        self.ir.coverage,
+                        path_touched,
+                        _path_evidence_gaps(next_path),
+                    )
+                    output_truncated = len(next_path) > output_limit
+                    target_state = _state_key(downstream)
+                    return ConnectivityPathQueryResult(
+                        operation="path",
+                        from_signal=from_signal,
+                        to_signal=to_signal,
+                        from_endpoint=from_endpoint,
+                        to_endpoint=to_endpoint,
+                        status=(
+                            PathQueryStatus.TRUNCATED
+                            if output_truncated
+                            else PathQueryStatus.FOUND
+                        ),
+                        coverage_status=(
+                            CoverageStatus.INCONCLUSIVE
+                            if output_truncated
+                            else _query_coverage(self.ir.coverage, relevant_gaps)
+                        ),
+                        path=() if output_truncated else next_path,
+                        unresolved_boundaries=(
+                            relevant_gaps
+                            + (
+                                CoverageGap(
+                                    code="path_output_limit",
+                                    message=(
+                                        "shortest path exceeds the internal output limit"
+                                    ),
+                                    impact=CoverageStatus.INCONCLUSIVE,
+                                    scopes=(from_endpoint.path(), to_endpoint.path()),
+                                ),
+                            )
+                            if output_truncated
+                            else relevant_gaps
+                        ),
+                        endpoint_alias_equivalent=False,
+                        expand_assigns=expand_assigns,
+                        traversed_edge_count=traversed_edges,
+                        visited_state_count=len(visited | {target_state}),
+                        traversal_limit=traversal_limit,
+                        output_limit=output_limit,
+                        traversal_truncated=False,
+                        output_truncated=output_truncated,
+                    )
+                state = _state_key(downstream)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append((downstream, next_path))
+
+        relevant_gaps = _merge_path_gaps(
+            self.ir.coverage,
+            touched_paths,
+            query_gaps.values(),
+        )
+        if traversal_truncated:
+            truncation_gap = CoverageGap(
+                code="path_traversal_limit",
+                message="path search reached the internal traversal edge limit",
+                impact=CoverageStatus.INCONCLUSIVE,
+                scopes=(from_endpoint.path(), to_endpoint.path()),
+            )
+            relevant_gaps = relevant_gaps + (truncation_gap,)
+            coverage = CoverageStatus.INCONCLUSIVE
+            status = PathQueryStatus.TRUNCATED
+        else:
+            coverage = _query_coverage(self.ir.coverage, relevant_gaps)
+            status = (
+                PathQueryStatus.NOT_CONNECTED
+                if coverage is CoverageStatus.COMPLETE
+                else PathQueryStatus.INCONCLUSIVE
+            )
+        return ConnectivityPathQueryResult(
+            operation="path",
+            from_signal=from_signal,
+            to_signal=to_signal,
+            from_endpoint=from_endpoint,
+            to_endpoint=to_endpoint,
+            status=status,
+            coverage_status=coverage,
+            path=(),
+            unresolved_boundaries=relevant_gaps,
+            endpoint_alias_equivalent=False,
+            expand_assigns=expand_assigns,
+            traversed_edge_count=traversed_edges,
+            visited_state_count=len(visited),
+            traversal_limit=traversal_limit,
+            output_limit=output_limit,
+            traversal_truncated=traversal_truncated,
+            output_truncated=False,
+        )
+
+    def _try_resolve_path_endpoint(
+        self, signal_path: str, *, label: str
+    ) -> tuple[SignalSelection | None, CoverageGap | None]:
+        if label not in {"from", "to"}:
+            raise ValueError("path endpoint label must be from or to")
+        try:
+            return self.resolve_signal(signal_path), None
+        except (KeyError, ValueError):
+            return None, CoverageGap(
+                code=f"path_{label}_endpoint_unresolved",
+                message=f"path {label} endpoint is absent from the bounded IR",
+                impact=CoverageStatus.INCONCLUSIVE,
+                scopes=(signal_path,),
+            )
+
     def resolve_signal(self, signal_path: str) -> SignalSelection:
         match = _TRAILING_SELECT_RE.fullmatch(signal_path.strip())
         if not match:
@@ -312,6 +636,17 @@ class ConnectivityQueryEngine:
                 for segment in self._oriented_segments(binding, mapping):
                     self._incoming[_endpoint_key(segment.target)].append(segment)
                     self._outgoing[_endpoint_key(segment.source)].append(segment)
+                    self._path_outgoing[_endpoint_key(segment.source)].append(
+                        _PathEdge(
+                            edge_id=segment.binding.binding_id,
+                            edge_kind=segment.binding.edge_kind,
+                            source=segment.source,
+                            target=segment.target,
+                            evidence=segment.binding.evidence,
+                            exact_bit_mapping=True,
+                            binding_style=segment.binding.style,
+                        )
+                    )
         for instance in self.ir.instances:
             definition = self._definitions[instance.definition_id]
             for assignment in definition.assignments:
@@ -322,6 +657,55 @@ class ConnectivityQueryEngine:
                     self._reads[(instance.path, dependency.source.symbol)].append(
                         (assignment, dependency)
                     )
+                    source = dependency.source.bind(instance.path)
+                    target = dependency.target.bind(instance.path)
+                    if assignment.boundary is BoundaryKind.SEQUENTIAL:
+                        self._path_exclusions[_endpoint_key(source)].append(
+                            (
+                                source,
+                                CoverageGap(
+                                    code="sequential_boundary",
+                                    message=(
+                                        "path traversal does not cross sequential state"
+                                    ),
+                                    impact=CoverageStatus.INCONCLUSIVE,
+                                    scopes=(source.path(), target.path()),
+                                    location=assignment.evidence.location,
+                                ),
+                            )
+                        )
+                        continue
+                    if dependency.role is DependencyRole.CONTROL:
+                        self._path_exclusions[_endpoint_key(source)].append(
+                            (
+                                source,
+                                CoverageGap(
+                                    code="control_dependency_excluded",
+                                    message=(
+                                        "path traversal excludes control-only dependencies"
+                                    ),
+                                    impact=CoverageStatus.INCONCLUSIVE,
+                                    scopes=(source.path(), target.path()),
+                                    location=assignment.evidence.location,
+                                ),
+                            )
+                        )
+                        continue
+                    self._path_outgoing[_endpoint_key(source)].append(
+                        _PathEdge(
+                            edge_id=assignment.assignment_id,
+                            edge_kind=assignment.kind,
+                            source=source,
+                            target=target,
+                            evidence=assignment.evidence,
+                            exact_bit_mapping=dependency.exact_bit_mapping,
+                            dependency_role=dependency.role.value,
+                            boundary=assignment.boundary,
+                            procedure_kind=assignment.procedure_kind,
+                        )
+                    )
+        for edges in self._path_outgoing.values():
+            edges.sort(key=_path_edge_sort_key)
 
     @staticmethod
     def _oriented_segments(
@@ -488,6 +872,12 @@ def _state_key(selection: SignalSelection) -> tuple[str, str, tuple[int, ...]]:
     return instance, symbol, selection.bits
 
 
+def _same_path_endpoint(left: SignalSelection, right: SignalSelection) -> bool:
+    return _endpoint_key(left) == _endpoint_key(right) and _overlaps(
+        left.bits, right.bits
+    )
+
+
 def _overlaps(left: tuple[int, ...], right: tuple[int, ...]) -> bool:
     return not set(left).isdisjoint(right)
 
@@ -507,6 +897,105 @@ def _map_selection(
         symbol=mapped_to.symbol,
         bits=tuple(bit_map[bit] for bit in selected_bits),
     )
+
+
+def _follow_path_edge(
+    selected: SignalSelection,
+    edge: _PathEdge,
+) -> SignalSelection:
+    if edge.exact_bit_mapping:
+        return _map_selection(
+            selected=selected,
+            mapped_from=edge.source,
+            mapped_to=edge.target,
+        )
+    return edge.target
+
+
+def _public_path_edge(
+    edge: _PathEdge,
+    source: SignalSelection,
+    target: SignalSelection,
+) -> PathTraversalEdge:
+    return PathTraversalEdge(
+        edge_id=edge.edge_id,
+        edge_kind=edge.edge_kind,
+        source=source,
+        target=target,
+        evidence=edge.evidence,
+        exact_bit_mapping=edge.exact_bit_mapping,
+        binding_style=edge.binding_style,
+        dependency_role=edge.dependency_role,
+        boundary=edge.boundary,
+        procedure_kind=edge.procedure_kind,
+    )
+
+
+def _path_edge_sort_key(edge: _PathEdge) -> tuple[Any, ...]:
+    return (
+        edge.target.instance_path or "",
+        edge.target.symbol,
+        edge.target.bits,
+        edge.edge_kind.value,
+        edge.edge_id,
+        edge.source.bits,
+        edge.evidence.location.file,
+        edge.evidence.location.line,
+    )
+
+
+def _gap_key(gap: CoverageGap) -> tuple[str, str, int, str]:
+    location = gap.location
+    return (
+        gap.code,
+        location.file if location is not None else "",
+        location.line if location is not None else 0,
+        "\x1f".join(gap.scopes),
+    )
+
+
+def _merge_path_gaps(
+    coverage: CoverageReport,
+    touched_paths: set[str],
+    query_gaps: Iterable[CoverageGap],
+) -> tuple[CoverageGap, ...]:
+    by_key = {
+        _gap_key(gap): gap for gap in _relevant_gaps(coverage.gaps, touched_paths)
+    }
+    for gap in query_gaps:
+        by_key[_gap_key(gap)] = gap
+    return tuple(by_key[key] for key in sorted(by_key))
+
+
+def _path_evidence_gaps(
+    path: tuple[PathTraversalEdge, ...],
+) -> tuple[CoverageGap, ...]:
+    gaps: list[CoverageGap] = []
+    for edge in path:
+        if edge.evidence.resolution is ResolutionKind.UNRESOLVED:
+            gaps.append(
+                CoverageGap(
+                    code="path_edge_evidence_unresolved",
+                    message="path edge source evidence is unresolved",
+                    impact=CoverageStatus.INCONCLUSIVE,
+                    scopes=(edge.source.path(), edge.target.path()),
+                    location=edge.evidence.location,
+                )
+            )
+        if not edge.exact_bit_mapping:
+            gaps.append(
+                CoverageGap(
+                    code="path_bit_mapping_inexact",
+                    message=(
+                        "structural dependency is known but its exact bit mapping "
+                        "is not available"
+                    ),
+                    impact=CoverageStatus.PARTIAL,
+                    scopes=(edge.source.path(), edge.target.path()),
+                    location=edge.evidence.location,
+                )
+            )
+    return tuple(gaps)
 
 
 def _hop(segment: _FlowSegment) -> TraversalHop:

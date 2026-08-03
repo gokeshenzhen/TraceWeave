@@ -1,14 +1,31 @@
 from dataclasses import replace
 
+import pytest
+
+from src import cancellation
 from src.connectivity_ir import (
+    AssignmentFact,
+    BindingStyle,
+    BitRange,
     BoundaryKind,
+    ConnectivityIR,
     CoverageGap,
     CoverageReport,
     CoverageStatus,
+    DefinitionKind,
+    DefinitionTemplate,
+    DependencyFact,
     EdgeKind,
+    InstanceDecl,
+    SignalDecl,
+    SignalSelection,
+    SourceEvidence,
+    SourceLocation,
+    SymbolKind,
 )
 from src.connectivity_query import (
     ConnectivityQueryEngine,
+    PathQueryStatus,
     QueryConfidence,
     QueryStatus,
 )
@@ -21,6 +38,74 @@ DEEP_LEAF = (
     "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel."
     "u_rx_fifo.u_storage_bank.u_x_cell"
 )
+
+
+def _build_scalar_path_ir(
+    *edges: tuple[str, str, str, BoundaryKind],
+    signals: tuple[str, ...] = (),
+    coverage: CoverageReport | None = None,
+) -> ConnectivityIR:
+    names = sorted(
+        {
+            *signals,
+            *(source for _, source, _, _ in edges),
+            *(target for _, _, target, _ in edges),
+        }
+    )
+    location = SourceLocation(file="tests/test_connectivity_query.py", line=1)
+    assignments = []
+    for line, (edge_id, source, target, boundary) in enumerate(edges, start=10):
+        sequential = boundary is BoundaryKind.SEQUENTIAL
+        assignments.append(
+            AssignmentFact(
+                assignment_id=edge_id,
+                kind=(
+                    EdgeKind.PROCEDURAL_ASSIGN
+                    if sequential
+                    else EdgeKind.CONTINUOUS_ASSIGN
+                ),
+                target=SignalSelection.template(target, BitRange.scalar()),
+                dependencies=(
+                    DependencyFact(
+                        source=SignalSelection.template(source, BitRange.scalar()),
+                        target=SignalSelection.template(target, BitRange.scalar()),
+                    ),
+                ),
+                boundary=boundary,
+                evidence=SourceEvidence(
+                    construct="path_test_edge",
+                    location=replace(location, line=line),
+                    frontend="path_test",
+                    frontend_version="1.0",
+                ),
+                procedure_kind="AlwaysFF" if sequential else None,
+            )
+        )
+    definition = DefinitionTemplate(
+        definition_id="path_top",
+        name="path_top",
+        kind=DefinitionKind.MODULE,
+        location=location,
+        signals=tuple(
+            SignalDecl(name, SymbolKind.NET, BitRange.scalar(), location)
+            for name in names
+        ),
+        assignments=tuple(assignments),
+    )
+    return ConnectivityIR(
+        frontend_name="path_test",
+        frontend_version="1.0",
+        definitions=(definition,),
+        instances=(InstanceDecl("path_top", "path_top", "path_top", None, location),),
+        bindings=(),
+        coverage=coverage
+        or CoverageReport(
+            status=CoverageStatus.COMPLETE,
+            files_total=1,
+            files_projected=1,
+        ),
+        top_instances=("path_top",),
+    )
 
 
 def test_deep_driver_crosses_seven_positional_bindings_to_always_ff():
@@ -205,3 +290,291 @@ def test_global_partial_gap_downgrades_positive_match_confidence():
     assert result.status is QueryStatus.FOUND
     assert result.coverage_status is CoverageStatus.PARTIAL
     assert result.matches[0].confidence is QueryConfidence.PARTIAL
+
+
+def test_path_same_signal_and_overlapping_slice_are_alias_equivalent():
+    engine = ConnectivityQueryEngine(build_hand_ir())
+
+    same = engine.query_path("sg_top.seed", "sg_top.seed")
+    overlapping = engine.query_path("sg_top.seed", "sg_top.seed[7:0]")
+
+    for result in (same, overlapping):
+        assert result.status is PathQueryStatus.FOUND
+        assert result.coverage_status is CoverageStatus.COMPLETE
+        assert result.endpoint_alias_equivalent is True
+        assert result.path == ()
+
+
+@pytest.mark.parametrize(
+    ("from_signal", "to_signal", "expected_style"),
+    [
+        ("sg_top.clk", "sg_top.u_producer.clk", "named"),
+        ("sg_top.clk", "sg_top.u_bridge.clk", "positional"),
+        (
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]",
+            "modport",
+        ),
+    ],
+)
+def test_path_direct_named_positional_and_modport_bindings(
+    from_signal, to_signal, expected_style
+):
+    result = ConnectivityQueryEngine(build_hand_ir()).query_path(from_signal, to_signal)
+
+    assert result.status is PathQueryStatus.FOUND
+    assert result.coverage_status is CoverageStatus.COMPLETE
+    assert len(result.path) == 1
+    assert result.path[0].binding_style.value == expected_style
+    assert result.path[0].evidence.location.file.endswith("hand_connectivity.sv")
+
+
+def test_path_interface_binding_style_is_structurally_traversable():
+    ir = build_hand_ir()
+    bindings = tuple(
+        replace(binding, style=BindingStyle.INTERFACE, modport=None)
+        if binding.binding_id == "sg_top.u_producer:bus.data"
+        else binding
+        for binding in ir.bindings
+    )
+
+    result = ConnectivityQueryEngine(replace(ir, bindings=bindings)).query_path(
+        "sg_top.u_producer.bus.data[15:8]",
+        "sg_top.bus.data[15:8]",
+    )
+
+    assert result.status is PathQueryStatus.FOUND
+    assert result.path[0].edge_kind is EdgeKind.INTERFACE_BIND
+    assert result.path[0].binding_style is BindingStyle.INTERFACE
+
+
+def test_path_multi_hop_preserves_interface_and_exact_slice_concat_mappings():
+    result = ConnectivityQueryEngine(build_hand_ir()).query_path(
+        "sg_top.u_producer.seed[7:0]",
+        "sg_top.u_bridge.gen_lanes[1].u_lane.u_named.data_i",
+    )
+
+    assert result.status is PathQueryStatus.FOUND
+    assert result.coverage_status is CoverageStatus.COMPLETE
+    assert [edge.edge_kind for edge in result.path] == [
+        EdgeKind.PROCEDURAL_ASSIGN,
+        EdgeKind.INTERFACE_BIND,
+        EdgeKind.INTERFACE_BIND,
+        EdgeKind.PORT_BIND_INPUT,
+        EdgeKind.PORT_BIND_INPUT,
+    ]
+    assert [
+        edge.binding_style.value if edge.binding_style else None for edge in result.path
+    ] == [
+        None,
+        "modport",
+        "modport",
+        "positional",
+        "named",
+    ]
+    assert all(edge.exact_bit_mapping for edge in result.path)
+    assert result.path[0].source.bits == tuple(range(7, -1, -1))
+    assert result.path[0].target.bits == tuple(range(15, 7, -1))
+    assert result.path[-1].target.bits == tuple(range(7, -1, -1))
+
+
+def test_path_continuous_assignment_has_real_source_evidence():
+    result = ConnectivityQueryEngine(build_hand_ir()).query_path(
+        "sg_top.u_bridge.gen_lanes[0].u_lane.comb_y[3:0]",
+        "sg_top.u_bridge.gen_lanes[0].u_lane.lane_o[7:4]",
+    )
+
+    assert result.status is PathQueryStatus.FOUND
+    assert [edge.edge_kind for edge in result.path] == [EdgeKind.CONTINUOUS_ASSIGN]
+    assert result.path[0].edge_id == "sg_lane:assign:50:lane_o"
+    assert result.path[0].evidence.location.line == 50
+
+
+def test_path_inexact_bit_dependency_is_found_with_partial_coverage():
+    result = ConnectivityQueryEngine(build_hand_ir()).query_path(
+        "sg_top.u_bridge.lane_data",
+        "sg_top.u_bridge.bus.ready",
+    )
+
+    assert result.status is PathQueryStatus.FOUND
+    assert result.coverage_status is CoverageStatus.PARTIAL
+    assert len(result.path) == 1
+    assert result.path[0].exact_bit_mapping is False
+    assert [gap.code for gap in result.unresolved_boundaries] == [
+        "path_bit_mapping_inexact"
+    ]
+
+
+def test_path_expand_assigns_is_presentation_only_and_preserves_connectivity():
+    engine = ConnectivityQueryEngine(build_hand_ir())
+    args = (
+        "sg_top.u_producer.seed[7:0]",
+        "sg_top.u_bridge.gen_lanes[1].u_lane.u_named.data_i",
+    )
+
+    folded = engine.query_path(*args, expand_assigns=False)
+    expanded = engine.query_path(*args, expand_assigns=True)
+
+    assert folded.status is expanded.status is PathQueryStatus.FOUND
+    assert folded.path == expanded.path
+    assert folded.expand_assigns is False
+    assert expanded.expand_assigns is True
+    assert any(edge.edge_kind is EdgeKind.PROCEDURAL_ASSIGN for edge in expanded.path)
+
+
+def test_path_shortest_hop_tie_break_and_serialization_are_deterministic():
+    ir = _build_scalar_path_ir(
+        ("edge-c-d", "c", "d", BoundaryKind.COMBINATIONAL),
+        ("edge-a-c", "a", "c", BoundaryKind.COMBINATIONAL),
+        ("edge-b-d", "b", "d", BoundaryKind.COMBINATIONAL),
+        ("edge-a-b", "a", "b", BoundaryKind.COMBINATIONAL),
+    )
+    engine = ConnectivityQueryEngine(ir)
+
+    first = engine.query_path("path_top.a", "path_top.d")
+    second = engine.query_path("path_top.a", "path_top.d")
+
+    assert [edge.edge_id for edge in first.path] == ["edge-a-b", "edge-b-d"]
+    assert first.to_dict() == second.to_dict()
+
+
+def test_path_cycle_detection_terminates_with_complete_not_connected():
+    result = ConnectivityQueryEngine(
+        _build_scalar_path_ir(
+            ("edge-a-b", "a", "b", BoundaryKind.COMBINATIONAL),
+            ("edge-b-a", "b", "a", BoundaryKind.COMBINATIONAL),
+            signals=("d",),
+        )
+    ).query_path("path_top.a", "path_top.d")
+
+    assert result.status is PathQueryStatus.NOT_CONNECTED
+    assert result.coverage_status is CoverageStatus.COMPLETE
+    assert result.visited_state_count == 2
+
+
+@pytest.mark.parametrize(
+    ("from_signal", "to_signal", "status", "gap_codes"),
+    [
+        (
+            "path_top.missing",
+            "path_top.b",
+            PathQueryStatus.FROM_UNRESOLVED,
+            ["path_from_endpoint_unresolved"],
+        ),
+        (
+            "path_top.a",
+            "path_top.missing",
+            PathQueryStatus.TO_UNRESOLVED,
+            ["path_to_endpoint_unresolved"],
+        ),
+        (
+            "path_top.left_missing",
+            "path_top.right_missing",
+            PathQueryStatus.ENDPOINTS_UNRESOLVED,
+            ["path_from_endpoint_unresolved", "path_to_endpoint_unresolved"],
+        ),
+    ],
+)
+def test_path_endpoint_resolution_statuses_are_distinct(
+    from_signal, to_signal, status, gap_codes
+):
+    result = ConnectivityQueryEngine(
+        _build_scalar_path_ir(signals=("a", "b"))
+    ).query_path(from_signal, to_signal)
+
+    assert result.status is status
+    assert result.coverage_status is CoverageStatus.INCONCLUSIVE
+    assert [gap.code for gap in result.unresolved_boundaries] == gap_codes
+
+
+def test_path_complete_negative_and_partial_no_path_are_not_confused():
+    complete_ir = _build_scalar_path_ir(signals=("a", "d"))
+    gap = CoverageGap(
+        code="objective_exclusion",
+        message="unsupported construct can affect the source endpoint",
+        impact=CoverageStatus.PARTIAL,
+        constructs=("dpi",),
+        scopes=("path_top.a",),
+    )
+    partial_ir = replace(
+        complete_ir,
+        coverage=CoverageReport(
+            status=CoverageStatus.PARTIAL,
+            files_total=1,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+
+    complete = ConnectivityQueryEngine(complete_ir).query_path(
+        "path_top.a", "path_top.d"
+    )
+    partial = ConnectivityQueryEngine(partial_ir).query_path("path_top.a", "path_top.d")
+
+    assert complete.status is PathQueryStatus.NOT_CONNECTED
+    assert complete.coverage_status is CoverageStatus.COMPLETE
+    assert partial.status is PathQueryStatus.INCONCLUSIVE
+    assert partial.coverage_status is CoverageStatus.PARTIAL
+    assert [item.code for item in partial.unresolved_boundaries] == [
+        "objective_exclusion"
+    ]
+
+
+def test_path_sequential_boundary_is_inconclusive_and_not_traversed():
+    result = ConnectivityQueryEngine(
+        _build_scalar_path_ir(
+            ("edge-a-b", "a", "b", BoundaryKind.SEQUENTIAL),
+        )
+    ).query_path("path_top.a", "path_top.b")
+
+    assert result.status is PathQueryStatus.INCONCLUSIVE
+    assert result.coverage_status is CoverageStatus.INCONCLUSIVE
+    assert result.path == ()
+    assert [gap.code for gap in result.unresolved_boundaries] == ["sequential_boundary"]
+
+
+def test_path_traversal_and_output_caps_are_loud():
+    engine = ConnectivityQueryEngine(
+        _build_scalar_path_ir(
+            ("edge-a-b", "a", "b", BoundaryKind.COMBINATIONAL),
+            ("edge-b-c", "b", "c", BoundaryKind.COMBINATIONAL),
+        )
+    )
+
+    traversal = engine.query_path("path_top.a", "path_top.c", traversal_limit=1)
+    output = engine.query_path("path_top.a", "path_top.c", output_limit=1)
+
+    assert traversal.status is PathQueryStatus.TRUNCATED
+    assert traversal.traversal_truncated is True
+    assert [gap.code for gap in traversal.unresolved_boundaries] == [
+        "path_traversal_limit"
+    ]
+    assert output.status is PathQueryStatus.TRUNCATED
+    assert output.output_truncated is True
+    assert output.path == ()
+    assert [gap.code for gap in output.unresolved_boundaries] == ["path_output_limit"]
+
+
+def test_path_checks_cancellation_during_graph_traversal(monkeypatch):
+    calls = 0
+
+    def cancel_during_walk():
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise cancellation.OperationCancelled("cancelled in path walk")
+
+    monkeypatch.setattr("src.connectivity_query.check_cancelled", cancel_during_walk)
+    engine = ConnectivityQueryEngine(
+        _build_scalar_path_ir(
+            ("edge-a-b", "a", "b", BoundaryKind.COMBINATIONAL),
+            ("edge-b-c", "b", "c", BoundaryKind.COMBINATIONAL),
+            ("edge-c-d", "c", "d", BoundaryKind.COMBINATIONAL),
+        )
+    )
+
+    with pytest.raises(cancellation.OperationCancelled):
+        engine.query_path("path_top.a", "path_top.d")
+    assert calls == 4

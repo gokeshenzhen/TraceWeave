@@ -9,8 +9,10 @@ from src.connectivity_ir import CoverageStatus
 from src.source_graph_contract import (
     BoundaryMode,
     CompileInputManifest,
+    ConnectivityPathTarget,
     ConnectivityTarget,
     CoverageBoundary,
+    PathHierarchyScope,
     QueryOperation,
     RequestedCone,
     ScopeRelation,
@@ -91,6 +93,54 @@ def _request(
     )
 
 
+def _path_scope(
+    *,
+    from_signal: str = "top.u_left.out",
+    to_signal: str = "top.u_right.in",
+    from_instance: str = "top.u_left",
+    to_instance: str = "top.u_right",
+    expand_assigns: bool = False,
+    traversal_limit: int = 4096,
+    output_limit: int = 256,
+) -> SourceGraphBuildScope:
+    from_chain = ("top", from_instance)
+    to_chain = ("top", to_instance)
+    union = tuple(
+        sorted(set(from_chain + to_chain), key=lambda path: (path.count("."), path))
+    )
+    path_hierarchy = PathHierarchyScope(
+        from_ancestors=from_chain,
+        to_ancestors=to_chain,
+        ancestor_union=union,
+        lca="top" if from_instance != to_instance else from_instance,
+    )
+    return SourceGraphBuildScope(
+        design="unit_fixture",
+        top="top",
+        target=ConnectivityPathTarget(
+            operation=QueryOperation.PATH,
+            from_signal=from_signal,
+            to_signal=to_signal,
+            from_instance_path=from_instance,
+            to_instance_path=to_instance,
+            expand_assigns=expand_assigns,
+            traversal_limit=traversal_limit,
+            output_limit=output_limit,
+        ),
+        hierarchy_ancestors=union,
+        requested_cone=RequestedCone(
+            operation=QueryOperation.PATH,
+            max_hops=4,
+            instance_paths=(from_instance, to_instance),
+        ),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=union,
+        ),
+        path_hierarchy=path_hierarchy,
+    )
+
+
 def test_complete_request_round_trips_and_has_reusable_stable_key():
     request = _request()
 
@@ -104,6 +154,90 @@ def test_complete_request_round_trips_and_has_reusable_stable_key():
     assert first.cache_key == first.digest
     assert len(first.design_digest) == 64
     assert len(first.scope_digest) == 64
+
+
+def test_dual_endpoint_path_request_round_trips_with_proved_lca_scope():
+    request = _request(scope=_path_scope(expand_assigns=True))
+
+    round_trip = SourceGraphBuildRequest.from_dict(request.to_dict())
+    target = round_trip.scope.target
+
+    assert round_trip == request
+    assert isinstance(target, ConnectivityPathTarget)
+    assert target.operation is QueryOperation.PATH
+    assert target.expand_assigns is True
+    assert target.from_instance_path == "top.u_left"
+    assert target.to_instance_path == "top.u_right"
+    assert round_trip.scope.path_hierarchy == PathHierarchyScope(
+        from_ancestors=("top", "top.u_left"),
+        to_ancestors=("top", "top.u_right"),
+        ancestor_union=("top", "top.u_left", "top.u_right"),
+        lca="top",
+    )
+
+
+@pytest.mark.parametrize(
+    "changed_scope",
+    [
+        lambda: _path_scope(to_signal="top.u_right.other"),
+        lambda: _path_scope(to_signal="top.u_third.in", to_instance="top.u_third"),
+        lambda: _path_scope(expand_assigns=True),
+        lambda: _path_scope(traversal_limit=2048),
+        lambda: _path_scope(output_limit=128),
+    ],
+)
+def test_path_build_key_remains_exact_endpoint_and_semantics_specific(changed_scope):
+    baseline = compute_source_graph_build_key(_request(scope=_path_scope()))
+    changed = compute_source_graph_build_key(_request(scope=changed_scope()))
+
+    assert changed.digest != baseline.digest
+    assert changed.design_digest == baseline.design_digest
+
+
+def test_path_target_supports_dotted_signal_members_without_guessing_instance():
+    target = ConnectivityPathTarget(
+        operation=QueryOperation.PATH,
+        from_signal="top.u_left.bus.data",
+        to_signal="top.u_right.bus.data",
+        from_instance_path="top.u_left",
+        to_instance_path="top.u_right",
+    )
+
+    assert target.from_instance_path == "top.u_left"
+    assert target.to_instance_path == "top.u_right"
+
+
+def test_path_target_rejects_unproved_endpoint_instance_membership():
+    with pytest.raises(ValueError, match="must be within"):
+        ConnectivityPathTarget(
+            operation=QueryOperation.PATH,
+            from_signal="top.u_left.out",
+            to_signal="top.u_right.in",
+            from_instance_path="top.u_other",
+            to_instance_path="top.u_right",
+        )
+
+
+def test_path_hierarchy_rejects_different_tops_and_wrong_lca():
+    with pytest.raises(ValueError, match="share one top"):
+        PathHierarchyScope(
+            from_ancestors=("top_a", "top_a.u_left"),
+            to_ancestors=("top_b", "top_b.u_right"),
+            ancestor_union=(
+                "top_a",
+                "top_b",
+                "top_a.u_left",
+                "top_b.u_right",
+            ),
+            lca="top_a",
+        )
+    with pytest.raises(ValueError, match="lowest common ancestor"):
+        PathHierarchyScope(
+            from_ancestors=("top", "top.u_left"),
+            to_ancestors=("top", "top.u_right"),
+            ancestor_union=("top", "top.u_left", "top.u_right"),
+            lca="top.u_left",
+        )
 
 
 @pytest.mark.parametrize(

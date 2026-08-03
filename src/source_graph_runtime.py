@@ -1,9 +1,9 @@
 """Internal scoped Source Graph preparation runtime.
 
 The runtime owns an in-process session cache, same-key single-flight, and an
-isolated child process runner for the optional source frontend.  The production
-driver/load router imports it through a lazy lifecycle owner; import/startup
-does not create a runtime or build.  It never selects or invokes the Legacy
+isolated child process runner for the optional source frontend. The production
+connectivity router imports it through a lazy lifecycle owner; import/startup
+does not create a runtime or build. It never selects or invokes the Legacy
 Static backend and never acquires a waveform lock.
 """
 
@@ -37,7 +37,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "1.0"
+SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "2.0"
 
 # One real cold build admission across every runtime object in this process.
 # Acquisition is polled from the event loop, so waiting never blocks it and a
