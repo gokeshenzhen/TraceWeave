@@ -1,0 +1,4391 @@
+{
+  "assessment": {
+    "coverage_claim": "target_scoped_only_partial_or_inconclusive_preserved",
+    "cross_target_reuse_implemented": false,
+    "decision": "phase3a_trace_signal_path_gate_passed",
+    "disk_cache": false,
+    "driver_load_route_changed": false,
+    "failure_gate_passed": true,
+    "next_step": "stop after Phase 3A and await explicit Phase 3B authorization",
+    "opentitan_claim": "target-scoped only; no full-design path claim",
+    "persistent_worker": false,
+    "phase3a_trace_signal_path_gate_passed": true,
+    "production_route_changed": true,
+    "production_route_changed_tools": [
+      "trace_signal_path"
+    ],
+    "route_gate_passed": true,
+    "startup_full_design_enumeration": false,
+    "trace_x_source_route_changed": false,
+    "waveform_locking_model_changed": false,
+    "workload_gate_passed": true
+  },
+  "before_baselines": {
+    "phase1a": {
+      "sha256": "c7310560a1e89e19694a83d41e24a645578b747585c68df546a20937f3fa42e2"
+    },
+    "phase1b": {
+      "sha256": "c9a25c96c63ddce9205ecabf86b61f6da1eff9ba0f71aeee099a6b04f7237da7"
+    },
+    "phase2": {
+      "decision": "phase2_public_driver_load_gate_passed",
+      "measurement_head": "8b40dc2b7b597f152fe5d0a152d3afe71c8ff05e",
+      "opentitan_reference": {
+        "blocking_diagnostic_count": 65,
+        "coverage_boundary_path_count": 4,
+        "coverage_status": "inconclusive",
+        "ordered_input_count": 785,
+        "ordered_top_count": 11,
+        "representative_confidence": "partial",
+        "requested_cone_path_count": 1
+      },
+      "production_route_changed_tools": [
+        "explain_signal_driver",
+        "find_signal_loads"
+      ],
+      "sha256": "1b5f76c3862601bb1163d838744c9c03ec7ed62cd1bc5f663ef7008bd0902599",
+      "trace_signal_path_route_changed": false,
+      "trace_x_source_route_changed": false,
+      "waveform_locking_model_changed": false
+    }
+  },
+  "benchmark": "source_graph_connectivity_phase3a",
+  "benchmark_script": {
+    "path": "scripts/benchmark_source_graph_phase3a.py",
+    "sha256": "4dcf97a2aea8df56705b3f3712e347d6ea1fca0f572bb7591fe404350f61978d"
+  },
+  "failure_probes": {
+    "gate": {
+      "checks": [
+        {
+          "actual": {
+            "actual": "static",
+            "fallback_used": true,
+            "prepare": "dependency_blocked"
+          },
+          "expected": {
+            "actual": "static",
+            "prepare": "dependency_blocked"
+          },
+          "name": "dependency_structured_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual": "static",
+            "fallback_used": true,
+            "prepare": "build_failed"
+          },
+          "expected": {
+            "actual": "static",
+            "prepare": "build_failed"
+          },
+          "name": "build_failure_structured_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual": "static",
+            "fallback_used": true,
+            "prepare": "worker_crash"
+          },
+          "expected": {
+            "actual": "static",
+            "prepare": "worker_crash"
+          },
+          "name": "crash_structured_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "actual": "static",
+            "fallback_used": true,
+            "prepare": "timed_out"
+          },
+          "expected": {
+            "actual": "static",
+            "prepare": "timed_out"
+          },
+          "name": "timeout_structured_static_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "failure": {
+              "actual_backend": null,
+              "fallback_used": false,
+              "status": "cancelled"
+            },
+            "static_calls": 0
+          },
+          "expected": {
+            "cancelled": true,
+            "static_calls": 0
+          },
+          "name": "cancellation_no_fallback",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "name": "dependency_cleanup_and_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "name": "build_failure_cleanup_and_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "name": "crash_cleanup_and_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "name": "timeout_cleanup_and_retry",
+          "passed": true
+        },
+        {
+          "actual": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "expected": {
+            "cache": 0,
+            "inflight": 0,
+            "retry": "source_graph"
+          },
+          "name": "cancellation_cleanup_and_retry",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    "results": {
+      "build_failure": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_build_failed",
+              "status": "failed"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "source_graph_build_failed",
+          "found": false,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 0,
+          "parent_cpu_time_ms": 1.335219,
+          "path": [],
+          "path_net_paths": [],
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "b7a2bccd37ceaa00a115379760a8c2a9cd569f0822145c25d505b2809c54d722",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "frontend_build_failed",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": null,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1.0755830444395542,
+              "admission_wait_ms": 0.001251930370926857,
+              "build_wall_ms": 0.017181970179080963,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.10760989971458912,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "output_limit": null,
+            "output_truncated": false,
+            "path_edge_count": 0,
+            "prepare_status": "build_failed",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": null,
+            "traversal_truncated": false,
+            "traversed_edge_count": 0,
+            "visited_state_count": 0
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": "static_backend_no_path_api",
+          "wall_time_ms": 1.336199
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "npi_kdb_unavailable",
+          "found": true,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 2,
+          "parent_cpu_time_ms": 4.040614,
+          "path": [
+            {
+              "backend": "source_graph",
+              "edge_id": null,
+              "edge_kind": null,
+              "edge_source_path": null,
+              "exact_bit_mapping": null,
+              "index": 0,
+              "is_endpoint": true,
+              "net_path": "sg_top.u_producer.seed[7:0]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 74
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "assign_c52017b3ec43b70f3357",
+              "edge_kind": "procedural_assign",
+              "edge_source_path": "sg_top.u_producer.seed[7:0]",
+              "exact_bit_mapping": true,
+              "index": 1,
+              "is_endpoint": false,
+              "net_path": "sg_top.u_producer.bus.data[15:8]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 86
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "sg_top.u_producer:3:bus.data",
+              "edge_kind": "interface_bind",
+              "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+              "exact_bit_mapping": true,
+              "index": 2,
+              "is_endpoint": true,
+              "net_path": "sg_top.bus.data[15:8]",
+              "scope_inst": "sg_top.bus",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 98
+            }
+          ],
+          "path_net_paths": [
+            "sg_top.u_producer.seed[7:0]",
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]"
+          ],
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "c53e2ff71dbb8ea82ea46d0d34418168b44aedd4f78dd1c3c384289fd469ce05",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "hierarchy_projection_scoped"
+            ],
+            "coverage_gap_count": 1,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.24894392117857933,
+              "admission_wait_ms": 0.0010421499609947205,
+              "build_wall_ms": 178.69056109339,
+              "cache_bytes": 13510,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 13510,
+              "load_wall_ms": 2.0135408267378807,
+              "prepare_total_wall_ms": 180.82751100882888,
+              "query_wall_ms": 0.2911021001636982,
+              "rss_end_kib": 50428,
+              "rss_peak_kib": 100220,
+              "rss_start_kib": 24468,
+              "worker_cpu_ms": 53.634814
+            },
+            "objective_exclusions": [],
+            "output_limit": 256,
+            "output_truncated": false,
+            "path_edge_count": 2,
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": 4096,
+            "traversal_truncated": false,
+            "traversed_edge_count": 3,
+            "visited_state_count": 4
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": null,
+          "wall_time_ms": 181.5195
+        },
+        "static_calls_after_failure": 1
+      },
+      "cancellation": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": null,
+          "fallback_used": false,
+          "status": "cancelled"
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "npi_kdb_unavailable",
+          "found": true,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 2,
+          "parent_cpu_time_ms": 4.124759,
+          "path": [
+            {
+              "backend": "source_graph",
+              "edge_id": null,
+              "edge_kind": null,
+              "edge_source_path": null,
+              "exact_bit_mapping": null,
+              "index": 0,
+              "is_endpoint": true,
+              "net_path": "sg_top.u_producer.seed[7:0]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 74
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "assign_c52017b3ec43b70f3357",
+              "edge_kind": "procedural_assign",
+              "edge_source_path": "sg_top.u_producer.seed[7:0]",
+              "exact_bit_mapping": true,
+              "index": 1,
+              "is_endpoint": false,
+              "net_path": "sg_top.u_producer.bus.data[15:8]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 86
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "sg_top.u_producer:3:bus.data",
+              "edge_kind": "interface_bind",
+              "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+              "exact_bit_mapping": true,
+              "index": 2,
+              "is_endpoint": true,
+              "net_path": "sg_top.bus.data[15:8]",
+              "scope_inst": "sg_top.bus",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 98
+            }
+          ],
+          "path_net_paths": [
+            "sg_top.u_producer.seed[7:0]",
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]"
+          ],
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "1970fe0daf7f7b126d0581d5f36af8ab7691f7c09d352d84005ed5800691d0fd",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "hierarchy_projection_scoped"
+            ],
+            "coverage_gap_count": 1,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.40471390821039677,
+              "admission_wait_ms": 0.0012719538062810898,
+              "build_wall_ms": 163.97781507112086,
+              "cache_bytes": 13510,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 13510,
+              "load_wall_ms": 2.009954070672393,
+              "prepare_total_wall_ms": 166.113373124972,
+              "query_wall_ms": 0.28749601915478706,
+              "rss_end_kib": 52740,
+              "rss_peak_kib": 100220,
+              "rss_start_kib": 24384,
+              "worker_cpu_ms": 51.226752
+            },
+            "objective_exclusions": [],
+            "output_limit": 256,
+            "output_truncated": false,
+            "path_edge_count": 2,
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": 4096,
+            "traversal_truncated": false,
+            "traversed_edge_count": 3,
+            "visited_state_count": 4
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": null,
+          "wall_time_ms": 166.977593
+        },
+        "static_calls_after_failure": 0
+      },
+      "crash": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_worker_crash",
+              "status": "failed"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "source_graph_worker_crash",
+          "found": false,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 0,
+          "parent_cpu_time_ms": 1.987503,
+          "path": [],
+          "path_net_paths": [],
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "2267a1114af444c03d70a5c2e9d699b5ed339b97ad57e0bdf70e94a80e4e9a5a",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "worker_exit_failure",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": null,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.9391091298311949,
+              "admission_wait_ms": 0.0015329569578170776,
+              "build_wall_ms": 8.655903860926628,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 8.7621312122792,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "output_limit": null,
+            "output_truncated": false,
+            "path_edge_count": 0,
+            "prepare_status": "worker_crash",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": null,
+            "traversal_truncated": false,
+            "traversed_edge_count": 0,
+            "visited_state_count": 0
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": "static_backend_no_path_api",
+          "wall_time_ms": 9.927973
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "npi_kdb_unavailable",
+          "found": true,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 2,
+          "parent_cpu_time_ms": 4.159672,
+          "path": [
+            {
+              "backend": "source_graph",
+              "edge_id": null,
+              "edge_kind": null,
+              "edge_source_path": null,
+              "exact_bit_mapping": null,
+              "index": 0,
+              "is_endpoint": true,
+              "net_path": "sg_top.u_producer.seed[7:0]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 74
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "assign_c52017b3ec43b70f3357",
+              "edge_kind": "procedural_assign",
+              "edge_source_path": "sg_top.u_producer.seed[7:0]",
+              "exact_bit_mapping": true,
+              "index": 1,
+              "is_endpoint": false,
+              "net_path": "sg_top.u_producer.bus.data[15:8]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 86
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "sg_top.u_producer:3:bus.data",
+              "edge_kind": "interface_bind",
+              "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+              "exact_bit_mapping": true,
+              "index": 2,
+              "is_endpoint": true,
+              "net_path": "sg_top.bus.data[15:8]",
+              "scope_inst": "sg_top.bus",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 98
+            }
+          ],
+          "path_net_paths": [
+            "sg_top.u_producer.seed[7:0]",
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]"
+          ],
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "516447bc6133b8049f69567dd569fd0dc08bb0fecef2e1f1e3c284efdb14fad8",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "hierarchy_projection_scoped"
+            ],
+            "coverage_gap_count": 1,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.32788095995783806,
+              "admission_wait_ms": 0.0011320225894451141,
+              "build_wall_ms": 166.56503407284617,
+              "cache_bytes": 13510,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 13510,
+              "load_wall_ms": 2.1058230195194483,
+              "prepare_total_wall_ms": 168.78415807150304,
+              "query_wall_ms": 0.31499704346060753,
+              "rss_end_kib": 52744,
+              "rss_peak_kib": 100220,
+              "rss_start_kib": 24384,
+              "worker_cpu_ms": 52.243375
+            },
+            "objective_exclusions": [],
+            "output_limit": 256,
+            "output_truncated": false,
+            "path_edge_count": 2,
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": 4096,
+            "traversal_truncated": false,
+            "traversed_edge_count": 3,
+            "visited_state_count": 4
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": null,
+          "wall_time_ms": 169.58478
+        },
+        "static_calls_after_failure": 1
+      },
+      "dependency": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_dependency_blocked",
+              "status": "failed"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "source_graph_dependency_blocked",
+          "found": false,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 0,
+          "parent_cpu_time_ms": 1.614303,
+          "path": [],
+          "path_net_paths": [],
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "f63ea38b172c2f8279755b081e2b6f90412118771c95d9101d38afdf8b83f641",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "frontend_unavailable",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": null,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1.257592812180519,
+              "admission_wait_ms": 0.0013820827007293701,
+              "build_wall_ms": 0.023423926904797554,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.13312790542840958,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "output_limit": null,
+            "output_truncated": false,
+            "path_edge_count": 0,
+            "prepare_status": "dependency_blocked",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": null,
+            "traversal_truncated": false,
+            "traversed_edge_count": 0,
+            "visited_state_count": 0
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": "static_backend_no_path_api",
+          "wall_time_ms": 1.649353
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "npi_kdb_unavailable",
+          "found": true,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 2,
+          "parent_cpu_time_ms": 4.231909,
+          "path": [
+            {
+              "backend": "source_graph",
+              "edge_id": null,
+              "edge_kind": null,
+              "edge_source_path": null,
+              "exact_bit_mapping": null,
+              "index": 0,
+              "is_endpoint": true,
+              "net_path": "sg_top.u_producer.seed[7:0]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 74
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "assign_c52017b3ec43b70f3357",
+              "edge_kind": "procedural_assign",
+              "edge_source_path": "sg_top.u_producer.seed[7:0]",
+              "exact_bit_mapping": true,
+              "index": 1,
+              "is_endpoint": false,
+              "net_path": "sg_top.u_producer.bus.data[15:8]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 86
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "sg_top.u_producer:3:bus.data",
+              "edge_kind": "interface_bind",
+              "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+              "exact_bit_mapping": true,
+              "index": 2,
+              "is_endpoint": true,
+              "net_path": "sg_top.bus.data[15:8]",
+              "scope_inst": "sg_top.bus",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 98
+            }
+          ],
+          "path_net_paths": [
+            "sg_top.u_producer.seed[7:0]",
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]"
+          ],
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "bb294cc42714fbc5a6854bf4a0cb7dd7d317dd5fe85d15d603905cf40875d7a0",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "hierarchy_projection_scoped"
+            ],
+            "coverage_gap_count": 1,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.34498306922614574,
+              "admission_wait_ms": 0.0015420373529195786,
+              "build_wall_ms": 173.82940603420138,
+              "cache_bytes": 13510,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 13510,
+              "load_wall_ms": 1.9589688163250685,
+              "prepare_total_wall_ms": 175.92933704145253,
+              "query_wall_ms": 0.28561195358633995,
+              "rss_end_kib": 52592,
+              "rss_peak_kib": 100220,
+              "rss_start_kib": 24480,
+              "worker_cpu_ms": 52.63325
+            },
+            "objective_exclusions": [],
+            "output_limit": 256,
+            "output_truncated": false,
+            "path_edge_count": 2,
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": 4096,
+            "traversal_truncated": false,
+            "traversed_edge_count": 3,
+            "visited_state_count": 4
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": null,
+          "wall_time_ms": 176.742943
+        },
+        "static_calls_after_failure": 1
+      },
+      "timeout": {
+        "cache_entry_count_after_failure": 0,
+        "cache_entry_count_after_retry": 1,
+        "failure": {
+          "actual_backend": "static",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": null,
+              "reason": "source_graph_timed_out",
+              "status": "timed_out"
+            },
+            {
+              "backend": "static",
+              "coverage_status": null,
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "static",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "source_graph_timed_out",
+          "found": false,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 0,
+          "parent_cpu_time_ms": 2.03234,
+          "path": [],
+          "path_net_paths": [],
+          "payload_backends": [
+            "static"
+          ],
+          "schema_fingerprint_sha256": "d6e95d438efc1ec508dc70d1d2e7a95ede719f3dfec585821809ff34c2aea922",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": {
+              "code": "worker_timeout",
+              "stage": "worker_process"
+            },
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 0,
+            "coverage_files_total": 0,
+            "coverage_gap_codes": [],
+            "coverage_gap_count": 0,
+            "coverage_status": null,
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": null,
+            "fallback_used": true,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": null,
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "miss",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1.0020961053669453,
+              "admission_wait_ms": 0.0011920928955078125,
+              "build_wall_ms": 2.0633831154555082,
+              "cache_bytes": 0,
+              "cancel_to_exit_ms": 0.20991102792322636,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 0,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 2.1650418639183044,
+              "query_wall_ms": null,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "objective_exclusions": [],
+            "output_limit": null,
+            "output_truncated": false,
+            "path_edge_count": 0,
+            "prepare_status": "timed_out",
+            "query_confidence": null,
+            "query_match_count": 0,
+            "query_status": null,
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": null,
+            "traversal_truncated": false,
+            "traversed_edge_count": 0,
+            "visited_state_count": 0
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": "static_backend_no_path_api",
+          "wall_time_ms": 3.353026
+        },
+        "inflight_count_after_failure": 0,
+        "retry": {
+          "actual_backend": "source_graph",
+          "attempted_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "backend": "source_graph",
+          "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+          "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+          "expand_assigns": true,
+          "fallback_reason": "npi_kdb_unavailable",
+          "found": true,
+          "from_signal": "sg_top.u_producer.seed[7:0]",
+          "hops": 2,
+          "parent_cpu_time_ms": 4.357413,
+          "path": [
+            {
+              "backend": "source_graph",
+              "edge_id": null,
+              "edge_kind": null,
+              "edge_source_path": null,
+              "exact_bit_mapping": null,
+              "index": 0,
+              "is_endpoint": true,
+              "net_path": "sg_top.u_producer.seed[7:0]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 74
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "assign_c52017b3ec43b70f3357",
+              "edge_kind": "procedural_assign",
+              "edge_source_path": "sg_top.u_producer.seed[7:0]",
+              "exact_bit_mapping": true,
+              "index": 1,
+              "is_endpoint": false,
+              "net_path": "sg_top.u_producer.bus.data[15:8]",
+              "scope_inst": "sg_top.u_producer",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 86
+            },
+            {
+              "backend": "source_graph",
+              "edge_id": "sg_top.u_producer:3:bus.data",
+              "edge_kind": "interface_bind",
+              "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+              "exact_bit_mapping": true,
+              "index": 2,
+              "is_endpoint": true,
+              "net_path": "sg_top.bus.data[15:8]",
+              "scope_inst": "sg_top.bus",
+              "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+              "source_info_origin": "source_graph",
+              "source_line": 98
+            }
+          ],
+          "path_net_paths": [
+            "sg_top.u_producer.seed[7:0]",
+            "sg_top.u_producer.bus.data[15:8]",
+            "sg_top.bus.data[15:8]"
+          ],
+          "payload_backends": [
+            "source_graph"
+          ],
+          "schema_fingerprint_sha256": "2aa0b21db65cb87958dc74c6e7221c30cc0227166fa7478442841770e53bb2ec",
+          "selected_backend": "source_graph",
+          "source_graph": {
+            "adapter_status": "ready",
+            "blocker": null,
+            "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+            "cache_disposition": "miss",
+            "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+            "coverage_blocking_diagnostic_count": 0,
+            "coverage_diagnostic_count": 0,
+            "coverage_files_projected": 1,
+            "coverage_files_total": 1,
+            "coverage_gap_codes": [
+              "hierarchy_projection_scoped"
+            ],
+            "coverage_gap_count": 1,
+            "coverage_status": "inconclusive",
+            "cross_request_reusable": true,
+            "endpoint_alias_equivalent": false,
+            "expand_assigns": true,
+            "fallback_used": false,
+            "flight_disposition": "builder",
+            "gap_codes": [],
+            "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+            "manifest": {
+              "complete": true,
+              "fingerprint_cache_disposition": "hit_session_snapshot",
+              "incomplete_reasons": [],
+              "input_count": 1,
+              "option_count": 5,
+              "top_count": 1
+            },
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 0.3337319940328598,
+              "admission_wait_ms": 0.0014631077647209167,
+              "build_wall_ms": 165.34276795573533,
+              "cache_bytes": 13510,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 13510,
+              "load_wall_ms": 2.186303026974201,
+              "prepare_total_wall_ms": 167.6681179087609,
+              "query_wall_ms": 0.3124519716948271,
+              "rss_end_kib": 54624,
+              "rss_peak_kib": 100220,
+              "rss_start_kib": 24400,
+              "worker_cpu_ms": 52.296708
+            },
+            "objective_exclusions": [],
+            "output_limit": 256,
+            "output_truncated": false,
+            "path_edge_count": 2,
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found",
+            "scope": {
+              "ancestor_count": 3,
+              "coverage_boundary_instance_count": 3,
+              "endpoint_count": 2,
+              "kind": "dual_endpoint_path",
+              "lca_depth": 0,
+              "objective_exclusions": [],
+              "requested_cone_instance_count": 3
+            },
+            "traversal_limit": 4096,
+            "traversal_truncated": false,
+            "traversed_edge_count": 3,
+            "visited_state_count": 4
+          },
+          "to_signal": "sg_top.bus.data[15:8]",
+          "unsupported_reason": null,
+          "wall_time_ms": 168.460054
+        },
+        "static_calls_after_failure": 1
+      }
+    }
+  },
+  "frontend": {
+    "dependency_model": "optional pinned isolated one-shot worker",
+    "interpreter": "/tmp/traceweave-phase0b-pyslang-11.0.0/bin/python",
+    "name": "Slang/pyslang",
+    "parent_import_requires_pyslang": false,
+    "required_version": "11.0.0"
+  },
+  "gate_targets": {
+    "opentitan_scoped_cold_p50_max_ms": 15000.0,
+    "peak_rss_max_kib": 2621440,
+    "same_key_actual_build_count": 1,
+    "warm_exact_path_public_p95_max_ms": 100.0
+  },
+  "generated_at_utc": "2026-08-03T16:52:42.684070+00:00",
+  "measurement_policy": {
+    "cold": "fresh adapter manifest cache and Source Graph runtime per repeat",
+    "concurrent": "simultaneous identical public path requests",
+    "correctness_oracle": "tracked hand IR and RTL fixture",
+    "failure": "dependency/build/crash/timeout whole-result Static fallback; cancellation no-fallback; same-runtime safe retry",
+    "opentitan_claim": "bounded representative target-scoped only",
+    "warm": "repeated exact public endpoint pair with process-memory hits"
+  },
+  "repository": {
+    "head": "1a9fac908caa865821d46b60130edf1edf3abde1",
+    "root": "/home/robin/Projects/mcp/TraceWeave"
+  },
+  "route_probes": {
+    "driver_load_unchanged": {
+      "driver_actual_backend": "source_graph",
+      "driver_payload_backend": "source_graph",
+      "loads_actual_backend": "source_graph",
+      "loads_payload_backend": "source_graph",
+      "runtime_stats": {
+        "actual_build_count": 2,
+        "cache_bypass_count": 0,
+        "cache_bytes": 74498,
+        "cache_entry_count": 2,
+        "cache_hit_count": 0,
+        "cache_miss_count": 2,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 0
+      },
+      "static_calls": 0
+    },
+    "gate": {
+      "checks": [
+        {
+          "actual": {
+            "npi_path_calls": 1,
+            "probe_model": "deterministic trusted NPI routing probe; no license claim",
+            "result": {
+              "actual_backend": "verdi_npi",
+              "attempted_backend": "verdi_npi",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "verdi_npi",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+              "expand_assigns": true,
+              "fallback_reason": null,
+              "found": true,
+              "from_signal": "sg_top.u_producer.seed[7:0]",
+              "hops": 1,
+              "parent_cpu_time_ms": 0.09583,
+              "path": [
+                {
+                  "backend": "verdi_npi",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.u_producer.seed[7:0]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "npi",
+                  "source_line": 84
+                },
+                {
+                  "backend": "verdi_npi",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 1,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.bus.data[15:8]",
+                  "scope_inst": "sg_top.bus",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "npi",
+                  "source_line": 98
+                }
+              ],
+              "path_net_paths": [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.bus.data[15:8]"
+              ],
+              "payload_backends": [
+                "verdi_npi"
+              ],
+              "schema_fingerprint_sha256": "3d7f0d32871400864077685cb1d6d758e01a3c06c0dbe200ddc05c5f8bcbd268",
+              "selected_backend": "verdi_npi",
+              "to_signal": "sg_top.bus.data[15:8]",
+              "unsupported_reason": null,
+              "wall_time_ms": 0.096469
+            },
+            "source_graph_runtime_get_count": 0,
+            "static_calls": 0
+          },
+          "expected": {
+            "actual": "verdi_npi",
+            "source_graph": 0,
+            "static": 0
+          },
+          "name": "trusted_npi_precedence",
+          "passed": true
+        },
+        {
+          "actual": {
+            "npi_path_calls": 1,
+            "probe_model": "deterministic trusted NPI routing probe; no license claim",
+            "result": {
+              "actual_backend": "verdi_npi",
+              "attempted_backend": "verdi_npi",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "verdi_npi",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+              "expand_assigns": true,
+              "fallback_reason": null,
+              "found": false,
+              "from_signal": "sg_top.u_producer.seed[7:0]",
+              "hops": 0,
+              "parent_cpu_time_ms": 0.028403,
+              "path": [],
+              "path_net_paths": [],
+              "payload_backends": [
+                "verdi_npi"
+              ],
+              "schema_fingerprint_sha256": "467fc1ab1ea4f4e298d82a2c38661e44ce674a96fc80971577b64153a7c67612",
+              "selected_backend": "verdi_npi",
+              "to_signal": "sg_top.bus.data[15:8]",
+              "unsupported_reason": "not_connected",
+              "wall_time_ms": 0.028293
+            },
+            "source_graph_runtime_get_count": 0,
+            "static_calls": 0
+          },
+          "expected": {
+            "actual": "verdi_npi",
+            "reason": "not_connected"
+          },
+          "name": "npi_authoritative_negative_unchanged",
+          "passed": true
+        },
+        {
+          "actual": {
+            "probe_model": "tracked IR coverage-complete not-connected oracle",
+            "result": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "complete",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "eac1d9c051ea4383aa7e78f0ced861ad48bfb2b79ac026893f5fb798e96fc753",
+              "expand_assigns": false,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": false,
+              "from_signal": "sg_top.runtime_force",
+              "hops": 0,
+              "parent_cpu_time_ms": 16.381801,
+              "path": [],
+              "path_net_paths": [],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "ca6739c4f3b53da0f6ad298ebde342ceaccf987627df48941d5b7caf098301f4",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "d2674285fd0cdebb3a4e12ee0f8a85b3e3406f7fc2e6215255ae8ea84abe7003",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+                "coverage_blocking_diagnostic_count": 0,
+                "coverage_diagnostic_count": 0,
+                "coverage_files_projected": 1,
+                "coverage_files_total": 1,
+                "coverage_gap_codes": [],
+                "coverage_gap_count": 0,
+                "coverage_status": "complete",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": false,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [],
+                "ir_fingerprint_sha256": "d60cd9514dcf6ae74e28f6a55f5de1344effa738e4479a982ab282a3ccf56b64",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 1,
+                  "option_count": 5,
+                  "top_count": 1
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 3.497174009680748,
+                  "admission_wait_ms": 0.0024549663066864014,
+                  "build_wall_ms": 7.75492493994534,
+                  "cache_bytes": 37249,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 37249,
+                  "load_wall_ms": 4.602593136951327,
+                  "prepare_total_wall_ms": 12.530269799754024,
+                  "query_wall_ms": 0.24517695419490337,
+                  "rss_end_kib": 120,
+                  "rss_peak_kib": 160,
+                  "rss_start_kib": 100,
+                  "worker_cpu_ms": 1.0
+                },
+                "objective_exclusions": [],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 0,
+                "prepare_status": "ready",
+                "query_confidence": "exact",
+                "query_match_count": 0,
+                "query_status": "not_connected",
+                "scope": {
+                  "ancestor_count": 1,
+                  "coverage_boundary_instance_count": 1,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 0,
+                  "objective_exclusions": [],
+                  "requested_cone_instance_count": 1
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 0,
+                "visited_state_count": 1
+              },
+              "to_signal": "sg_top.seed",
+              "unsupported_reason": "not_connected",
+              "wall_time_ms": 16.409897
+            },
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 37249,
+              "cache_entry_count": 1,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0
+          },
+          "expected": {
+            "actual": "source_graph",
+            "reason": "not_connected"
+          },
+          "name": "source_graph_complete_negative",
+          "passed": true
+        },
+        {
+          "actual": {
+            "probe_model": "tracked IR inconclusive no-path oracle",
+            "result": {
+              "actual_backend": "static",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": "source_graph_coverage_inconclusive",
+                  "status": "inconclusive"
+                },
+                {
+                  "backend": "static",
+                  "coverage_status": null,
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "static",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "eac1d9c051ea4383aa7e78f0ced861ad48bfb2b79ac026893f5fb798e96fc753",
+              "expand_assigns": false,
+              "fallback_reason": "source_graph_coverage_inconclusive",
+              "found": false,
+              "from_signal": "sg_top.runtime_force",
+              "hops": 0,
+              "parent_cpu_time_ms": 12.546921,
+              "path": [],
+              "path_net_paths": [],
+              "payload_backends": [
+                "static"
+              ],
+              "schema_fingerprint_sha256": "857ea4ba410851aefd98b67dcb0730d0fe178304b141cc95343cac73eecf6b92",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "d2674285fd0cdebb3a4e12ee0f8a85b3e3406f7fc2e6215255ae8ea84abe7003",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+                "coverage_blocking_diagnostic_count": 1,
+                "coverage_diagnostic_count": 1,
+                "coverage_files_projected": 1,
+                "coverage_files_total": 1,
+                "coverage_gap_codes": [
+                  "objective_exclusion"
+                ],
+                "coverage_gap_count": 1,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": false,
+                "fallback_used": true,
+                "flight_disposition": "builder",
+                "gap_codes": [],
+                "ir_fingerprint_sha256": "da9fedeaf6bc51858c7a1825f3101db8708ac833f3867d33340cb57c324e3d2b",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "hit_session_snapshot",
+                  "incomplete_reasons": [],
+                  "input_count": 1,
+                  "option_count": 5,
+                  "top_count": 1
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 0.36449916660785675,
+                  "admission_wait_ms": 0.0012831296771764755,
+                  "build_wall_ms": 7.6705580577254295,
+                  "cache_bytes": 37433,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 37433,
+                  "load_wall_ms": 3.9086409378796816,
+                  "prepare_total_wall_ms": 11.713087791576982,
+                  "query_wall_ms": 0.2335051540285349,
+                  "rss_end_kib": 120,
+                  "rss_peak_kib": 160,
+                  "rss_start_kib": 100,
+                  "worker_cpu_ms": 1.0
+                },
+                "objective_exclusions": [],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 0,
+                "prepare_status": "ready",
+                "query_confidence": null,
+                "query_match_count": 0,
+                "query_status": "inconclusive",
+                "scope": {
+                  "ancestor_count": 1,
+                  "coverage_boundary_instance_count": 1,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 0,
+                  "objective_exclusions": [],
+                  "requested_cone_instance_count": 1
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 0,
+                "visited_state_count": 1
+              },
+              "to_signal": "sg_top.seed",
+              "unsupported_reason": "static_backend_no_path_api",
+              "wall_time_ms": 12.597615
+            },
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 37433,
+              "cache_entry_count": 1,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 1
+          },
+          "expected": {
+            "actual": "static",
+            "query": "inconclusive"
+          },
+          "name": "inconclusive_negative_to_static",
+          "passed": true
+        },
+        {
+          "actual": {
+            "build_keys": {
+              "changed_expand": "5e8300974df416c43025e2ec99ee48076d93f10cf10544e3ec7f62d795c7bd2b",
+              "changed_pair": "4ec0d0d07482a0c6996603458aac4e7aa30a1e2da360260e6672ed88116ec3f4",
+              "first": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+              "repeated": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+            },
+            "cache_dispositions": {
+              "changed_expand": "miss",
+              "changed_pair": "miss",
+              "first": "miss",
+              "repeated": "hit_exact"
+            },
+            "cross_target_reuse_implemented": false,
+            "probe_model": "Phase 3A target-specific identity: exact repeat may warm; changed endpoint pair or semantic option remains cold",
+            "runtime_stats": {
+              "actual_build_count": 3,
+              "cache_bypass_count": 0,
+              "cache_bytes": 111747,
+              "cache_entry_count": 3,
+              "cache_hit_count": 1,
+              "cache_miss_count": 3,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "worker_calls": 3
+          },
+          "expected": {
+            "distinct_builds": 3,
+            "exact_repeat_same": true
+          },
+          "name": "target_specific_identity_no_cross_target_reuse",
+          "passed": true
+        },
+        {
+          "actual": {
+            "driver_actual_backend": "source_graph",
+            "driver_payload_backend": "source_graph",
+            "loads_actual_backend": "source_graph",
+            "loads_payload_backend": "source_graph",
+            "runtime_stats": {
+              "actual_build_count": 2,
+              "cache_bypass_count": 0,
+              "cache_bytes": 74498,
+              "cache_entry_count": 2,
+              "cache_hit_count": 0,
+              "cache_miss_count": 2,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0
+          },
+          "expected": {
+            "driver": "source_graph",
+            "loads": "source_graph"
+          },
+          "name": "driver_load_public_route_unchanged",
+          "passed": true
+        },
+        {
+          "actual": {
+            "accepted_head": "102f5a6339b399138c795e2cb917a0ef462b3c8d",
+            "dispatch_branches": {
+              "explain_signal_driver": {
+                "accepted_ast_sha256": "b27dc7fd1f4703fd72261b225f9656238c2fdb87865f70e390ccd36657a198ca",
+                "changed": false,
+                "current_ast_sha256": "b27dc7fd1f4703fd72261b225f9656238c2fdb87865f70e390ccd36657a198ca"
+              },
+              "find_signal_loads": {
+                "accepted_ast_sha256": "f9075c58aa4bc0e44556e2180a88732ba396f132c47609a802be2887acf831b7",
+                "changed": false,
+                "current_ast_sha256": "f9075c58aa4bc0e44556e2180a88732ba396f132c47609a802be2887acf831b7"
+              },
+              "trace_signal_path": {
+                "accepted_ast_sha256": "14ac40cf7d3f3c7270eaee11a6ab12749eb038fb8c3ce1ff285a1ec7eed9ea43",
+                "changed": true,
+                "current_ast_sha256": "fdf261c479739d6039bf975b63074f15f0a7a3d353ee6f6d219afb6b02a83850"
+              },
+              "trace_x_source": {
+                "accepted_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe",
+                "changed": false,
+                "current_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe"
+              }
+            },
+            "functions": {
+              "_handle_trace_x_source": {
+                "accepted_ast_sha256": "9d326f10585f70816f5f74bfc5129059c24b45eccaab275e57f4f62297c64e97",
+                "changed": false,
+                "current_ast_sha256": "9d326f10585f70816f5f74bfc5129059c24b45eccaab275e57f4f62297c64e97"
+              },
+              "_route_public_connectivity": {
+                "accepted_ast_sha256": "01f480cbee722a968bd1cea79350096716033033be6c278f95abc49bf0ce754a",
+                "changed": false,
+                "current_ast_sha256": "01f480cbee722a968bd1cea79350096716033033be6c278f95abc49bf0ce754a"
+              },
+              "_run_in_wave_thread": {
+                "accepted_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044",
+                "changed": false,
+                "current_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044"
+              },
+              "_run_trace_x_attempt": {
+                "accepted_ast_sha256": "c138a7b8ca0985c78b8aff842b5dd3a577cd8c7ae1db673342c6e4c7d2898425",
+                "changed": false,
+                "current_ast_sha256": "c138a7b8ca0985c78b8aff842b5dd3a577cd8c7ae1db673342c6e4c7d2898425"
+              },
+              "_wave_locks_for": {
+                "accepted_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70",
+                "changed": false,
+                "current_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70"
+              }
+            },
+            "phase3a_isolated": true,
+            "production_route_changed_tools": [
+              "trace_signal_path"
+            ]
+          },
+          "expected": {
+            "changed_tools": [
+              "trace_signal_path"
+            ],
+            "other_functions": false
+          },
+          "name": "phase3a_ast_isolation",
+          "passed": true
+        },
+        {
+          "actual": {
+            "pyslang_imported": false,
+            "server_import_succeeded": true,
+            "uhdm_imported": false
+          },
+          "expected": {
+            "pyslang": false,
+            "server": true,
+            "uhdm": false
+          },
+          "name": "parent_import_optional_frontend_free",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    "npi_complete_not_connected": {
+      "npi_path_calls": 1,
+      "probe_model": "deterministic trusted NPI routing probe; no license claim",
+      "result": {
+        "actual_backend": "verdi_npi",
+        "attempted_backend": "verdi_npi",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "verdi_npi",
+        "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+        "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+        "expand_assigns": true,
+        "fallback_reason": null,
+        "found": false,
+        "from_signal": "sg_top.u_producer.seed[7:0]",
+        "hops": 0,
+        "parent_cpu_time_ms": 0.028403,
+        "path": [],
+        "path_net_paths": [],
+        "payload_backends": [
+          "verdi_npi"
+        ],
+        "schema_fingerprint_sha256": "467fc1ab1ea4f4e298d82a2c38661e44ce674a96fc80971577b64153a7c67612",
+        "selected_backend": "verdi_npi",
+        "to_signal": "sg_top.bus.data[15:8]",
+        "unsupported_reason": "not_connected",
+        "wall_time_ms": 0.028293
+      },
+      "source_graph_runtime_get_count": 0,
+      "static_calls": 0
+    },
+    "npi_success": {
+      "npi_path_calls": 1,
+      "probe_model": "deterministic trusted NPI routing probe; no license claim",
+      "result": {
+        "actual_backend": "verdi_npi",
+        "attempted_backend": "verdi_npi",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "verdi_npi",
+        "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+        "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+        "expand_assigns": true,
+        "fallback_reason": null,
+        "found": true,
+        "from_signal": "sg_top.u_producer.seed[7:0]",
+        "hops": 1,
+        "parent_cpu_time_ms": 0.09583,
+        "path": [
+          {
+            "backend": "verdi_npi",
+            "edge_id": null,
+            "edge_kind": null,
+            "edge_source_path": null,
+            "exact_bit_mapping": null,
+            "index": 0,
+            "is_endpoint": true,
+            "net_path": "sg_top.u_producer.seed[7:0]",
+            "scope_inst": "sg_top.u_producer",
+            "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+            "source_info_origin": "npi",
+            "source_line": 84
+          },
+          {
+            "backend": "verdi_npi",
+            "edge_id": null,
+            "edge_kind": null,
+            "edge_source_path": null,
+            "exact_bit_mapping": null,
+            "index": 1,
+            "is_endpoint": true,
+            "net_path": "sg_top.bus.data[15:8]",
+            "scope_inst": "sg_top.bus",
+            "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+            "source_info_origin": "npi",
+            "source_line": 98
+          }
+        ],
+        "path_net_paths": [
+          "sg_top.u_producer.seed[7:0]",
+          "sg_top.bus.data[15:8]"
+        ],
+        "payload_backends": [
+          "verdi_npi"
+        ],
+        "schema_fingerprint_sha256": "3d7f0d32871400864077685cb1d6d758e01a3c06c0dbe200ddc05c5f8bcbd268",
+        "selected_backend": "verdi_npi",
+        "to_signal": "sg_top.bus.data[15:8]",
+        "unsupported_reason": null,
+        "wall_time_ms": 0.096469
+      },
+      "source_graph_runtime_get_count": 0,
+      "static_calls": 0
+    },
+    "parent_import": {
+      "pyslang_imported": false,
+      "server_import_succeeded": true,
+      "uhdm_imported": false
+    },
+    "scope_isolation": {
+      "accepted_head": "102f5a6339b399138c795e2cb917a0ef462b3c8d",
+      "dispatch_branches": {
+        "explain_signal_driver": {
+          "accepted_ast_sha256": "b27dc7fd1f4703fd72261b225f9656238c2fdb87865f70e390ccd36657a198ca",
+          "changed": false,
+          "current_ast_sha256": "b27dc7fd1f4703fd72261b225f9656238c2fdb87865f70e390ccd36657a198ca"
+        },
+        "find_signal_loads": {
+          "accepted_ast_sha256": "f9075c58aa4bc0e44556e2180a88732ba396f132c47609a802be2887acf831b7",
+          "changed": false,
+          "current_ast_sha256": "f9075c58aa4bc0e44556e2180a88732ba396f132c47609a802be2887acf831b7"
+        },
+        "trace_signal_path": {
+          "accepted_ast_sha256": "14ac40cf7d3f3c7270eaee11a6ab12749eb038fb8c3ce1ff285a1ec7eed9ea43",
+          "changed": true,
+          "current_ast_sha256": "fdf261c479739d6039bf975b63074f15f0a7a3d353ee6f6d219afb6b02a83850"
+        },
+        "trace_x_source": {
+          "accepted_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe",
+          "changed": false,
+          "current_ast_sha256": "a568ea72a1b54766f423341f43c0c65e29cdf242a5c35dfe39dd91ad21b284fe"
+        }
+      },
+      "functions": {
+        "_handle_trace_x_source": {
+          "accepted_ast_sha256": "9d326f10585f70816f5f74bfc5129059c24b45eccaab275e57f4f62297c64e97",
+          "changed": false,
+          "current_ast_sha256": "9d326f10585f70816f5f74bfc5129059c24b45eccaab275e57f4f62297c64e97"
+        },
+        "_route_public_connectivity": {
+          "accepted_ast_sha256": "01f480cbee722a968bd1cea79350096716033033be6c278f95abc49bf0ce754a",
+          "changed": false,
+          "current_ast_sha256": "01f480cbee722a968bd1cea79350096716033033be6c278f95abc49bf0ce754a"
+        },
+        "_run_in_wave_thread": {
+          "accepted_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044",
+          "changed": false,
+          "current_ast_sha256": "f104211b90aaff080f425c225e9e05a6a1d57e57158b1b8f903921acb861d044"
+        },
+        "_run_trace_x_attempt": {
+          "accepted_ast_sha256": "c138a7b8ca0985c78b8aff842b5dd3a577cd8c7ae1db673342c6e4c7d2898425",
+          "changed": false,
+          "current_ast_sha256": "c138a7b8ca0985c78b8aff842b5dd3a577cd8c7ae1db673342c6e4c7d2898425"
+        },
+        "_wave_locks_for": {
+          "accepted_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70",
+          "changed": false,
+          "current_ast_sha256": "66b8fcd25c34a0b507e7a349bd59fc649302a08f2f4579ce3865a9f79c40df70"
+        }
+      },
+      "phase3a_isolated": true,
+      "production_route_changed_tools": [
+        "trace_signal_path"
+      ]
+    },
+    "source_graph_complete_not_connected": {
+      "probe_model": "tracked IR coverage-complete not-connected oracle",
+      "result": {
+        "actual_backend": "source_graph",
+        "attempted_backend": "source_graph",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": "npi_kdb_unavailable",
+            "status": "unavailable"
+          },
+          {
+            "backend": "source_graph",
+            "coverage_status": "complete",
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "source_graph",
+        "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+        "endpoint_pair_fingerprint_sha256": "eac1d9c051ea4383aa7e78f0ced861ad48bfb2b79ac026893f5fb798e96fc753",
+        "expand_assigns": false,
+        "fallback_reason": "npi_kdb_unavailable",
+        "found": false,
+        "from_signal": "sg_top.runtime_force",
+        "hops": 0,
+        "parent_cpu_time_ms": 16.381801,
+        "path": [],
+        "path_net_paths": [],
+        "payload_backends": [
+          "source_graph"
+        ],
+        "schema_fingerprint_sha256": "ca6739c4f3b53da0f6ad298ebde342ceaccf987627df48941d5b7caf098301f4",
+        "selected_backend": "source_graph",
+        "source_graph": {
+          "adapter_status": "ready",
+          "blocker": null,
+          "build_key_sha256": "d2674285fd0cdebb3a4e12ee0f8a85b3e3406f7fc2e6215255ae8ea84abe7003",
+          "cache_disposition": "miss",
+          "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+          "coverage_blocking_diagnostic_count": 0,
+          "coverage_diagnostic_count": 0,
+          "coverage_files_projected": 1,
+          "coverage_files_total": 1,
+          "coverage_gap_codes": [],
+          "coverage_gap_count": 0,
+          "coverage_status": "complete",
+          "cross_request_reusable": true,
+          "endpoint_alias_equivalent": false,
+          "expand_assigns": false,
+          "fallback_used": false,
+          "flight_disposition": "builder",
+          "gap_codes": [],
+          "ir_fingerprint_sha256": "d60cd9514dcf6ae74e28f6a55f5de1344effa738e4479a982ab282a3ccf56b64",
+          "manifest": {
+            "complete": true,
+            "fingerprint_cache_disposition": "miss",
+            "incomplete_reasons": [],
+            "input_count": 1,
+            "option_count": 5,
+            "top_count": 1
+          },
+          "metrics": {
+            "actual_build_count": 1,
+            "adapter_wall_ms": 3.497174009680748,
+            "admission_wait_ms": 0.0024549663066864014,
+            "build_wall_ms": 7.75492493994534,
+            "cache_bytes": 37249,
+            "cancel_to_exit_ms": null,
+            "coalesced_waiter_count": 0,
+            "ir_bytes": 37249,
+            "load_wall_ms": 4.602593136951327,
+            "prepare_total_wall_ms": 12.530269799754024,
+            "query_wall_ms": 0.24517695419490337,
+            "rss_end_kib": 120,
+            "rss_peak_kib": 160,
+            "rss_start_kib": 100,
+            "worker_cpu_ms": 1.0
+          },
+          "objective_exclusions": [],
+          "output_limit": 256,
+          "output_truncated": false,
+          "path_edge_count": 0,
+          "prepare_status": "ready",
+          "query_confidence": "exact",
+          "query_match_count": 0,
+          "query_status": "not_connected",
+          "scope": {
+            "ancestor_count": 1,
+            "coverage_boundary_instance_count": 1,
+            "endpoint_count": 2,
+            "kind": "dual_endpoint_path",
+            "lca_depth": 0,
+            "objective_exclusions": [],
+            "requested_cone_instance_count": 1
+          },
+          "traversal_limit": 4096,
+          "traversal_truncated": false,
+          "traversed_edge_count": 0,
+          "visited_state_count": 1
+        },
+        "to_signal": "sg_top.seed",
+        "unsupported_reason": "not_connected",
+        "wall_time_ms": 16.409897
+      },
+      "runtime_stats": {
+        "actual_build_count": 1,
+        "cache_bypass_count": 0,
+        "cache_bytes": 37249,
+        "cache_entry_count": 1,
+        "cache_hit_count": 0,
+        "cache_miss_count": 1,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 0
+      },
+      "static_calls": 0
+    },
+    "source_graph_inconclusive_to_static": {
+      "probe_model": "tracked IR inconclusive no-path oracle",
+      "result": {
+        "actual_backend": "static",
+        "attempted_backend": "source_graph",
+        "attempted_backends": [
+          {
+            "backend": "verdi_npi",
+            "coverage_status": null,
+            "reason": "npi_kdb_unavailable",
+            "status": "unavailable"
+          },
+          {
+            "backend": "source_graph",
+            "coverage_status": "inconclusive",
+            "reason": "source_graph_coverage_inconclusive",
+            "status": "inconclusive"
+          },
+          {
+            "backend": "static",
+            "coverage_status": null,
+            "reason": null,
+            "status": "success"
+          }
+        ],
+        "backend": "static",
+        "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+        "endpoint_pair_fingerprint_sha256": "eac1d9c051ea4383aa7e78f0ced861ad48bfb2b79ac026893f5fb798e96fc753",
+        "expand_assigns": false,
+        "fallback_reason": "source_graph_coverage_inconclusive",
+        "found": false,
+        "from_signal": "sg_top.runtime_force",
+        "hops": 0,
+        "parent_cpu_time_ms": 12.546921,
+        "path": [],
+        "path_net_paths": [],
+        "payload_backends": [
+          "static"
+        ],
+        "schema_fingerprint_sha256": "857ea4ba410851aefd98b67dcb0730d0fe178304b141cc95343cac73eecf6b92",
+        "selected_backend": "source_graph",
+        "source_graph": {
+          "adapter_status": "ready",
+          "blocker": null,
+          "build_key_sha256": "d2674285fd0cdebb3a4e12ee0f8a85b3e3406f7fc2e6215255ae8ea84abe7003",
+          "cache_disposition": "miss",
+          "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+          "coverage_blocking_diagnostic_count": 1,
+          "coverage_diagnostic_count": 1,
+          "coverage_files_projected": 1,
+          "coverage_files_total": 1,
+          "coverage_gap_codes": [
+            "objective_exclusion"
+          ],
+          "coverage_gap_count": 1,
+          "coverage_status": "inconclusive",
+          "cross_request_reusable": true,
+          "endpoint_alias_equivalent": false,
+          "expand_assigns": false,
+          "fallback_used": true,
+          "flight_disposition": "builder",
+          "gap_codes": [],
+          "ir_fingerprint_sha256": "da9fedeaf6bc51858c7a1825f3101db8708ac833f3867d33340cb57c324e3d2b",
+          "manifest": {
+            "complete": true,
+            "fingerprint_cache_disposition": "hit_session_snapshot",
+            "incomplete_reasons": [],
+            "input_count": 1,
+            "option_count": 5,
+            "top_count": 1
+          },
+          "metrics": {
+            "actual_build_count": 1,
+            "adapter_wall_ms": 0.36449916660785675,
+            "admission_wait_ms": 0.0012831296771764755,
+            "build_wall_ms": 7.6705580577254295,
+            "cache_bytes": 37433,
+            "cancel_to_exit_ms": null,
+            "coalesced_waiter_count": 0,
+            "ir_bytes": 37433,
+            "load_wall_ms": 3.9086409378796816,
+            "prepare_total_wall_ms": 11.713087791576982,
+            "query_wall_ms": 0.2335051540285349,
+            "rss_end_kib": 120,
+            "rss_peak_kib": 160,
+            "rss_start_kib": 100,
+            "worker_cpu_ms": 1.0
+          },
+          "objective_exclusions": [],
+          "output_limit": 256,
+          "output_truncated": false,
+          "path_edge_count": 0,
+          "prepare_status": "ready",
+          "query_confidence": null,
+          "query_match_count": 0,
+          "query_status": "inconclusive",
+          "scope": {
+            "ancestor_count": 1,
+            "coverage_boundary_instance_count": 1,
+            "endpoint_count": 2,
+            "kind": "dual_endpoint_path",
+            "lca_depth": 0,
+            "objective_exclusions": [],
+            "requested_cone_instance_count": 1
+          },
+          "traversal_limit": 4096,
+          "traversal_truncated": false,
+          "traversed_edge_count": 0,
+          "visited_state_count": 1
+        },
+        "to_signal": "sg_top.seed",
+        "unsupported_reason": "static_backend_no_path_api",
+        "wall_time_ms": 12.597615
+      },
+      "runtime_stats": {
+        "actual_build_count": 1,
+        "cache_bypass_count": 0,
+        "cache_bytes": 37433,
+        "cache_entry_count": 1,
+        "cache_hit_count": 0,
+        "cache_miss_count": 1,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 0
+      },
+      "static_calls": 1
+    },
+    "target_specific_identity": {
+      "build_keys": {
+        "changed_expand": "5e8300974df416c43025e2ec99ee48076d93f10cf10544e3ec7f62d795c7bd2b",
+        "changed_pair": "4ec0d0d07482a0c6996603458aac4e7aa30a1e2da360260e6672ed88116ec3f4",
+        "first": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+        "repeated": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+      },
+      "cache_dispositions": {
+        "changed_expand": "miss",
+        "changed_pair": "miss",
+        "first": "miss",
+        "repeated": "hit_exact"
+      },
+      "cross_target_reuse_implemented": false,
+      "probe_model": "Phase 3A target-specific identity: exact repeat may warm; changed endpoint pair or semantic option remains cold",
+      "runtime_stats": {
+        "actual_build_count": 3,
+        "cache_bypass_count": 0,
+        "cache_bytes": 111747,
+        "cache_entry_count": 3,
+        "cache_hit_count": 1,
+        "cache_miss_count": 3,
+        "cancelled_waiter_count": 0,
+        "coalesced_waiter_count": 0,
+        "inflight_count": 0,
+        "last_cancel_to_exit_ms": 0.0,
+        "timeout_count": 0,
+        "worker_failure_count": 0
+      },
+      "static_calls": 0,
+      "worker_calls": 3
+    }
+  },
+  "runtime_model": {
+    "compile_session_manifest_cache": "bounded process memory",
+    "cross_target_reuse_implemented": false,
+    "different_endpoint_pair_may_be_cold": true,
+    "disk_cache": false,
+    "ir_cache": "target-specific process-session memory only",
+    "max_concurrent_cold_builds_per_process": 1,
+    "persistent_worker": false,
+    "process_shared_lazy_runtime": true,
+    "production_route": "trusted Verdi NPI -> bounded dual-endpoint Source Graph -> Legacy Static structured unsupported",
+    "same_exact_path_can_warm": true,
+    "same_key_single_flight": true,
+    "startup_build": false,
+    "startup_full_design_enumeration": false,
+    "waveform_locking_model_changed": false
+  },
+  "schema_version": "1.0",
+  "workloads": [
+    {
+      "concurrent_same_key": {
+        "actual_backends": {
+          "source_graph": 4
+        },
+        "actual_build_count": 1,
+        "build_fingerprints": [
+          "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+        ],
+        "cache_entry_count": 1,
+        "coalesced_waiter_count": 3,
+        "flight_dispositions": {
+          "builder": 1,
+          "coalesced": 3
+        },
+        "parent_cpu_time_ms": 7.989304,
+        "payload_backend_sets": [
+          [
+            "source_graph"
+          ]
+        ],
+        "request_count": 4,
+        "static_calls": 0,
+        "wall_time_ms": 174.190919
+      },
+      "expected_path": [
+        "sg_top.u_producer.seed[7:0]",
+        "sg_top.u_producer.bus.data[15:8]",
+        "sg_top.bus.data[15:8]"
+      ],
+      "gate": {
+        "checks": [
+          {
+            "actual": {
+              "backend": [
+                "source_graph"
+              ],
+              "found": [
+                true
+              ],
+              "query_status": [
+                "found"
+              ]
+            },
+            "expected": {
+              "backend": [
+                "source_graph"
+              ],
+              "found": [
+                true
+              ]
+            },
+            "name": "source_graph_found",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.u_producer.bus.data[15:8]",
+                "sg_top.bus.data[15:8]"
+              ]
+            ],
+            "expected": [
+              [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.u_producer.bus.data[15:8]",
+                "sg_top.bus.data[15:8]"
+              ]
+            ],
+            "name": "tracked_endpoint_oracle",
+            "passed": true
+          },
+          {
+            "actual": {
+              "payload": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "static_zero": true
+            },
+            "expected": {
+              "payload": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "static": 0
+            },
+            "name": "single_provenance",
+            "passed": true
+          },
+          {
+            "actual": {
+              "actual_build_counts": [
+                1
+              ],
+              "fingerprints": {
+                "build_fingerprints": [
+                  "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+                ],
+                "compile_fingerprints": [
+                  "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a"
+                ],
+                "endpoint_pair_fingerprints": [
+                  "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89"
+                ],
+                "ir_fingerprints": [
+                  "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14"
+                ]
+              }
+            },
+            "expected": {
+              "actual_build_counts": [
+                1
+              ],
+              "fingerprint_length": 64
+            },
+            "name": "cold_build_and_fingerprints",
+            "passed": true
+          },
+          {
+            "actual": 0.532855,
+            "expected": "<=100.0ms",
+            "name": "warm_exact_path_latency",
+            "passed": true
+          },
+          {
+            "actual": {
+              "actual_backends": {
+                "source_graph": 4
+              },
+              "actual_build_count": 1,
+              "build_fingerprints": [
+                "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+              ],
+              "cache_entry_count": 1,
+              "coalesced_waiter_count": 3,
+              "flight_dispositions": {
+                "builder": 1,
+                "coalesced": 3
+              },
+              "parent_cpu_time_ms": 7.989304,
+              "payload_backend_sets": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "request_count": 4,
+              "static_calls": 0,
+              "wall_time_ms": 174.190919
+            },
+            "expected": {
+              "actual_build_count": 1,
+              "backend": "source_graph"
+            },
+            "name": "same_key_single_flight",
+            "passed": true
+          },
+          {
+            "actual": 70156.0,
+            "expected": "<=2621440KiB",
+            "name": "peak_rss",
+            "passed": true
+          }
+        ],
+        "passed": true
+      },
+      "name": "hand_fixture",
+      "path_operation": {
+        "aggregate": {
+          "actual_backends": [
+            "source_graph"
+          ],
+          "actual_build_counts": [
+            1
+          ],
+          "all_static_calls_zero": true,
+          "blocking_diagnostic_counts": [
+            0
+          ],
+          "build_fingerprints": [
+            "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d"
+          ],
+          "cache_bytes": {
+            "count": 3,
+            "max": 13510.0,
+            "min": 13510.0,
+            "p50": 13510.0,
+            "p95": 13510.0
+          },
+          "cold_parent_cpu_time_ms": {
+            "count": 3,
+            "max": 5.491366,
+            "min": 4.804112,
+            "p50": 4.926581,
+            "p95": 5.434888
+          },
+          "cold_wall_time_ms": {
+            "count": 3,
+            "max": 170.619296,
+            "min": 168.199739,
+            "p50": 168.501732,
+            "p95": 170.40754
+          },
+          "compile_fingerprints": [
+            "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a"
+          ],
+          "coverage_boundary_path_counts": [
+            3
+          ],
+          "coverage_fact_codes": [
+            "hierarchy_projection_scoped"
+          ],
+          "coverage_statuses": [
+            "inconclusive"
+          ],
+          "endpoint_pair_fingerprints": [
+            "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89"
+          ],
+          "found_values": [
+            true
+          ],
+          "ir_bytes": {
+            "count": 3,
+            "max": 13510.0,
+            "min": 13510.0,
+            "p50": 13510.0,
+            "p95": 13510.0
+          },
+          "ir_fingerprints": [
+            "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14"
+          ],
+          "manifest_input_counts": [
+            1
+          ],
+          "manifest_top_counts": [
+            1
+          ],
+          "path_net_path_sets": [
+            [
+              "sg_top.u_producer.seed[7:0]",
+              "sg_top.u_producer.bus.data[15:8]",
+              "sg_top.bus.data[15:8]"
+            ]
+          ],
+          "payload_backend_sets": [
+            [
+              "source_graph"
+            ]
+          ],
+          "peak_rss_kib": {
+            "count": 3,
+            "max": 70156.0,
+            "min": 70024.0,
+            "p50": 70156.0,
+            "p95": 70156.0
+          },
+          "query_confidences": [
+            "partial"
+          ],
+          "query_statuses": [
+            "found"
+          ],
+          "requested_cone_path_counts": [
+            3
+          ],
+          "warm_parent_cpu_time_ms": {
+            "count": 150,
+            "max": 0.725331,
+            "min": 0.47885,
+            "p50": 0.498529,
+            "p95": 0.536748
+          },
+          "warm_wall_time_ms": {
+            "count": 150,
+            "max": 0.722456,
+            "min": 0.474254,
+            "p50": 0.496054,
+            "p95": 0.532855
+          },
+          "worker_cpu_ms": {
+            "count": 3,
+            "max": 51.271873,
+            "min": 50.781757,
+            "p50": 50.901784,
+            "p95": 51.234864
+          }
+        },
+        "cold_runs": [
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "sg_top.u_producer.seed[7:0]",
+              "hops": 2,
+              "parent_cpu_time_ms": 5.491366,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.u_producer.seed[7:0]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 74
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_c52017b3ec43b70f3357",
+                  "edge_kind": "procedural_assign",
+                  "edge_source_path": "sg_top.u_producer.seed[7:0]",
+                  "exact_bit_mapping": true,
+                  "index": 1,
+                  "is_endpoint": false,
+                  "net_path": "sg_top.u_producer.bus.data[15:8]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 86
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "sg_top.u_producer:3:bus.data",
+                  "edge_kind": "interface_bind",
+                  "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+                  "exact_bit_mapping": true,
+                  "index": 2,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.bus.data[15:8]",
+                  "scope_inst": "sg_top.bus",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 98
+                }
+              ],
+              "path_net_paths": [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.u_producer.bus.data[15:8]",
+                "sg_top.bus.data[15:8]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "f6e52128964eb300555ea38c9308f8fbf6b0d0e7a23b63b055720bd6fd746700",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+                "coverage_blocking_diagnostic_count": 0,
+                "coverage_diagnostic_count": 0,
+                "coverage_files_projected": 1,
+                "coverage_files_total": 1,
+                "coverage_gap_codes": [
+                  "hierarchy_projection_scoped"
+                ],
+                "coverage_gap_count": 1,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [],
+                "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 1,
+                  "option_count": 5,
+                  "top_count": 1
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 1.1166899930685759,
+                  "admission_wait_ms": 0.0015129335224628448,
+                  "build_wall_ms": 164.30891188792884,
+                  "cache_bytes": 13510,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 13510,
+                  "load_wall_ms": 2.171003958210349,
+                  "prepare_total_wall_ms": 166.6309768334031,
+                  "query_wall_ms": 0.28965016826987267,
+                  "rss_end_kib": 50428,
+                  "rss_peak_kib": 70024,
+                  "rss_start_kib": 24468,
+                  "worker_cpu_ms": 50.781757
+                },
+                "objective_exclusions": [],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 2,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 3,
+                  "coverage_boundary_instance_count": 3,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 0,
+                  "objective_exclusions": [],
+                  "requested_cone_instance_count": 3
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 3,
+                "visited_state_count": 4
+              },
+              "to_signal": "sg_top.bus.data[15:8]",
+              "unsupported_reason": null,
+              "wall_time_ms": 168.199739
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 13510,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          },
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "sg_top.u_producer.seed[7:0]",
+              "hops": 2,
+              "parent_cpu_time_ms": 4.804112,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.u_producer.seed[7:0]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 74
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_c52017b3ec43b70f3357",
+                  "edge_kind": "procedural_assign",
+                  "edge_source_path": "sg_top.u_producer.seed[7:0]",
+                  "exact_bit_mapping": true,
+                  "index": 1,
+                  "is_endpoint": false,
+                  "net_path": "sg_top.u_producer.bus.data[15:8]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 86
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "sg_top.u_producer:3:bus.data",
+                  "edge_kind": "interface_bind",
+                  "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+                  "exact_bit_mapping": true,
+                  "index": 2,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.bus.data[15:8]",
+                  "scope_inst": "sg_top.bus",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 98
+                }
+              ],
+              "path_net_paths": [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.u_producer.bus.data[15:8]",
+                "sg_top.bus.data[15:8]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "7bf6ed8cc688c5db6b3b2f762eefbcbdfce0c709876d0d24a0d35faf6ee32b7a",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+                "coverage_blocking_diagnostic_count": 0,
+                "coverage_diagnostic_count": 0,
+                "coverage_files_projected": 1,
+                "coverage_files_total": 1,
+                "coverage_gap_codes": [
+                  "hierarchy_projection_scoped"
+                ],
+                "coverage_gap_count": 1,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [],
+                "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 1,
+                  "option_count": 5,
+                  "top_count": 1
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 0.9019197896122932,
+                  "admission_wait_ms": 0.0013120006769895554,
+                  "build_wall_ms": 167.1829759143293,
+                  "cache_bytes": 13510,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 13510,
+                  "load_wall_ms": 1.9477889873087406,
+                  "prepare_total_wall_ms": 169.26856990903616,
+                  "query_wall_ms": 0.2900299150496721,
+                  "rss_end_kib": 52804,
+                  "rss_peak_kib": 70156,
+                  "rss_start_kib": 24368,
+                  "worker_cpu_ms": 50.901784
+                },
+                "objective_exclusions": [],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 2,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 3,
+                  "coverage_boundary_instance_count": 3,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 0,
+                  "objective_exclusions": [],
+                  "requested_cone_instance_count": 3
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 3,
+                "visited_state_count": 4
+              },
+              "to_signal": "sg_top.bus.data[15:8]",
+              "unsupported_reason": null,
+              "wall_time_ms": 170.619296
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 13510,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          },
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "3b07d00b47d9a476ae6007ac4d2665f9afd487aadce2e8812ac5c9b2bec47c89",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "sg_top.u_producer.seed[7:0]",
+              "hops": 2,
+              "parent_cpu_time_ms": 4.926581,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.u_producer.seed[7:0]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 74
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_c52017b3ec43b70f3357",
+                  "edge_kind": "procedural_assign",
+                  "edge_source_path": "sg_top.u_producer.seed[7:0]",
+                  "exact_bit_mapping": true,
+                  "index": 1,
+                  "is_endpoint": false,
+                  "net_path": "sg_top.u_producer.bus.data[15:8]",
+                  "scope_inst": "sg_top.u_producer",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 86
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "sg_top.u_producer:3:bus.data",
+                  "edge_kind": "interface_bind",
+                  "edge_source_path": "sg_top.u_producer.bus.data[15:8]",
+                  "exact_bit_mapping": true,
+                  "index": 2,
+                  "is_endpoint": true,
+                  "net_path": "sg_top.bus.data[15:8]",
+                  "scope_inst": "sg_top.bus",
+                  "source_file": "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 98
+                }
+              ],
+              "path_net_paths": [
+                "sg_top.u_producer.seed[7:0]",
+                "sg_top.u_producer.bus.data[15:8]",
+                "sg_top.bus.data[15:8]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "69cef66298be4f687cfa3ecc574dfe1617b0aab3116edd3ccf206b71455f5812",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "4f76bc296b9f435098bf3e0c55ca9b8b05ef9c8c5574249610d73aa4a2c2e09d",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "f53b334a2e1d90c9e73463f2c210527eebe05933539fa84b89807ad749b9595a",
+                "coverage_blocking_diagnostic_count": 0,
+                "coverage_diagnostic_count": 0,
+                "coverage_files_projected": 1,
+                "coverage_files_total": 1,
+                "coverage_gap_codes": [
+                  "hierarchy_projection_scoped"
+                ],
+                "coverage_gap_count": 1,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [],
+                "ir_fingerprint_sha256": "d8cf3b070743216e709ab97237c4307699d7d225276776c982698205499cde14",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 1,
+                  "option_count": 5,
+                  "top_count": 1
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 0.8697300218045712,
+                  "admission_wait_ms": 0.00169314444065094,
+                  "build_wall_ms": 164.91664410568774,
+                  "cache_bytes": 13510,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 13510,
+                  "load_wall_ms": 2.1290259901434183,
+                  "prepare_total_wall_ms": 167.18035005033016,
+                  "query_wall_ms": 0.2989168278872967,
+                  "rss_end_kib": 52740,
+                  "rss_peak_kib": 70156,
+                  "rss_start_kib": 24380,
+                  "worker_cpu_ms": 51.271873
+                },
+                "objective_exclusions": [],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 2,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 3,
+                  "coverage_boundary_instance_count": 3,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 0,
+                  "objective_exclusions": [],
+                  "requested_cone_instance_count": 3
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 3,
+                "visited_state_count": 4
+              },
+              "to_signal": "sg_top.bus.data[15:8]",
+              "unsupported_reason": null,
+              "wall_time_ms": 168.501732
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 13510,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          }
+        ]
+      },
+      "scope_claim": "tracked hand fixture and exact endpoint oracle; bounded ancestor-union scope, not a production full-design accuracy claim"
+    },
+    {
+      "concurrent_same_key": {
+        "actual_backends": {
+          "source_graph": 4
+        },
+        "actual_build_count": 1,
+        "build_fingerprints": [
+          "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992"
+        ],
+        "cache_entry_count": 1,
+        "coalesced_waiter_count": 3,
+        "flight_dispositions": {
+          "builder": 1,
+          "coalesced": 3
+        },
+        "parent_cpu_time_ms": 928.003625,
+        "payload_backend_sets": [
+          [
+            "source_graph"
+          ]
+        ],
+        "request_count": 4,
+        "static_calls": 0,
+        "wall_time_ms": 5968.642446
+      },
+      "expected_path": [
+        "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+        "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+      ],
+      "gate": {
+        "checks": [
+          {
+            "actual": {
+              "backend": [
+                "source_graph"
+              ],
+              "found": [
+                true
+              ],
+              "query_status": [
+                "found"
+              ]
+            },
+            "expected": {
+              "backend": [
+                "source_graph"
+              ],
+              "found": [
+                true
+              ]
+            },
+            "name": "source_graph_found",
+            "passed": true
+          },
+          {
+            "actual": [
+              [
+                "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+              ]
+            ],
+            "expected": [
+              [
+                "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+              ]
+            ],
+            "name": "tracked_endpoint_oracle",
+            "passed": true
+          },
+          {
+            "actual": {
+              "payload": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "static_zero": true
+            },
+            "expected": {
+              "payload": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "static": 0
+            },
+            "name": "single_provenance",
+            "passed": true
+          },
+          {
+            "actual": {
+              "actual_build_counts": [
+                1
+              ],
+              "fingerprints": {
+                "build_fingerprints": [
+                  "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992"
+                ],
+                "compile_fingerprints": [
+                  "8994570ac1dc463161e580f84d72ba5ee160e23e110d92b88b23bc5b542d52ca"
+                ],
+                "endpoint_pair_fingerprints": [
+                  "26981f4ee9eee94a086bf46170553fe490355f0ea587896cb7ea461e0b5b5463"
+                ],
+                "ir_fingerprints": [
+                  "e5193f2e02972244a0198e88b2a56e8e9033239e5aa38248bc8c37ee230ea74a"
+                ]
+              }
+            },
+            "expected": {
+              "actual_build_counts": [
+                1
+              ],
+              "fingerprint_length": 64
+            },
+            "name": "cold_build_and_fingerprints",
+            "passed": true
+          },
+          {
+            "actual": 3.849044,
+            "expected": "<=100.0ms",
+            "name": "warm_exact_path_latency",
+            "passed": true
+          },
+          {
+            "actual": {
+              "actual_backends": {
+                "source_graph": 4
+              },
+              "actual_build_count": 1,
+              "build_fingerprints": [
+                "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992"
+              ],
+              "cache_entry_count": 1,
+              "coalesced_waiter_count": 3,
+              "flight_dispositions": {
+                "builder": 1,
+                "coalesced": 3
+              },
+              "parent_cpu_time_ms": 928.003625,
+              "payload_backend_sets": [
+                [
+                  "source_graph"
+                ]
+              ],
+              "request_count": 4,
+              "static_calls": 0,
+              "wall_time_ms": 5968.642446
+            },
+            "expected": {
+              "actual_build_count": 1,
+              "backend": "source_graph"
+            },
+            "name": "same_key_single_flight",
+            "passed": true
+          },
+          {
+            "actual": 1377068.0,
+            "expected": "<=2621440KiB",
+            "name": "peak_rss",
+            "passed": true
+          },
+          {
+            "actual": 5901.102719,
+            "expected": "<=15000.0ms",
+            "name": "opentitan_scoped_cold_latency",
+            "passed": true
+          },
+          {
+            "actual": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                4
+              ],
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "expected": {
+              "boundary": [
+                4
+              ],
+              "cone": [
+                4
+              ],
+              "inputs": [
+                785
+              ],
+              "tops": [
+                11
+              ]
+            },
+            "name": "opentitan_bounded_manifest_scope",
+            "passed": true
+          },
+          {
+            "actual": {
+              "blocking": [
+                65
+              ],
+              "confidence": [
+                "partial"
+              ],
+              "coverage": [
+                "inconclusive"
+              ]
+            },
+            "expected": {
+              "blocking": [
+                65
+              ],
+              "confidence": [
+                "partial"
+              ],
+              "coverage": [
+                "inconclusive"
+              ]
+            },
+            "name": "opentitan_coverage_honesty",
+            "passed": true
+          }
+        ],
+        "passed": true
+      },
+      "name": "opentitan_core",
+      "path_operation": {
+        "aggregate": {
+          "actual_backends": [
+            "source_graph"
+          ],
+          "actual_build_counts": [
+            1
+          ],
+          "all_static_calls_zero": true,
+          "blocking_diagnostic_counts": [
+            65
+          ],
+          "build_fingerprints": [
+            "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992"
+          ],
+          "cache_bytes": {
+            "count": 3,
+            "max": 1761846.0,
+            "min": 1761846.0,
+            "p50": 1761846.0,
+            "p95": 1761846.0
+          },
+          "cold_parent_cpu_time_ms": {
+            "count": 3,
+            "max": 907.988571,
+            "min": 884.851913,
+            "p50": 902.308541,
+            "p95": 907.420568
+          },
+          "cold_wall_time_ms": {
+            "count": 3,
+            "max": 5908.932503,
+            "min": 5862.484754,
+            "p50": 5901.102719,
+            "p95": 5908.149525
+          },
+          "compile_fingerprints": [
+            "8994570ac1dc463161e580f84d72ba5ee160e23e110d92b88b23bc5b542d52ca"
+          ],
+          "coverage_boundary_path_counts": [
+            4
+          ],
+          "coverage_fact_codes": [
+            "assignment_target_unresolved",
+            "bind_semantics",
+            "concat_lvalue_partial",
+            "continuous_assignment_unresolved",
+            "definition_replacement_semantics",
+            "dpi_runtime",
+            "frontend_diagnostic:BadAssignment",
+            "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+            "frontend_diagnostic:DefinitionUsedAsValue",
+            "frontend_diagnostic:ExpectedScopeOrAssert",
+            "frontend_diagnostic:FatalTask",
+            "frontend_diagnostic:NoImplicitConversion",
+            "frontend_diagnostic:TypoIdentifier",
+            "frontend_diagnostic:UndeclaredIdentifier",
+            "frontend_diagnostic:UnknownFormatSpecifier",
+            "frontend_diagnostic_badassignment",
+            "frontend_diagnostic_couldnotresolvehierarchicalpath",
+            "frontend_diagnostic_definitionusedasvalue",
+            "frontend_diagnostic_expectedscopeorassert",
+            "frontend_diagnostic_fataltask",
+            "frontend_diagnostic_noimplicitconversion",
+            "frontend_diagnostic_typoidentifier",
+            "frontend_diagnostic_undeclaredidentifier",
+            "frontend_diagnostic_unknownformatspecifier",
+            "hierarchy_projection_scoped",
+            "native_runtime_input_excluded",
+            "path_bit_mapping_inexact",
+            "procedural_control_shape_partial",
+            "procedural_force_release",
+            "projection_gaps_truncated",
+            "runtime_force_not_modeled",
+            "signal_shape_unresolved",
+            "subroutine_body_not_projected",
+            "uvm_dynamic_connectivity"
+          ],
+          "coverage_statuses": [
+            "inconclusive"
+          ],
+          "endpoint_pair_fingerprints": [
+            "26981f4ee9eee94a086bf46170553fe490355f0ea587896cb7ea461e0b5b5463"
+          ],
+          "found_values": [
+            true
+          ],
+          "ir_bytes": {
+            "count": 3,
+            "max": 1761846.0,
+            "min": 1761846.0,
+            "p50": 1761846.0,
+            "p95": 1761846.0
+          },
+          "ir_fingerprints": [
+            "e5193f2e02972244a0198e88b2a56e8e9033239e5aa38248bc8c37ee230ea74a"
+          ],
+          "manifest_input_counts": [
+            785
+          ],
+          "manifest_top_counts": [
+            11
+          ],
+          "path_net_path_sets": [
+            [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+            ]
+          ],
+          "payload_backend_sets": [
+            [
+              "source_graph"
+            ]
+          ],
+          "peak_rss_kib": {
+            "count": 3,
+            "max": 1377068.0,
+            "min": 1375428.0,
+            "p50": 1376148.0,
+            "p95": 1376976.0
+          },
+          "query_confidences": [
+            "partial"
+          ],
+          "query_statuses": [
+            "found"
+          ],
+          "requested_cone_path_counts": [
+            4
+          ],
+          "warm_parent_cpu_time_ms": {
+            "count": 150,
+            "max": 35.799907,
+            "min": 3.196254,
+            "p50": 3.374879,
+            "p95": 3.782577
+          },
+          "warm_wall_time_ms": {
+            "count": 150,
+            "max": 35.886918,
+            "min": 3.200191,
+            "p50": 3.397018,
+            "p95": 3.849044
+          },
+          "worker_cpu_ms": {
+            "count": 3,
+            "max": 4613.812123,
+            "min": 4556.001681,
+            "p50": 4580.966031,
+            "p95": 4610.527514
+          }
+        },
+        "cold_runs": [
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "26981f4ee9eee94a086bf46170553fe490355f0ea587896cb7ea461e0b5b5463",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "hops": 1,
+              "parent_cpu_time_ms": 907.988571,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 253
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_1694f3b616c0d2651393",
+                  "edge_kind": "continuous_assign",
+                  "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "exact_bit_mapping": false,
+                  "index": 1,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 265
+                }
+              ],
+              "path_net_paths": [
+                "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "8ae20e2c2ece53d126a1a310aacbb1bc847f85664bfdba872ff3200405420fb5",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "8994570ac1dc463161e580f84d72ba5ee160e23e110d92b88b23bc5b542d52ca",
+                "coverage_blocking_diagnostic_count": 65,
+                "coverage_diagnostic_count": 29416,
+                "coverage_files_projected": 785,
+                "coverage_files_total": 785,
+                "coverage_gap_codes": [
+                  "assignment_target_unresolved",
+                  "bind_semantics",
+                  "concat_lvalue_partial",
+                  "continuous_assignment_unresolved",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "frontend_diagnostic:BadAssignment",
+                  "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                  "frontend_diagnostic:DefinitionUsedAsValue",
+                  "frontend_diagnostic:ExpectedScopeOrAssert",
+                  "frontend_diagnostic:FatalTask",
+                  "frontend_diagnostic:NoImplicitConversion",
+                  "frontend_diagnostic:TypoIdentifier",
+                  "frontend_diagnostic:UndeclaredIdentifier",
+                  "frontend_diagnostic:UnknownFormatSpecifier",
+                  "frontend_diagnostic_badassignment",
+                  "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                  "frontend_diagnostic_definitionusedasvalue",
+                  "frontend_diagnostic_expectedscopeorassert",
+                  "frontend_diagnostic_fataltask",
+                  "frontend_diagnostic_noimplicitconversion",
+                  "frontend_diagnostic_typoidentifier",
+                  "frontend_diagnostic_undeclaredidentifier",
+                  "frontend_diagnostic_unknownformatspecifier",
+                  "hierarchy_projection_scoped",
+                  "path_bit_mapping_inexact",
+                  "procedural_control_shape_partial",
+                  "procedural_force_release",
+                  "projection_gaps_truncated",
+                  "runtime_force_not_modeled",
+                  "signal_shape_unresolved",
+                  "subroutine_body_not_projected",
+                  "uvm_dynamic_connectivity"
+                ],
+                "coverage_gap_count": 257,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [
+                  "definition_replacement_semantics",
+                  "native_runtime_input_excluded"
+                ],
+                "ir_fingerprint_sha256": "e5193f2e02972244a0198e88b2a56e8e9033239e5aa38248bc8c37ee230ea74a",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 785,
+                  "option_count": 101,
+                  "top_count": 11
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 671.4044900145382,
+                  "admission_wait_ms": 0.0017529819160699844,
+                  "build_wall_ms": 4998.909713933244,
+                  "cache_bytes": 1761846,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 1761846,
+                  "load_wall_ms": 228.97098888643086,
+                  "prepare_total_wall_ms": 5228.875286877155,
+                  "query_wall_ms": 0.6436989642679691,
+                  "rss_end_kib": 1376216,
+                  "rss_peak_kib": 1377068,
+                  "rss_start_kib": 24812,
+                  "worker_cpu_ms": 4580.966031
+                },
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "uvm_dynamic_connectivity"
+                ],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 1,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 4,
+                  "coverage_boundary_instance_count": 4,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 3,
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "requested_cone_instance_count": 4
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 1,
+                "visited_state_count": 2
+              },
+              "to_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+              "unsupported_reason": null,
+              "wall_time_ms": 5901.102719
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 1761846,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          },
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "26981f4ee9eee94a086bf46170553fe490355f0ea587896cb7ea461e0b5b5463",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "hops": 1,
+              "parent_cpu_time_ms": 902.308541,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 253
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_1694f3b616c0d2651393",
+                  "edge_kind": "continuous_assign",
+                  "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "exact_bit_mapping": false,
+                  "index": 1,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 265
+                }
+              ],
+              "path_net_paths": [
+                "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "5ec987be94b85dacc950dd8328fbead09b6573e1ca481e9977cf09b5b679dae2",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "8994570ac1dc463161e580f84d72ba5ee160e23e110d92b88b23bc5b542d52ca",
+                "coverage_blocking_diagnostic_count": 65,
+                "coverage_diagnostic_count": 29416,
+                "coverage_files_projected": 785,
+                "coverage_files_total": 785,
+                "coverage_gap_codes": [
+                  "assignment_target_unresolved",
+                  "bind_semantics",
+                  "concat_lvalue_partial",
+                  "continuous_assignment_unresolved",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "frontend_diagnostic:BadAssignment",
+                  "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                  "frontend_diagnostic:DefinitionUsedAsValue",
+                  "frontend_diagnostic:ExpectedScopeOrAssert",
+                  "frontend_diagnostic:FatalTask",
+                  "frontend_diagnostic:NoImplicitConversion",
+                  "frontend_diagnostic:TypoIdentifier",
+                  "frontend_diagnostic:UndeclaredIdentifier",
+                  "frontend_diagnostic:UnknownFormatSpecifier",
+                  "frontend_diagnostic_badassignment",
+                  "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                  "frontend_diagnostic_definitionusedasvalue",
+                  "frontend_diagnostic_expectedscopeorassert",
+                  "frontend_diagnostic_fataltask",
+                  "frontend_diagnostic_noimplicitconversion",
+                  "frontend_diagnostic_typoidentifier",
+                  "frontend_diagnostic_undeclaredidentifier",
+                  "frontend_diagnostic_unknownformatspecifier",
+                  "hierarchy_projection_scoped",
+                  "path_bit_mapping_inexact",
+                  "procedural_control_shape_partial",
+                  "procedural_force_release",
+                  "projection_gaps_truncated",
+                  "runtime_force_not_modeled",
+                  "signal_shape_unresolved",
+                  "subroutine_body_not_projected",
+                  "uvm_dynamic_connectivity"
+                ],
+                "coverage_gap_count": 257,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [
+                  "definition_replacement_semantics",
+                  "native_runtime_input_excluded"
+                ],
+                "ir_fingerprint_sha256": "e5193f2e02972244a0198e88b2a56e8e9033239e5aa38248bc8c37ee230ea74a",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 785,
+                  "option_count": 101,
+                  "top_count": 11
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 667.6489238161594,
+                  "admission_wait_ms": 0.0019129365682601929,
+                  "build_wall_ms": 4964.664495084435,
+                  "cache_bytes": 1761846,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 1761846,
+                  "load_wall_ms": 228.1528350431472,
+                  "prepare_total_wall_ms": 5193.744076881558,
+                  "query_wall_ms": 0.9025509934872389,
+                  "rss_end_kib": 1374552,
+                  "rss_peak_kib": 1375428,
+                  "rss_start_kib": 24728,
+                  "worker_cpu_ms": 4556.001681
+                },
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "uvm_dynamic_connectivity"
+                ],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 1,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 4,
+                  "coverage_boundary_instance_count": 4,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 3,
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "requested_cone_instance_count": 4
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 1,
+                "visited_state_count": 2
+              },
+              "to_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+              "unsupported_reason": null,
+              "wall_time_ms": 5862.484754
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 1761846,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          },
+          {
+            "cold": {
+              "actual_backend": "source_graph",
+              "attempted_backend": "source_graph",
+              "attempted_backends": [
+                {
+                  "backend": "verdi_npi",
+                  "coverage_status": null,
+                  "reason": "npi_kdb_unavailable",
+                  "status": "unavailable"
+                },
+                {
+                  "backend": "source_graph",
+                  "coverage_status": "inconclusive",
+                  "reason": null,
+                  "status": "success"
+                }
+              ],
+              "backend": "source_graph",
+              "direction_note": "Connectivity only \u2014 not a temporal driver relation. Use explain_signal_driver for driver direction.",
+              "endpoint_pair_fingerprint_sha256": "26981f4ee9eee94a086bf46170553fe490355f0ea587896cb7ea461e0b5b5463",
+              "expand_assigns": true,
+              "fallback_reason": "npi_kdb_unavailable",
+              "found": true,
+              "from_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "hops": 1,
+              "parent_cpu_time_ms": 884.851913,
+              "path": [
+                {
+                  "backend": "source_graph",
+                  "edge_id": null,
+                  "edge_kind": null,
+                  "edge_source_path": null,
+                  "exact_bit_mapping": null,
+                  "index": 0,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 253
+                },
+                {
+                  "backend": "source_graph",
+                  "edge_id": "assign_1694f3b616c0d2651393",
+                  "edge_kind": "continuous_assign",
+                  "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                  "exact_bit_mapping": false,
+                  "index": 1,
+                  "is_endpoint": true,
+                  "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                  "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                  "source_file": "../../../../../tmp/traceweave-phase0b-opentitan-dvsim/phase0b-cold/chip_earlgrey_asic-sim-xcelium/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                  "source_info_origin": "source_graph",
+                  "source_line": 265
+                }
+              ],
+              "path_net_paths": [
+                "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]"
+              ],
+              "payload_backends": [
+                "source_graph"
+              ],
+              "schema_fingerprint_sha256": "45ac40a1a4cbf467f0b1a6c004b2542f06562a35adc9584cbe1f67aed8ecce2c",
+              "selected_backend": "source_graph",
+              "source_graph": {
+                "adapter_status": "ready",
+                "blocker": null,
+                "build_key_sha256": "1184a7c2ab2863386ed8beb79fc193161974cc939db2d57576b818006971b992",
+                "cache_disposition": "miss",
+                "compile_fingerprint_sha256": "8994570ac1dc463161e580f84d72ba5ee160e23e110d92b88b23bc5b542d52ca",
+                "coverage_blocking_diagnostic_count": 65,
+                "coverage_diagnostic_count": 29416,
+                "coverage_files_projected": 785,
+                "coverage_files_total": 785,
+                "coverage_gap_codes": [
+                  "assignment_target_unresolved",
+                  "bind_semantics",
+                  "concat_lvalue_partial",
+                  "continuous_assignment_unresolved",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "frontend_diagnostic:BadAssignment",
+                  "frontend_diagnostic:CouldNotResolveHierarchicalPath",
+                  "frontend_diagnostic:DefinitionUsedAsValue",
+                  "frontend_diagnostic:ExpectedScopeOrAssert",
+                  "frontend_diagnostic:FatalTask",
+                  "frontend_diagnostic:NoImplicitConversion",
+                  "frontend_diagnostic:TypoIdentifier",
+                  "frontend_diagnostic:UndeclaredIdentifier",
+                  "frontend_diagnostic:UnknownFormatSpecifier",
+                  "frontend_diagnostic_badassignment",
+                  "frontend_diagnostic_couldnotresolvehierarchicalpath",
+                  "frontend_diagnostic_definitionusedasvalue",
+                  "frontend_diagnostic_expectedscopeorassert",
+                  "frontend_diagnostic_fataltask",
+                  "frontend_diagnostic_noimplicitconversion",
+                  "frontend_diagnostic_typoidentifier",
+                  "frontend_diagnostic_undeclaredidentifier",
+                  "frontend_diagnostic_unknownformatspecifier",
+                  "hierarchy_projection_scoped",
+                  "path_bit_mapping_inexact",
+                  "procedural_control_shape_partial",
+                  "procedural_force_release",
+                  "projection_gaps_truncated",
+                  "runtime_force_not_modeled",
+                  "signal_shape_unresolved",
+                  "subroutine_body_not_projected",
+                  "uvm_dynamic_connectivity"
+                ],
+                "coverage_gap_count": 257,
+                "coverage_status": "inconclusive",
+                "cross_request_reusable": true,
+                "endpoint_alias_equivalent": false,
+                "expand_assigns": true,
+                "fallback_used": false,
+                "flight_disposition": "builder",
+                "gap_codes": [
+                  "definition_replacement_semantics",
+                  "native_runtime_input_excluded"
+                ],
+                "ir_fingerprint_sha256": "e5193f2e02972244a0198e88b2a56e8e9033239e5aa38248bc8c37ee230ea74a",
+                "manifest": {
+                  "complete": true,
+                  "fingerprint_cache_disposition": "miss",
+                  "incomplete_reasons": [],
+                  "input_count": 785,
+                  "option_count": 101,
+                  "top_count": 11
+                },
+                "metrics": {
+                  "actual_build_count": 1,
+                  "adapter_wall_ms": 651.9904970191419,
+                  "admission_wait_ms": 0.0019329600036144257,
+                  "build_wall_ms": 5029.378940118477,
+                  "cache_bytes": 1761846,
+                  "cancel_to_exit_ms": null,
+                  "coalesced_waiter_count": 0,
+                  "ir_bytes": 1761846,
+                  "load_wall_ms": 225.7381770759821,
+                  "prepare_total_wall_ms": 5256.055946927518,
+                  "query_wall_ms": 0.6883819587528706,
+                  "rss_end_kib": 1375288,
+                  "rss_peak_kib": 1376148,
+                  "rss_start_kib": 24808,
+                  "worker_cpu_ms": 4613.812123
+                },
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "definition_replacement_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "uvm_dynamic_connectivity"
+                ],
+                "output_limit": 256,
+                "output_truncated": false,
+                "path_edge_count": 1,
+                "prepare_status": "ready",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "query_status": "found",
+                "scope": {
+                  "ancestor_count": 4,
+                  "coverage_boundary_instance_count": 4,
+                  "endpoint_count": 2,
+                  "kind": "dual_endpoint_path",
+                  "lca_depth": 3,
+                  "objective_exclusions": [
+                    "bind_semantics",
+                    "definition_replacement_semantics",
+                    "dpi_runtime",
+                    "procedural_force_release",
+                    "uvm_dynamic_connectivity"
+                  ],
+                  "requested_cone_instance_count": 4
+                },
+                "traversal_limit": 4096,
+                "traversal_truncated": false,
+                "traversed_edge_count": 1,
+                "visited_state_count": 2
+              },
+              "to_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+              "unsupported_reason": null,
+              "wall_time_ms": 5908.932503
+            },
+            "runtime_get_count": 51,
+            "runtime_stats": {
+              "actual_build_count": 1,
+              "cache_bypass_count": 0,
+              "cache_bytes": 1761846,
+              "cache_entry_count": 1,
+              "cache_hit_count": 50,
+              "cache_miss_count": 1,
+              "cancelled_waiter_count": 0,
+              "coalesced_waiter_count": 0,
+              "inflight_count": 0,
+              "last_cancel_to_exit_ms": 0.0,
+              "timeout_count": 0,
+              "worker_failure_count": 0
+            },
+            "static_calls": 0,
+            "warm": {
+              "all_found": true,
+              "all_source_graph": true,
+              "cache_dispositions": {
+                "hit_exact": 50
+              },
+              "manifest_cache_dispositions": {
+                "hit_session_snapshot": 50
+              },
+              "sample_count": 50
+            }
+          }
+        ]
+      },
+      "scope_claim": "bounded representative path from the tracked compile session: one continuous assignment inside a pre-resolved rv_core_ibex instance; target-scoped only, not full-design path accuracy, coverage, or speedup"
+    }
+  ]
+}
