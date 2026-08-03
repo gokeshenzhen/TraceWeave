@@ -16,12 +16,19 @@ from src.source_graph_contract import (
     QueryOperation,
     RequestedCone,
     ScopeRelation,
+    SourceGraphArtifactIdentity,
+    SourceGraphArtifactScope,
+    SourceGraphArtifactScopeReceipt,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
     SourceGraphIdentity,
+    SourceGraphQueryIdentity,
     SourceGraphScopeReceipt,
+    compare_source_graph_artifact_scopes,
     compare_source_graph_scopes,
+    compute_source_graph_artifact_key,
     compute_source_graph_build_key,
+    compute_source_graph_query_key,
 )
 
 
@@ -90,6 +97,40 @@ def _request(
             projector_schema_version=projector_schema_version,
         ),
         scope=scope or _scope(),
+    )
+
+
+def _artifact_scope(
+    scope: SourceGraphBuildScope | None = None,
+    *,
+    hierarchy_snapshot: str | None = None,
+) -> SourceGraphArtifactScope:
+    return SourceGraphArtifactScope.from_build_scope(
+        scope or _scope(),
+        hierarchy_snapshot_sha256=hierarchy_snapshot or _fingerprint("hierarchy"),
+    )
+
+
+def _artifact_identity(
+    scope: SourceGraphBuildScope | None = None,
+    *,
+    manifest: CompileInputManifest | None = None,
+    hierarchy_snapshot: str | None = None,
+    compile_snapshot: str | None = None,
+    frontend_version: str = "11.0.0",
+    adapter_version: str = "3.0",
+    worker_protocol_version: str = "3.0",
+) -> SourceGraphArtifactIdentity:
+    return SourceGraphArtifactIdentity(
+        source=SourceGraphIdentity(
+            compile_inputs=manifest or _manifest(),
+            frontend_name="Slang/pyslang",
+            frontend_version=frontend_version,
+        ),
+        scope=_artifact_scope(scope, hierarchy_snapshot=hierarchy_snapshot),
+        compile_snapshot_sha256=compile_snapshot or _fingerprint("compile_snapshot"),
+        adapter_version=adapter_version,
+        worker_protocol_version=worker_protocol_version,
     )
 
 
@@ -400,3 +441,327 @@ def test_partial_explicit_receipt_requires_a_machine_readable_gap():
             scope=_scope(),
             coverage_status=CoverageStatus.PARTIAL,
         )
+
+
+def test_artifact_identity_ignores_driver_target_and_operation_but_query_does_not():
+    driver_scope = _scope(
+        operation=QueryOperation.DRIVER,
+        signal_path="top.u_dut.u_leaf.q",
+    )
+    other_driver_scope = _scope(
+        operation=QueryOperation.DRIVER,
+        signal_path="top.u_dut.u_leaf.other_q",
+    )
+    loads_scope = _scope(
+        operation=QueryOperation.LOADS,
+        signal_path="top.u_dut.u_leaf.q",
+    )
+
+    artifact_keys = {
+        compute_source_graph_artifact_key(_artifact_identity(scope)).digest
+        for scope in (driver_scope, other_driver_scope, loads_scope)
+    }
+    query_keys = {
+        compute_source_graph_query_key(
+            SourceGraphQueryIdentity.from_build_scope(scope)
+        ).digest
+        for scope in (driver_scope, other_driver_scope, loads_scope)
+    }
+
+    assert len(artifact_keys) == 1
+    assert len(query_keys) == 3
+
+
+def test_artifact_query_and_scope_receipt_contracts_round_trip():
+    artifact = _artifact_identity(_path_scope())
+    query = SourceGraphQueryIdentity.from_build_scope(
+        _scope(operation=QueryOperation.LOADS),
+        include_expr=False,
+        kind_filter=("rhs_expr",),
+    )
+    receipt = SourceGraphArtifactScopeReceipt(
+        scope=artifact.scope,
+        coverage_status=CoverageStatus.COMPLETE,
+    )
+
+    assert SourceGraphArtifactIdentity.from_dict(artifact.to_dict()) == artifact
+    assert SourceGraphQueryIdentity.from_dict(query.to_dict()) == query
+    assert SourceGraphArtifactScopeReceipt.from_dict(receipt.to_dict()) == receipt
+
+
+def test_driver_load_and_same_instance_path_share_one_artifact_identity():
+    def single(operation: QueryOperation) -> SourceGraphBuildScope:
+        return SourceGraphBuildScope(
+            design="unit_fixture",
+            top="top",
+            target=ConnectivityTarget(
+                operation=operation,
+                signal_path="top.u_left.q",
+            ),
+            hierarchy_ancestors=("top", "top.u_left"),
+            requested_cone=RequestedCone(
+                operation=operation,
+                max_hops=8,
+                instance_paths=("top.u_left",),
+            ),
+            coverage_boundary=CoverageBoundary(
+                mode=BoundaryMode.EXPLICIT,
+                instance_paths=("top", "top.u_left"),
+            ),
+        )
+
+    scopes = (
+        single(QueryOperation.DRIVER),
+        single(QueryOperation.LOADS),
+        _path_scope(
+            from_signal="top.u_left.q",
+            to_signal="top.u_left.d",
+            from_instance="top.u_left",
+            to_instance="top.u_left",
+        ),
+    )
+
+    assert (
+        len(
+            {
+                compute_source_graph_artifact_key(_artifact_identity(scope)).digest
+                for scope in scopes
+            }
+        )
+        == 1
+    )
+    assert (
+        len(
+            {
+                compute_source_graph_query_key(
+                    SourceGraphQueryIdentity.from_build_scope(scope)
+                ).digest
+                for scope in scopes
+            }
+        )
+        == 3
+    )
+
+
+def test_path_expand_and_query_caps_change_query_not_artifact_identity():
+    scopes = (
+        _path_scope(expand_assigns=False),
+        _path_scope(expand_assigns=True),
+        _path_scope(traversal_limit=2048),
+        _path_scope(output_limit=128),
+    )
+
+    artifact_keys = {
+        compute_source_graph_artifact_key(_artifact_identity(scope)).digest
+        for scope in scopes
+    }
+    query_keys = {
+        compute_source_graph_query_key(
+            SourceGraphQueryIdentity.from_build_scope(scope)
+        ).digest
+        for scope in scopes
+    }
+
+    assert len(artifact_keys) == 1
+    assert len(query_keys) == 4
+
+
+def test_driver_query_depth_and_mapping_flags_do_not_rebuild_artifact():
+    shallow = _scope(max_hops=1)
+    deep = _scope(max_hops=8)
+    shallow_artifact = compute_source_graph_artifact_key(_artifact_identity(shallow))
+    deep_artifact = compute_source_graph_artifact_key(_artifact_identity(deep))
+
+    shallow_query = SourceGraphQueryIdentity.from_build_scope(shallow, recursive=False)
+    deep_query = SourceGraphQueryIdentity.from_build_scope(deep, recursive=True)
+
+    assert shallow_artifact == deep_artifact
+    assert compute_source_graph_query_key(shallow_query) != (
+        compute_source_graph_query_key(deep_query)
+    )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        lambda: _artifact_identity(
+            manifest=_manifest(fingerprint=_fingerprint("changed_content"))
+        ),
+        lambda: _artifact_identity(frontend_version="11.1.0"),
+        lambda: _artifact_identity(adapter_version="3.1"),
+        lambda: _artifact_identity(worker_protocol_version="3.1"),
+        lambda: _artifact_identity(
+            compile_snapshot=_fingerprint("new_compile_snapshot")
+        ),
+        lambda: _artifact_identity(
+            hierarchy_snapshot=_fingerprint("new_hierarchy_snapshot")
+        ),
+    ],
+)
+def test_artifact_affecting_content_versions_and_snapshots_change_key(changed):
+    assert compute_source_graph_artifact_key(changed()) != (
+        compute_source_graph_artifact_key(_artifact_identity())
+    )
+
+
+def test_path_ancestor_union_artifact_dominates_covered_single_endpoint():
+    path_artifact = _artifact_scope(_path_scope())
+    single_scope = SourceGraphBuildScope(
+        design="unit_fixture",
+        top="top",
+        target=ConnectivityTarget(
+            operation=QueryOperation.DRIVER,
+            signal_path="top.u_left.out",
+        ),
+        hierarchy_ancestors=("top", "top.u_left"),
+        requested_cone=RequestedCone(
+            operation=QueryOperation.DRIVER,
+            max_hops=2,
+            instance_paths=("top.u_left",),
+        ),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+        ),
+    )
+    single_artifact = _artifact_scope(single_scope)
+
+    assert (
+        compare_source_graph_artifact_scopes(path_artifact, single_artifact)
+        is ScopeRelation.SUPERSET
+    )
+    assert (
+        compare_source_graph_artifact_scopes(single_artifact, path_artifact)
+        is ScopeRelation.SUBSET
+    )
+
+
+def test_smaller_endpoint_artifact_cannot_serve_sibling_lca_path():
+    path_artifact = _artifact_scope(_path_scope())
+    single_artifact = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("top", "top.u_left"),),
+        proved_lcas=(),
+        projection_instance_paths=("top.u_left",),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+        ),
+    )
+
+    decision = SourceGraphArtifactScopeReceipt(
+        scope=single_artifact,
+        coverage_status=CoverageStatus.COMPLETE,
+    ).reuse_for(path_artifact)
+
+    assert decision.reusable is False
+    assert decision.complete_for_request is False
+    assert decision.relation is ScopeRelation.SUBSET
+
+
+def test_artifact_dominance_blocks_different_top_and_snapshot():
+    baseline = _artifact_scope()
+    different_top = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="other_top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("other_top", "other_top.u_leaf"),),
+        proved_lcas=(),
+        projection_instance_paths=("other_top.u_leaf",),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("other_top", "other_top.u_leaf"),
+        ),
+    )
+    refreshed = replace(
+        baseline,
+        hierarchy_snapshot_sha256=_fingerprint("refreshed_hierarchy"),
+    )
+
+    assert (
+        compare_source_graph_artifact_scopes(baseline, different_top)
+        is ScopeRelation.DISJOINT
+    )
+    assert (
+        compare_source_graph_artifact_scopes(baseline, refreshed)
+        is ScopeRelation.UNPROVEN
+    )
+
+
+def test_artifact_scope_canonicalization_and_dominance_are_deterministic():
+    boundary = CoverageBoundary(
+        mode=BoundaryMode.EXPLICIT,
+        instance_paths=("top.u_right", "top", "top.u_left"),
+    )
+    left = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(
+            ("top", "top.u_right"),
+            ("top", "top.u_left"),
+        ),
+        proved_lcas=("top",),
+        projection_instance_paths=("top.u_right", "top.u_left"),
+        coverage_boundary=boundary,
+    )
+    right = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(
+            ("top", "top.u_left"),
+            ("top", "top.u_right"),
+        ),
+        proved_lcas=("top", "top"),
+        projection_instance_paths=("top.u_left", "top.u_right"),
+        coverage_boundary=boundary,
+    )
+
+    assert left == right
+    assert compare_source_graph_artifact_scopes(left, right) is ScopeRelation.EXACT
+
+
+def test_dominating_partial_artifact_preserves_non_exact_coverage():
+    path_artifact = _artifact_scope(_path_scope())
+    single_artifact = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("top", "top.u_left"),),
+        proved_lcas=(),
+        projection_instance_paths=("top.u_left",),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+        ),
+    )
+    partial_path = replace(
+        path_artifact,
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=path_artifact.coverage_boundary.instance_paths,
+            objective_exclusions=("protected_region",),
+        ),
+    )
+    partial_single = replace(
+        single_artifact,
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=single_artifact.coverage_boundary.instance_paths,
+            objective_exclusions=("protected_region",),
+        ),
+    )
+
+    decision = SourceGraphArtifactScopeReceipt(
+        scope=partial_path,
+        coverage_status=CoverageStatus.INCONCLUSIVE,
+        gap_codes=("frontend_diagnostic",),
+    ).reuse_for(partial_single)
+
+    assert decision.reusable is True
+    assert decision.coverage_status is CoverageStatus.INCONCLUSIVE
+    assert decision.complete_for_request is False
+    assert decision.reason == "coverage_preserved_inconclusive"
