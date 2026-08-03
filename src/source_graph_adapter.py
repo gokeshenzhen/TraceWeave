@@ -1,11 +1,11 @@
-"""Conservative production inputs for scoped Source Graph driver/load builds.
+"""Conservative production inputs for scoped Source Graph connectivity builds.
 
 The adapter translates only local compile-log facts that can be replayed by
 the isolated Slang worker.  It never starts a worker and never walks an
 elaborated design.  Hierarchy scope is resolved by following the requested
-signal through the already-built ``component_tree`` one child at a time; the
-requested assignment cone is the target instance and the explicit coverage
-boundary is that instance plus its ancestors.
+signal through the already-built ``component_tree`` one child at a time. Path
+requests follow two such chains, require one proved top, and project only their
+ancestor union; no sibling or full-design enumeration is performed.
 
 Incomplete compile inputs can still produce a diagnostic request, but the
 existing build contract makes its key non-reusable.  Unprovable target/top
@@ -32,8 +32,10 @@ from .slang_connectivity_projector import SLANG_FRONTEND_NAME
 from .source_graph_contract import (
     BoundaryMode,
     CompileInputManifest,
+    ConnectivityPathTarget,
     ConnectivityTarget,
     CoverageBoundary,
+    PathHierarchyScope,
     QueryOperation,
     RequestedCone,
     SourceGraphBuildRequest,
@@ -43,7 +45,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "1.1"
+SOURCE_GRAPH_ADAPTER_VERSION = "2.0"
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -182,6 +184,9 @@ class SourceGraphAdapterReceipt:
     ancestor_count: int = 0
     requested_cone_instance_count: int = 0
     coverage_boundary_instance_count: int = 0
+    scope_kind: str = "single_endpoint"
+    endpoint_count: int = 1
+    lca_depth: int | None = None
     cross_request_reusable: bool = False
     fingerprint_cache_disposition: str | None = None
     blocker: SourceGraphAdapterBlocker | None = None
@@ -201,6 +206,12 @@ class SourceGraphAdapterReceipt:
             raise ValueError("blocked adapter receipt requires a blocker")
         if self.status is AdapterStatus.READY and self.blocker is not None:
             raise ValueError("ready adapter receipt must not carry a blocker")
+        if self.scope_kind not in {"single_endpoint", "dual_endpoint_path"}:
+            raise ValueError("invalid adapter scope kind")
+        if self.endpoint_count not in {1, 2}:
+            raise ValueError("adapter endpoint count must be one or two")
+        if self.lca_depth is not None and self.lca_depth < 0:
+            raise ValueError("adapter LCA depth must not be negative")
         if self.fingerprint_cache_disposition not in {
             None,
             "miss",
@@ -221,7 +232,10 @@ class SourceGraphAdapterReceipt:
                 "fingerprint_cache_disposition": self.fingerprint_cache_disposition,
             },
             "scope": {
+                "kind": self.scope_kind,
+                "endpoint_count": self.endpoint_count,
                 "ancestor_count": self.ancestor_count,
+                "lca_depth": self.lca_depth,
                 "requested_cone_instance_count": self.requested_cone_instance_count,
                 "coverage_boundary_instance_count": self.coverage_boundary_instance_count,
                 "objective_exclusions": list(self.objective_exclusions),
@@ -1114,6 +1128,8 @@ def _blocked_plan(
     manifest: CompileInputManifest | None = None,
     gaps: Sequence[str] = (),
     exclusions: Sequence[str] = (),
+    scope_kind: str = "single_endpoint",
+    endpoint_count: int = 1,
 ) -> SourceGraphBuildPlan:
     blocker = SourceGraphAdapterBlocker(code=code, stage=stage)
     receipt = SourceGraphAdapterReceipt(
@@ -1125,6 +1141,8 @@ def _blocked_plan(
         manifest_incomplete_reasons=(manifest.incomplete_reasons if manifest else ()),
         gap_codes=tuple(gaps),
         objective_exclusions=tuple(exclusions),
+        scope_kind=scope_kind,
+        endpoint_count=endpoint_count,
         blocker=blocker,
     )
     return SourceGraphBuildPlan(
@@ -1257,6 +1275,232 @@ def build_source_graph_plan(
         ancestor_count=len(ancestors),
         requested_cone_instance_count=1,
         coverage_boundary_instance_count=len(boundary_paths),
+        cross_request_reusable=build_key.cross_request_reusable,
+        fingerprint_cache_disposition=fingerprint_cache_disposition,
+    )
+    return SourceGraphBuildPlan(
+        status=AdapterStatus.READY,
+        request=request,
+        receipt=receipt,
+    )
+
+
+def _path_ancestor_union(
+    from_ancestors: tuple[str, ...],
+    to_ancestors: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {*from_ancestors, *to_ancestors},
+            key=lambda path: (path.count("."), path),
+        )
+    )
+
+
+def _path_lca(
+    from_ancestors: tuple[str, ...],
+    to_ancestors: tuple[str, ...],
+) -> str:
+    common = from_ancestors[0]
+    for left, right in zip(from_ancestors, to_ancestors):
+        if left != right:
+            break
+        common = left
+    return common
+
+
+def build_source_graph_path_plan(
+    *,
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+    hierarchy_result: Mapping[str, Any],
+    from_signal: str,
+    to_signal: str,
+    top_hint: str | None,
+    expand_assigns: bool,
+    frontend_version: str,
+) -> SourceGraphBuildPlan:
+    """Build one bounded, dual-endpoint structural path request.
+
+    Each endpoint instance must be found by direct child lookup in the cached
+    hierarchy. Only the two ancestor chains and their LCA are admitted to the
+    projection, so an unrelated sibling cannot enter the request implicitly.
+    """
+
+    check_cancelled()
+    scope_kind = "dual_endpoint_path"
+    endpoint_count = 2
+    normalized_from = str(from_signal).strip()
+    normalized_to = str(to_signal).strip()
+    if not normalized_from or "." not in normalized_from:
+        return _blocked_plan(
+            code="path_from_signal_unscoped",
+            stage="target_scope",
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+        )
+    if not normalized_to or "." not in normalized_to:
+        return _blocked_plan(
+            code="path_to_signal_unscoped",
+            stage="target_scope",
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+        )
+    if not isinstance(expand_assigns, bool):
+        return _blocked_plan(
+            code="path_expand_assigns_invalid",
+            stage="target_scope",
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+        )
+
+    manifest, gaps, exclusions, fingerprint_cache_disposition = _compile_manifest(
+        compile_log, compile_result
+    )
+    if not manifest.complete:
+        exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
+    blocker_kwargs = {
+        "manifest": manifest,
+        "gaps": gaps,
+        "exclusions": exclusions,
+        "scope_kind": scope_kind,
+        "endpoint_count": endpoint_count,
+    }
+    if not manifest.ordered_inputs:
+        return _blocked_plan(
+            code="compile_inputs_unavailable",
+            stage="compile_manifest",
+            **blocker_kwargs,
+        )
+    if not manifest.ordered_tops:
+        return _blocked_plan(
+            code="compile_tops_unavailable",
+            stage="compile_manifest",
+            **blocker_kwargs,
+        )
+
+    from_root = normalized_from.split(".", 1)[0]
+    to_root = normalized_to.split(".", 1)[0]
+    if from_root != to_root:
+        return _blocked_plan(
+            code="path_endpoint_top_mismatch",
+            stage="target_scope",
+            **blocker_kwargs,
+        )
+    top = _selected_top(
+        signal_path=normalized_from,
+        tops=manifest.ordered_tops,
+        top_hint=top_hint,
+    )
+    if (
+        top is None
+        or _selected_top(
+            signal_path=normalized_to,
+            tops=manifest.ordered_tops,
+            top_hint=top_hint,
+        )
+        != top
+    ):
+        return _blocked_plan(
+            code="path_endpoint_top_unresolved",
+            stage="target_scope",
+            **blocker_kwargs,
+        )
+
+    from_ancestors = _hierarchy_ancestors(
+        hierarchy_result=hierarchy_result,
+        top=top,
+        signal_path=normalized_from,
+    )
+    to_ancestors = _hierarchy_ancestors(
+        hierarchy_result=hierarchy_result,
+        top=top,
+        signal_path=normalized_to,
+    )
+    if from_ancestors is None and to_ancestors is None:
+        code = "path_endpoint_hierarchy_unresolved"
+    elif from_ancestors is None:
+        code = "path_from_hierarchy_unresolved"
+    elif to_ancestors is None:
+        code = "path_to_hierarchy_unresolved"
+    else:
+        code = None
+    if code is not None:
+        return _blocked_plan(
+            code=code,
+            stage="target_scope",
+            gaps=(*gaps, code),
+            manifest=manifest,
+            exclusions=exclusions,
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+        )
+
+    assert from_ancestors is not None and to_ancestors is not None
+    ancestor_union = _path_ancestor_union(from_ancestors, to_ancestors)
+    lca = _path_lca(from_ancestors, to_ancestors)
+    target = ConnectivityPathTarget(
+        operation=QueryOperation.PATH,
+        from_signal=normalized_from,
+        to_signal=normalized_to,
+        from_instance_path=from_ancestors[-1],
+        to_instance_path=to_ancestors[-1],
+        expand_assigns=expand_assigns,
+    )
+    path_hierarchy = PathHierarchyScope(
+        from_ancestors=from_ancestors,
+        to_ancestors=to_ancestors,
+        ancestor_union=ancestor_union,
+        lca=lca,
+    )
+    scope = SourceGraphBuildScope(
+        design=(
+            f"compile_{manifest.fingerprint[:24]}"
+            if manifest.fingerprint
+            else "compile_incomplete_manifest"
+        ),
+        top=top,
+        target=target,
+        hierarchy_ancestors=ancestor_union,
+        requested_cone=RequestedCone(
+            operation=QueryOperation.PATH,
+            max_hops=max(len(from_ancestors), len(to_ancestors)) - 1,
+            instance_paths=ancestor_union,
+            cross_instance_boundaries=True,
+            stop_at_sequential=True,
+            include_control_dependencies=False,
+        ),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=ancestor_union,
+            objective_exclusions=tuple(exclusions),
+        ),
+        path_hierarchy=path_hierarchy,
+    )
+    request = SourceGraphBuildRequest(
+        identity=SourceGraphIdentity(
+            compile_inputs=manifest,
+            frontend_name=SLANG_FRONTEND_NAME,
+            frontend_version=frontend_version,
+        ),
+        scope=scope,
+    )
+    build_key = compute_source_graph_build_key(request)
+    receipt = SourceGraphAdapterReceipt(
+        status=AdapterStatus.READY,
+        input_count=len(manifest.ordered_inputs),
+        option_count=len(manifest.ordered_options),
+        top_count=len(manifest.ordered_tops),
+        manifest_complete=manifest.complete,
+        manifest_incomplete_reasons=manifest.incomplete_reasons,
+        gap_codes=gaps,
+        objective_exclusions=tuple(exclusions),
+        ancestor_count=len(ancestor_union),
+        requested_cone_instance_count=len(ancestor_union),
+        coverage_boundary_instance_count=len(ancestor_union),
+        scope_kind=scope_kind,
+        endpoint_count=endpoint_count,
+        lca_depth=lca.count("."),
         cross_request_reusable=build_key.cross_request_reusable,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
     )

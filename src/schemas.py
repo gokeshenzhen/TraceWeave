@@ -755,11 +755,31 @@ class SourceGraphBackendReceipt(SchemaModel):
     coverage_gap_count: int = 0
     coverage_gap_codes: list[str] = Field(default_factory=list)
     objective_exclusions: list[str] = Field(default_factory=list)
-    query_status: Literal["found", "not_connected", "inconclusive"] | None = None
+    query_status: (
+        Literal[
+            "found",
+            "not_connected",
+            "from_unresolved",
+            "to_unresolved",
+            "endpoints_unresolved",
+            "inconclusive",
+            "truncated",
+        ]
+        | None
+    ) = None
     query_confidence: Literal["exact", "conditional", "partial"] | None = None
     query_match_count: int = 0
     traversed_binding_edges: int = 0
     max_depth: int | None = None
+    path_edge_count: int = 0
+    traversed_edge_count: int = 0
+    visited_state_count: int = 0
+    traversal_limit: int | None = None
+    output_limit: int | None = None
+    traversal_truncated: bool = False
+    output_truncated: bool = False
+    endpoint_alias_equivalent: bool = False
+    expand_assigns: bool | None = None
     build_key_sha256: str | None = None
     compile_fingerprint_sha256: str | None = None
     ir_fingerprint_sha256: str | None = None
@@ -875,6 +895,22 @@ class SignalPathHop(SchemaModel):
     source_file: str | None = None
     source_line: int | None = None
     is_endpoint: bool = False
+    source_info_origin: Literal["npi", "source_graph"] | None = None
+    backend: Literal["verdi_npi", "source_graph"] | None = None
+    edge_kind: (
+        Literal[
+            "port_bind_input",
+            "port_bind_output",
+            "port_bind_inout",
+            "interface_bind",
+            "continuous_assign",
+            "procedural_assign",
+        ]
+        | None
+    ) = None
+    edge_id: str | None = None
+    edge_source_path: str | None = None
+    exact_bit_mapping: bool | None = None
 
 
 _TRACE_SIGNAL_PATH_DIRECTION_NOTE = (
@@ -898,9 +934,13 @@ class TraceSignalPathResult(SchemaModel):
             "not_connected",
             "static_backend_no_path_api",
             "npi_call_failed",
+            "source_graph_endpoints_unresolved",
+            "source_graph_query_inconclusive",
+            "source_graph_path_truncated",
         ]
         | None
     ) = None
+    backend: Literal["static", "verdi_npi", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 

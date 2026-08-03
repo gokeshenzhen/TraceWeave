@@ -1,7 +1,7 @@
 """Prepared Source Graph backend and conservative public result mapping.
 
 The runtime owns preparation/cache lifecycle; this module consumes exactly one
-prepared cache entry and emits driver/load facts from its Connectivity IR.  It
+prepared cache entry and emits driver/load/path facts from its Connectivity IR. It
 does not invoke NPI or Legacy Static, so a returned result has one provenance.
 """
 
@@ -10,9 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .connectivity_ir import CoverageStatus
+from .connectivity_ir import CoverageStatus, EdgeKind, ResolutionKind, SignalSelection
 from .connectivity_query import (
+    ConnectivityPathQueryResult,
     ConnectivityQueryResult,
+    PathQueryStatus,
     QueryConfidence,
     QueryMatch,
     QueryStatus,
@@ -62,8 +64,42 @@ def _query_receipt(result: ConnectivityQueryResult) -> dict[str, Any]:
     }
 
 
+def _path_confidence(result: ConnectivityPathQueryResult) -> str | None:
+    if result.status is not PathQueryStatus.FOUND:
+        return "exact" if result.status is PathQueryStatus.NOT_CONNECTED else None
+    if result.coverage_status is not CoverageStatus.COMPLETE:
+        return "partial"
+    resolutions = {edge.evidence.resolution for edge in result.path}
+    if ResolutionKind.UNRESOLVED in resolutions:
+        return "partial"
+    if ResolutionKind.CONDITIONAL in resolutions:
+        return "conditional"
+    return "exact"
+
+
+def _path_query_receipt(result: ConnectivityPathQueryResult) -> dict[str, Any]:
+    return {
+        "status": result.status.value,
+        "coverage_status": result.coverage_status.value,
+        "confidence": _path_confidence(result),
+        "match_count": int(result.status is PathQueryStatus.FOUND),
+        "unresolved_boundary_codes": sorted(
+            {gap.code for gap in result.unresolved_boundaries}
+        ),
+        "path_edge_count": len(result.path),
+        "traversed_edge_count": result.traversed_edge_count,
+        "visited_state_count": result.visited_state_count,
+        "traversal_limit": result.traversal_limit,
+        "output_limit": result.output_limit,
+        "traversal_truncated": result.traversal_truncated,
+        "output_truncated": result.output_truncated,
+        "endpoint_alias_equivalent": result.endpoint_alias_equivalent,
+        "expand_assigns": result.expand_assigns,
+    }
+
+
 class SourceGraphConnectivityBackend:
-    """One-provenance driver/load queries over a prepared Source Graph entry."""
+    """One-provenance driver/load/path queries over a prepared graph entry."""
 
     name = "source_graph"
     execution_mode = "local"
@@ -128,18 +164,15 @@ class SourceGraphConnectivityBackend:
         expand_assigns: bool = False,
         simulator: str = "auto",
     ) -> dict[str, Any]:
-        """Arbitrary path integration is outside the approved Phase 2 scope."""
-
         del compile_log, top_hint, simulator
-        return {
-            "from_signal": from_signal,
-            "to_signal": to_signal,
-            "found": False,
-            "hops": 0,
-            "path": [],
-            "expand_assigns": expand_assigns,
-            "unsupported_reason": "source_graph_path_not_integrated",
-        }
+        query = self._entry.query_engine.query_path(
+            from_signal,
+            to_signal,
+            expand_assigns=expand_assigns,
+        )
+        result = self._map_path(query)
+        result["_source_graph_query_receipt"] = _path_query_receipt(query)
+        return result
 
     def _definition_name(self, instance_path: str) -> str | None:
         instance = self._entry.ir.instance_index.get(instance_path)
@@ -147,6 +180,105 @@ class SourceGraphConnectivityBackend:
             return None
         definition = self._entry.ir.definition_index.get(instance.definition_id)
         return definition.name if definition is not None else None
+
+    def _selection_location(
+        self, selection: SignalSelection
+    ) -> tuple[str | None, int | None]:
+        instance_path = selection.instance_path
+        instance = self._entry.ir.instance_index.get(instance_path or "")
+        if instance is None:
+            return None, None
+        definition = self._entry.ir.definition_index.get(instance.definition_id)
+        if definition is None:
+            return None, None
+        for declaration in (*definition.ports, *definition.signals):
+            if declaration.name == selection.symbol:
+                return declaration.location.file, declaration.location.line
+        if "." not in selection.symbol:
+            return None, None
+        port_name, member_name = selection.symbol.split(".", 1)
+        port = definition.port(port_name)
+        if port is None or not port.interface_definition:
+            return None, None
+        candidates = [
+            item
+            for item in self._entry.ir.definitions
+            if item.definition_id == port.interface_definition
+            or item.name == port.interface_definition
+        ]
+        if len(candidates) != 1:
+            return None, None
+        for declaration in candidates[0].signals:
+            if declaration.name == member_name:
+                return declaration.location.file, declaration.location.line
+        return None, None
+
+    @staticmethod
+    def _path_unsupported_reason(status: PathQueryStatus) -> str | None:
+        return {
+            PathQueryStatus.FOUND: None,
+            PathQueryStatus.NOT_CONNECTED: "not_connected",
+            PathQueryStatus.FROM_UNRESOLVED: "from_not_found",
+            PathQueryStatus.TO_UNRESOLVED: "to_not_found",
+            PathQueryStatus.ENDPOINTS_UNRESOLVED: ("source_graph_endpoints_unresolved"),
+            PathQueryStatus.INCONCLUSIVE: "source_graph_query_inconclusive",
+            PathQueryStatus.TRUNCATED: "source_graph_path_truncated",
+        }[status]
+
+    def _map_path(self, query: ConnectivityPathQueryResult) -> dict[str, Any]:
+        found = query.status is PathQueryStatus.FOUND
+        public_path: list[dict[str, Any]] = []
+        if found and query.from_endpoint is not None:
+            source_file, source_line = self._selection_location(query.from_endpoint)
+            public_path.append(
+                {
+                    "index": 0,
+                    "net_path": query.from_endpoint.path(include_bits=True),
+                    "scope_inst": query.from_endpoint.instance_path,
+                    "source_file": source_file,
+                    "source_line": source_line,
+                    "source_info_origin": "source_graph",
+                    "backend": "source_graph",
+                    "is_endpoint": True,
+                }
+            )
+            last_index = len(query.path)
+            for index, edge in enumerate(query.path, start=1):
+                assignment_edge = edge.edge_kind in {
+                    EdgeKind.CONTINUOUS_ASSIGN,
+                    EdgeKind.PROCEDURAL_ASSIGN,
+                }
+                expose_edge = query.expand_assigns or not assignment_edge
+                public_path.append(
+                    {
+                        "index": index,
+                        "net_path": edge.target.path(include_bits=True),
+                        "scope_inst": edge.target.instance_path,
+                        "source_file": edge.evidence.location.file,
+                        "source_line": edge.evidence.location.line,
+                        "source_info_origin": "source_graph",
+                        "backend": "source_graph",
+                        "is_endpoint": index == last_index,
+                        "edge_kind": edge.edge_kind.value if expose_edge else None,
+                        "edge_id": edge.edge_id if expose_edge else None,
+                        "edge_source_path": (
+                            edge.source.path(include_bits=True) if expose_edge else None
+                        ),
+                        "exact_bit_mapping": (
+                            edge.exact_bit_mapping if expose_edge else None
+                        ),
+                    }
+                )
+        return {
+            "from_signal": query.from_signal,
+            "to_signal": query.to_signal,
+            "found": found,
+            "hops": len(query.path) if found else 0,
+            "path": public_path,
+            "expand_assigns": query.expand_assigns,
+            "unsupported_reason": self._path_unsupported_reason(query.status),
+            "backend": "source_graph",
+        }
 
     def _map_driver(
         self,

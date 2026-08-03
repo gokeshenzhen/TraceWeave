@@ -11,11 +11,11 @@ execution placement.
 Design intent: backend selection happens at the dispatch site (server.py)
 based on probe_verdi_backend status — not inside individual scanners.
 The NPI backend normally wraps Static internally and degrades to it on any
-per-call failure for driver/load queries.  Production driver/load routing may
+per-call failure. Production driver/load/path routing may
 instead inject :class:`DeferredConnectivityFallbackBackend` so Source Graph gets
-the first fallback opportunity; ``find_path`` is NPI-only and
-returns a structured ``static_backend_no_path_api`` when no KDB is
-present (no honest source-regex equivalent exists).
+the first fallback opportunity. Legacy Static still returns a structured
+``static_backend_no_path_api`` for ``find_path`` because source regex has no
+honest path equivalent.
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ class StaticConnectivityBackend:
 
 
 class DeferredConnectivityFallbackBackend:
-    """Internal no-I/O fallback used by the public driver/load router.
+    """Internal no-I/O fallback used by the public connectivity router.
 
     Verdi backends historically own their Static fallback.  Injecting this
     placeholder lets them retain that control flow and attach their normal NPI
@@ -235,7 +235,7 @@ def select_backend(
     If a usable KDB is present, return a local VerdiNpiBackend or the opt-in
     LSF wrapper.  The default fallback remains Static for backward-compatible
     path/X-trace callers; driver/load production routing injects a deferred
-    fallback so it can attempt Source Graph first.
+    fallback so it can attempt Source Graph first for driver/load/path calls.
 
     If no KDB is detected, the configured fallback is returned directly —
     starting NPI without a design to load would just consume a license

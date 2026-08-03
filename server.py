@@ -64,7 +64,11 @@ from src.compile_log_parser import parse_compile_log
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import HandleStore, compute_handle
-from src.source_graph_adapter import AdapterStatus, build_source_graph_plan
+from src.source_graph_adapter import (
+    AdapterStatus,
+    build_source_graph_path_plan,
+    build_source_graph_plan,
+)
 from src.source_graph_backend import (
     SourceGraphConnectivityBackend,
     SourceGraphQueryBlocked,
@@ -1304,6 +1308,19 @@ def _merge_source_graph_query_receipt(
     receipt["query_match_count"] = int(query.get("match_count", 0))
     receipt["traversed_binding_edges"] = int(query.get("traversed_binding_edges", 0))
     receipt["max_depth"] = query.get("max_depth")
+    for field in (
+        "path_edge_count",
+        "traversed_edge_count",
+        "visited_state_count",
+        "traversal_limit",
+        "output_limit",
+        "traversal_truncated",
+        "output_truncated",
+        "endpoint_alias_equivalent",
+        "expand_assigns",
+    ):
+        if field in query:
+            receipt[field] = query[field]
     receipt["coverage_status"] = query.get("coverage_status")
     receipt["coverage_gap_codes"] = sorted(
         {
@@ -1807,6 +1824,481 @@ async def _route_public_connectivity(
         actual_backend="static",
         attempts=attempts,
         fallback_reason=final_reason,
+        npi_backend=npi_backend if npi_selected else None,
+        npi_execution=npi_execution,
+        source_graph_receipt=source_graph_receipt,
+    )
+    return clean, status
+
+
+def _single_path_backend_provenance(result: dict, *, expected: str) -> bool:
+    explicit: list[object] = []
+    if result.get("backend") is not None:
+        explicit.append(result.get("backend"))
+    path = result.get("path")
+    if isinstance(path, list):
+        explicit.extend(
+            hop.get("backend")
+            for hop in path
+            if isinstance(hop, dict) and hop.get("backend") is not None
+        )
+    return all(item == expected for item in explicit)
+
+
+def _npi_path_result_usable(result: dict) -> bool:
+    if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
+        return False
+    if not _single_path_backend_provenance(result, expected="verdi_npi"):
+        return False
+    if result.get("found") is True:
+        return result.get("unsupported_reason") is None and bool(result.get("path"))
+    return result.get("unsupported_reason") in {
+        "from_not_found",
+        "to_not_found",
+        "not_connected",
+    }
+
+
+async def _call_signal_path_backend(
+    backend,
+    *,
+    args: dict,
+    simulator: str,
+) -> dict:
+    def query():
+        return backend.find_path(
+            from_signal=args["from_signal"],
+            to_signal=args["to_signal"],
+            compile_log=args["compile_log"],
+            top_hint=args.get("top_hint"),
+            expand_assigns=args.get("expand_assigns", False),
+            simulator=simulator,
+        )
+
+    if backend.name in {"static", "source_graph"}:
+        raw = await _run_in_cancellable_thread(query)
+    else:
+        raw = await _call_connectivity_backend(backend, query)
+    if not isinstance(raw, dict):
+        raise TypeError("connectivity path backend result must be a mapping")
+    return raw
+
+
+def _source_graph_path_fallback_reason(query_status: str | None) -> str:
+    return {
+        "from_unresolved": "source_graph_path_from_unresolved",
+        "to_unresolved": "source_graph_path_to_unresolved",
+        "endpoints_unresolved": "source_graph_path_endpoints_unresolved",
+        "truncated": "source_graph_path_truncated",
+        "inconclusive": "source_graph_coverage_inconclusive",
+    }.get(query_status, "source_graph_query_failed")
+
+
+async def _route_public_signal_path(
+    *,
+    args: dict,
+    simulator: str,
+) -> tuple[dict, dict]:
+    """Route one path result through NPI, Source Graph, then Legacy Static."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        DeferredConnectivityFallbackBackend,
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    backend_status = _safe_probe_backend(args["compile_log"], simulator)
+    deferred = DeferredConnectivityFallbackBackend()
+    npi_selection_reason: str | None = None
+    try:
+        npi_backend = select_backend(backend_status, fallback=deferred)
+    except Exception:  # noqa: BLE001
+        npi_backend = deferred
+        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    selected_backend = "verdi_npi" if npi_selected else "source_graph"
+    attempts: list[dict] = []
+    npi_execution: dict | None = None
+    fallback_reason: str | None = None
+
+    if npi_selected:
+        try:
+            npi_result = await _call_signal_path_backend(
+                npi_backend,
+                args=args,
+                simulator=simulator,
+            )
+        except OperationCancelled as exc:
+            raise asyncio.CancelledError from exc
+        except Exception:  # noqa: BLE001
+            npi_result = None
+            fallback_reason = "npi_query_failed"
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed",
+                    reason=fallback_reason,
+                )
+            )
+        if npi_result is not None:
+            execution = npi_result.get("_npi_execution_status")
+            if isinstance(execution, dict):
+                npi_execution = dict(execution)
+            if _npi_path_result_usable(npi_result):
+                attempts.append(_backend_attempt("verdi_npi", "success"))
+                clean = _strip_connectivity_internal_receipts(npi_result)
+                clean["backend"] = "verdi_npi"
+                status = _finalize_public_connectivity_status(
+                    backend_status=backend_status,
+                    selected_backend=selected_backend,
+                    actual_backend="verdi_npi",
+                    attempts=attempts,
+                    fallback_reason=None,
+                    npi_backend=npi_backend,
+                    npi_execution=npi_execution,
+                    source_graph_receipt=None,
+                )
+                return clean, status
+            raw_reason = npi_result.get("_npi_fallback_reason")
+            fallback_reason = (
+                "npi_query_failed"
+                if npi_result.get("_npi_call_error")
+                else _sanitize_npi_fallback_reason(raw_reason)
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed"
+                    if raw_reason or npi_result.get("_npi_call_error")
+                    else "inconclusive",
+                    reason=fallback_reason,
+                )
+            )
+    else:
+        fallback_reason = npi_selection_reason or "npi_kdb_unavailable"
+        attempts.append(
+            _backend_attempt(
+                "verdi_npi",
+                "failed" if npi_selection_reason else "unavailable",
+                reason=fallback_reason,
+            )
+        )
+
+    config = get_source_graph_execution_config()
+    source_graph_receipt: dict
+    source_graph_reason: str
+    if not config.enabled:
+        source_graph_reason = "source_graph_disabled"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "disabled",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    elif not config.valid:
+        source_graph_reason = config.error_code or "source_graph_config_invalid"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "invalid",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    else:
+        operation_metrics.set_value("source_graph_phase", "adapter")
+        adapter_started = time.perf_counter()
+        handle = compute_handle(args["compile_log"], simulator)
+        hierarchy_result = _handle_store.resolve(handle)
+        if hierarchy_result is None:
+            adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+            operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+            source_graph_reason = "source_graph_hierarchy_context_unavailable"
+            source_graph_receipt = _blocked_source_graph_receipt(
+                "blocked",
+                code=source_graph_reason,
+                stage="target_scope",
+                adapter_wall_ms=adapter_wall_ms,
+            )
+            attempts.append(
+                _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+            )
+        else:
+            compile_result = hierarchy_result.get("compile_result")
+            if not isinstance(compile_result, dict):
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                source_graph_reason = "source_graph_compile_context_unavailable"
+                source_graph_receipt = _blocked_source_graph_receipt(
+                    "blocked",
+                    code=source_graph_reason,
+                    stage="compile_manifest",
+                    adapter_wall_ms=adapter_wall_ms,
+                )
+                attempts.append(
+                    _backend_attempt(
+                        "source_graph", "blocked", reason=source_graph_reason
+                    )
+                )
+            else:
+                try:
+                    plan = await _run_in_cancellable_thread(
+                        lambda: build_source_graph_path_plan(
+                            compile_log=args["compile_log"],
+                            compile_result=compile_result,
+                            hierarchy_result=hierarchy_result,
+                            from_signal=args["from_signal"],
+                            to_signal=args["to_signal"],
+                            top_hint=args.get("top_hint"),
+                            expand_assigns=args.get("expand_assigns", False),
+                            frontend_version=config.frontend_version,
+                        )
+                    )
+                except OperationCancelled as exc:
+                    raise asyncio.CancelledError from exc
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                if plan.status is AdapterStatus.BLOCKED:
+                    assert plan.receipt.blocker is not None
+                    source_graph_reason = f"source_graph_{plan.receipt.blocker.code}"
+                    source_graph_receipt = _blocked_source_graph_receipt(
+                        "blocked",
+                        code=plan.receipt.blocker.code,
+                        stage=plan.receipt.blocker.stage,
+                        adapter=plan.receipt.to_dict(),
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    attempts.append(
+                        _backend_attempt(
+                            "source_graph",
+                            "blocked",
+                            reason=source_graph_reason,
+                        )
+                    )
+                else:
+                    assert plan.request is not None
+                    operation_metrics.set_value("source_graph_phase", "prepare")
+                    try:
+                        runtime = get_source_graph_runtime(config)
+                        outcome = await runtime.prepare(
+                            plan.request,
+                            timeout_seconds=config.timeout_sec,
+                        )
+                    except OperationCancelled as exc:
+                        raise asyncio.CancelledError from exc
+                    except RuntimeError:
+                        outcome = None
+                        source_graph_reason = "source_graph_runtime_config_changed"
+                    except Exception:  # noqa: BLE001
+                        outcome = None
+                        source_graph_reason = "source_graph_prepare_failed"
+                    if outcome is None:
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "ready",
+                            code=source_graph_reason,
+                            stage="runtime_prepare",
+                            adapter=plan.receipt.to_dict(),
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["build_key_sha256"] = (
+                            compute_source_graph_build_key(plan.request).digest
+                        )
+                        source_graph_receipt["compile_fingerprint_sha256"] = (
+                            plan.request.identity.compile_inputs.fingerprint
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                    else:
+                        _record_source_graph_prepare_metrics(outcome)
+                        source_graph_receipt = _source_graph_receipt_from_prepare(
+                            plan,
+                            outcome,
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        if outcome.status is PrepareStatus.CANCELLED:
+                            operation_metrics.set_value(
+                                "source_graph_phase", "cancelled"
+                            )
+                            raise asyncio.CancelledError
+                        if outcome.status is not PrepareStatus.READY:
+                            source_graph_reason = _SOURCE_GRAPH_PREPARE_REASONS.get(
+                                outcome.status,
+                                "source_graph_prepare_failed",
+                            )
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    (
+                                        "timed_out"
+                                        if outcome.status is PrepareStatus.TIMED_OUT
+                                        else "failed"
+                                    ),
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        outcome.coverage_status.value
+                                        if outcome.coverage_status is not None
+                                        else None
+                                    ),
+                                )
+                            )
+                        else:
+                            assert outcome.entry is not None
+                            operation_metrics.set_value("source_graph_phase", "query")
+                            query_started = time.perf_counter()
+                            source_backend = SourceGraphConnectivityBackend(
+                                outcome.entry
+                            )
+                            source_result = None
+                            query_receipt = None
+                            try:
+                                source_result = await _call_signal_path_backend(
+                                    source_backend,
+                                    args=args,
+                                    simulator=simulator,
+                                )
+                                query_receipt = source_result.pop(
+                                    "_source_graph_query_receipt"
+                                )
+                                source_graph_reason = (
+                                    _source_graph_path_fallback_reason(
+                                        query_receipt.get("status")
+                                    )
+                                )
+                            except OperationCancelled as exc:
+                                raise asyncio.CancelledError from exc
+                            except SourceGraphQueryBlocked as exc:
+                                source_graph_reason = f"source_graph_{exc.code}"
+                            except (KeyError, ValueError):
+                                source_graph_reason = (
+                                    "source_graph_query_target_unresolved"
+                                )
+                            except Exception:  # noqa: BLE001
+                                source_graph_reason = "source_graph_query_failed"
+                            query_wall_ms = (
+                                time.perf_counter() - query_started
+                            ) * 1000.0
+                            operation_metrics.set_value(
+                                "source_graph_query_ms", query_wall_ms
+                            )
+                            if query_receipt is not None:
+                                _merge_source_graph_query_receipt(
+                                    source_graph_receipt,
+                                    query_receipt,
+                                    query_wall_ms=query_wall_ms,
+                                )
+                            else:
+                                source_graph_receipt["blocker"] = {
+                                    "code": source_graph_reason.removeprefix(
+                                        "source_graph_"
+                                    ),
+                                    "stage": "query",
+                                }
+                                source_graph_receipt["metrics"]["query_wall_ms"] = (
+                                    query_wall_ms
+                                )
+                            source_provenance_ok = (
+                                source_result is not None
+                                and _single_path_backend_provenance(
+                                    source_result,
+                                    expected="source_graph",
+                                )
+                            )
+                            if source_result is not None and not source_provenance_ok:
+                                source_graph_reason = (
+                                    "source_graph_mixed_provenance_rejected"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "mixed_provenance_rejected",
+                                    "stage": "query",
+                                }
+                            query_status = (
+                                query_receipt.get("status")
+                                if query_receipt is not None
+                                else None
+                            )
+                            coverage_status = (
+                                query_receipt.get("coverage_status")
+                                if query_receipt is not None
+                                else None
+                            )
+                            source_usable = query_status == "found" or (
+                                query_status == "not_connected"
+                                and coverage_status == "complete"
+                            )
+                            if (
+                                source_result is not None
+                                and query_receipt is not None
+                                and source_provenance_ok
+                                and source_usable
+                            ):
+                                attempts.append(
+                                    _backend_attempt(
+                                        "source_graph",
+                                        "success",
+                                        coverage_status=coverage_status,
+                                    )
+                                )
+                                clean = _strip_connectivity_internal_receipts(
+                                    source_result
+                                )
+                                clean["backend"] = "source_graph"
+                                operation_metrics.set_value(
+                                    "source_graph_phase", "complete"
+                                )
+                                status = _finalize_public_connectivity_status(
+                                    backend_status=backend_status,
+                                    selected_backend=selected_backend,
+                                    actual_backend="source_graph",
+                                    attempts=attempts,
+                                    fallback_reason=fallback_reason,
+                                    npi_backend=(npi_backend if npi_selected else None),
+                                    npi_execution=npi_execution,
+                                    source_graph_receipt=source_graph_receipt,
+                                )
+                                return clean, status
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "inconclusive",
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        coverage_status
+                                        if coverage_status is not None
+                                        else outcome.coverage_status.value
+                                    ),
+                                )
+                            )
+
+    operation_metrics.set_value("source_graph_phase", "fallback")
+    source_graph_receipt["fallback_used"] = True
+    static_backend = StaticConnectivityBackend()
+    try:
+        static_result = await _call_signal_path_backend(
+            static_backend,
+            args=args,
+            simulator=simulator,
+        )
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    if not _single_path_backend_provenance(static_result, expected="static"):
+        raise RuntimeError("Legacy Static path result contains mixed provenance")
+    attempts.append(_backend_attempt("static", "success"))
+    clean = _strip_connectivity_internal_receipts(static_result)
+    clean["backend"] = "static"
+    status = _finalize_public_connectivity_status(
+        backend_status=backend_status,
+        selected_backend=selected_backend,
+        actual_backend="static",
+        attempts=attempts,
+        fallback_reason=source_graph_reason,
         npi_backend=npi_backend if npi_selected else None,
         npi_execution=npi_execution,
         source_graph_receipt=source_graph_receipt,
@@ -2940,15 +3432,15 @@ async def list_tools():
         Tool(
             name="trace_signal_path",
             description=(
-                "Find a connectivity path between two signals in the elaborated "
-                "netlist (NPI-only). Returns one connected chain of nets walking "
-                "across assigns, interface bindings, and instance boundaries. "
-                "This is connectivity, NOT temporal driver direction — use "
-                "explain_signal_driver for driver semantics. Without a Verdi KDB "
-                "this tool returns unsupported_reason='static_backend_no_path_api' "
-                "because source-regex cannot reproduce sig_to_sig_conn_list "
-                "honestly; in that case fall back to explain_signal_driver + "
-                "find_signal_loads."
+                "Find a structural connectivity path between two signals. A "
+                "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
+                "bounded, dual-endpoint Source Graph before Legacy Static. "
+                "Source Graph follows only projected IR facts across bindings and "
+                "supported combinational dependencies. A no-path result is exact "
+                "only with complete coverage; an inconclusive result falls through "
+                "to unsupported_reason='static_backend_no_path_api'. This is "
+                "connectivity, NOT temporal driver direction — use "
+                "explain_signal_driver for driver semantics."
             ),
             inputSchema={
                 "type": "object",
@@ -2965,9 +3457,10 @@ async def list_tools():
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "When true, NPI treats `assign` as a separate cell, "
-                            "yielding longer paths with explicit assign hops. "
-                            "Useful when debugging RTL aliases."
+                            "Expose supported assignment transitions. NPI may show "
+                            "assign cells; Source Graph shows only real IR/source "
+                            "evidence and never invents an NPI cell identity. This "
+                            "changes presentation, not the connectivity verdict."
                         ),
                     },
                 },
@@ -4501,29 +4994,10 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "trace_signal_path":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_path(
-                from_signal=args["from_signal"],
-                to_signal=args["to_signal"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                expand_assigns=args.get("expand_assigns", False),
-                simulator=simulator,
-            ),
+        result, backend_status = await _route_public_signal_path(
+            args=args,
+            simulator=simulator,
         )
-        # Static returning static_backend_no_path_api is the expected
-        # answer when NPI is unavailable, not a fallback. Only treat
-        # _npi_fallback_reason (set by VerdiNpiBackend internals) as a
-        # true fallback.
-        backend_status, _ = _finalize_connectivity_backend_status(
-            result, backend_status, backend
-        )
-        result.pop("_npi_call_error", None)
         result["backend_status"] = backend_status
         return schemas.TraceSignalPathResult.model_validate(result)
 
@@ -5511,7 +5985,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
                         "reason": (
                             "Xcelium flow has no Verdi KDB yet; running build_kdb "
                             "produces one so the NPI backend can answer cross-hierarchy "
-                            "driver/load queries."
+                            "driver/load/path queries."
                         ),
                     }
                 )

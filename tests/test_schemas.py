@@ -14,6 +14,7 @@ from src.schemas import (
     SearchSignalsBatchResult,
     SignalTransitionsResult,
     SimPathsResult,
+    TraceSignalPathResult,
     TraceXSourceResult,
     WaveformSummaryResult,
 )
@@ -272,6 +273,65 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.source_graph.coverage_gap_count == 388
     assert status.source_graph.build_key_sha256 == "b" * 64
     assert status.source_graph.metrics.actual_build_count == 1
+
+
+def test_trace_signal_path_validates_additive_source_graph_path_evidence():
+    result = TraceSignalPathResult.model_validate(
+        {
+            "from_signal": "top.u_src.out[7:0]",
+            "to_signal": "top.u_dst.in[7:0]",
+            "found": True,
+            "hops": 1,
+            "expand_assigns": True,
+            "backend": "source_graph",
+            "path": [
+                {
+                    "index": 0,
+                    "net_path": "top.u_src.out[7:0]",
+                    "scope_inst": "top.u_src",
+                    "source_info_origin": "source_graph",
+                    "backend": "source_graph",
+                    "is_endpoint": True,
+                },
+                {
+                    "index": 1,
+                    "net_path": "top.u_dst.in[7:0]",
+                    "scope_inst": "top.u_dst",
+                    "source_file": "/rtl/top.sv",
+                    "source_line": 17,
+                    "source_info_origin": "source_graph",
+                    "backend": "source_graph",
+                    "edge_kind": "continuous_assign",
+                    "edge_id": "edge-1",
+                    "edge_source_path": "/rtl/top.sv",
+                    "exact_bit_mapping": True,
+                    "is_endpoint": True,
+                },
+            ],
+            "backend_status": {
+                "backend": "source_graph",
+                "actual_backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "query_status": "found",
+                    "query_confidence": "partial",
+                    "path_edge_count": 1,
+                    "traversed_edge_count": 3,
+                    "visited_state_count": 4,
+                    "traversal_limit": 4096,
+                    "output_limit": 256,
+                    "endpoint_alias_equivalent": False,
+                    "expand_assigns": True,
+                },
+            },
+        }
+    )
+
+    assert result.backend == "source_graph"
+    assert result.path[1].edge_kind == "continuous_assign"
+    assert result.path[1].exact_bit_mapping is True
+    assert result.backend_status.source_graph.path_edge_count == 1
+    assert result.backend_status.source_graph.traversal_limit == 4096
 
 
 def test_trace_x_source_result_carries_backend_consistency_receipt():

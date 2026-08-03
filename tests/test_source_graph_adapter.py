@@ -11,9 +11,14 @@ from src.compile_log_parser import parse_compile_log
 from src.source_graph_adapter import (
     AdapterStatus,
     SOURCE_GRAPH_ADAPTER_VERSION,
+    build_source_graph_path_plan,
     build_source_graph_plan,
 )
-from src.source_graph_contract import QueryOperation, compute_source_graph_build_key
+from src.source_graph_contract import (
+    ConnectivityPathTarget,
+    QueryOperation,
+    compute_source_graph_build_key,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +90,41 @@ def _plan(
         signal_path=signal_path,
         top_hint="tb",
         max_hops=8,
+        frontend_version="11.0.0",
+    )
+
+
+def _path_plan(
+    tmp_path: Path,
+    compile_result: dict,
+    *,
+    from_signal: str = "tb.dut.u_left.out",
+    to_signal: str = "tb.dut.u_right.in",
+    hierarchy: dict | None = None,
+    expand_assigns: bool = False,
+    top_hint: str | None = "tb",
+):
+    return build_source_graph_path_plan(
+        compile_log=str(tmp_path / "compile.log"),
+        compile_result=compile_result,
+        hierarchy_result=hierarchy
+        or {
+            "component_tree": {
+                "tb": {
+                    "dut": {
+                        "module": "dut",
+                        "children": {
+                            "u_left": {"module": "left", "children": {}},
+                            "u_right": {"module": "right", "children": {}},
+                        },
+                    }
+                }
+            }
+        },
+        from_signal=from_signal,
+        to_signal=to_signal,
+        top_hint=top_hint,
+        expand_assigns=expand_assigns,
         frontend_version="11.0.0",
     )
 
@@ -395,3 +435,199 @@ def test_pre_cancelled_adapter_stops_without_building_a_fallback_plan(tmp_path):
             _plan(tmp_path, compile_result, signal_path="tb.q")
     finally:
         cancellation.pop_cancel_event(token)
+
+
+def test_path_scope_same_instance_and_parent_child_are_proved(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = _hierarchy()
+
+    same = _path_plan(
+        tmp_path,
+        compile_result,
+        from_signal="tb.dut.a",
+        to_signal="tb.dut.b",
+        hierarchy=hierarchy,
+    )
+    parent_child = _path_plan(
+        tmp_path,
+        compile_result,
+        from_signal="tb.dut.a",
+        to_signal="tb.dut.u_leaf.q",
+        hierarchy=hierarchy,
+    )
+
+    assert same.request is not None
+    assert same.request.scope.path_hierarchy.lca == "tb.dut"
+    assert same.request.scope.hierarchy_ancestors == ("tb", "tb.dut")
+    assert parent_child.request is not None
+    assert parent_child.request.scope.path_hierarchy.lca == "tb.dut"
+    assert parent_child.request.scope.hierarchy_ancestors == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+
+
+def test_path_sibling_scope_uses_only_proved_ancestor_union_and_lca(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+
+    plan = _path_plan(tmp_path, compile_result, expand_assigns=True)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    target = plan.request.scope.target
+    assert isinstance(target, ConnectivityPathTarget)
+    assert target.from_instance_path == "tb.dut.u_left"
+    assert target.to_instance_path == "tb.dut.u_right"
+    assert target.expand_assigns is True
+    assert plan.request.scope.path_hierarchy.lca == "tb.dut"
+    assert plan.request.scope.hierarchy_ancestors == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_left",
+        "tb.dut.u_right",
+    )
+    assert plan.request.scope.requested_cone.instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_left",
+        "tb.dut.u_right",
+    )
+    receipt = plan.receipt.to_dict()["scope"]
+    assert receipt == {
+        "kind": "dual_endpoint_path",
+        "endpoint_count": 2,
+        "ancestor_count": 4,
+        "lca_depth": 1,
+        "requested_cone_instance_count": 4,
+        "coverage_boundary_instance_count": 4,
+        "objective_exclusions": [],
+    }
+
+
+def test_path_different_top_and_missing_hierarchy_are_structured_blockers(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb_a; endmodule module tb_b; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb_a -top tb_b",
+        sources=(source,),
+        tops=("tb_a", "tb_b"),
+    )
+
+    different_top = _path_plan(
+        tmp_path,
+        compile_result,
+        from_signal="tb_a.a",
+        to_signal="tb_b.b",
+        hierarchy={"component_tree": {"tb_a": {}, "tb_b": {}}},
+        top_hint=None,
+    )
+    missing = _path_plan(
+        tmp_path,
+        compile_result,
+        from_signal="tb_a.missing.a",
+        to_signal="tb_a.b",
+        hierarchy={"component_tree": {"tb_a": {}}},
+        top_hint="tb_a",
+    )
+
+    assert different_top.receipt.blocker.code == "path_endpoint_top_mismatch"
+    assert missing.receipt.blocker.code == "path_from_hierarchy_unresolved"
+    assert different_top.receipt.to_dict()["scope"]["endpoint_count"] == 2
+
+
+def test_path_scope_does_not_enumerate_unrelated_siblings(tmp_path):
+    class NoIterationDict(dict):
+        def __iter__(self):  # pragma: no cover - failure is the assertion
+            raise AssertionError("path adapter enumerated siblings")
+
+        def items(self):  # pragma: no cover - failure is the assertion
+            raise AssertionError("path adapter enumerated siblings")
+
+        def values(self):  # pragma: no cover - failure is the assertion
+            raise AssertionError("path adapter enumerated siblings")
+
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    children = NoIterationDict(
+        {
+            "u_left": {"module": "left", "children": {}},
+            "u_right": {"module": "right", "children": {}},
+            "unrelated": {"module": "other", "children": {}},
+        }
+    )
+    top_children = NoIterationDict(
+        {
+            "dut": {"module": "dut", "children": children},
+            "unrelated_top": {"module": "other", "children": {}},
+        }
+    )
+
+    plan = _path_plan(
+        tmp_path,
+        compile_result,
+        hierarchy={"component_tree": {"tb": top_children}},
+    )
+
+    assert plan.request is not None
+    assert "tb.dut.unrelated" not in plan.request.scope.hierarchy_ancestors
+    assert "tb.unrelated_top" not in plan.request.scope.hierarchy_ancestors
+
+
+def test_path_key_is_endpoint_and_expand_sensitive_while_manifest_cache_hits(
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top bind_top -top tb",
+        sources=(source,),
+        tops=("bind_top", "tb"),
+    )
+
+    baseline = _path_plan(tmp_path, compile_result)
+    changed_endpoint = _path_plan(
+        tmp_path,
+        compile_result,
+        to_signal="tb.dut.u_right.other",
+    )
+    changed_expand = _path_plan(tmp_path, compile_result, expand_assigns=True)
+
+    assert baseline.request is not None
+    assert changed_endpoint.request is not None
+    assert changed_expand.request is not None
+    keys = {
+        compute_source_graph_build_key(plan.request).digest
+        for plan in (baseline, changed_endpoint, changed_expand)
+    }
+    assert len(keys) == 3
+    assert baseline.request.identity.compile_inputs.ordered_tops == (
+        "bind_top",
+        "tb",
+    )
+    assert baseline.receipt.fingerprint_cache_disposition == "miss"
+    assert changed_endpoint.receipt.fingerprint_cache_disposition == (
+        "hit_session_snapshot"
+    )
+    assert changed_expand.receipt.fingerprint_cache_disposition == (
+        "hit_session_snapshot"
+    )

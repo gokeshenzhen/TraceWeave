@@ -26,7 +26,7 @@ Source-aware structure analysis
   src/signal_driver.py
   src/signal_load.py
 
-Connectivity backends (driver/load resolution)
+Connectivity backends (driver/load/path resolution)
   src/connectivity_backend.py     # protocol + Static + select_backend
   src/verdi_npi_backend.py        # Verdi NPI backend, lazy, license-tolerant
   src/npi_lsf.py                  # optional LSF transport + exact worker protocol
@@ -136,7 +136,7 @@ Verification
   receipt; `trace_restarted` records whether that whole-trace retry occurred.
   Driver-level NPI evidence (`source_line`, `testbench_driven`, and its
   driver-vs-load cross-check) remains attached to the terminal trace node.
-  The two public driver/load tools have a separate production orchestrator:
+  The public driver/load/path tools have a separate production orchestrator:
   trustworthy NPI results return directly; NPI unavailability/failure defers
   to an on-demand Source Graph; a Source Graph blocker or inconclusive no-match
   triggers a whole-result Legacy Static recomputation. The Source Graph runtime
@@ -147,8 +147,17 @@ Verification
   lock or blocks light event-loop calls. Cancellation terminates the request
   without entering the next fallback. `backend_status` preserves the ordered
   attempt chain, fixed fallback/blocker labels, coverage and fingerprints while
-  the result payload contains facts from exactly one backend. Arbitrary path
-  and `trace_x_source` routing are unchanged.
+  the result payload contains facts from exactly one backend. For
+  `trace_signal_path`, the adapter proves both endpoint ancestor chains share a
+  top, projects only their ancestor union through the LCA, and keeps the exact
+  endpoint pair in the build key. Thus an identical request can be warm while a
+  different pair may still build cold; cross-target reuse is not implemented.
+  The deterministic shortest-hop query traverses only supported structural IR
+  bindings and combinational dependencies. Positive partial results remain
+  partial, while only complete coverage can establish `not_connected`;
+  inconclusive/truncated negatives fall through to Static's structured
+  unsupported result. `expand_assigns` changes only whether real assignment
+  evidence is exposed. `trace_x_source` routing is unchanged.
   The adapter content-hashes every ordered source/support input on the first
   request for a hierarchy handle. A bounded process-memory manifest cache then
   reuses that immutable compile-session snapshot; its key includes compile-log
@@ -288,8 +297,9 @@ Verification
   `kdb_path`, and re-issues `npisys.load_design` to switch cases within one
   session. Synthesized PinHdl paths (`scope:Construct#Op:line:line:Cell.Port`)
   are normalized to FSDB-visible scopes; raw form is preserved in `expr` for
-  diagnostics. Additional NPI-only capabilities: `find_path` wraps
-  `sig_to_sig_conn_list` for the `trace_signal_path` MCP tool, and
+  diagnostics. NPI's `find_path` wraps `sig_to_sig_conn_list` and remains the
+  highest-priority implementation for the `trace_signal_path` MCP tool; the
+  bounded Source Graph is its production fallback. Another NPI-only capability,
   `collect_instance_src_map` walks `netlist.get_top_inst_list()` recursively
   to overlay elaborated `file:line` onto compile-log-derived hierarchy
   nodes; `LoadHop` / `DriverChainHop` / hierarchy nodes carry a

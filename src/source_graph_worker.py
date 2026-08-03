@@ -265,7 +265,7 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
                 focus_instance_paths=request.scope.coverage_boundary.instance_paths,
                 assignment_instance_paths=request.scope.requested_cone.instance_paths,
                 metadata=(
-                    ("runtime", "phase1b_scoped_on_demand"),
+                    ("runtime", "phase3a_scoped_on_demand"),
                     ("scope_contract", request.contract_version),
                 ),
             ),

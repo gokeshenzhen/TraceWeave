@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 
-from src.connectivity_ir import CoverageStatus, ResolutionKind
+from src.connectivity_ir import (
+    CoverageGap,
+    CoverageReport,
+    CoverageStatus,
+    ResolutionKind,
+)
 from src.connectivity_query import ConnectivityQueryEngine, QueryConfidence
 from src.source_graph_backend import (
     SourceGraphConnectivityBackend,
@@ -55,7 +60,8 @@ def _entry(ir=None) -> SourceGraphCacheEntry:
         ),
         scope_receipt=SourceGraphScopeReceipt(
             scope=scope,
-            coverage_status=CoverageStatus.COMPLETE,
+            coverage_status=ir.coverage.status,
+            gap_codes=tuple(gap.code for gap in ir.coverage.gaps),
         ),
         ir=ir,
         query_engine=ConnectivityQueryEngine(ir),
@@ -145,3 +151,122 @@ def test_complete_negative_maps_to_not_connected_without_source_guessing():
     assert result["source_file"] is None
     assert result["unsupported_reason"] is None
     assert result["_source_graph_query_receipt"]["status"] == "not_connected"
+
+
+def test_path_mapping_returns_only_ir_endpoints_and_edge_evidence():
+    result = SourceGraphConnectivityBackend(_entry()).find_path(
+        from_signal="sg_top.u_producer.seed[7:0]",
+        to_signal="sg_top.u_bridge.gen_lanes[1].u_lane.u_named.data_i",
+        compile_log="compile.log",
+        expand_assigns=True,
+    )
+
+    assert result["found"] is True
+    assert result["backend"] == "source_graph"
+    assert result["hops"] == 5
+    assert len(result["path"]) == 6
+    assert result["path"][0]["net_path"] == "sg_top.u_producer.seed[7:0]"
+    assert result["path"][-1]["net_path"].endswith("u_named.data_i[7:0]")
+    assert {hop["backend"] for hop in result["path"]} == {"source_graph"}
+    assert {hop["source_info_origin"] for hop in result["path"]} == {"source_graph"}
+    assignment = result["path"][1]
+    assert assignment["edge_kind"] == "procedural_assign"
+    assert assignment["edge_id"] == "sg_producer:always_comb:84:bus.data"
+    assert assignment["source_file"].endswith("hand_connectivity.sv")
+    receipt = result["_source_graph_query_receipt"]
+    assert receipt["status"] == "found"
+    assert receipt["coverage_status"] == "complete"
+    assert receipt["path_edge_count"] == 5
+
+
+def test_path_expand_assigns_changes_evidence_visibility_not_connectivity():
+    backend = SourceGraphConnectivityBackend(_entry())
+    kwargs = {
+        "from_signal": "sg_top.u_producer.seed[7:0]",
+        "to_signal": "sg_top.u_bridge.gen_lanes[1].u_lane.u_named.data_i",
+        "compile_log": "compile.log",
+    }
+
+    folded = backend.find_path(**kwargs, expand_assigns=False)
+    expanded = backend.find_path(**kwargs, expand_assigns=True)
+
+    assert folded["found"] is expanded["found"] is True
+    assert folded["hops"] == expanded["hops"] == 5
+    assert [hop["net_path"] for hop in folded["path"]] == [
+        hop["net_path"] for hop in expanded["path"]
+    ]
+    assert folded["path"][1]["edge_kind"] is None
+    assert folded["path"][1]["edge_id"] is None
+    assert expanded["path"][1]["edge_kind"] == "procedural_assign"
+    assert expanded["path"][1]["edge_id"] is not None
+
+
+def test_path_complete_negative_and_partial_positive_map_distinctly():
+    complete = SourceGraphConnectivityBackend(_entry()).find_path(
+        from_signal="sg_top.runtime_force",
+        to_signal="sg_top.seed",
+        compile_log="compile.log",
+    )
+    gap = CoverageGap(
+        code="scoped_projection_gap",
+        message="projection is intentionally bounded",
+        impact=CoverageStatus.PARTIAL,
+        scopes=("sg_top.u_producer",),
+    )
+    partial_ir = replace(
+        build_hand_ir(),
+        coverage=CoverageReport(
+            status=CoverageStatus.PARTIAL,
+            files_total=1,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+    partial = SourceGraphConnectivityBackend(_entry(partial_ir)).find_path(
+        from_signal="sg_top.u_producer.seed[7:0]",
+        to_signal="sg_top.u_bridge.gen_lanes[1].u_lane.u_named.data_i",
+        compile_log="compile.log",
+    )
+
+    assert complete["found"] is False
+    assert complete["unsupported_reason"] == "not_connected"
+    assert complete["_source_graph_query_receipt"]["coverage_status"] == "complete"
+    assert partial["found"] is True
+    assert partial["unsupported_reason"] is None
+    assert partial["_source_graph_query_receipt"]["coverage_status"] == "partial"
+    assert partial["_source_graph_query_receipt"]["confidence"] == "partial"
+
+
+def test_path_inconclusive_negative_preserves_gap_in_query_receipt():
+    gap = CoverageGap(
+        code="objective_exclusion",
+        message="runtime behavior can affect the endpoint",
+        impact=CoverageStatus.INCONCLUSIVE,
+        scopes=("sg_top.runtime_force",),
+    )
+    ir = replace(
+        build_hand_ir(),
+        coverage=CoverageReport(
+            status=CoverageStatus.INCONCLUSIVE,
+            files_total=1,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+
+    result = SourceGraphConnectivityBackend(_entry(ir)).find_path(
+        from_signal="sg_top.runtime_force",
+        to_signal="sg_top.seed",
+        compile_log="compile.log",
+    )
+
+    assert result["found"] is False
+    assert result["unsupported_reason"] == "source_graph_query_inconclusive"
+    assert result["_source_graph_query_receipt"]["status"] == "inconclusive"
+    assert result["_source_graph_query_receipt"]["unresolved_boundary_codes"] == [
+        "objective_exclusion"
+    ]

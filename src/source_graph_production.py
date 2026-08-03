@@ -2,7 +2,7 @@
 
 This module owns only process/session lifecycle.  It deliberately does not
 select connectivity backends, map public schemas, read waveforms, or import
-``pyslang``.  The first eligible driver/load request creates one
+``pyslang``. The first eligible driver/load/path request creates one
 :class:`SourceGraphRuntime`; no build or source enumeration happens at server
 startup.  The runtime remains memory-only and uses the existing isolated
 one-shot worker contract.

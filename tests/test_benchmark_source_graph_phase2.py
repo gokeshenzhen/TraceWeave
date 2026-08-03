@@ -204,14 +204,14 @@ def test_historical_baseline_guard_rejects_tampering(tmp_path):
         )
 
 
-def test_ast_route_receipt_proves_only_driver_load_and_not_wave_lock_changed():
+def test_ast_route_receipt_detects_phase3a_path_without_x_or_wave_lock_change():
     receipt = benchmark._route_isolation_receipt()
 
-    assert receipt["driver_load_route_changed_only"] is True
+    assert receipt["driver_load_route_changed_only"] is False
     branches = receipt["dispatch_branches"]
     assert branches["explain_signal_driver"]["changed"] is True
     assert branches["find_signal_loads"]["changed"] is True
-    assert branches["trace_signal_path"]["changed"] is False
+    assert branches["trace_signal_path"]["changed"] is True
     assert branches["trace_x_source"]["changed"] is False
     assert all(
         item["changed"] is False
@@ -220,7 +220,19 @@ def test_ast_route_receipt_proves_only_driver_load_and_not_wave_lock_changed():
 
 
 @pytest.mark.anyio
-async def test_fake_public_phase2_benchmark_covers_routes_performance_and_failures():
+async def test_fake_public_phase2_benchmark_covers_routes_performance_and_failures(
+    monkeypatch,
+):
+    # Phase 2 evidence is immutable. Its historical route-isolation receipt is
+    # the correct input when replaying the Phase 2-only fake gate after Phase 3A
+    # intentionally changes trace_signal_path in the current tree.
+    historical = json.loads(PHASE2_EVIDENCE.read_text(encoding="utf-8"))
+    historical_isolation = historical["route_probes"]["scope_isolation"]
+    monkeypatch.setattr(
+        benchmark,
+        "_route_isolation_receipt",
+        lambda: historical_isolation,
+    )
     args = _args(
         "--workload",
         "hand_fixture",

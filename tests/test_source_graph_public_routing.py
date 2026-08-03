@@ -79,6 +79,7 @@ def _install_source_context(tmp_path) -> tuple[str, str]:
         "component_tree": {
             "sg_top": {
                 "bus": {"module": "sg_bus", "children": {}},
+                "u_producer": {"module": "sg_producer", "children": {}},
             }
         },
     }
@@ -196,6 +197,7 @@ class TrackingStaticBackend:
     def __init__(self) -> None:
         self.driver_calls = 0
         self.load_calls = 0
+        self.path_calls = 0
 
     def find_driver(self, **kwargs):
         self.driver_calls += 1
@@ -231,6 +233,18 @@ class TrackingStaticBackend:
             "unsupported_reason": None,
         }
 
+    def find_path(self, **kwargs):
+        self.path_calls += 1
+        return {
+            "from_signal": kwargs["from_signal"],
+            "to_signal": kwargs["to_signal"],
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "expand_assigns": kwargs["expand_assigns"],
+            "unsupported_reason": "static_backend_no_path_api",
+        }
+
 
 class FakeNpiBackend:
     name = "verdi_npi"
@@ -252,6 +266,15 @@ class FakeNpiBackend:
     def find_loads(self, **kwargs):
         self.calls += 1
         return {**self.result, "signal_path": kwargs["signal_path"]}
+
+    def find_path(self, **kwargs):
+        self.calls += 1
+        return {
+            **self.result,
+            "from_signal": kwargs["from_signal"],
+            "to_signal": kwargs["to_signal"],
+            "expand_assigns": kwargs["expand_assigns"],
+        }
 
 
 def _patch_common(
@@ -314,6 +337,23 @@ def _load_args(compile_log: str) -> dict:
         "top_hint": "sg_top",
         "max_depth": 8,
         "include_expr": True,
+    }
+
+
+def _path_args(
+    compile_log: str,
+    *,
+    from_signal: str = "sg_top.u_producer.seed[7:0]",
+    to_signal: str = "sg_top.bus.data[15:8]",
+    expand_assigns: bool = True,
+) -> dict:
+    return {
+        "from_signal": from_signal,
+        "to_signal": to_signal,
+        "compile_log": compile_log,
+        "simulator": "xcelium",
+        "top_hint": "sg_top",
+        "expand_assigns": expand_assigns,
     }
 
 
@@ -984,3 +1024,602 @@ async def test_source_graph_operation_metrics_are_numeric_or_fixed_labels_only(
         for key, value in snapshot.items()
     )
     assert all("signal" not in key and "path" not in key for key in snapshot)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "npi_result",
+    [
+        {
+            "found": True,
+            "hops": 1,
+            "path": [
+                {
+                    "index": 0,
+                    "net_path": "sg_top.u_producer.seed[7:0]",
+                    "scope_inst": "sg_top.u_producer",
+                    "is_endpoint": True,
+                },
+                {
+                    "index": 1,
+                    "net_path": "sg_top.bus.data[15:8]",
+                    "scope_inst": "sg_top.bus",
+                    "is_endpoint": True,
+                },
+            ],
+            "unsupported_reason": None,
+        },
+        {
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "unsupported_reason": "not_connected",
+        },
+    ],
+)
+async def test_path_npi_authoritative_results_skip_source_graph_and_static(
+    monkeypatch, tmp_path, npi_result
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(npi_result)
+    _patch_common(
+        monkeypatch,
+        runtime=None,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.backend == "verdi_npi"
+    assert result.backend_status.actual_backend == "verdi_npi"
+    assert result.backend_status.source_graph is None
+    assert [item.backend for item in result.backend_status.attempted_backends] == [
+        "verdi_npi"
+    ]
+    assert npi.calls == 1
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_npi_unavailable_routes_to_source_graph_found(monkeypatch, tmp_path):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.found is True
+    assert result.backend == "source_graph"
+    assert result.hops == 2
+    assert [hop.net_path for hop in result.path] == [
+        "sg_top.u_producer.seed[7:0]",
+        "sg_top.u_producer.bus.data[15:8]",
+        "sg_top.bus.data[15:8]",
+    ]
+    assert {hop.backend for hop in result.path} == {"source_graph"}
+    assert result.path[1].edge_kind == "procedural_assign"
+    assert result.path[1].edge_id == "sg_producer:always_comb:84:bus.data"
+    assert result.backend_status.selected_backend == "source_graph"
+    assert result.backend_status.actual_backend == "source_graph"
+    receipt = result.backend_status.source_graph
+    assert receipt.prepare_status == "ready"
+    assert receipt.query_status == "found"
+    assert receipt.path_edge_count == 2
+    assert receipt.coverage_status == "complete"
+    assert receipt.fallback_used is False
+    assert static.path_calls == 0
+    assert worker.calls == 1
+
+
+@pytest.mark.anyio
+async def test_path_internal_npi_fallback_defers_static_until_after_source_graph(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "unsupported_reason": "connectivity_fallback_deferred",
+            "_npi_fallback_reason": "npi_load_failed",
+            "backend": "source_graph_deferred",
+        }
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.backend == "source_graph"
+    assert result.backend_status.selected_backend == "verdi_npi"
+    assert result.backend_status.actual_backend == "source_graph"
+    assert result.backend_status.fallback_reason == "npi_load_failed"
+    assert [item.backend for item in result.backend_status.attempted_backends] == [
+        "verdi_npi",
+        "source_graph",
+    ]
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_source_graph_complete_negative_is_authoritative(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "trace_signal_path",
+        _path_args(
+            compile_log,
+            from_signal="sg_top.runtime_force",
+            to_signal="sg_top.seed",
+            expand_assigns=False,
+        ),
+    )
+
+    assert result.found is False
+    assert result.unsupported_reason == "not_connected"
+    assert result.backend == "source_graph"
+    assert result.backend_status.source_graph.query_status == "not_connected"
+    assert result.backend_status.source_graph.coverage_status == "complete"
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_source_graph_partial_positive_remains_usable(monkeypatch, tmp_path):
+    compile_log, _ = _install_source_context(tmp_path)
+    gap = CoverageGap(
+        code="scoped_gap",
+        message="bounded projection retains a scoped gap",
+        impact=CoverageStatus.PARTIAL,
+        scopes=("sg_top.u_producer",),
+    )
+    partial = replace(
+        _production_ir(),
+        coverage=CoverageReport(
+            status=CoverageStatus.PARTIAL,
+            files_total=1,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+    runtime = SourceGraphRuntime(ReadyWorker(ir=partial))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.found is True
+    assert result.backend == "source_graph"
+    assert result.backend_status.source_graph.query_status == "found"
+    assert result.backend_status.source_graph.coverage_status == "partial"
+    assert result.backend_status.source_graph.query_confidence == "partial"
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_source_graph_inconclusive_negative_falls_back_to_static(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    gap = CoverageGap(
+        code="objective_exclusion",
+        message="runtime behavior can affect this endpoint",
+        impact=CoverageStatus.INCONCLUSIVE,
+        scopes=("sg_top.runtime_force",),
+    )
+    inconclusive = replace(
+        _production_ir(),
+        coverage=CoverageReport(
+            status=CoverageStatus.INCONCLUSIVE,
+            files_total=1,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+    runtime = SourceGraphRuntime(ReadyWorker(ir=inconclusive))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "trace_signal_path",
+        _path_args(
+            compile_log,
+            from_signal="sg_top.runtime_force",
+            to_signal="sg_top.seed",
+        ),
+    )
+
+    assert result.found is False
+    assert result.unsupported_reason == "static_backend_no_path_api"
+    assert result.backend == "static"
+    assert result.backend_status.actual_backend == "static"
+    assert result.backend_status.fallback_reason == (
+        "source_graph_coverage_inconclusive"
+    )
+    receipt = result.backend_status.source_graph
+    assert receipt.query_status == "inconclusive"
+    assert receipt.coverage_status == "inconclusive"
+    assert receipt.coverage_gap_codes == ["objective_exclusion"]
+    assert receipt.fallback_used is True
+    assert static.path_calls == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("prepare_status", "reason", "attempt_status"),
+    [
+        (
+            PrepareStatus.DEPENDENCY_BLOCKED,
+            "source_graph_dependency_blocked",
+            "failed",
+        ),
+        (PrepareStatus.BUILD_FAILED, "source_graph_build_failed", "failed"),
+        (PrepareStatus.WORKER_CRASH, "source_graph_worker_crash", "failed"),
+        (PrepareStatus.TIMED_OUT, "source_graph_timed_out", "timed_out"),
+    ],
+)
+async def test_path_source_graph_prepare_failures_use_static_whole_result(
+    monkeypatch, tmp_path, prepare_status, reason, attempt_status
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(FailedWorker(prepare_status))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.backend == "static"
+    assert result.unsupported_reason == "static_backend_no_path_api"
+    assert result.backend_status.fallback_reason == reason
+    source_attempt = result.backend_status.attempted_backends[-2]
+    assert source_attempt.backend == "source_graph"
+    assert source_attempt.status == attempt_status
+    assert result.backend_status.source_graph.fallback_used is True
+    assert static.path_calls == 1
+
+
+@pytest.mark.anyio
+async def test_path_npi_cancellation_never_falls_back(monkeypatch, tmp_path):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+
+    class CancellingNpi:
+        name = "verdi_npi"
+        execution_mode = "local"
+        uses_external_worker = False
+
+        def find_path(self, **kwargs):
+            del kwargs
+            raise OperationCancelled("cancelled")
+
+    _patch_common(
+        monkeypatch,
+        runtime=None,
+        static=static,
+        npi_backend=CancellingNpi(),
+        with_kdb=True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await server._dispatch("trace_signal_path", _path_args(compile_log))
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_mixed_source_graph_provenance_is_rejected_as_whole(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    class MixedBackend:
+        name = "source_graph"
+
+        def __init__(self, entry):
+            del entry
+
+        def find_path(self, **kwargs):
+            return {
+                "from_signal": kwargs["from_signal"],
+                "to_signal": kwargs["to_signal"],
+                "found": True,
+                "hops": 1,
+                "path": [
+                    {
+                        "index": 0,
+                        "net_path": kwargs["from_signal"],
+                        "is_endpoint": True,
+                        "backend": "source_graph",
+                    },
+                    {
+                        "index": 1,
+                        "net_path": kwargs["to_signal"],
+                        "is_endpoint": True,
+                        "backend": "static",
+                    },
+                ],
+                "expand_assigns": kwargs["expand_assigns"],
+                "unsupported_reason": None,
+                "backend": "source_graph",
+                "_source_graph_query_receipt": {
+                    "status": "found",
+                    "coverage_status": "complete",
+                    "confidence": "exact",
+                    "match_count": 1,
+                    "unresolved_boundary_codes": [],
+                    "path_edge_count": 1,
+                },
+            }
+
+    monkeypatch.setattr(server, "SourceGraphConnectivityBackend", MixedBackend)
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.backend == "static"
+    assert result.path == []
+    assert result.backend_status.fallback_reason == (
+        "source_graph_mixed_provenance_rejected"
+    )
+    assert result.backend_status.source_graph.blocker.code == (
+        "mixed_provenance_rejected"
+    )
+    assert static.path_calls == 1
+
+
+@pytest.mark.anyio
+async def test_concurrent_exact_path_requests_single_flight_one_build(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    release = asyncio.Event()
+    entered = threading.Event()
+    worker = ReadyWorker(release=release, entered=entered)
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    tasks = [
+        asyncio.create_task(
+            server._dispatch("trace_signal_path", _path_args(compile_log))
+        )
+        for _ in range(4)
+    ]
+    assert await asyncio.to_thread(entered.wait, 2)
+    await asyncio.sleep(0.05)
+    release.set()
+    results = await asyncio.gather(*tasks)
+
+    assert {result.backend for result in results} == {"source_graph"}
+    assert worker.calls == 1
+    assert (
+        sum(
+            result.backend_status.source_graph.metrics.actual_build_count
+            for result in results
+        )
+        == 1
+    )
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_waiter_cancellation_does_not_cancel_surviving_waiter(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    release = asyncio.Event()
+    entered = threading.Event()
+    worker = ReadyWorker(release=release, entered=entered)
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    cancelled = asyncio.create_task(
+        server._dispatch("trace_signal_path", _path_args(compile_log))
+    )
+    surviving = asyncio.create_task(
+        server._dispatch("trace_signal_path", _path_args(compile_log))
+    )
+    assert await asyncio.to_thread(entered.wait, 2)
+    await asyncio.sleep(0.05)
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    release.set()
+    result = await surviving
+
+    assert result.backend == "source_graph"
+    assert worker.calls == 1
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_cold_path_build_does_not_block_light_call_or_hold_wave_lock(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    release = asyncio.Event()
+    entered = threading.Event()
+    worker = ReadyWorker(release=release, entered=entered)
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    wave_lock = server._wave_locks_for(["/private/wave.fsdb"])[0]
+
+    task = asyncio.create_task(
+        server._dispatch("trace_signal_path", _path_args(compile_log))
+    )
+    assert await asyncio.to_thread(entered.wait, 2)
+    assert wave_lock.locked() is False
+    started = time.perf_counter()
+    light = await server._dispatch("cursor_list", {})
+    elapsed = time.perf_counter() - started
+    release.set()
+    result = await task
+
+    assert isinstance(light.cursors, list)
+    assert elapsed < 0.5
+    assert result.backend == "source_graph"
+    assert wave_lock.locked() is False
+
+
+@pytest.mark.anyio
+async def test_path_operation_metrics_exclude_endpoint_and_path_content(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        await server._dispatch("trace_signal_path", _path_args(compile_log))
+        operation_metrics.set_value("source_graph_path", "sg_top.secret")
+    finally:
+        operation_metrics.pop(token)
+
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["source_graph_phase"] == "complete"
+    assert "source_graph_path" not in snapshot
+    assert all(
+        key == "source_graph_phase"
+        or (not isinstance(value, bool) and isinstance(value, (int, float)))
+        for key, value in snapshot.items()
+    )
+    assert all(
+        label not in key
+        for key in snapshot
+        for label in ("compile", "diagnostic", "endpoint", "path", "scope", "signal")
+    )
+
+
+@pytest.mark.anyio
+async def test_raised_npi_path_failure_still_routes_to_source_graph(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+
+    class ExplodingNpi:
+        name = "verdi_npi"
+        execution_mode = "local"
+        uses_external_worker = False
+
+        def find_path(self, **kwargs):
+            del kwargs
+            raise RuntimeError("private failure detail")
+
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=ExplodingNpi(),
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.backend == "source_graph"
+    assert result.backend_status.fallback_reason == "npi_query_failed"
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_path_adapter_blocker_preserved_when_static_is_final(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "trace_signal_path",
+        _path_args(
+            compile_log,
+            from_signal="sg_top.missing.a",
+            to_signal="sg_top.seed",
+        ),
+    )
+
+    assert result.backend == "static"
+    assert result.unsupported_reason == "static_backend_no_path_api"
+    assert result.backend_status.source_graph.adapter_status == "blocked"
+    assert result.backend_status.source_graph.blocker.code == (
+        "path_from_hierarchy_unresolved"
+    )
+    assert result.backend_status.source_graph.fallback_used is True
+    assert static.path_calls == 1
+
+
+@pytest.mark.anyio
+async def test_path_build_failure_does_not_poison_retry(monkeypatch, tmp_path):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = SequenceWorker([PrepareStatus.BUILD_FAILED, _production_ir()])
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    failed = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    retried = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert failed.backend == "static"
+    assert retried.backend == "source_graph"
+    assert worker.calls == 2
+    assert runtime.stats_snapshot()["cache_entry_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_sole_path_waiter_cancellation_terminates_worker_without_fallback(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    release = asyncio.Event()
+    entered = threading.Event()
+    worker_cancelled = threading.Event()
+    worker = ReadyWorker(
+        release=release,
+        entered=entered,
+        cancelled=worker_cancelled,
+    )
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    task = asyncio.create_task(
+        server._dispatch("trace_signal_path", _path_args(compile_log))
+    )
+    assert await asyncio.to_thread(entered.wait, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(worker_cancelled.wait, 2)
+    await runtime.wait_idle()
+
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+    assert runtime.stats_snapshot()["inflight_count"] == 0
+    assert static.path_calls == 0
