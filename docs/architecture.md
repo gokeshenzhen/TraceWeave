@@ -128,10 +128,14 @@ Verification
   merges those facts into the next X/Z frontier. Static source scans run in a
   lock-free cancellable worker so they do not block the event loop; local NPI
   retains its existing synchronous execution model, while LSF keeps
-  using its existing worker path. It selects one connectivity backend for the
-  trace. If NPI internally falls back on any driver lookup,
-  the partial chain is discarded and the whole trace restarts with Static, so
-  one returned propagation chain never mixes NPI and Static provenance.
+  using its existing worker path. If NPI internally falls back on any driver
+  lookup, the partial chain is discarded and the whole trace restarts with a
+  bounded Source Graph artifact. Every Source Graph node in one attempt is
+  supported by that single proved artifact. A newly discovered target outside
+  its projection expands only the exact hierarchy ancestor union and restarts
+  from the original signal; the smaller artifact's chain is discarded. An
+  unsafe/inconclusive negative or build/query blocker restarts the whole trace
+  with Static, so one returned propagation chain never mixes provenance.
   `backend_status` records selected versus actual backend and the execution
   receipt; `trace_restarted` records whether that whole-trace retry occurred.
   Driver-level NPI evidence (`source_line`, `testbench_driven`, and its
@@ -149,15 +153,17 @@ Verification
   attempt chain, fixed fallback/blocker labels, coverage and fingerprints while
   the result payload contains facts from exactly one backend. For
   `trace_signal_path`, the adapter proves both endpoint ancestor chains share a
-  top, projects only their ancestor union through the LCA, and keeps the exact
-  endpoint pair in the build key. Thus an identical request can be warm while a
-  different pair may still build cold; cross-target reuse is not implemented.
+  top and projects only their ancestor union through the LCA. Artifact identity
+  is target-independent, so a dominating proved artifact may serve a covered
+  endpoint while QueryIdentity remains target-specific.
   The deterministic shortest-hop query traverses only supported structural IR
   bindings and combinational dependencies. Positive partial results remain
   partial, while only complete coverage can establish `not_connected`;
   inconclusive/truncated negatives fall through to Static's structured
   unsupported result. `expand_assigns` changes only whether real assignment
-  evidence is exposed. `trace_x_source` routing is unchanged.
+  evidence is exposed. `trace_x_source` uses the same process-memory artifact
+  runtime while retaining split-phase waveform locking and whole-trace restart
+  semantics.
   The adapter content-hashes every ordered source/support input on the first
   request for a hierarchy handle. A bounded process-memory manifest cache then
   reuses that immutable compile-session snapshot; its key includes compile-log

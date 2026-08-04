@@ -365,10 +365,36 @@ def test_trace_x_source_result_carries_backend_consistency_receipt():
                 "simulator": "vcs",
                 "backend": "verdi_npi",
                 "actual_backend": "static",
+                "whole_trace_restart_count": 2,
+                "whole_trace_restart_reasons": [
+                    "npi_internal_fallback",
+                    "source_graph_to_static",
+                ],
+                "single_backend_provenance": True,
                 "fallback_reason": "npi_lsf_timeout",
                 "execution_mode": "lsf",
                 "scheduler_status": "timed_out",
                 "worker_status": "not_started",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "query_count": 2,
+                    "attempted_query_count": 3,
+                    "query_fingerprints_sha256": ["a" * 64, "b" * 64],
+                    "query_statuses": ["found", "not_connected"],
+                    "coverage_statuses": ["partial", "complete"],
+                    "positive_query_count": 1,
+                    "complete_negative_query_count": 1,
+                    "artifact_attempt_count": 2,
+                    "scope_expansion_count": 1,
+                    "attempted_artifact_fingerprints_sha256": [
+                        "c" * 64,
+                        "d" * 64,
+                    ],
+                    "final_artifact_fingerprint_sha256": "d" * 64,
+                    "single_artifact_provenance": True,
+                    "final_artifact_scope_match": True,
+                    "fallback_used": True,
+                },
             },
             "trace_restarted": True,
         }
@@ -376,6 +402,11 @@ def test_trace_x_source_result_carries_backend_consistency_receipt():
 
     assert result.backend_status.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "static"
+    assert result.backend_status.whole_trace_restart_count == 2
+    assert result.backend_status.single_backend_provenance is True
+    assert result.backend_status.source_graph.query_count == 2
+    assert result.backend_status.source_graph.artifact_attempt_count == 2
+    assert result.backend_status.source_graph.single_artifact_provenance is True
     assert result.trace_restarted is True
 
 

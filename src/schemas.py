@@ -789,6 +789,19 @@ class SourceGraphBackendReceipt(SchemaModel):
     ) = None
     query_confidence: Literal["exact", "conditional", "partial"] | None = None
     query_match_count: int = 0
+    query_count: int = 0
+    attempted_query_count: int = 0
+    query_fingerprints_sha256: list[str] = Field(default_factory=list)
+    query_statuses: list[Literal["found", "not_connected", "inconclusive"]] = Field(
+        default_factory=list
+    )
+    coverage_statuses: list[Literal["complete", "partial", "inconclusive"]] = Field(
+        default_factory=list
+    )
+    query_gap_codes: list[str] = Field(default_factory=list)
+    positive_query_count: int = 0
+    complete_negative_query_count: int = 0
+    inconclusive_negative_count: int = 0
     traversed_binding_edges: int = 0
     max_depth: int | None = None
     path_edge_count: int = 0
@@ -803,6 +816,12 @@ class SourceGraphBackendReceipt(SchemaModel):
     build_key_sha256: str | None = None
     artifact_fingerprint_sha256: str | None = None
     selected_artifact_fingerprint_sha256: str | None = None
+    final_artifact_fingerprint_sha256: str | None = None
+    attempted_artifact_fingerprints_sha256: list[str] = Field(default_factory=list)
+    artifact_attempt_count: int = 0
+    scope_expansion_count: int = 0
+    single_artifact_provenance: bool | None = None
+    final_artifact_scope_match: bool | None = None
     query_fingerprint_sha256: str | None = None
     artifact_reuse: (
         Literal[
@@ -873,6 +892,9 @@ class BackendStatus(SchemaModel):
         | None
     ) = None
     attempted_backends: list[BackendAttemptReceipt] = Field(default_factory=list)
+    whole_trace_restart_count: int = 0
+    whole_trace_restart_reasons: list[str] = Field(default_factory=list)
+    single_backend_provenance: bool | None = None
     fallback_reason: str | None = None
     source_graph: SourceGraphBackendReceipt | None = None
     execution_mode: Literal["local", "lsf", "invalid"] | None = None

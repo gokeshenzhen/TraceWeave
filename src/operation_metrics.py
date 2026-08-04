@@ -113,6 +113,10 @@ _PUBLIC_FIELDS = {
     "source_graph_cache_peak_bytes",
     "source_graph_cache_eviction_count",
     "source_graph_cache_oversize_bypass_count",
+    "source_graph_trace_query_count",
+    "source_graph_trace_artifact_attempt_count",
+    "source_graph_trace_scope_expansion_count",
+    "source_graph_trace_restart_count",
 }
 _PUBLIC_PHASES = {
     "discover_valid_ready",

@@ -233,9 +233,9 @@ def select_backend(
     """Pick the active backend based on probe output.
 
     If a usable KDB is present, return a local VerdiNpiBackend or the opt-in
-    LSF wrapper.  The default fallback remains Static for backward-compatible
-    path/X-trace callers; driver/load production routing injects a deferred
-    fallback so it can attempt Source Graph first for driver/load/path calls.
+    LSF wrapper.  The default fallback remains Static for direct/library
+    callers; production driver/load/path/X-trace routing injects a deferred
+    fallback so it can attempt Source Graph before whole-result Static.
 
     If no KDB is detected, the configured fallback is returned directly —
     starting NPI without a design to load would just consume a license

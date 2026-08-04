@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import re
+import time
 from typing import Any
 
 from .cancellation import check_cancelled
@@ -138,6 +139,8 @@ class SourceGraphTraceQueryLedger:
         self.positive_query_count = 0
         self.complete_negative_query_count = 0
         self.inconclusive_negative_count = 0
+        self.unresolved_boundary_codes: set[str] = set()
+        self.last_query_receipt: dict[str, Any] | None = None
 
     def record(
         self,
@@ -167,6 +170,11 @@ class SourceGraphTraceQueryLedger:
         )
         self.query_statuses.append(status)
         self.coverage_statuses.append(coverage)
+        self.unresolved_boundary_codes.update(
+            _fixed_label(str(code), "unresolved boundary code")
+            for code in query_receipt.get("unresolved_boundary_codes", ())
+        )
+        self.last_query_receipt = dict(query_receipt)
         if status == "found":
             self.positive_query_count += 1
         elif status == "not_connected" and coverage == "complete":
@@ -178,7 +186,7 @@ class SourceGraphTraceQueryLedger:
         return {
             "single_artifact_provenance": True,
             "final_artifact_scope_match": True,
-            "artifact_fingerprint_sha256": self.artifact_fingerprint_sha256,
+            "final_artifact_fingerprint_sha256": (self.artifact_fingerprint_sha256),
             "query_count": len(self.query_fingerprints_sha256),
             "query_fingerprints_sha256": list(self.query_fingerprints_sha256),
             "query_statuses": list(self.query_statuses),
@@ -186,6 +194,7 @@ class SourceGraphTraceQueryLedger:
             "positive_query_count": self.positive_query_count,
             "complete_negative_query_count": self.complete_negative_query_count,
             "inconclusive_negative_count": self.inconclusive_negative_count,
+            "query_gap_codes": sorted(self.unresolved_boundary_codes),
         }
 
 
@@ -210,6 +219,7 @@ class SourceGraphTraceConnectivityBackend:
             hierarchy_result=hierarchy_result,
         )
         self.ledger = SourceGraphTraceQueryLedger(artifact_fingerprint_sha256)
+        self.query_wall_ms = 0.0
 
     def require_scope(self, signal_paths: Sequence[str]) -> None:
         self._guard.require(signal_paths)
@@ -227,15 +237,19 @@ class SourceGraphTraceConnectivityBackend:
     ) -> dict[str, Any]:
         check_cancelled()
         self._guard.require((signal_path,))
-        result = self._backend.find_driver(
-            signal_path=signal_path,
-            wave_path=wave_path,
-            compile_log=compile_log,
-            top_hint=top_hint,
-            recursive=recursive,
-            max_depth=max_depth,
-            simulator=simulator,
-        )
+        started = time.perf_counter()
+        try:
+            result = self._backend.find_driver(
+                signal_path=signal_path,
+                wave_path=wave_path,
+                compile_log=compile_log,
+                top_hint=top_hint,
+                recursive=recursive,
+                max_depth=max_depth,
+                simulator=simulator,
+            )
+        finally:
+            self.query_wall_ms += (time.perf_counter() - started) * 1000.0
         check_cancelled()
         if not isinstance(result, dict):
             raise SourceGraphTraceFallbackRequired("source_graph_trace_query_invalid")
@@ -243,6 +257,18 @@ class SourceGraphTraceConnectivityBackend:
         if not isinstance(query_receipt, Mapping):
             raise SourceGraphTraceFallbackRequired(
                 "source_graph_trace_query_receipt_missing"
+            )
+        if query_receipt.get("status") not in {
+            "found",
+            "not_connected",
+            "inconclusive",
+        } or query_receipt.get("coverage_status") not in {
+            "complete",
+            "partial",
+            "inconclusive",
+        }:
+            raise SourceGraphTraceFallbackRequired(
+                "source_graph_trace_query_receipt_invalid"
             )
         explicit_backends = [result.get("backend")]
         chain = result.get("driver_chain")

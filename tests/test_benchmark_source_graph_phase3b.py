@@ -93,7 +93,7 @@ def test_historical_baseline_guard_rejects_phase3a_tampering(tmp_path, monkeypat
         benchmark._read_historical_baselines()
 
 
-def test_route_isolation_preserves_order_trace_x_and_wave_locks():
+def test_route_isolation_detects_phase3c_while_preserving_order_and_wave_locks():
     receipt = benchmark._route_isolation_receipt()
 
     assert receipt["accepted_head"] == benchmark.ACCEPTED_PHASE3A_HEAD
@@ -103,17 +103,35 @@ def test_route_isolation_preserves_order_trace_x_and_wave_locks():
         "find_signal_loads",
         "trace_signal_path",
     ]
-    assert receipt["trace_x_source_route_changed"] is False
+    assert receipt["trace_x_source_route_changed"] is True
     assert receipt["waveform_locking_model_changed"] is False
     for route in receipt["route_stage_order"].values():
         assert route["accepted"] == ["trusted_npi", "source_graph", "legacy_static"]
         assert route["current"] == route["accepted"]
     assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
     assert receipt["functions"]["_route_public_signal_path"]["changed"] is True
+    assert receipt["functions"]["_run_trace_x_attempt"]["changed"] is True
+    assert receipt["functions"]["_handle_trace_x_source"]["changed"] is True
 
 
 @pytest.mark.anyio
-async def test_fake_phase3b_gate_covers_reuse_dominance_capacity_and_failures():
+async def test_fake_phase3b_gate_covers_reuse_dominance_capacity_and_failures(
+    monkeypatch,
+):
+    # Phase 3B's executable gate is a historical behavior test. Freeze its
+    # isolation receipt at the Phase 3B boundary; the separate test above must
+    # detect the authorized Phase 3C X-trace route change in current sources.
+    frozen_isolation = benchmark._route_isolation_receipt()
+    frozen_isolation["trace_x_source_route_changed"] = False
+    for function_name in ("_run_trace_x_attempt", "_handle_trace_x_source"):
+        function = frozen_isolation["functions"][function_name]
+        function["current_ast_sha256"] = function["accepted_ast_sha256"]
+        function["changed"] = False
+    monkeypatch.setattr(
+        benchmark,
+        "_route_isolation_receipt",
+        lambda: frozen_isolation,
+    )
     result = await benchmark.run_benchmark_async(
         _args(
             "--workload",

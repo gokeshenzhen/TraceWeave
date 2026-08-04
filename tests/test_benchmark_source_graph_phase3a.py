@@ -85,7 +85,7 @@ def test_phase2_baseline_guard_rejects_tampering(tmp_path):
         benchmark._read_phase2_baseline(copied)
 
 
-def test_frozen_phase3a_ast_probe_detects_phase3b_without_x_or_wave_lock_changes():
+def test_frozen_phase3a_ast_probe_detects_later_route_changes_without_wave_lock_changes():
     receipt = benchmark._route_isolation_receipt()
 
     assert receipt["accepted_head"] == benchmark.ACCEPTED_PHASE2_HEAD
@@ -93,12 +93,9 @@ def test_frozen_phase3a_ast_probe_detects_phase3b_without_x_or_wave_lock_changes
     assert receipt["phase3a_isolated"] is False
     assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
     assert receipt["dispatch_branches"]["trace_x_source"]["changed"] is False
-    for function_name in (
-        "_run_trace_x_attempt",
-        "_handle_trace_x_source",
-        "_run_in_wave_thread",
-        "_wave_locks_for",
-    ):
+    for function_name in ("_run_trace_x_attempt", "_handle_trace_x_source"):
+        assert receipt["functions"][function_name]["changed"] is True
+    for function_name in ("_run_in_wave_thread", "_wave_locks_for"):
         assert receipt["functions"][function_name]["changed"] is False
 
 
