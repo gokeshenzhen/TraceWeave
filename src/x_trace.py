@@ -27,6 +27,7 @@ UpstreamLookup = Callable[
     [list[str], str, int],
     list[dict[str, Any]] | Awaitable[list[dict[str, Any]]],
 ]
+ScopeGuard = Callable[[list[str]], None | Awaitable[None]]
 
 
 async def trace_x_source(
@@ -37,11 +38,12 @@ async def trace_x_source(
     parser=None,
     top_hint: str | None = None,
     max_depth: int = DEFAULT_X_TRACE_MAX_DEPTH,
-    simulator: str = 'auto',
+    simulator: str = "auto",
     *,
     driver_lookup: DriverLookup | None = None,
     value_lookup: ValueLookup | None = None,
     upstream_lookup: UpstreamLookup | None = None,
+    upstream_scope_guard: ScopeGuard | None = None,
 ) -> dict[str, Any]:
     """Trace X/Z propagation using injected wave and connectivity lookups.
 
@@ -168,6 +170,9 @@ async def trace_x_source(
             else:
                 clean_upstream.append(full_path)
 
+        if x_upstream and upstream_scope_guard is not None:
+            await _maybe_await(upstream_scope_guard(x_upstream))
+
         if x_upstream:
             node["x_upstream_signals"] = x_upstream[:X_TRACE_MAX_BRANCH_FANOUT]
         if clean_upstream:
@@ -176,7 +181,12 @@ async def trace_x_source(
             node["unresolved_signals"] = unresolved_upstream
         if skipped_signals:
             node["skipped_signals"] = skipped_signals
-        if clean_upstream and not x_upstream and not unresolved_upstream and not skipped_signals:
+        if (
+            clean_upstream
+            and not x_upstream
+            and not unresolved_upstream
+            and not skipped_signals
+        ):
             node["trace_stop_reason"] = "traced_to_clean_leaf"
 
     trace_status = _determine_trace_status(chain, signal_path)
@@ -324,7 +334,9 @@ def inspect_upstream_values(
     return observations
 
 
-def _resolve_signal_full_path(parser, signal_name: str, current_signal_path: str) -> str | None:
+def _resolve_signal_full_path(
+    parser, signal_name: str, current_signal_path: str
+) -> str | None:
     instance_path = ".".join(current_signal_path.split(".")[:-1])
     candidates = []
     if "." in signal_name:
@@ -396,7 +408,9 @@ def _identify_root_cause(chain: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def _generate_analysis_guide(chain: list[dict[str, Any]], trace_status: str) -> dict[str, str]:
+def _generate_analysis_guide(
+    chain: list[dict[str, Any]], trace_status: str
+) -> dict[str, str]:
     if trace_status == "signal_is_clean":
         return {
             "step1": "Signal is clean at the requested time; choose another signal or failure timestamp.",

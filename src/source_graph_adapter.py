@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import hashlib
 import json
@@ -214,10 +214,18 @@ class SourceGraphAdapterReceipt:
             raise ValueError("blocked adapter receipt requires a blocker")
         if self.status is AdapterStatus.READY and self.blocker is not None:
             raise ValueError("ready adapter receipt must not carry a blocker")
-        if self.scope_kind not in {"single_endpoint", "dual_endpoint_path"}:
+        if self.scope_kind not in {
+            "single_endpoint",
+            "dual_endpoint_path",
+            "multi_endpoint_trace",
+        }:
             raise ValueError("invalid adapter scope kind")
-        if self.endpoint_count not in {1, 2}:
-            raise ValueError("adapter endpoint count must be one or two")
+        if self.endpoint_count < 1:
+            raise ValueError("adapter endpoint count must be positive")
+        if (self.scope_kind == "single_endpoint" and self.endpoint_count != 1) or (
+            self.scope_kind == "dual_endpoint_path" and self.endpoint_count != 2
+        ):
+            raise ValueError("adapter endpoint count does not match scope kind")
         if self.lca_depth is not None and self.lca_depth < 0:
             raise ValueError("adapter LCA depth must not be negative")
         if self.fingerprint_cache_disposition not in {
@@ -1119,7 +1127,7 @@ def _selected_top(
     return root if root in tops else None
 
 
-def _hierarchy_ancestors(
+def resolve_source_graph_hierarchy_ancestors(
     *,
     hierarchy_result: Mapping[str, Any],
     top: str,
@@ -1255,7 +1263,7 @@ def build_source_graph_plan(
             gaps=gaps,
             exclusions=exclusions,
         )
-    ancestors = _hierarchy_ancestors(
+    ancestors = resolve_source_graph_hierarchy_ancestors(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_signal,
@@ -1361,6 +1369,164 @@ def build_source_graph_plan(
     return SourceGraphBuildPlan(
         status=AdapterStatus.READY,
         request=request,
+        receipt=receipt,
+    )
+
+
+def _trace_scope_lca(chains: Sequence[tuple[str, ...]]) -> str:
+    common = chains[0]
+    for chain in chains[1:]:
+        prefix_length = 0
+        for left, right in zip(common, chain):
+            if left != right:
+                break
+            prefix_length += 1
+        common = common[:prefix_length]
+    if not common:
+        raise ValueError("trace hierarchy chains must share one proved top")
+    return common[-1]
+
+
+def build_source_graph_trace_plan(
+    *,
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+    hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
+    signal_paths: Sequence[str],
+    top_hint: str | None,
+    max_hops: int,
+    frontend_version: str,
+) -> SourceGraphBuildPlan:
+    """Build one artifact for an exact, hierarchy-proved X-trace target union.
+
+    ``signal_paths`` contains only waveform targets already encountered by the
+    trace. Every target is resolved by direct child lookup through the cached
+    hierarchy. The artifact projects the union of those proved ancestor chains;
+    it never admits a sibling, descendant, filename, or module-name inference.
+
+    The request query remains rooted at the first signal. Additional targets
+    affect only artifact identity, which lets independent per-node driver
+    queries reuse one prepared IR while preserving QueryIdentity separation.
+    """
+
+    check_cancelled()
+    if isinstance(signal_paths, (str, bytes)):
+        normalized_paths: tuple[str, ...] = ()
+    else:
+        normalized_paths = tuple(
+            dict.fromkeys(
+                str(path).strip() for path in signal_paths if str(path).strip()
+            )
+        )
+    scope_kind = "multi_endpoint_trace"
+    if not normalized_paths:
+        return _blocked_plan(
+            code="trace_targets_unavailable",
+            stage="target_scope",
+            scope_kind=scope_kind,
+            endpoint_count=1,
+        )
+
+    base = build_source_graph_plan(
+        compile_log=compile_log,
+        compile_result=compile_result,
+        hierarchy_result=hierarchy_result,
+        hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
+        operation=QueryOperation.DRIVER,
+        signal_path=normalized_paths[0],
+        top_hint=top_hint,
+        max_hops=max_hops,
+        frontend_version=frontend_version,
+        recursive=True,
+    )
+    if base.status is AdapterStatus.BLOCKED:
+        return replace(
+            base,
+            receipt=replace(
+                base.receipt,
+                scope_kind=scope_kind,
+                endpoint_count=len(normalized_paths),
+            ),
+        )
+
+    assert base.request is not None
+    request = base.request
+    manifest = request.identity.compile_inputs
+    top = request.scope.top
+    chains: list[tuple[str, ...]] = []
+    for signal_path in normalized_paths:
+        check_cancelled()
+        if signal_path.split(".", 1)[0] != top:
+            return _blocked_plan(
+                code="trace_target_top_mismatch",
+                stage="target_scope",
+                manifest=manifest,
+                gaps=base.receipt.gap_codes,
+                exclusions=base.receipt.objective_exclusions,
+                scope_kind=scope_kind,
+                endpoint_count=len(normalized_paths),
+            )
+        ancestors = resolve_source_graph_hierarchy_ancestors(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            signal_path=signal_path,
+        )
+        if ancestors is None:
+            return _blocked_plan(
+                code="trace_hierarchy_scope_unresolved",
+                stage="target_scope",
+                manifest=manifest,
+                gaps=(*base.receipt.gap_codes, "trace_hierarchy_scope_unresolved"),
+                exclusions=base.receipt.objective_exclusions,
+                scope_kind=scope_kind,
+                endpoint_count=len(normalized_paths),
+            )
+        chains.append(ancestors)
+
+    unique_chains = tuple(dict.fromkeys(chains))
+    ancestor_union = tuple(
+        sorted(
+            set().union(*(set(chain) for chain in unique_chains)),
+            key=lambda path: (path.count("."), path),
+        )
+    )
+    lca = _trace_scope_lca(unique_chains)
+    boundary = CoverageBoundary(
+        mode=BoundaryMode.EXPLICIT,
+        instance_paths=ancestor_union,
+        objective_exclusions=request.scope.coverage_boundary.objective_exclusions,
+    )
+    base_artifact = request.artifact_identity
+    artifact_scope = SourceGraphArtifactScope(
+        design=base_artifact.scope.design,
+        top=top,
+        hierarchy_snapshot_sha256=base_artifact.scope.hierarchy_snapshot_sha256,
+        proved_ancestor_chains=unique_chains,
+        proved_lcas=(lca,),
+        projection_instance_paths=ancestor_union,
+        coverage_boundary=boundary,
+        capabilities=base_artifact.scope.capabilities,
+    )
+    artifact = replace(base_artifact, scope=artifact_scope)
+    trace_request = replace(request, artifact=artifact)
+    artifact_key = compute_source_graph_artifact_key(artifact)
+    query_key = compute_source_graph_query_key(trace_request.query_identity)
+    receipt = replace(
+        base.receipt,
+        ancestor_count=len(ancestor_union),
+        requested_cone_instance_count=len(ancestor_union),
+        coverage_boundary_instance_count=len(ancestor_union),
+        scope_kind=scope_kind,
+        endpoint_count=len(normalized_paths),
+        lca_depth=lca.count("."),
+        cross_request_reusable=artifact_key.cross_request_reusable,
+        artifact_fingerprint_sha256=artifact_key.digest,
+        query_fingerprint_sha256=query_key.digest,
+    )
+    return SourceGraphBuildPlan(
+        status=AdapterStatus.READY,
+        request=trace_request,
         receipt=receipt,
     )
 
@@ -1501,12 +1667,12 @@ def build_source_graph_path_plan(
             **blocker_kwargs,
         )
 
-    from_ancestors = _hierarchy_ancestors(
+    from_ancestors = resolve_source_graph_hierarchy_ancestors(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_from,
     )
-    to_ancestors = _hierarchy_ancestors(
+    to_ancestors = resolve_source_graph_hierarchy_ancestors(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_to,
