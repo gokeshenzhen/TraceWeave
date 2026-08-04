@@ -38,14 +38,19 @@ from .source_graph_contract import (
     PathHierarchyScope,
     QueryOperation,
     RequestedCone,
+    SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+    SourceGraphArtifactIdentity,
+    SourceGraphArtifactScope,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
     SourceGraphIdentity,
-    compute_source_graph_build_key,
+    SourceGraphQueryIdentity,
+    compute_source_graph_artifact_key,
+    compute_source_graph_query_key,
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "2.0"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.0"
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -188,6 +193,9 @@ class SourceGraphAdapterReceipt:
     endpoint_count: int = 1
     lca_depth: int | None = None
     cross_request_reusable: bool = False
+    artifact_fingerprint_sha256: str | None = None
+    query_fingerprint_sha256: str | None = None
+    snapshot_identity_complete: bool = False
     fingerprint_cache_disposition: str | None = None
     blocker: SourceGraphAdapterBlocker | None = None
 
@@ -218,6 +226,13 @@ class SourceGraphAdapterReceipt:
             "hit_session_snapshot",
         }:
             raise ValueError("invalid fingerprint cache disposition")
+        for field_name in (
+            "artifact_fingerprint_sha256",
+            "query_fingerprint_sha256",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ValueError(f"invalid {field_name}")
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -242,6 +257,9 @@ class SourceGraphAdapterReceipt:
             },
             "gap_codes": list(self.gap_codes),
             "cross_request_reusable": self.cross_request_reusable,
+            "artifact_fingerprint_sha256": self.artifact_fingerprint_sha256,
+            "query_fingerprint_sha256": self.query_fingerprint_sha256,
+            "snapshot_identity_complete": self.snapshot_identity_complete,
         }
         if self.blocker is not None:
             result["blocker"] = self.blocker.to_dict()
@@ -1014,7 +1032,13 @@ def _build_compile_manifest(
 def _compile_manifest(
     compile_log: str,
     compile_result: Mapping[str, Any],
-) -> tuple[CompileInputManifest, tuple[str, ...], tuple[str, ...], str]:
+) -> tuple[
+    CompileInputManifest,
+    tuple[str, ...],
+    tuple[str, ...],
+    str,
+    str | None,
+]:
     """Return a content-hashed manifest for one immutable compile session.
 
     The hierarchy handle and this cache share the same lifetime boundary: the
@@ -1033,6 +1057,7 @@ def _compile_manifest(
             cached.gap_codes,
             cached.objective_exclusions,
             "hit_session_snapshot",
+            snapshot_key,
         )
 
     while not _MANIFEST_BUILD_LOCK.acquire(timeout=0.05):
@@ -1046,6 +1071,7 @@ def _compile_manifest(
                 cached.gap_codes,
                 cached.objective_exclusions,
                 "hit_session_snapshot",
+                snapshot_key,
             )
         manifest, gaps, exclusions = _build_compile_manifest(
             compile_log, compile_result
@@ -1071,7 +1097,12 @@ def _compile_manifest(
                     objective_exclusions=exclusions,
                 ),
             )
-        return manifest, gaps, exclusions, "miss"
+        stable_snapshot = (
+            snapshot_key
+            if snapshot_key is not None and after_key == snapshot_key
+            else None
+        )
+        return manifest, gaps, exclusions, "miss", stable_snapshot
     finally:
         _MANIFEST_BUILD_LOCK.release()
 
@@ -1157,11 +1188,15 @@ def build_source_graph_plan(
     compile_log: str,
     compile_result: Mapping[str, Any],
     hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
     operation: QueryOperation | str,
     signal_path: str,
     top_hint: str | None,
     max_hops: int,
     frontend_version: str,
+    recursive: bool = False,
+    include_expr: bool = True,
+    kind_filter: Sequence[str] = (),
 ) -> SourceGraphBuildPlan:
     """Build one bounded driver/load request or a fixed structured blocker."""
 
@@ -1172,13 +1207,22 @@ def build_source_graph_plan(
         return _blocked_plan(code="operation_unsupported", stage="target_scope")
     if not isinstance(max_hops, int) or isinstance(max_hops, bool) or max_hops < 0:
         return _blocked_plan(code="max_hops_invalid", stage="target_scope")
+    normalized_hierarchy_snapshot = str(hierarchy_snapshot_sha256).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized_hierarchy_snapshot):
+        return _blocked_plan(
+            code="hierarchy_snapshot_unavailable", stage="target_scope"
+        )
     normalized_signal = str(signal_path).strip()
     if not normalized_signal or "." not in normalized_signal:
         return _blocked_plan(code="signal_path_unscoped", stage="target_scope")
 
-    manifest, gaps, exclusions, fingerprint_cache_disposition = _compile_manifest(
-        compile_log, compile_result
-    )
+    (
+        manifest,
+        gaps,
+        exclusions,
+        fingerprint_cache_disposition,
+        compile_snapshot,
+    ) = _compile_manifest(compile_log, compile_result)
     if not manifest.complete:
         exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     if not manifest.ordered_inputs:
@@ -1226,10 +1270,10 @@ def build_source_graph_plan(
         )
 
     target = ConnectivityTarget(operation=operation, signal_path=normalized_signal)
-    # The deepest source-hierarchy instance is the only assignment-bearing
-    # cone.  Its already-resolved ancestors are included as binding skeletons.
-    # This is finite by construction and never enumerates siblings/descendants.
-    target_instance = ancestors[-1]
+    # The proved ancestor chain is the canonical bounded projection.  It lets
+    # driver/load and same-chain path queries share one artifact without adding
+    # siblings or descendants; every admitted path came directly from the
+    # hierarchy handle.
     boundary_paths = tuple(dict.fromkeys(ancestors))
     scope = SourceGraphBuildScope(
         design=(
@@ -1243,7 +1287,7 @@ def build_source_graph_plan(
         requested_cone=RequestedCone(
             operation=operation,
             max_hops=max_hops,
-            instance_paths=(target_instance,),
+            instance_paths=boundary_paths,
             cross_instance_boundaries=True,
             stop_at_sequential=True,
             include_control_dependencies=False,
@@ -1254,15 +1298,48 @@ def build_source_graph_plan(
             objective_exclusions=tuple(exclusions),
         ),
     )
-    request = SourceGraphBuildRequest(
-        identity=SourceGraphIdentity(
-            compile_inputs=manifest,
-            frontend_name=SLANG_FRONTEND_NAME,
-            frontend_version=frontend_version,
-        ),
-        scope=scope,
+    source_identity = SourceGraphIdentity(
+        compile_inputs=manifest,
+        frontend_name=SLANG_FRONTEND_NAME,
+        frontend_version=frontend_version,
     )
-    build_key = compute_source_graph_build_key(request)
+    artifact_scope = SourceGraphArtifactScope.from_build_scope(
+        scope,
+        hierarchy_snapshot_sha256=normalized_hierarchy_snapshot,
+    )
+    stable_compile_snapshot = (
+        compile_snapshot
+        or hashlib.sha256(
+            _canonical_json(
+                {
+                    "unproved_compile_snapshot": True,
+                    "manifest": manifest.to_dict(),
+                }
+            )
+        ).hexdigest()
+    )
+    artifact_identity = SourceGraphArtifactIdentity(
+        source=source_identity,
+        scope=artifact_scope,
+        compile_snapshot_sha256=stable_compile_snapshot,
+        adapter_version=SOURCE_GRAPH_ADAPTER_VERSION,
+        worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+        snapshots_complete=compile_snapshot is not None,
+    )
+    query_identity = SourceGraphQueryIdentity.from_build_scope(
+        scope,
+        recursive=recursive,
+        include_expr=include_expr,
+        kind_filter=kind_filter,
+    )
+    request = SourceGraphBuildRequest(
+        identity=source_identity,
+        scope=scope,
+        artifact=artifact_identity,
+        query=query_identity,
+    )
+    artifact_key = compute_source_graph_artifact_key(artifact_identity)
+    query_key = compute_source_graph_query_key(query_identity)
     receipt = SourceGraphAdapterReceipt(
         status=AdapterStatus.READY,
         input_count=len(manifest.ordered_inputs),
@@ -1273,9 +1350,12 @@ def build_source_graph_plan(
         gap_codes=gaps,
         objective_exclusions=tuple(exclusions),
         ancestor_count=len(ancestors),
-        requested_cone_instance_count=1,
+        requested_cone_instance_count=len(boundary_paths),
         coverage_boundary_instance_count=len(boundary_paths),
-        cross_request_reusable=build_key.cross_request_reusable,
+        cross_request_reusable=artifact_key.cross_request_reusable,
+        artifact_fingerprint_sha256=artifact_key.digest,
+        query_fingerprint_sha256=query_key.digest,
+        snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
     )
     return SourceGraphBuildPlan(
@@ -1314,6 +1394,7 @@ def build_source_graph_path_plan(
     compile_log: str,
     compile_result: Mapping[str, Any],
     hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
     from_signal: str,
     to_signal: str,
     top_hint: str | None,
@@ -1354,9 +1435,22 @@ def build_source_graph_path_plan(
             endpoint_count=endpoint_count,
         )
 
-    manifest, gaps, exclusions, fingerprint_cache_disposition = _compile_manifest(
-        compile_log, compile_result
-    )
+    normalized_hierarchy_snapshot = str(hierarchy_snapshot_sha256).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized_hierarchy_snapshot):
+        return _blocked_plan(
+            code="hierarchy_snapshot_unavailable",
+            stage="target_scope",
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+        )
+
+    (
+        manifest,
+        gaps,
+        exclusions,
+        fingerprint_cache_disposition,
+        compile_snapshot,
+    ) = _compile_manifest(compile_log, compile_result)
     if not manifest.complete:
         exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     blocker_kwargs = {
@@ -1477,15 +1571,43 @@ def build_source_graph_path_plan(
         ),
         path_hierarchy=path_hierarchy,
     )
-    request = SourceGraphBuildRequest(
-        identity=SourceGraphIdentity(
-            compile_inputs=manifest,
-            frontend_name=SLANG_FRONTEND_NAME,
-            frontend_version=frontend_version,
-        ),
-        scope=scope,
+    source_identity = SourceGraphIdentity(
+        compile_inputs=manifest,
+        frontend_name=SLANG_FRONTEND_NAME,
+        frontend_version=frontend_version,
     )
-    build_key = compute_source_graph_build_key(request)
+    artifact_scope = SourceGraphArtifactScope.from_build_scope(
+        scope,
+        hierarchy_snapshot_sha256=normalized_hierarchy_snapshot,
+    )
+    stable_compile_snapshot = (
+        compile_snapshot
+        or hashlib.sha256(
+            _canonical_json(
+                {
+                    "unproved_compile_snapshot": True,
+                    "manifest": manifest.to_dict(),
+                }
+            )
+        ).hexdigest()
+    )
+    artifact_identity = SourceGraphArtifactIdentity(
+        source=source_identity,
+        scope=artifact_scope,
+        compile_snapshot_sha256=stable_compile_snapshot,
+        adapter_version=SOURCE_GRAPH_ADAPTER_VERSION,
+        worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+        snapshots_complete=compile_snapshot is not None,
+    )
+    query_identity = SourceGraphQueryIdentity.from_build_scope(scope)
+    request = SourceGraphBuildRequest(
+        identity=source_identity,
+        scope=scope,
+        artifact=artifact_identity,
+        query=query_identity,
+    )
+    artifact_key = compute_source_graph_artifact_key(artifact_identity)
+    query_key = compute_source_graph_query_key(query_identity)
     receipt = SourceGraphAdapterReceipt(
         status=AdapterStatus.READY,
         input_count=len(manifest.ordered_inputs),
@@ -1501,7 +1623,10 @@ def build_source_graph_path_plan(
         scope_kind=scope_kind,
         endpoint_count=endpoint_count,
         lca_depth=lca.count("."),
-        cross_request_reusable=build_key.cross_request_reusable,
+        cross_request_reusable=artifact_key.cross_request_reusable,
+        artifact_fingerprint_sha256=artifact_key.digest,
+        query_fingerprint_sha256=query_key.digest,
+        snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
     )
     return SourceGraphBuildPlan(

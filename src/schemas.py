@@ -720,6 +720,25 @@ class SourceGraphMetricsReceipt(SchemaModel):
     rss_end_kib: int | None = None
     ir_bytes: int = 0
     cache_bytes: int = 0
+    cache_entry_count: int = 0
+    cache_peak_entry_count: int = 0
+    cache_peak_bytes: int = 0
+    cache_eviction_count: int = 0
+    cache_oversize_bypass_count: int = 0
+
+
+class SourceGraphScopeMatchReceipt(SchemaModel):
+    relation: Literal["exact", "superset", "subset", "disjoint", "unproven"]
+    reusable: bool
+    complete_for_request: bool
+    reason: Literal[
+        "coverage_complete",
+        "coverage_preserved_partial",
+        "coverage_preserved_inconclusive",
+        "scope_subset",
+        "scope_disjoint",
+        "scope_unproven",
+    ]
 
 
 class SourceGraphBackendReceipt(SchemaModel):
@@ -743,6 +762,7 @@ class SourceGraphBackendReceipt(SchemaModel):
             "hit_superset",
             "miss",
             "bypass_incomplete_key",
+            "bypass_capacity",
         ]
         | None
     ) = None
@@ -781,6 +801,35 @@ class SourceGraphBackendReceipt(SchemaModel):
     endpoint_alias_equivalent: bool = False
     expand_assigns: bool | None = None
     build_key_sha256: str | None = None
+    artifact_fingerprint_sha256: str | None = None
+    selected_artifact_fingerprint_sha256: str | None = None
+    query_fingerprint_sha256: str | None = None
+    artifact_reuse: (
+        Literal[
+            "cold",
+            "exact_hit",
+            "dominating_hit",
+            "coalesced_build",
+            "bypass_incomplete",
+            "bypass_capacity",
+        ]
+        | None
+    ) = None
+    cache_lookup_reason: (
+        Literal[
+            "exact_artifact",
+            "dominating_artifact",
+            "no_cached_artifact",
+            "artifact_semantics_mismatch",
+            "cached_scope_not_dominating",
+            "identity_not_reusable",
+            "same_artifact_inflight",
+            "artifact_exceeds_cache_capacity",
+            "cancelled_before_lookup",
+        ]
+        | None
+    ) = None
+    scope_match: SourceGraphScopeMatchReceipt | None = None
     compile_fingerprint_sha256: str | None = None
     ir_fingerprint_sha256: str | None = None
     blocker: SourceGraphBlockerReceipt | None = None

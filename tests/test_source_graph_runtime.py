@@ -19,13 +19,18 @@ from src.source_graph_contract import (
     CoverageBoundary,
     QueryOperation,
     RequestedCone,
+    SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+    SourceGraphArtifactIdentity,
+    SourceGraphArtifactScope,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
     SourceGraphIdentity,
+    SourceGraphQueryIdentity,
     SourceGraphScopeReceipt,
 )
 from src.source_graph_runtime import (
     CacheDisposition,
+    CacheLookupReason,
     FlightDisposition,
     IsolatedSourceGraphProcessRunner,
     PrepareStatus,
@@ -43,6 +48,9 @@ def _fingerprint(label: str = "runtime") -> str:
 
 def _scope(
     *,
+    operation: QueryOperation = QueryOperation.DRIVER,
+    signal_path: str = "sg_top.lane_data[15:8]",
+    ancestors=("sg_top",),
     max_hops: int = 2,
     cone_paths=("sg_top",),
     boundary_paths=("sg_top",),
@@ -51,12 +59,12 @@ def _scope(
         design="hand_runtime_fixture",
         top="sg_top",
         target=ConnectivityTarget(
-            operation=QueryOperation.DRIVER,
-            signal_path="sg_top.lane_data[15:8]",
+            operation=operation,
+            signal_path=signal_path,
         ),
-        hierarchy_ancestors=("sg_top",),
+        hierarchy_ancestors=tuple(ancestors),
         requested_cone=RequestedCone(
-            operation=QueryOperation.DRIVER,
+            operation=operation,
             max_hops=max_hops,
             instance_paths=tuple(cone_paths),
         ),
@@ -72,24 +80,43 @@ def _request(
     label: str = "runtime",
     scope: SourceGraphBuildScope | None = None,
     complete: bool = True,
+    explicit_artifact: bool = True,
 ) -> SourceGraphBuildRequest:
-    return SourceGraphBuildRequest(
-        identity=SourceGraphIdentity(
-            compile_inputs=CompileInputManifest(
-                fingerprint=_fingerprint(label),
-                ordered_inputs=(
-                    "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
-                ),
-                ordered_options=("--compat", "all"),
-                ordered_tops=("sg_top",),
-                inputs_complete=True,
-                options_complete=complete,
-                tops_complete=True,
+    build_scope = scope or _scope()
+    source_identity = SourceGraphIdentity(
+        compile_inputs=CompileInputManifest(
+            fingerprint=_fingerprint(label),
+            ordered_inputs=(
+                "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
             ),
-            frontend_name="hand_oracle",
-            frontend_version="1.0",
+            ordered_options=("--compat", "all"),
+            ordered_tops=("sg_top",),
+            inputs_complete=True,
+            options_complete=complete,
+            tops_complete=True,
         ),
-        scope=scope or _scope(),
+        frontend_name="hand_oracle",
+        frontend_version="1.0",
+    )
+    artifact = None
+    query = None
+    if explicit_artifact:
+        artifact = SourceGraphArtifactIdentity(
+            source=source_identity,
+            scope=SourceGraphArtifactScope.from_build_scope(
+                build_scope,
+                hierarchy_snapshot_sha256=_fingerprint("hierarchy_snapshot"),
+            ),
+            compile_snapshot_sha256=_fingerprint(f"compile_snapshot:{label}"),
+            adapter_version="test_adapter_3_0",
+            worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+        )
+        query = SourceGraphQueryIdentity.from_build_scope(build_scope)
+    return SourceGraphBuildRequest(
+        identity=source_identity,
+        scope=build_scope,
+        artifact=artifact,
+        query=query,
     )
 
 
@@ -115,7 +142,7 @@ def _ready_result(request: SourceGraphBuildRequest) -> WorkerBuildResult:
 
 
 def test_worker_replays_all_ordered_tops_from_compile_manifest():
-    request = _request()
+    request = _request(explicit_artifact=False)
     request = replace(
         request,
         identity=replace(
@@ -194,9 +221,11 @@ async def test_cold_prepare_then_exact_memory_hit_builds_once():
 
     assert cold.status is PrepareStatus.READY
     assert cold.metrics.cache_disposition is CacheDisposition.MISS
+    assert cold.cache_lookup_reason is CacheLookupReason.NO_CACHED_ARTIFACT
     assert cold.metrics.actual_build_count == 1
     assert warm.status is PrepareStatus.READY
     assert warm.metrics.cache_disposition is CacheDisposition.HIT_EXACT
+    assert warm.cache_lookup_reason is CacheLookupReason.EXACT_ARTIFACT
     assert warm.metrics.actual_build_count == 0
     assert worker.count == 1
     assert warm.entry is cold.entry
@@ -214,15 +243,19 @@ async def test_proven_superset_hits_but_subset_builds_again():
     worker = ImmediateWorker()
     runtime = SourceGraphRuntime(worker)
     superset_scope = _scope(
+        signal_path="sg_top.u_bridge.q",
+        ancestors=("sg_top", "sg_top.u_bridge"),
         max_hops=4,
         cone_paths=("sg_top", "sg_top.u_bridge"),
         boundary_paths=("sg_top", "sg_top.u_bridge"),
     )
     requested_scope = _scope(max_hops=2)
     larger_scope = _scope(
+        signal_path="sg_top.u_other.q",
+        ancestors=("sg_top", "sg_top.u_other"),
         max_hops=6,
-        cone_paths=("sg_top", "sg_top.u_bridge"),
-        boundary_paths=("sg_top", "sg_top.u_bridge"),
+        cone_paths=("sg_top", "sg_top.u_other"),
+        boundary_paths=("sg_top", "sg_top.u_other"),
     )
 
     await runtime.prepare(_request(scope=superset_scope))
@@ -230,8 +263,10 @@ async def test_proven_superset_hits_but_subset_builds_again():
     miss = await runtime.prepare(_request(scope=larger_scope))
 
     assert hit.metrics.cache_disposition is CacheDisposition.HIT_SUPERSET
+    assert hit.cache_lookup_reason is CacheLookupReason.DOMINATING_ARTIFACT
     assert hit.scope_match.relation.value == "superset"
     assert miss.metrics.cache_disposition is CacheDisposition.MISS
+    assert miss.cache_lookup_reason is CacheLookupReason.CACHED_SCOPE_NOT_DOMINATING
     assert worker.count == 2
 
 
@@ -275,6 +310,102 @@ async def test_concurrent_same_key_is_single_flight_with_one_actual_build():
     assert sum(item.metrics.actual_build_count for item in (first, second)) == 1
     assert runtime.stats_snapshot()["actual_build_count"] == 1
     assert runtime.stats_snapshot()["coalesced_waiter_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_concurrent_mixed_queries_share_one_artifact_flight():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    requests = (
+        _request(scope=_scope(signal_path="sg_top.lane_data[15:8]")),
+        _request(scope=_scope(signal_path="sg_top.other_data")),
+        _request(
+            scope=_scope(
+                operation=QueryOperation.LOADS,
+                signal_path="sg_top.lane_data[15:8]",
+                max_hops=5,
+            )
+        ),
+    )
+
+    tasks = [asyncio.create_task(runtime.prepare(request)) for request in requests]
+    await worker.started.wait()
+    await asyncio.sleep(0)
+    worker.release.set()
+    outcomes = await asyncio.gather(*tasks)
+
+    assert worker.count == 1
+    assert runtime.stats_snapshot()["actual_build_count"] == 1
+    assert all(outcome.entry is outcomes[0].entry for outcome in outcomes)
+    assert sum(outcome.metrics.actual_build_count for outcome in outcomes) == 1
+    assert {outcome.metrics.flight_disposition for outcome in outcomes} == {
+        FlightDisposition.BUILDER,
+        FlightDisposition.COALESCED,
+    }
+
+
+@pytest.mark.anyio
+async def test_cancelled_query_waiter_does_not_pollute_or_evict_ready_artifact():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request()
+    ready = await runtime.prepare(request)
+    cancel = asyncio.Event()
+    cancel.set()
+
+    cancelled = await runtime.prepare(
+        _request(scope=_scope(signal_path="sg_top.other_data")),
+        cancel_event=cancel,
+    )
+    warm = await runtime.prepare(request)
+
+    assert ready.status is PrepareStatus.READY
+    assert cancelled.status is PrepareStatus.CANCELLED
+    assert warm.metrics.cache_disposition is CacheDisposition.HIT_EXACT
+    assert worker.count == 1
+    assert runtime.stats_snapshot()["cache_entry_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_lru_entry_boundary_evicts_safely_and_rebuilds_oldest():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker, max_cache_entries=2)
+    requests = tuple(_request(label=f"artifact_{index}") for index in range(3))
+
+    first = await runtime.prepare(requests[0])
+    await runtime.prepare(requests[1])
+    await runtime.prepare(requests[2])
+    rebuilt = await runtime.prepare(requests[0])
+    stats = runtime.stats_snapshot()
+
+    assert first.entry is not None
+    # The immutable entry remains usable through the first outcome even after
+    # its cache reference is evicted.
+    assert first.entry.query_engine.query_driver("sg_top.lane_data[15:8]").matches
+    assert rebuilt.metrics.cache_disposition is CacheDisposition.MISS
+    assert worker.count == 4
+    assert stats["cache_entry_count"] == 2
+    assert stats["cache_peak_entry_count"] == 2
+    assert stats["cache_eviction_count"] == 2
+
+
+@pytest.mark.anyio
+async def test_cache_byte_boundary_bypasses_oversize_artifact_without_pollution():
+    worker = ImmediateWorker()
+    ir_bytes = len(build_hand_ir().to_json_bytes())
+    runtime = SourceGraphRuntime(worker, max_cache_bytes=ir_bytes - 1)
+    request = _request()
+
+    first = await runtime.prepare(request)
+    second = await runtime.prepare(request)
+    stats = runtime.stats_snapshot()
+
+    assert first.status is PrepareStatus.READY
+    assert first.metrics.cache_disposition is CacheDisposition.BYPASS_CAPACITY
+    assert second.metrics.cache_disposition is CacheDisposition.BYPASS_CAPACITY
+    assert worker.count == 2
+    assert stats["cache_entry_count"] == 0
+    assert stats["cache_oversize_bypass_count"] == 2
 
 
 @pytest.mark.anyio
@@ -520,6 +651,11 @@ async def test_metrics_are_numeric_or_fixed_labels_and_contain_no_private_inputs
         "rss_end_kib",
         "ir_bytes",
         "cache_bytes",
+        "cache_entry_count",
+        "cache_peak_entry_count",
+        "cache_peak_bytes",
+        "cache_eviction_count",
+        "cache_oversize_bypass_count",
     }
     assert all(
         isinstance(value, (int, float))

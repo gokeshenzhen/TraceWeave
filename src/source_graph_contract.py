@@ -25,7 +25,8 @@ from typing import Any, Mapping, Sequence
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 
 
-SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "2.0"
+SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.0"
+SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.0"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
 SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.0"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.0"
@@ -653,6 +654,8 @@ class SourceGraphBuildScope:
 class SourceGraphBuildRequest:
     identity: SourceGraphIdentity
     scope: SourceGraphBuildScope
+    artifact: SourceGraphArtifactIdentity | None = None
+    query: SourceGraphQueryIdentity | None = None
     contract_version: str = SOURCE_GRAPH_BUILD_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -668,12 +671,90 @@ class SourceGraphBuildRequest:
             and self.scope.top not in self.identity.compile_inputs.ordered_tops
         ):
             raise ValueError("scope top is absent from the complete compile top list")
+        if self.artifact is not None:
+            if self.artifact.source != self.identity:
+                raise ValueError("artifact source identity must match build identity")
+            if (
+                self.artifact.scope.design != self.scope.design
+                or self.artifact.scope.top != self.scope.top
+            ):
+                raise ValueError("artifact scope must match build design and top")
+            if self.scope.target.operation not in self.artifact.scope.capabilities:
+                raise ValueError("artifact lacks the requested query capability")
+            requested_artifact_scope = SourceGraphArtifactScope.from_build_scope(
+                self.scope,
+                hierarchy_snapshot_sha256=(
+                    self.artifact.scope.hierarchy_snapshot_sha256
+                ),
+                capabilities=(self.scope.target.operation,),
+            )
+            if not _artifact_scope_covers(
+                self.artifact.scope, requested_artifact_scope
+            ):
+                raise ValueError("artifact scope does not cover the query scope")
+        if self.query is not None and self.query.target != self.scope.target:
+            raise ValueError("query identity target must match build scope target")
+
+    @property
+    def artifact_identity(self) -> SourceGraphArtifactIdentity:
+        if self.artifact is not None:
+            return self.artifact
+        # Compatibility for pre-3B internal callers.  Production adapters pass
+        # explicit compile/hierarchy snapshots.  This fallback remains bounded
+        # to the already-proved scope and never enumerates hierarchy or sources.
+        compile_snapshot = _sha256(
+            {"compile_inputs": self.identity.compile_inputs.to_dict()}
+        )
+        if self.scope.path_hierarchy is None:
+            hierarchy_proof: Mapping[str, Any] = {
+                "chains": [list(self.scope.hierarchy_ancestors)],
+                "lcas": [self.scope.hierarchy_ancestors[-1]],
+            }
+        else:
+            hierarchy_proof = {
+                "chains": [
+                    list(self.scope.path_hierarchy.from_ancestors),
+                    list(self.scope.path_hierarchy.to_ancestors),
+                ],
+                "lcas": [self.scope.path_hierarchy.lca],
+            }
+        hierarchy_snapshot = _sha256(
+            {
+                "design": self.scope.design,
+                "top": self.scope.top,
+                "hierarchy_proof": hierarchy_proof,
+                "projection_instance_paths": list(
+                    self.scope.requested_cone.instance_paths
+                ),
+                "coverage_boundary": self.scope.coverage_boundary.to_dict(),
+            }
+        )
+        return SourceGraphArtifactIdentity(
+            source=self.identity,
+            scope=SourceGraphArtifactScope.from_build_scope(
+                self.scope,
+                hierarchy_snapshot_sha256=hierarchy_snapshot,
+            ),
+            compile_snapshot_sha256=compile_snapshot,
+            adapter_version="legacy_compat_2_0",
+            worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+        )
+
+    @property
+    def query_identity(self) -> SourceGraphQueryIdentity:
+        return self.query or SourceGraphQueryIdentity.from_build_scope(self.scope)
+
+    @property
+    def artifact_build_request(self) -> SourceGraphArtifactBuildRequest:
+        return SourceGraphArtifactBuildRequest(identity=self.artifact_identity)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "contract_version": self.contract_version,
             "identity": self.identity.to_dict(),
             "scope": self.scope.to_dict(),
+            "artifact_identity": self.artifact_identity.to_dict(),
+            "query_identity": self.query_identity.to_dict(),
         }
 
     @classmethod
@@ -682,9 +763,35 @@ class SourceGraphBuildRequest:
         scope = value.get("scope")
         if not isinstance(identity, Mapping) or not isinstance(scope, Mapping):
             raise ValueError("identity and scope are required")
+        source_identity = SourceGraphIdentity.from_dict(identity)
+        build_scope = SourceGraphBuildScope.from_dict(scope)
+        contract_version = value.get(
+            "contract_version", SOURCE_GRAPH_BUILD_CONTRACT_VERSION
+        )
+        legacy = cls(
+            identity=source_identity,
+            scope=build_scope,
+            contract_version=contract_version,
+        )
+        artifact_value = value.get("artifact_identity")
+        query_value = value.get("query_identity")
+        artifact = (
+            SourceGraphArtifactIdentity.from_dict(artifact_value)
+            if isinstance(artifact_value, Mapping)
+            else None
+        )
+        query = (
+            SourceGraphQueryIdentity.from_dict(query_value)
+            if isinstance(query_value, Mapping)
+            else None
+        )
+        if artifact == legacy.artifact_identity and query == legacy.query_identity:
+            return legacy
         return cls(
-            identity=SourceGraphIdentity.from_dict(identity),
-            scope=SourceGraphBuildScope.from_dict(scope),
+            identity=source_identity,
+            scope=build_scope,
+            artifact=artifact,
+            query=query,
             contract_version=value.get(
                 "contract_version", SOURCE_GRAPH_BUILD_CONTRACT_VERSION
             ),
@@ -770,8 +877,20 @@ class SourceGraphArtifactScope:
 
         lcas = _path_set(self.proved_lcas, "proved hierarchy lca")
         chain_atoms = set().union(*(set(chain) for chain in chains))
-        if not set(lcas).issubset(chain_atoms):
-            raise ValueError("proved hierarchy LCA must occur in an ancestor chain")
+        if len(lcas) != 1:
+            raise ValueError("artifact scope requires exactly one proved hierarchy LCA")
+        common_prefix = chains[0]
+        for chain in chains[1:]:
+            prefix_length = 0
+            for left, right in zip(common_prefix, chain):
+                if left != right:
+                    break
+                prefix_length += 1
+            common_prefix = common_prefix[:prefix_length]
+        if not common_prefix or lcas[0] != common_prefix[-1]:
+            raise ValueError(
+                "proved hierarchy LCA must equal the canonical chain intersection"
+            )
         object.__setattr__(self, "proved_lcas", lcas)
 
         projection_paths = _path_set(
@@ -882,6 +1001,7 @@ class SourceGraphArtifactIdentity:
     compile_snapshot_sha256: str
     adapter_version: str
     worker_protocol_version: str
+    snapshots_complete: bool = True
     identity_version: str = SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION
     build_contract_version: str = SOURCE_GRAPH_BUILD_CONTRACT_VERSION
 
@@ -903,6 +1023,8 @@ class SourceGraphArtifactIdentity:
             object.__setattr__(self, field_name, value)
         if self.identity_version != SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION:
             raise ValueError("unsupported Source Graph artifact identity version")
+        if not isinstance(self.snapshots_complete, bool):
+            raise ValueError("artifact snapshots_complete must be boolean")
         if (
             self.source.compile_inputs.tops_complete
             and self.source.compile_inputs.ordered_tops
@@ -921,6 +1043,7 @@ class SourceGraphArtifactIdentity:
             "compile_snapshot_sha256": self.compile_snapshot_sha256,
             "adapter_version": self.adapter_version,
             "worker_protocol_version": self.worker_protocol_version,
+            "snapshots_complete": self.snapshots_complete,
         }
 
     @classmethod
@@ -935,11 +1058,54 @@ class SourceGraphArtifactIdentity:
             compile_snapshot_sha256=value["compile_snapshot_sha256"],
             adapter_version=value["adapter_version"],
             worker_protocol_version=value["worker_protocol_version"],
+            snapshots_complete=bool(value.get("snapshots_complete", False)),
             identity_version=value.get(
                 "identity_version", SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION
             ),
             build_contract_version=value.get(
                 "build_contract_version", SOURCE_GRAPH_BUILD_CONTRACT_VERSION
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SourceGraphArtifactBuildRequest:
+    """Worker-facing request containing artifact semantics and no query state."""
+
+    identity: SourceGraphArtifactIdentity
+    contract_version: str = SOURCE_GRAPH_BUILD_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        contract_version = _required_text(self.contract_version, "contract_version")
+        if contract_version != SOURCE_GRAPH_BUILD_CONTRACT_VERSION:
+            raise ValueError(
+                f"unsupported Source Graph build contract version: {contract_version}"
+            )
+        object.__setattr__(self, "contract_version", contract_version)
+
+    @property
+    def source(self) -> SourceGraphIdentity:
+        return self.identity.source
+
+    @property
+    def scope(self) -> SourceGraphArtifactScope:
+        return self.identity.scope
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract_version": self.contract_version,
+            "artifact_identity": self.identity.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> SourceGraphArtifactBuildRequest:
+        identity = value.get("artifact_identity")
+        if not isinstance(identity, Mapping):
+            raise ValueError("worker request requires artifact_identity")
+        return cls(
+            identity=SourceGraphArtifactIdentity.from_dict(identity),
+            contract_version=value.get(
+                "contract_version", SOURCE_GRAPH_BUILD_CONTRACT_VERSION
             ),
         )
 
@@ -1113,6 +1279,8 @@ def compute_source_graph_artifact_key(
         }
     )
     reasons = list(identity.source.compile_inputs.incomplete_reasons)
+    if not identity.snapshots_complete:
+        reasons.append("snapshot_identity_unproved")
     if not identity.scope.coverage_boundary.explicit:
         reasons.append("scope_boundary_unscoped")
     incomplete_reasons = tuple(sorted(set(reasons)))
@@ -1169,6 +1337,11 @@ def _artifact_scope_covers(
     if not set(requested.coverage_boundary.instance_paths).issubset(
         available.coverage_boundary.instance_paths
     ):
+        return False
+    available_chain_atoms = set().union(
+        *(set(chain) for chain in available.proved_ancestor_chains)
+    )
+    if not set(requested.proved_lcas).issubset(available_chain_atoms):
         return False
     return all(
         _chain_covered_by(available.proved_ancestor_chains, requested_chain)
@@ -1264,27 +1437,13 @@ class SourceGraphArtifactScopeReceipt:
 def compute_source_graph_build_key(
     request: SourceGraphBuildRequest,
 ) -> SourceGraphBuildKey:
-    identity_payload = request.identity.to_dict()
-    scope_payload = request.scope.to_dict()
-    design_digest = _sha256(identity_payload)
-    scope_digest = _sha256(scope_payload)
-    digest = _sha256(
-        {
-            "contract_version": request.contract_version,
-            "design_digest": design_digest,
-            "scope_digest": scope_digest,
-        }
-    )
-    reasons = list(request.identity.compile_inputs.incomplete_reasons)
-    if not request.scope.coverage_boundary.explicit:
-        reasons.append("scope_boundary_unscoped")
-    incomplete_reasons = tuple(sorted(set(reasons)))
+    artifact = compute_source_graph_artifact_key(request.artifact_identity)
     return SourceGraphBuildKey(
-        digest=digest,
-        design_digest=design_digest,
-        scope_digest=scope_digest,
-        cross_request_reusable=not incomplete_reasons,
-        incomplete_reasons=incomplete_reasons,
+        digest=artifact.digest,
+        design_digest=artifact.build_semantics_digest,
+        scope_digest=artifact.scope_digest,
+        cross_request_reusable=artifact.cross_request_reusable,
+        incomplete_reasons=artifact.incomplete_reasons,
     )
 
 

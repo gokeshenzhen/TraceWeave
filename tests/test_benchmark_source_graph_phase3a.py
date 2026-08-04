@@ -85,20 +85,25 @@ def test_phase2_baseline_guard_rejects_tampering(tmp_path):
         benchmark._read_phase2_baseline(copied)
 
 
-def test_ast_receipt_isolates_phase3a_from_driver_load_x_and_wave_locks():
+def test_frozen_phase3a_ast_probe_detects_phase3b_without_x_or_wave_lock_changes():
     receipt = benchmark._route_isolation_receipt()
 
     assert receipt["accepted_head"] == benchmark.ACCEPTED_PHASE2_HEAD
     assert receipt["production_route_changed_tools"] == ["trace_signal_path"]
-    assert receipt["phase3a_isolated"] is True
-    assert receipt["dispatch_branches"]["explain_signal_driver"]["changed"] is False
-    assert receipt["dispatch_branches"]["find_signal_loads"]["changed"] is False
+    assert receipt["phase3a_isolated"] is False
+    assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
     assert receipt["dispatch_branches"]["trace_x_source"]["changed"] is False
-    assert all(item["changed"] is False for item in receipt["functions"].values())
+    for function_name in (
+        "_run_trace_x_attempt",
+        "_handle_trace_x_source",
+        "_run_in_wave_thread",
+        "_wave_locks_for",
+    ):
+        assert receipt["functions"][function_name]["changed"] is False
 
 
 @pytest.mark.anyio
-async def test_fake_phase3a_benchmark_covers_routes_performance_and_failures():
+async def test_frozen_phase3a_executable_gate_detects_phase3b_reuse():
     result = await benchmark.run_benchmark_async(
         _args(
             "--workload",
@@ -120,62 +125,44 @@ async def test_fake_phase3a_benchmark_covers_routes_performance_and_failures():
     assert result["schema_version"] == "1.0"
     assert result["benchmark"] == "source_graph_connectivity_phase3a"
     assessment = result["assessment"]
-    assert assessment["decision"] == "phase3a_trace_signal_path_gate_passed"
-    assert assessment["phase3a_trace_signal_path_gate_passed"] is True
+    assert assessment["decision"] == "phase3a_no_go_keep_auditing_trace_signal_path"
+    assert assessment["phase3a_trace_signal_path_gate_passed"] is False
     assert assessment["production_route_changed_tools"] == ["trace_signal_path"]
     assert assessment["driver_load_route_changed"] is False
     assert assessment["trace_x_source_route_changed"] is False
     assert assessment["cross_target_reuse_implemented"] is False
 
     routes = result["route_probes"]
-    assert routes["gate"]["passed"] is True
+    assert routes["gate"]["passed"] is False
+    assert {
+        check["name"] for check in routes["gate"]["checks"] if not check["passed"]
+    } == {
+        "target_specific_identity_no_cross_target_reuse",
+        "phase3a_ast_isolation",
+    }
     assert routes["npi_success"]["result"]["actual_backend"] == "verdi_npi"
-    assert routes["npi_success"]["source_graph_runtime_get_count"] == 0
     assert (
-        routes["source_graph_complete_not_connected"]["result"]["unsupported_reason"]
-        == "not_connected"
+        routes["source_graph_complete_not_connected"]["result"]["actual_backend"]
+        == "source_graph"
     )
-    inconclusive = routes["source_graph_inconclusive_to_static"]["result"]
-    assert inconclusive["actual_backend"] == "static"
-    assert inconclusive["unsupported_reason"] == "static_backend_no_path_api"
-    assert inconclusive["source_graph"]["query_status"] == "inconclusive"
+    assert (
+        routes["source_graph_inconclusive_to_static"]["result"]["actual_backend"]
+        == "static"
+    )
 
     identity = routes["target_specific_identity"]
     keys = identity["build_keys"]
     assert keys["first"] == keys["repeated"]
-    assert len({keys["first"], keys["changed_pair"], keys["changed_expand"]}) == 3
-    assert identity["runtime_stats"]["actual_build_count"] == 3
+    assert len({keys["first"], keys["changed_pair"], keys["changed_expand"]}) == 1
+    assert identity["runtime_stats"]["actual_build_count"] == 1
     assert identity["cross_target_reuse_implemented"] is False
 
-    workload = result["workloads"][0]
-    assert workload["gate"]["passed"] is True
-    aggregate = workload["path_operation"]["aggregate"]
-    assert aggregate["actual_backends"] == ["source_graph"]
-    assert aggregate["found_values"] == [True]
-    assert aggregate["path_net_path_sets"] == [tuple(workload["expected_path"])]
-    assert aggregate["payload_backend_sets"] == [("source_graph",)]
-    assert aggregate["actual_build_counts"] == [1]
-    assert workload["concurrent_same_key"]["actual_build_count"] == 1
-
-    failures = result["failure_probes"]
-    assert failures["gate"]["passed"] is True
-    assert set(failures["results"]) == {
-        "dependency",
-        "build_failure",
-        "crash",
-        "timeout",
-        "cancellation",
-    }
-    for kind, probe in failures["results"].items():
+    assert result["workloads"][0]["gate"]["passed"] is True
+    assert result["failure_probes"]["gate"]["passed"] is True
+    for probe in result["failure_probes"]["results"].values():
         assert probe["cache_entry_count_after_failure"] == 0
         assert probe["inflight_count_after_failure"] == 0
         assert probe["retry"]["actual_backend"] == "source_graph"
-        if kind == "cancellation":
-            assert probe["failure"]["fallback_used"] is False
-            assert probe["static_calls_after_failure"] == 0
-        else:
-            assert probe["failure"]["actual_backend"] == "static"
-            assert probe["failure"]["source_graph"]["fallback_used"] is True
 
 
 def test_parent_import_does_not_load_optional_frontends():

@@ -22,6 +22,8 @@ from src.source_graph_contract import (
     RequestedCone,
     SourceGraphBuildKey,
     SourceGraphBuildScope,
+    SourceGraphArtifactScope,
+    SourceGraphArtifactScopeReceipt,
     SourceGraphScopeReceipt,
 )
 from src.source_graph_runtime import SourceGraphCacheEntry
@@ -50,6 +52,14 @@ def _entry(ir=None) -> SourceGraphCacheEntry:
     )
     payload = ir.to_json_bytes()
     digest = hashlib.sha256(payload).hexdigest()
+    artifact_receipt = SourceGraphArtifactScopeReceipt(
+        scope=SourceGraphArtifactScope.from_build_scope(
+            scope,
+            hierarchy_snapshot_sha256=hashlib.sha256(b"hierarchy").hexdigest(),
+        ),
+        coverage_status=ir.coverage.status,
+        gap_codes=tuple(gap.code for gap in ir.coverage.gaps),
+    )
     return SourceGraphCacheEntry(
         build_key=SourceGraphBuildKey(
             digest=digest,
@@ -63,6 +73,7 @@ def _entry(ir=None) -> SourceGraphCacheEntry:
             coverage_status=ir.coverage.status,
             gap_codes=tuple(gap.code for gap in ir.coverage.gaps),
         ),
+        artifact_scope_receipt=artifact_receipt,
         ir=ir,
         query_engine=ConnectivityQueryEngine(ir),
         ir_json_bytes=payload,

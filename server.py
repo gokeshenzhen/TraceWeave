@@ -63,7 +63,11 @@ from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import parse_compile_log
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
-from src.hierarchy_handles import HandleStore, compute_handle
+from src.hierarchy_handles import (
+    HandleStore,
+    compute_handle,
+    compute_snapshot_fingerprint,
+)
 from src.source_graph_adapter import (
     AdapterStatus,
     build_source_graph_path_plan,
@@ -73,7 +77,11 @@ from src.source_graph_backend import (
     SourceGraphConnectivityBackend,
     SourceGraphQueryBlocked,
 )
-from src.source_graph_contract import QueryOperation, compute_source_graph_build_key
+from src.source_graph_contract import (
+    QueryOperation,
+    compute_source_graph_build_key,
+    compute_source_graph_query_key,
+)
 from src.source_graph_production import get_source_graph_runtime
 from src.source_graph_runtime import PrepareStatus
 from src.timespec import resolve_timespec
@@ -1189,6 +1197,13 @@ def _source_graph_metrics_dict(
                 "coalesced_waiter_count": prepare_metrics.coalesced_waiter_count,
                 "ir_bytes": prepare_metrics.ir_bytes,
                 "cache_bytes": prepare_metrics.cache_bytes,
+                "cache_entry_count": prepare_metrics.cache_entry_count,
+                "cache_peak_entry_count": prepare_metrics.cache_peak_entry_count,
+                "cache_peak_bytes": prepare_metrics.cache_peak_bytes,
+                "cache_eviction_count": prepare_metrics.cache_eviction_count,
+                "cache_oversize_bypass_count": (
+                    prepare_metrics.cache_oversize_bypass_count
+                ),
             }
         )
         for source_name, public_name in (
@@ -1220,6 +1235,14 @@ def _record_source_graph_prepare_metrics(outcome) -> None:
         ),
         ("source_graph_ir_bytes", metrics.ir_bytes),
         ("source_graph_cache_bytes", metrics.cache_bytes),
+        ("source_graph_cache_entry_count", metrics.cache_entry_count),
+        ("source_graph_cache_peak_entry_count", metrics.cache_peak_entry_count),
+        ("source_graph_cache_peak_bytes", metrics.cache_peak_bytes),
+        ("source_graph_cache_eviction_count", metrics.cache_eviction_count),
+        (
+            "source_graph_cache_oversize_bypass_count",
+            metrics.cache_oversize_bypass_count,
+        ),
         ("source_graph_cancel_to_exit_ms", metrics.cancel_to_exit_ms),
         ("source_graph_worker_cpu_ms", metrics.worker_cpu_ms),
         ("source_graph_rss_start_kib", metrics.rss_start_kib),
@@ -1274,7 +1297,7 @@ def _source_graph_receipt_from_prepare(
         ),
         "coverage_gap_count": len(coverage.gaps) if coverage is not None else 0,
         "coverage_gap_codes": (
-            list(entry.scope_receipt.gap_codes) if entry is not None else []
+            list(entry.artifact_scope_receipt.gap_codes) if entry is not None else []
         ),
         "objective_exclusions": list(
             plan.request.scope.coverage_boundary.objective_exclusions
@@ -1283,6 +1306,14 @@ def _source_graph_receipt_from_prepare(
             entry.ir_fingerprint_sha256 if entry is not None else None
         ),
         "build_key_sha256": outcome.build_key.digest,
+        "cache_lookup_reason": outcome.cache_lookup_reason.value,
+        "artifact_fingerprint_sha256": outcome.build_key.digest,
+        "selected_artifact_fingerprint_sha256": (
+            entry.build_key.digest if entry is not None else None
+        ),
+        "query_fingerprint_sha256": compute_source_graph_query_key(
+            plan.request.query_identity
+        ).digest,
         "compile_fingerprint_sha256": (
             plan.request.identity.compile_inputs.fingerprint
         ),
@@ -1292,6 +1323,25 @@ def _source_graph_receipt_from_prepare(
         ),
         "fallback_used": False,
     }
+    if outcome.metrics.cache_disposition.value == "hit_exact":
+        receipt["artifact_reuse"] = "exact_hit"
+    elif outcome.metrics.cache_disposition.value == "hit_superset":
+        receipt["artifact_reuse"] = "dominating_hit"
+    elif outcome.metrics.flight_disposition.value == "coalesced":
+        receipt["artifact_reuse"] = "coalesced_build"
+    elif outcome.metrics.cache_disposition.value == "bypass_incomplete_key":
+        receipt["artifact_reuse"] = "bypass_incomplete"
+    elif outcome.metrics.cache_disposition.value == "bypass_capacity":
+        receipt["artifact_reuse"] = "bypass_capacity"
+    else:
+        receipt["artifact_reuse"] = "cold"
+    if outcome.scope_match is not None:
+        receipt["scope_match"] = {
+            "relation": outcome.scope_match.relation.value,
+            "reusable": outcome.scope_match.reusable,
+            "complete_for_request": outcome.scope_match.complete_for_request,
+            "reason": outcome.scope_match.reason,
+        }
     if outcome.blocker is not None:
         receipt["blocker"] = outcome.blocker.to_dict(include_message=False)
     return receipt
@@ -1574,6 +1624,9 @@ async def _route_public_connectivity(
                         compile_log=args["compile_log"],
                         compile_result=compile_result,
                         hierarchy_result=hierarchy_result,
+                        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+                            args["compile_log"], simulator
+                        ),
                         operation=(
                             QueryOperation.DRIVER
                             if operation == "driver"
@@ -1585,6 +1638,21 @@ async def _route_public_connectivity(
                             "max_depth", 10 if operation == "driver" else 1
                         ),
                         frontend_version=config.frontend_version,
+                        recursive=(
+                            bool(args.get("recursive", False))
+                            if operation == "driver"
+                            else False
+                        ),
+                        include_expr=(
+                            bool(args.get("include_expr", True))
+                            if operation == "loads"
+                            else True
+                        ),
+                        kind_filter=(
+                            tuple(args.get("kind_filter") or ())
+                            if operation == "loads"
+                            else ()
+                        ),
                     )
                 )
                 adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
@@ -1698,6 +1766,8 @@ async def _route_public_connectivity(
                                 source_graph_reason = (
                                     "source_graph_coverage_inconclusive"
                                 )
+                            except OperationCancelled as exc:
+                                raise asyncio.CancelledError from exc
                             except SourceGraphQueryBlocked as exc:
                                 source_result = None
                                 query_receipt = None
@@ -2049,6 +2119,9 @@ async def _route_public_signal_path(
                             compile_log=args["compile_log"],
                             compile_result=compile_result,
                             hierarchy_result=hierarchy_result,
+                            hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+                                args["compile_log"], simulator
+                            ),
                             from_signal=args["from_signal"],
                             to_signal=args["to_signal"],
                             top_hint=args.get("top_hint"),

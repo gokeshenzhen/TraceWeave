@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import json
@@ -28,8 +29,10 @@ import uuid
 from .connectivity_ir import ConnectivityIR, CoverageStatus
 from .connectivity_query import ConnectivityQueryEngine
 from .source_graph_contract import (
+    SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     ScopeRelation,
     ScopeReuseDecision,
+    SourceGraphArtifactScopeReceipt,
     SourceGraphBuildKey,
     SourceGraphBuildRequest,
     SourceGraphScopeReceipt,
@@ -37,12 +40,12 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "2.0"
-
 # One real cold build admission across every runtime object in this process.
 # Acquisition is polled from the event loop, so waiting never blocks it and a
 # cancelled request cannot strand a background lock-acquisition thread.
 _PROCESS_COLD_BUILD_LOCK = threading.Lock()
+DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES = 8
+DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES = 512 * 1024 * 1024
 
 
 class PrepareStatus(str, Enum):
@@ -60,12 +63,25 @@ class CacheDisposition(str, Enum):
     HIT_SUPERSET = "hit_superset"
     MISS = "miss"
     BYPASS_INCOMPLETE_KEY = "bypass_incomplete_key"
+    BYPASS_CAPACITY = "bypass_capacity"
 
 
 class FlightDisposition(str, Enum):
     NONE = "none"
     BUILDER = "builder"
     COALESCED = "coalesced"
+
+
+class CacheLookupReason(str, Enum):
+    EXACT_ARTIFACT = "exact_artifact"
+    DOMINATING_ARTIFACT = "dominating_artifact"
+    NO_CACHED_ARTIFACT = "no_cached_artifact"
+    ARTIFACT_SEMANTICS_MISMATCH = "artifact_semantics_mismatch"
+    CACHED_SCOPE_NOT_DOMINATING = "cached_scope_not_dominating"
+    IDENTITY_NOT_REUSABLE = "identity_not_reusable"
+    SAME_ARTIFACT_INFLIGHT = "same_artifact_inflight"
+    ARTIFACT_EXCEEDS_CACHE_CAPACITY = "artifact_exceeds_cache_capacity"
+    CANCELLED_BEFORE_LOOKUP = "cancelled_before_lookup"
 
 
 def _fixed_label(value: str, label: str) -> str:
@@ -174,7 +190,9 @@ class WorkerBuildResult:
     status: PrepareStatus
     ir_json_bytes: bytes | None = None
     ir_fingerprint_sha256: str | None = None
-    scope_receipt: SourceGraphScopeReceipt | None = None
+    scope_receipt: SourceGraphScopeReceipt | SourceGraphArtifactScopeReceipt | None = (
+        None
+    )
     blocker: InternalBuildBlocker | None = None
     metrics: WorkerResourceMetrics = field(default_factory=WorkerResourceMetrics)
     projection_receipt: Mapping[str, Any] | None = None
@@ -201,7 +219,7 @@ class WorkerBuildResult:
     def ready(
         cls,
         ir: ConnectivityIR,
-        scope_receipt: SourceGraphScopeReceipt,
+        scope_receipt: SourceGraphScopeReceipt | SourceGraphArtifactScopeReceipt,
         *,
         metrics: WorkerResourceMetrics | None = None,
         projection_receipt: Mapping[str, Any] | None = None,
@@ -336,7 +354,7 @@ class IsolatedSourceGraphProcessRunner:
             response_path = temp_path / "response.json"
             request_payload = {
                 "protocol_version": SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
-                "request": request.to_dict(),
+                "request": request.artifact_build_request.to_dict(),
             }
             request_path.write_text(
                 json.dumps(request_payload, sort_keys=True, separators=(",", ":")),
@@ -488,7 +506,7 @@ class IsolatedSourceGraphProcessRunner:
                 status=status,
                 ir_json_bytes=ir_bytes,
                 ir_fingerprint_sha256=str(payload["ir_fingerprint_sha256"]),
-                scope_receipt=SourceGraphScopeReceipt.from_dict(receipt_value),
+                scope_receipt=SourceGraphArtifactScopeReceipt.from_dict(receipt_value),
                 metrics=replace(metrics, ir_bytes=len(ir_bytes)),
                 projection_receipt=(
                     payload.get("projection_receipt")
@@ -509,7 +527,8 @@ class IsolatedSourceGraphProcessRunner:
 @dataclass(frozen=True)
 class SourceGraphCacheEntry:
     build_key: SourceGraphBuildKey
-    scope_receipt: SourceGraphScopeReceipt
+    scope_receipt: SourceGraphScopeReceipt | SourceGraphArtifactScopeReceipt
+    artifact_scope_receipt: SourceGraphArtifactScopeReceipt
     ir: ConnectivityIR
     query_engine: ConnectivityQueryEngine
     ir_json_bytes: bytes
@@ -519,7 +538,7 @@ class SourceGraphCacheEntry:
 
     @property
     def coverage_status(self) -> CoverageStatus:
-        return self.scope_receipt.coverage_status
+        return self.artifact_scope_receipt.coverage_status
 
 
 @dataclass(frozen=True)
@@ -539,6 +558,11 @@ class SourceGraphPrepareMetrics:
     rss_end_kib: int | None = None
     ir_bytes: int = 0
     cache_bytes: int = 0
+    cache_entry_count: int = 0
+    cache_peak_entry_count: int = 0
+    cache_peak_bytes: int = 0
+    cache_eviction_count: int = 0
+    cache_oversize_bypass_count: int = 0
 
     def to_dict(self) -> dict[str, int | float | str]:
         result: dict[str, int | float | str] = {
@@ -552,6 +576,11 @@ class SourceGraphPrepareMetrics:
             "coalesced_waiter_count": self.coalesced_waiter_count,
             "ir_bytes": self.ir_bytes,
             "cache_bytes": self.cache_bytes,
+            "cache_entry_count": self.cache_entry_count,
+            "cache_peak_entry_count": self.cache_peak_entry_count,
+            "cache_peak_bytes": self.cache_peak_bytes,
+            "cache_eviction_count": self.cache_eviction_count,
+            "cache_oversize_bypass_count": self.cache_oversize_bypass_count,
         }
         for name in (
             "cancel_to_exit_ms",
@@ -571,6 +600,7 @@ class SourceGraphPrepareOutcome:
     status: PrepareStatus
     build_key: SourceGraphBuildKey
     metrics: SourceGraphPrepareMetrics
+    cache_lookup_reason: CacheLookupReason
     entry: SourceGraphCacheEntry | None = None
     blocker: InternalBuildBlocker | None = None
     scope_match: ScopeReuseDecision | None = None
@@ -592,6 +622,7 @@ class SourceGraphPrepareOutcome:
         result: dict[str, Any] = {
             "status": self.status.value,
             "build_key": self.build_key.to_dict(),
+            "cache_lookup_reason": self.cache_lookup_reason.value,
             "fallback_used": False,
             "metrics": self.metrics.to_dict(),
         }
@@ -603,7 +634,7 @@ class SourceGraphPrepareOutcome:
             }
             result["coverage"] = {
                 "status": self.entry.coverage_status.value,
-                "scope_receipt": self.entry.scope_receipt.to_dict(),
+                "scope_receipt": self.entry.artifact_scope_receipt.to_dict(),
             }
         if self.scope_match is not None:
             result["scope_match"] = {
@@ -625,6 +656,7 @@ class _Flight:
     request: SourceGraphBuildRequest
     build_key: SourceGraphBuildKey
     cache_disposition: CacheDisposition
+    cache_lookup_reason: CacheLookupReason
     worker_cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[SourceGraphPrepareOutcome] | None = None
     waiter_count: int = 0
@@ -636,9 +668,29 @@ class _Flight:
 class SourceGraphRuntime:
     """Process-session Source Graph cache and cold-build coordinator."""
 
-    def __init__(self, worker_runner: SourceGraphWorkerRunner) -> None:
+    def __init__(
+        self,
+        worker_runner: SourceGraphWorkerRunner,
+        *,
+        max_cache_entries: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES,
+        max_cache_bytes: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES,
+    ) -> None:
+        if (
+            not isinstance(max_cache_entries, int)
+            or isinstance(max_cache_entries, bool)
+            or max_cache_entries < 1
+        ):
+            raise ValueError("max_cache_entries must be a positive integer")
+        if (
+            not isinstance(max_cache_bytes, int)
+            or isinstance(max_cache_bytes, bool)
+            or max_cache_bytes < 1
+        ):
+            raise ValueError("max_cache_bytes must be a positive integer")
         self._worker_runner = worker_runner
-        self._cache: dict[str, SourceGraphCacheEntry] = {}
+        self._max_cache_entries = max_cache_entries
+        self._max_cache_bytes = max_cache_bytes
+        self._cache: OrderedDict[str, SourceGraphCacheEntry] = OrderedDict()
         self._inflight: dict[str, _Flight] = {}
         self._state_lock = asyncio.Lock()
         self._stats: dict[str, int | float] = {
@@ -646,6 +698,10 @@ class SourceGraphRuntime:
             "cache_hit_count": 0,
             "cache_miss_count": 0,
             "cache_bypass_count": 0,
+            "cache_eviction_count": 0,
+            "cache_oversize_bypass_count": 0,
+            "cache_peak_entry_count": 0,
+            "cache_peak_bytes": 0,
             "coalesced_waiter_count": 0,
             "cancelled_waiter_count": 0,
             "timeout_count": 0,
@@ -686,10 +742,12 @@ class SourceGraphRuntime:
                         build_key, entry, disposition, match, started
                     )
                 cache_disposition = CacheDisposition.MISS
+                cache_lookup_reason = self._cache_miss_reason_locked(build_key)
                 self._stats["cache_miss_count"] += 1
                 flight_key = build_key.digest
             else:
                 cache_disposition = CacheDisposition.BYPASS_INCOMPLETE_KEY
+                cache_lookup_reason = CacheLookupReason.IDENTITY_NOT_REUSABLE
                 self._stats["cache_bypass_count"] += 1
                 flight_key = f"{build_key.digest}:{uuid.uuid4().hex}"
 
@@ -704,6 +762,7 @@ class SourceGraphRuntime:
                     request=request,
                     build_key=build_key,
                     cache_disposition=cache_disposition,
+                    cache_lookup_reason=cache_lookup_reason,
                     waiter_count=1,
                 )
                 self._inflight[flight_key] = flight
@@ -920,11 +979,22 @@ class SourceGraphRuntime:
 
         if key.cross_request_reusable:
             async with self._state_lock:
-                self._cache[key.digest] = entry
-        scope_match = entry.scope_receipt.reuse_for(request.scope)
+                if entry.cache_bytes > self._max_cache_bytes:
+                    flight.cache_disposition = CacheDisposition.BYPASS_CAPACITY
+                    flight.cache_lookup_reason = (
+                        CacheLookupReason.ARTIFACT_EXCEEDS_CACHE_CAPACITY
+                    )
+                    self._stats["cache_bypass_count"] += 1
+                    self._stats["cache_oversize_bypass_count"] += 1
+                else:
+                    self._publish_cache_entry_locked(key.digest, entry)
+        scope_match = entry.artifact_scope_receipt.reuse_for(
+            request.artifact_identity.scope
+        )
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.READY,
             build_key=key,
+            cache_lookup_reason=flight.cache_lookup_reason,
             entry=entry,
             scope_match=scope_match,
             metrics=self._prepare_metrics(
@@ -957,22 +1027,34 @@ class SourceGraphRuntime:
         fingerprint = ir.fingerprint_sha256()
         if fingerprint != worker.ir_fingerprint_sha256:
             raise ValueError("worker IR fingerprint mismatch")
-        if ir.frontend_name != request.identity.frontend_name:
+        artifact_identity = request.artifact_identity
+        if ir.frontend_name != artifact_identity.source.frontend_name:
             raise ValueError("worker frontend name mismatch")
-        if ir.frontend_version != request.identity.frontend_version:
+        if ir.frontend_version != artifact_identity.source.frontend_version:
             raise ValueError("worker frontend version mismatch")
-        if ir.ir_version != request.identity.ir_schema_version:
+        if ir.ir_version != artifact_identity.source.ir_schema_version:
             raise ValueError("worker IR schema version mismatch")
-        if request.scope.top not in ir.top_instances:
+        if artifact_identity.scope.top not in ir.top_instances:
             raise ValueError("worker IR does not contain the requested top")
-        if worker.scope_receipt.scope != request.scope:
-            raise ValueError("worker scope receipt does not match request")
+        if isinstance(worker.scope_receipt, SourceGraphArtifactScopeReceipt):
+            if worker.scope_receipt.scope != artifact_identity.scope:
+                raise ValueError("worker artifact scope receipt does not match request")
+            artifact_scope_receipt = worker.scope_receipt
+        else:
+            if worker.scope_receipt.scope != request.scope:
+                raise ValueError("worker scope receipt does not match request")
+            artifact_scope_receipt = SourceGraphArtifactScopeReceipt(
+                scope=artifact_identity.scope,
+                coverage_status=worker.scope_receipt.coverage_status,
+                gap_codes=worker.scope_receipt.gap_codes,
+            )
         if worker.scope_receipt.coverage_status is not ir.coverage.status:
             raise ValueError("worker scope receipt coverage differs from IR")
         engine = ConnectivityQueryEngine(ir)
         return SourceGraphCacheEntry(
             build_key=key,
             scope_receipt=worker.scope_receipt,
+            artifact_scope_receipt=artifact_scope_receipt,
             ir=ir,
             query_engine=engine,
             ir_json_bytes=worker.ir_json_bytes,
@@ -1000,7 +1082,29 @@ class SourceGraphRuntime:
         result["cache_entry_count"] = len(self._cache)
         result["cache_bytes"] = sum(entry.cache_bytes for entry in self._cache.values())
         result["inflight_count"] = len(self._inflight)
+        result["cache_max_entries"] = self._max_cache_entries
+        result["cache_max_bytes"] = self._max_cache_bytes
         return result
+
+    def _publish_cache_entry_locked(
+        self, key: str, entry: SourceGraphCacheEntry
+    ) -> None:
+        self._cache[key] = entry
+        self._cache.move_to_end(key)
+        while (
+            len(self._cache) > self._max_cache_entries
+            or sum(item.cache_bytes for item in self._cache.values())
+            > self._max_cache_bytes
+        ):
+            self._cache.popitem(last=False)
+            self._stats["cache_eviction_count"] += 1
+        current_bytes = sum(item.cache_bytes for item in self._cache.values())
+        self._stats["cache_peak_entry_count"] = max(
+            int(self._stats["cache_peak_entry_count"]), len(self._cache)
+        )
+        self._stats["cache_peak_bytes"] = max(
+            int(self._stats["cache_peak_bytes"]), current_bytes
+        )
 
     def _find_cached_locked(
         self,
@@ -1009,8 +1113,11 @@ class SourceGraphRuntime:
     ) -> tuple[SourceGraphCacheEntry, CacheDisposition, ScopeReuseDecision] | None:
         exact = self._cache.get(build_key.digest)
         if exact is not None:
-            match = exact.scope_receipt.reuse_for(request.scope)
+            match = exact.artifact_scope_receipt.reuse_for(
+                request.artifact_identity.scope
+            )
             if match.relation is ScopeRelation.EXACT and match.reusable:
+                self._cache.move_to_end(build_key.digest)
                 return exact, CacheDisposition.HIT_EXACT, match
         candidates: list[
             tuple[int, int, str, SourceGraphCacheEntry, ScopeReuseDecision]
@@ -1018,13 +1125,15 @@ class SourceGraphRuntime:
         for entry in self._cache.values():
             if entry.build_key.design_digest != build_key.design_digest:
                 continue
-            match = entry.scope_receipt.reuse_for(request.scope)
+            match = entry.artifact_scope_receipt.reuse_for(
+                request.artifact_identity.scope
+            )
             if match.relation is not ScopeRelation.SUPERSET or not match.reusable:
                 continue
-            scope = entry.scope_receipt.scope
+            scope = entry.artifact_scope_receipt.scope
             candidates.append(
                 (
-                    scope.requested_cone.max_hops,
+                    len(scope.projection_instance_paths),
                     len(scope.coverage_boundary.instance_paths),
                     entry.build_key.digest,
                     entry,
@@ -1034,7 +1143,20 @@ class SourceGraphRuntime:
         if not candidates:
             return None
         _, _, _, entry, match = min(candidates, key=lambda item: item[:3])
+        self._cache.move_to_end(entry.build_key.digest)
         return entry, CacheDisposition.HIT_SUPERSET, match
+
+    def _cache_miss_reason_locked(
+        self, build_key: SourceGraphBuildKey
+    ) -> CacheLookupReason:
+        if not self._cache:
+            return CacheLookupReason.NO_CACHED_ARTIFACT
+        if any(
+            entry.build_key.design_digest == build_key.design_digest
+            for entry in self._cache.values()
+        ):
+            return CacheLookupReason.CACHED_SCOPE_NOT_DOMINATING
+        return CacheLookupReason.ARTIFACT_SEMANTICS_MISMATCH
 
     def _cache_hit_outcome(
         self,
@@ -1047,6 +1169,11 @@ class SourceGraphRuntime:
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.READY,
             build_key=build_key,
+            cache_lookup_reason=(
+                CacheLookupReason.EXACT_ARTIFACT
+                if disposition is CacheDisposition.HIT_EXACT
+                else CacheLookupReason.DOMINATING_ARTIFACT
+            ),
             entry=entry,
             scope_match=match,
             metrics=SourceGraphPrepareMetrics(
@@ -1055,8 +1182,20 @@ class SourceGraphRuntime:
                 total_wall_ms=(time.perf_counter() - started) * 1000,
                 ir_bytes=entry.ir_bytes,
                 cache_bytes=entry.cache_bytes,
+                **self._cache_metric_fields(),
             ),
         )
+
+    def _cache_metric_fields(self) -> dict[str, int]:
+        return {
+            "cache_entry_count": len(self._cache),
+            "cache_peak_entry_count": int(self._stats["cache_peak_entry_count"]),
+            "cache_peak_bytes": int(self._stats["cache_peak_bytes"]),
+            "cache_eviction_count": int(self._stats["cache_eviction_count"]),
+            "cache_oversize_bypass_count": int(
+                self._stats["cache_oversize_bypass_count"]
+            ),
+        }
 
     def _adapt_for_waiter(
         self,
@@ -1075,7 +1214,15 @@ class SourceGraphRuntime:
             ),
             coalesced_waiter_count=flight.coalesced_waiter_count,
         )
-        return replace(outcome, metrics=metrics)
+        return replace(
+            outcome,
+            metrics=metrics,
+            cache_lookup_reason=(
+                CacheLookupReason.SAME_ARTIFACT_INFLIGHT
+                if role is FlightDisposition.COALESCED
+                else outcome.cache_lookup_reason
+            ),
+        )
 
     def _prepare_metrics(
         self,
@@ -1106,6 +1253,7 @@ class SourceGraphRuntime:
             rss_end_kib=worker_metrics.rss_end_kib,
             ir_bytes=ir_bytes or worker_metrics.ir_bytes,
             cache_bytes=cache_bytes,
+            **self._cache_metric_fields(),
         )
 
     def _worker_failure_outcome(
@@ -1120,6 +1268,7 @@ class SourceGraphRuntime:
         return SourceGraphPrepareOutcome(
             status=worker.status,
             build_key=flight.build_key,
+            cache_lookup_reason=flight.cache_lookup_reason,
             blocker=worker.blocker,
             metrics=self._prepare_metrics(
                 flight,
@@ -1146,6 +1295,7 @@ class SourceGraphRuntime:
         return SourceGraphPrepareOutcome(
             status=status,
             build_key=flight.build_key,
+            cache_lookup_reason=flight.cache_lookup_reason,
             blocker=InternalBuildBlocker(code=code, stage=stage, message=message),
             metrics=self._prepare_metrics(
                 flight,
@@ -1168,6 +1318,7 @@ class SourceGraphRuntime:
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.CANCELLED,
             build_key=flight.build_key,
+            cache_lookup_reason=flight.cache_lookup_reason,
             blocker=InternalBuildBlocker(code="request_cancelled", stage="waiter"),
             metrics=SourceGraphPrepareMetrics(
                 cache_disposition=flight.cache_disposition,
@@ -1192,6 +1343,7 @@ class SourceGraphRuntime:
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.CANCELLED,
             build_key=build_key,
+            cache_lookup_reason=CacheLookupReason.CANCELLED_BEFORE_LOOKUP,
             blocker=InternalBuildBlocker(code="request_cancelled", stage="admission"),
             metrics=SourceGraphPrepareMetrics(
                 cache_disposition=disposition,

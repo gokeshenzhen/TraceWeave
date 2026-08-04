@@ -8,6 +8,7 @@ import pytest
 import src.cancellation as cancellation
 import src.source_graph_adapter as source_graph_adapter
 from src.compile_log_parser import parse_compile_log
+from src.hierarchy_handles import compute_snapshot_fingerprint
 from src.source_graph_adapter import (
     AdapterStatus,
     SOURCE_GRAPH_ADAPTER_VERSION,
@@ -18,6 +19,7 @@ from src.source_graph_contract import (
     ConnectivityPathTarget,
     QueryOperation,
     compute_source_graph_build_key,
+    compute_source_graph_query_key,
 )
 
 
@@ -86,6 +88,9 @@ def _plan(
         compile_log=str(tmp_path / "compile.log"),
         compile_result=compile_result,
         hierarchy_result=hierarchy or _hierarchy(),
+        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+            str(tmp_path / "compile.log"), "xcelium"
+        ),
         operation=QueryOperation.DRIVER,
         signal_path=signal_path,
         top_hint="tb",
@@ -121,6 +126,9 @@ def _path_plan(
                 }
             }
         },
+        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+            str(tmp_path / "compile.log"), "xcelium"
+        ),
         from_signal=from_signal,
         to_signal=to_signal,
         top_hint=top_hint,
@@ -156,7 +164,7 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert manifest.ordered_tops == ("bind_top", "tb")
     assert manifest.complete is True
     assert plan.request.scope.hierarchy_ancestors == ("tb", "tb.dut")
-    assert plan.request.scope.requested_cone.instance_paths == ("tb.dut",)
+    assert plan.request.scope.requested_cone.instance_paths == ("tb", "tb.dut")
     assert plan.request.scope.coverage_boundary.instance_paths == ("tb", "tb.dut")
     assert plan.request.scope.coverage_boundary.objective_exclusions == (
         "bind_semantics",
@@ -592,7 +600,7 @@ def test_path_scope_does_not_enumerate_unrelated_siblings(tmp_path):
     assert "tb.unrelated_top" not in plan.request.scope.hierarchy_ancestors
 
 
-def test_path_key_is_endpoint_and_expand_sensitive_while_manifest_cache_hits(
+def test_path_artifact_key_ignores_endpoint_and_expand_while_query_key_changes(
     tmp_path,
 ):
     source = tmp_path / "top.sv"
@@ -619,7 +627,12 @@ def test_path_key_is_endpoint_and_expand_sensitive_while_manifest_cache_hits(
         compute_source_graph_build_key(plan.request).digest
         for plan in (baseline, changed_endpoint, changed_expand)
     }
-    assert len(keys) == 3
+    query_keys = {
+        compute_source_graph_query_key(plan.request.query_identity).digest
+        for plan in (baseline, changed_endpoint, changed_expand)
+    }
+    assert len(keys) == 1
+    assert len(query_keys) == 3
     assert baseline.request.identity.compile_inputs.ordered_tops == (
         "bind_top",
         "tb",

@@ -14,6 +14,7 @@ from src.cancellation import OperationCancelled
 from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
 import src.connectivity_backend as connectivity_backend
 from src.source_graph_contract import SourceGraphScopeReceipt
+from src.source_graph_backend import SourceGraphConnectivityBackend
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
 from src.source_graph_runtime import (
     PrepareStatus,
@@ -1024,6 +1025,147 @@ async def test_source_graph_operation_metrics_are_numeric_or_fixed_labels_only(
         for key, value in snapshot.items()
     )
     assert all("signal" not in key and "path" not in key for key in snapshot)
+
+
+@pytest.mark.anyio
+async def test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    signal = "sg_top.u_producer.seed[7:0]"
+    driver_args = _driver_args(compile_log, signal)
+    load_args = _load_args(compile_log)
+    load_args["signal_path"] = signal
+    path_args = _path_args(
+        compile_log,
+        from_signal=signal,
+        to_signal=signal,
+        expand_assigns=True,
+    )
+
+    driver = await server._dispatch("explain_signal_driver", driver_args)
+    loads = await server._dispatch("find_signal_loads", load_args)
+    path = await server._dispatch("trace_signal_path", path_args)
+    toggled = await server._dispatch(
+        "trace_signal_path", {**path_args, "expand_assigns": False}
+    )
+
+    results = (driver, loads, path, toggled)
+    receipts = [result.backend_status.source_graph for result in results]
+    assert {result.backend for result in results} == {"source_graph"}, [
+        (
+            result.backend,
+            result.backend_status.source_graph.query_status,
+            result.backend_status.fallback_reason,
+        )
+        for result in results
+    ]
+    assert path.found is True
+    assert toggled.found is True
+    assert worker.calls == 1
+    assert runtime.stats_snapshot()["actual_build_count"] == 1
+    assert [receipt.artifact_reuse for receipt in receipts] == [
+        "cold",
+        "exact_hit",
+        "exact_hit",
+        "exact_hit",
+    ]
+    assert [receipt.cache_lookup_reason for receipt in receipts] == [
+        "no_cached_artifact",
+        "exact_artifact",
+        "exact_artifact",
+        "exact_artifact",
+    ]
+    assert len({receipt.artifact_fingerprint_sha256 for receipt in receipts}) == 1
+    assert len({receipt.query_fingerprint_sha256 for receipt in receipts}) == 4
+    assert all(receipt.scope_match.relation == "exact" for receipt in receipts)
+    assert static.driver_calls + static.load_calls + static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_cancelled_cached_query_does_not_fallback_or_pollute_artifact(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    args = _driver_args(compile_log, "sg_top.u_producer.seed[7:0]")
+
+    ready = await server._dispatch("explain_signal_driver", args)
+    original = SourceGraphConnectivityBackend.find_driver
+
+    def cancelled_query(self, *query_args, **query_kwargs):
+        del self, query_args, query_kwargs
+        raise OperationCancelled("query cancelled")
+
+    monkeypatch.setattr(
+        SourceGraphConnectivityBackend,
+        "find_driver",
+        cancelled_query,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await server._dispatch("explain_signal_driver", args)
+    monkeypatch.setattr(SourceGraphConnectivityBackend, "find_driver", original)
+    warm = await server._dispatch("explain_signal_driver", args)
+
+    assert ready.backend == "source_graph"
+    assert warm.backend == "source_graph"
+    assert warm.backend_status.source_graph.artifact_reuse == "exact_hit"
+    assert worker.calls == 1
+    assert runtime.stats_snapshot()["cache_entry_count"] == 1
+    assert static.driver_calls + static.load_calls + static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    cross_scope_path = _path_args(compile_log)
+
+    path = await server._dispatch("trace_signal_path", cross_scope_path)
+    endpoint = await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log, "sg_top.u_producer.seed[7:0]"),
+    )
+
+    assert path.backend == "source_graph"
+    assert endpoint.backend == "source_graph"
+    assert worker.calls == 1
+    receipt = endpoint.backend_status.source_graph
+    assert receipt.artifact_reuse == "dominating_hit"
+    assert receipt.cache_lookup_reason == "dominating_artifact"
+    assert receipt.scope_match.relation == "superset"
+    assert receipt.artifact_fingerprint_sha256 != (
+        receipt.selected_artifact_fingerprint_sha256
+    )
+
+    second_worker = ReadyWorker()
+    second_runtime = SourceGraphRuntime(second_worker)
+    _patch_common(monkeypatch, runtime=second_runtime, static=TrackingStaticBackend())
+    await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log, "sg_top.u_producer.seed[7:0]"),
+    )
+    larger = await server._dispatch("trace_signal_path", cross_scope_path)
+
+    assert larger.backend == "source_graph"
+    assert larger.backend_status.source_graph.artifact_reuse == "cold"
+    assert (
+        larger.backend_status.source_graph.cache_lookup_reason
+        == "cached_scope_not_dominating"
+    )
+    assert second_worker.calls == 2
 
 
 @pytest.mark.anyio

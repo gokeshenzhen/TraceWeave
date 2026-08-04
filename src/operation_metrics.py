@@ -108,6 +108,11 @@ _PUBLIC_FIELDS = {
     "source_graph_rss_end_kib",
     "source_graph_ir_bytes",
     "source_graph_cache_bytes",
+    "source_graph_cache_entry_count",
+    "source_graph_cache_peak_entry_count",
+    "source_graph_cache_peak_bytes",
+    "source_graph_cache_eviction_count",
+    "source_graph_cache_oversize_bypass_count",
 }
 _PUBLIC_PHASES = {
     "discover_valid_ready",

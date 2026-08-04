@@ -11,6 +11,7 @@ from src.hierarchy_handles import (
     HANDLE_PREFIX,
     HandleStore,
     compute_handle,
+    compute_snapshot_fingerprint,
 )
 
 
@@ -26,11 +27,18 @@ def test_handle_format(compile_log):
     assert h.startswith(HANDLE_PREFIX)
     # tbh_ + 8 hex chars
     assert len(h) == len(HANDLE_PREFIX) + 8
-    assert all(c in "0123456789abcdef" for c in h[len(HANDLE_PREFIX):])
+    assert all(c in "0123456789abcdef" for c in h[len(HANDLE_PREFIX) :])
 
 
 def test_handle_stable_for_same_inputs(compile_log):
     assert compute_handle(compile_log, "vcs") == compute_handle(compile_log, "vcs")
+
+
+def test_full_snapshot_fingerprint_drives_short_handle(compile_log):
+    fingerprint = compute_snapshot_fingerprint(compile_log, "vcs")
+
+    assert len(fingerprint) == 64
+    assert compute_handle(compile_log, "vcs") == f"{HANDLE_PREFIX}{fingerprint[:8]}"
 
 
 def test_handle_differs_by_simulator(compile_log):

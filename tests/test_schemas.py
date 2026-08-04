@@ -252,6 +252,17 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
                 "query_confidence": "partial",
                 "query_match_count": 1,
                 "build_key_sha256": "b" * 64,
+                "artifact_fingerprint_sha256": "b" * 64,
+                "selected_artifact_fingerprint_sha256": "d" * 64,
+                "query_fingerprint_sha256": "e" * 64,
+                "artifact_reuse": "dominating_hit",
+                "cache_lookup_reason": "dominating_artifact",
+                "scope_match": {
+                    "relation": "superset",
+                    "reusable": True,
+                    "complete_for_request": False,
+                    "reason": "coverage_preserved_partial",
+                },
                 "compile_fingerprint_sha256": "c" * 64,
                 "ir_fingerprint_sha256": "a" * 64,
                 "metrics": {
@@ -259,6 +270,10 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
                     "actual_build_count": 1,
                     "ir_bytes": 123,
                     "cache_bytes": 123,
+                    "cache_entry_count": 2,
+                    "cache_peak_entry_count": 3,
+                    "cache_peak_bytes": 456,
+                    "cache_eviction_count": 1,
                 },
             },
         }
@@ -272,6 +287,10 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.source_graph.coverage_blocking_diagnostic_count == 65
     assert status.source_graph.coverage_gap_count == 388
     assert status.source_graph.build_key_sha256 == "b" * 64
+    assert status.source_graph.artifact_reuse == "dominating_hit"
+    assert status.source_graph.cache_lookup_reason == "dominating_artifact"
+    assert status.source_graph.scope_match.relation == "superset"
+    assert status.source_graph.metrics.cache_eviction_count == 1
     assert status.source_graph.metrics.actual_build_count == 1
 
 

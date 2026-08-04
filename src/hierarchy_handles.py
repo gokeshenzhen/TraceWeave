@@ -37,14 +37,26 @@ def compute_handle(compile_log: str, simulator: str) -> str:
     resulting handle is still stable for the (path, simulator) pair, but a
     later successful build will replace it.
     """
+    digest = compute_snapshot_fingerprint(compile_log, simulator)[:_HANDLE_SHA_LEN]
+    return f"{HANDLE_PREFIX}{digest}"
+
+
+def compute_snapshot_fingerprint(compile_log: str, simulator: str) -> str:
+    """Return the full process-session hierarchy snapshot fingerprint.
+
+    Public handles intentionally remain short and opaque.  Internal Source
+    Graph artifact identity uses the full digest so hierarchy refreshes cannot
+    alias through the handle's display truncation.  This hashes handle material
+    only and never enumerates the hierarchy tree.
+    """
+
     abs_path = os.path.abspath(compile_log) if compile_log else ""
     try:
         mtime_ns = os.stat(abs_path).st_mtime_ns if abs_path else 0
     except OSError:
         mtime_ns = 0
     material = f"{abs_path}|{simulator or ''}|{mtime_ns}".encode("utf-8")
-    digest = hashlib.sha256(material).hexdigest()[:_HANDLE_SHA_LEN]
-    return f"{HANDLE_PREFIX}{digest}"
+    return hashlib.sha256(material).hexdigest()
 
 
 class HandleStore:

@@ -21,6 +21,8 @@ def test_source_graph_metrics_accept_only_numeric_values_and_fixed_phase():
     operation_metrics.set_value("source_graph_phase", "prepare", metrics)
     operation_metrics.set_value("source_graph_build_ms", 12.25, metrics)
     operation_metrics.set_value("source_graph_ir_bytes", 4096, metrics)
+    operation_metrics.set_value("source_graph_cache_entry_count", 2, metrics)
+    operation_metrics.set_value("source_graph_cache_eviction_count", 1, metrics)
     operation_metrics.set_value("source_graph_query_ms", "top.customer.signal", metrics)
     operation_metrics.set_value("source_graph_scope", "top.customer", metrics)
 
@@ -28,6 +30,8 @@ def test_source_graph_metrics_accept_only_numeric_values_and_fixed_phase():
         "source_graph_phase": "prepare",
         "source_graph_build_ms": 12.2,
         "source_graph_ir_bytes": 4096,
+        "source_graph_cache_entry_count": 2,
+        "source_graph_cache_eviction_count": 1,
     }
 
     operation_metrics.set_value("source_graph_phase", "top.customer", metrics)

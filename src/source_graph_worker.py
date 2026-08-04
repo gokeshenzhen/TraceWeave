@@ -33,8 +33,9 @@ from src.slang_connectivity_projector import (  # noqa: E402
 from src.source_graph_contract import (  # noqa: E402
     SOURCE_GRAPH_PROJECTOR_NAME,
     SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION,
+    SourceGraphArtifactBuildRequest,
+    SourceGraphArtifactScopeReceipt,
     SourceGraphBuildRequest,
-    SourceGraphScopeReceipt,
 )
 from src.source_graph_runtime import (  # noqa: E402
     InternalBuildBlocker,
@@ -103,8 +104,15 @@ def _gap_label(value: str) -> str:
     return label[:120]
 
 
-def _frontend_args(request: SourceGraphBuildRequest) -> list[str]:
-    manifest = request.identity.compile_inputs
+def _frontend_args(
+    request: SourceGraphBuildRequest | SourceGraphArtifactBuildRequest,
+) -> list[str]:
+    source_identity = (
+        request.identity
+        if isinstance(request, SourceGraphBuildRequest)
+        else request.source
+    )
+    manifest = source_identity.compile_inputs
     result = [*manifest.ordered_options, *manifest.ordered_inputs]
     tops = manifest.ordered_tops or (request.scope.top,)
     for top in tops:
@@ -144,13 +152,26 @@ def _failure_payload(
     }
 
 
-def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
+def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
     """Build a focused Connectivity IR; imports pyslang only in this process."""
 
     wall_started = time.perf_counter()
     cpu_started = time.process_time()
     rss_start, _ = _read_rss_kib()
-    identity = request.identity
+    identity = request.source
+    if request.identity.worker_protocol_version != SOURCE_GRAPH_WORKER_PROTOCOL_VERSION:
+        return _failure_payload(
+            PrepareStatus.DEPENDENCY_BLOCKED,
+            InternalBuildBlocker(
+                code="worker_protocol_identity_mismatch",
+                stage="frontend_import",
+            ),
+            _worker_metrics(
+                wall_started=wall_started,
+                cpu_started=cpu_started,
+                rss_start=rss_start,
+            ),
+        )
     if identity.frontend_name != SLANG_FRONTEND_NAME:
         return _failure_payload(
             PrepareStatus.DEPENDENCY_BLOCKED,
@@ -200,15 +221,13 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
             ),
         )
 
-    if version != request.identity.frontend_version:
+    if version != identity.frontend_version:
         return _failure_payload(
             PrepareStatus.DEPENDENCY_BLOCKED,
             InternalBuildBlocker(
                 code="frontend_version_mismatch",
                 stage="frontend_import",
-                message=(
-                    f"expected {request.identity.frontend_version}, found {version}"
-                ),
+                message=(f"expected {identity.frontend_version}, found {version}"),
             ),
             _worker_metrics(
                 wall_started=wall_started,
@@ -244,7 +263,7 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
             )
             for code in request.scope.coverage_boundary.objective_exclusions
         )
-        manifest = request.identity.compile_inputs
+        manifest = identity.compile_inputs
         projection = project_slang_design(
             root=root,
             source_manager=driver.sourceManager,
@@ -263,9 +282,9 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
                 ),
                 exclusions=exclusions,
                 focus_instance_paths=request.scope.coverage_boundary.instance_paths,
-                assignment_instance_paths=request.scope.requested_cone.instance_paths,
+                assignment_instance_paths=request.scope.projection_instance_paths,
                 metadata=(
-                    ("runtime", "phase3a_scoped_on_demand"),
+                    ("runtime", "phase3b_bounded_artifact"),
                     ("scope_contract", request.contract_version),
                 ),
             ),
@@ -275,7 +294,7 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
         gap_codes = {_gap_label(gap.code) for gap in ir.coverage.gaps}
         if ir.coverage.status is not CoverageStatus.COMPLETE and not gap_codes:
             gap_codes.add("coverage_incomplete_without_detailed_gap")
-        scope_receipt = SourceGraphScopeReceipt(
+        scope_receipt = SourceGraphArtifactScopeReceipt(
             scope=request.scope,
             coverage_status=ir.coverage.status,
             gap_codes=tuple(sorted(gap_codes)),
@@ -313,7 +332,7 @@ def execute_build(request: SourceGraphBuildRequest) -> dict[str, Any]:
     }
 
 
-def _read_request(path: Path) -> SourceGraphBuildRequest:
+def _read_request(path: Path) -> SourceGraphArtifactBuildRequest:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
         raise ValueError("worker request must be an object")
@@ -322,7 +341,7 @@ def _read_request(path: Path) -> SourceGraphBuildRequest:
     request = payload.get("request")
     if not isinstance(request, Mapping):
         raise ValueError("worker request payload is missing")
-    return SourceGraphBuildRequest.from_dict(request)
+    return SourceGraphArtifactBuildRequest.from_dict(request)
 
 
 def _write_response(path: Path, payload: Mapping[str, Any]) -> None:
