@@ -15,6 +15,7 @@ from src.source_graph_contract import (
     PathHierarchyScope,
     QueryOperation,
     RequestedCone,
+    SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     ScopeRelation,
     SourceGraphArtifactIdentity,
     SourceGraphArtifactScope,
@@ -87,16 +88,30 @@ def _request(
     projector_version: str = "1.0",
     projector_schema_version: str = "1.0",
 ) -> SourceGraphBuildRequest:
-    return SourceGraphBuildRequest(
-        identity=SourceGraphIdentity(
-            compile_inputs=manifest or _manifest(),
-            frontend_name="Slang/pyslang",
-            frontend_version=frontend_version,
-            ir_schema_version=ir_version,
-            projector_version=projector_version,
-            projector_schema_version=projector_schema_version,
+    build_scope = scope or _scope()
+    source = SourceGraphIdentity(
+        compile_inputs=manifest or _manifest(),
+        frontend_name="Slang/pyslang",
+        frontend_version=frontend_version,
+        ir_schema_version=ir_version,
+        projector_version=projector_version,
+        projector_schema_version=projector_schema_version,
+    )
+    artifact = SourceGraphArtifactIdentity(
+        source=source,
+        scope=SourceGraphArtifactScope.from_build_scope(
+            build_scope,
+            hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
         ),
-        scope=scope or _scope(),
+        compile_snapshot_sha256=_fingerprint("compile_snapshot"),
+        adapter_version="3.0",
+        worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+    )
+    return SourceGraphBuildRequest(
+        identity=source,
+        scope=build_scope,
+        artifact=artifact,
+        query=SourceGraphQueryIdentity.from_build_scope(build_scope),
     )
 
 
@@ -517,6 +532,46 @@ def test_worker_build_request_serializes_artifact_without_query_identity():
     assert "query_identity" not in rendered
     assert "private_target" not in rendered
     assert request.query_identity.target.signal_path.endswith("private_target")
+
+
+def test_legacy_multibranch_request_is_exact_keyed_and_bounded():
+    legacy_scope = _scope(
+        signal_path="top.u_dut.u_leaf.q",
+        cone_paths=("top.u_dut.u_leaf", "top.u_other"),
+        boundary_paths=("top", "top.u_dut", "top.u_dut.u_leaf", "top.u_other"),
+    )
+    source = SourceGraphIdentity(
+        compile_inputs=_manifest(),
+        frontend_name="Slang/pyslang",
+        frontend_version="11.0.0",
+    )
+    request = SourceGraphBuildRequest(identity=source, scope=legacy_scope)
+    changed_target = SourceGraphBuildRequest(
+        identity=source,
+        scope=replace(
+            legacy_scope,
+            target=ConnectivityTarget(
+                operation=QueryOperation.DRIVER,
+                signal_path="top.u_dut.u_leaf.other_q",
+            ),
+        ),
+    )
+
+    key = compute_source_graph_build_key(request)
+    artifact = request.artifact_identity
+
+    assert key.cross_request_reusable is True
+    assert key != compute_source_graph_build_key(changed_target)
+    assert SourceGraphBuildRequest.from_dict(request.to_dict()) == request
+    assert artifact.adapter_version == "legacy_exact_request_2_0"
+    assert artifact.scope.capabilities == (QueryOperation.DRIVER,)
+    assert artifact.scope.projection_instance_paths == (
+        "top.u_dut.u_leaf",
+        "top.u_other",
+    )
+    assert {
+        path for chain in artifact.scope.proved_ancestor_chains for path in chain
+    }.issubset(artifact.scope.coverage_boundary.instance_paths)
 
 
 def test_build_request_rejects_artifact_that_does_not_cover_query_scope():

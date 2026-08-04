@@ -699,46 +699,7 @@ class SourceGraphBuildRequest:
     def artifact_identity(self) -> SourceGraphArtifactIdentity:
         if self.artifact is not None:
             return self.artifact
-        # Compatibility for pre-3B internal callers.  Production adapters pass
-        # explicit compile/hierarchy snapshots.  This fallback remains bounded
-        # to the already-proved scope and never enumerates hierarchy or sources.
-        compile_snapshot = _sha256(
-            {"compile_inputs": self.identity.compile_inputs.to_dict()}
-        )
-        if self.scope.path_hierarchy is None:
-            hierarchy_proof: Mapping[str, Any] = {
-                "chains": [list(self.scope.hierarchy_ancestors)],
-                "lcas": [self.scope.hierarchy_ancestors[-1]],
-            }
-        else:
-            hierarchy_proof = {
-                "chains": [
-                    list(self.scope.path_hierarchy.from_ancestors),
-                    list(self.scope.path_hierarchy.to_ancestors),
-                ],
-                "lcas": [self.scope.path_hierarchy.lca],
-            }
-        hierarchy_snapshot = _sha256(
-            {
-                "design": self.scope.design,
-                "top": self.scope.top,
-                "hierarchy_proof": hierarchy_proof,
-                "projection_instance_paths": list(
-                    self.scope.requested_cone.instance_paths
-                ),
-                "coverage_boundary": self.scope.coverage_boundary.to_dict(),
-            }
-        )
-        return SourceGraphArtifactIdentity(
-            source=self.identity,
-            scope=SourceGraphArtifactScope.from_build_scope(
-                self.scope,
-                hierarchy_snapshot_sha256=hierarchy_snapshot,
-            ),
-            compile_snapshot_sha256=compile_snapshot,
-            adapter_version="legacy_compat_2_0",
-            worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
-        )
+        return _legacy_exact_artifact_identity(self.identity, self.scope)
 
     @property
     def query_identity(self) -> SourceGraphQueryIdentity:
@@ -1066,6 +1027,86 @@ class SourceGraphArtifactIdentity:
                 "build_contract_version", SOURCE_GRAPH_BUILD_CONTRACT_VERSION
             ),
         )
+
+
+def _legacy_exact_artifact_identity(
+    source: SourceGraphIdentity,
+    scope: SourceGraphBuildScope,
+) -> SourceGraphArtifactIdentity:
+    """Adapt pre-3B requests without granting cross-target scope reuse.
+
+    Old internal benchmark callers supplied a finite coverage boundary and an
+    assignment projection, but not a hierarchy-handle snapshot.  Some of those
+    projections deliberately contain several explicitly listed branches.  Keep
+    them runnable and exact-repeat cacheable by keying the *entire* legacy scope
+    (including target, operation, caps, and cone policy) into build semantics.
+    Consequently this compatibility route can never provide a target-changing
+    or dominating hit.  Production adapters always pass the explicit Phase 3B
+    identity and do not use this path.
+
+    Every compatibility chain atom below already occurs in the request's
+    explicit boundary; no sibling is enumerated and no source/module name is
+    used to infer coverage.
+    """
+
+    if scope.path_hierarchy is None:
+        chains = [scope.hierarchy_ancestors]
+    else:
+        chains = [
+            scope.path_hierarchy.from_ancestors,
+            scope.path_hierarchy.to_ancestors,
+        ]
+    chain_atoms = set().union(*(set(chain) for chain in chains))
+    for path in scope.requested_cone.instance_paths:
+        if path in chain_atoms:
+            continue
+        chains.append((scope.top,) if path == scope.top else (scope.top, path))
+        chain_atoms.add(path)
+
+    common_prefix = chains[0]
+    for chain in chains[1:]:
+        prefix_length = 0
+        for left, right in zip(common_prefix, chain):
+            if left != right:
+                break
+            prefix_length += 1
+        common_prefix = common_prefix[:prefix_length]
+    if not common_prefix:
+        raise ValueError("legacy scope paths do not share the declared top")
+
+    hierarchy_snapshot = _sha256(
+        {
+            "legacy_exact_boundary": True,
+            "design": scope.design,
+            "top": scope.top,
+            "chains": [list(chain) for chain in chains],
+            "projection_instance_paths": list(scope.requested_cone.instance_paths),
+            "coverage_boundary": scope.coverage_boundary.to_dict(),
+        }
+    )
+    compile_snapshot = _sha256(
+        {
+            "compile_inputs": source.compile_inputs.to_dict(),
+            "legacy_exact_request_scope": scope.to_dict(),
+        }
+    )
+    artifact_scope = SourceGraphArtifactScope(
+        design=scope.design,
+        top=scope.top,
+        hierarchy_snapshot_sha256=hierarchy_snapshot,
+        proved_ancestor_chains=tuple(chains),
+        proved_lcas=(common_prefix[-1],),
+        projection_instance_paths=scope.requested_cone.instance_paths,
+        coverage_boundary=scope.coverage_boundary,
+        capabilities=(scope.target.operation,),
+    )
+    return SourceGraphArtifactIdentity(
+        source=source,
+        scope=artifact_scope,
+        compile_snapshot_sha256=compile_snapshot,
+        adapter_version="legacy_exact_request_2_0",
+        worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+    )
 
 
 @dataclass(frozen=True)
