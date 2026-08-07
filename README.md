@@ -362,11 +362,11 @@ not shell text, and are limited to scheduler option/value pairs.
 `trace_x_source` use the production route
 `Verdi NPI -> Source Graph -> Legacy Static`. Source Graph is lazy and
 process-local: the first eligible request starts one isolated, short-lived
-frontend worker, successful scoped IR stays only in the server's memory cache,
+frontend worker, successful scoped IR enters the server's bounded memory cache,
 and same-key cold requests share one build. Artifact identity is independent of
-the query target; QueryIdentity remains target-specific.
-It does not build at startup, use a
-disk cache, hold an FSDB/VCD lock, or import `pyslang` into the MCP server.
+the query target; QueryIdentity remains target-specific. By default it neither
+builds nor scans a cache at startup, does not use disk persistence, does not hold
+an FSDB/VCD lock, and does not import `pyslang` into the MCP server.
 
 For `trace_x_source`, a trusted NPI result remains authoritative. An internal
 NPI fallback discards the partial propagation chain and restarts from the root
@@ -405,12 +405,42 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+An optional exact, content-addressed disk cache can reuse a validated scoped IR
+after an MCP restart. It remains disabled by default:
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE=1
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES=8
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES=536870912
+```
+
+It uses the existing `TRACEWEAVE_CACHE_DIR` root and stores its private
+namespace under `source_graph/disk-v1/`. The process-memory exact/dominating
+cache is always checked first and performs no disk I/O on a hit. A memory miss
+does one direct exact-artifact lookup; there is no startup scan or disk-level
+dominating-scope search. Every fresh process still hashes and validates all
+ordered source/support inputs, options, tops, and compile/hierarchy snapshots
+before the disk lookup. A verified hit skips the frontend worker, constructs a
+new query engine, and enters the memory cache. Unknown, truncated, corrupt, or
+version-mismatched entries are fixed-reason misses followed by the normal cold
+build; they are never connectivity negatives or Static results.
+
+The persisted canonical ConnectivityIR can contain protected-IP-derived
+structural information. TraceWeave creates its namespace and entries with
+owner-only directory/file permissions (`0700`/`0600`), rejects symlinks and
+non-regular entry files, publishes atomically, and applies deterministic entry
+and byte limits only on local lookup/publish/maintenance paths. Choose a trusted
+local `TRACEWEAVE_CACHE_DIR`; do not place this opt-in cache on an untrusted or
+shared filesystem. Failed, timed-out, or cancelled builds are not published.
+
 Run `build_tb_hierarchy` first, as in the standard workflow, so the request has
 an exact compile/hierarchy handle. `backend_status` then reports
 `selected_backend`, `attempted_backend`, `actual_backend`, the ordered
 `attempted_backends` chain, and a Source Graph receipt containing fixed blocker
 labels, coverage, build/compile/IR fingerprints, cache disposition, and numeric
-resource metrics. Positive results under partial or inconclusive coverage stay
+resource metrics. Additive fixed labels distinguish `memory`, `disk`, and
+`build` tiers plus the disk validation outcome; receipts never expose cache
+paths or entry names. Positive results under partial or inconclusive coverage stay
 partial; only complete coverage can establish `not_connected`. A fallback
 recomputes the whole result with Legacy Static, so payload provenance is never
 mixed.

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import errno
 import fcntl
@@ -113,6 +113,7 @@ class DiskArtifact:
     identity: SourceGraphArtifactIdentity
     artifact_key: SourceGraphArtifactKey
     scope_receipt: SourceGraphArtifactScopeReceipt
+    ir: ConnectivityIR
     ir_json_bytes: bytes
     ir_fingerprint_sha256: str
     ir_bytes: int
@@ -124,6 +125,9 @@ class DiskLookupResult:
     outcome: DiskValidationOutcome
     artifact: DiskArtifact | None = None
     bytes_read: int = 0
+    lookup_wall_ms: float = 0.0
+    read_wall_ms: float = 0.0
+    validate_wall_ms: float = 0.0
 
     @property
     def hit(self) -> bool:
@@ -146,6 +150,9 @@ class DiskPublishResult:
     disk_bytes: int = 0
     eviction_count: int = 0
     unsafe_entry_count: int = 0
+    publish_wall_ms: float = 0.0
+    write_wall_ms: float = 0.0
+    eviction_wall_ms: float = 0.0
 
     @property
     def published(self) -> bool:
@@ -313,16 +320,33 @@ class SourceGraphDiskCache:
     ) -> DiskLookupResult:
         """Read and fully validate one exact artifact without enumerating peers."""
 
+        started = time.perf_counter()
+        profile: dict[str, float] = {}
         _check_cancelled(cancelled)
         artifact_key = compute_source_graph_artifact_key(identity)
         if not artifact_key.cross_request_reusable:
-            return DiskLookupResult(DiskValidationOutcome.IDENTITY_NOT_REUSABLE)
-        namespace_state = self._validate_existing_namespace()
-        if namespace_state is DiskValidationOutcome.NOT_FOUND:
-            return DiskLookupResult(DiskValidationOutcome.NOT_FOUND)
-        if namespace_state is not None:
-            return DiskLookupResult(namespace_state)
-        return self._lookup_entry(identity, artifact_key, cancelled=cancelled)
+            result = DiskLookupResult(DiskValidationOutcome.IDENTITY_NOT_REUSABLE)
+        else:
+            namespace_state = self._validate_existing_namespace()
+            if namespace_state is DiskValidationOutcome.NOT_FOUND:
+                result = DiskLookupResult(DiskValidationOutcome.NOT_FOUND)
+            elif namespace_state is not None:
+                result = DiskLookupResult(namespace_state)
+            else:
+                result = self._lookup_entry(
+                    identity,
+                    artifact_key,
+                    cancelled=cancelled,
+                    profile=profile,
+                )
+        total_ms = (time.perf_counter() - started) * 1000
+        read_ms = profile.get("read_wall_ms", 0.0)
+        return replace(
+            result,
+            lookup_wall_ms=total_ms,
+            read_wall_ms=read_ms,
+            validate_wall_ms=max(total_ms - read_ms, 0.0),
+        )
 
     def publish(
         self,
@@ -333,6 +357,32 @@ class SourceGraphDiskCache:
         cancelled: Callable[[], bool] | None = None,
     ) -> DiskPublishResult:
         """Validate, privately stage, atomically publish, then enforce bounds."""
+
+        started = time.perf_counter()
+        profile: dict[str, float] = {}
+        result = self._publish(
+            identity,
+            ir_json_bytes,
+            scope_receipt,
+            cancelled=cancelled,
+            profile=profile,
+        )
+        return replace(
+            result,
+            publish_wall_ms=(time.perf_counter() - started) * 1000,
+            write_wall_ms=profile.get("write_wall_ms", 0.0),
+            eviction_wall_ms=profile.get("eviction_wall_ms", 0.0),
+        )
+
+    def _publish(
+        self,
+        identity: SourceGraphArtifactIdentity,
+        ir_json_bytes: bytes,
+        scope_receipt: SourceGraphArtifactScopeReceipt,
+        *,
+        cancelled: Callable[[], bool] | None,
+        profile: dict[str, float],
+    ) -> DiskPublishResult:
 
         _check_cancelled(cancelled)
         artifact_key = compute_source_graph_artifact_key(identity)
@@ -381,6 +431,7 @@ class SourceGraphDiskCache:
                 )
             )
             os.chmod(temp_path, _PRIVATE_DIRECTORY_MODE)
+            write_started = time.perf_counter()
             self._write_private_file(
                 temp_path / SOURCE_GRAPH_DISK_CACHE_IR,
                 ir_json_bytes,
@@ -392,11 +443,15 @@ class SourceGraphDiskCache:
                 cancelled=cancelled,
             )
             self._fsync_directory(temp_path)
+            profile["write_wall_ms"] = (time.perf_counter() - write_started) * 1000
             _check_cancelled(cancelled)
 
             with self._maintenance_lock(cancelled):
                 existing = self._lookup_entry(
-                    identity, artifact_key, cancelled=cancelled
+                    identity,
+                    artifact_key,
+                    cancelled=cancelled,
+                    profile={},
                 )
                 if existing.hit:
                     snapshot = self._scan_owned_entries(cancelled=cancelled)
@@ -418,6 +473,7 @@ class SourceGraphDiskCache:
                         entry_bytes=entry_bytes,
                     )
 
+                eviction_started = time.perf_counter()
                 owned_entries, unsafe_count = self._scan_owned_entries(
                     cancelled=cancelled
                 )
@@ -444,6 +500,9 @@ class SourceGraphDiskCache:
                     owned_entries.remove(victim)
                     current_bytes -= victim.entry_bytes
                     eviction_count += 1
+                profile["eviction_wall_ms"] = (
+                    time.perf_counter() - eviction_started
+                ) * 1000
 
                 _check_cancelled(cancelled)
                 shard = final_path.parent
@@ -683,6 +742,7 @@ class SourceGraphDiskCache:
         artifact_key: SourceGraphArtifactKey,
         *,
         cancelled: Callable[[], bool] | None,
+        profile: dict[str, float],
     ) -> DiskLookupResult:
         entry_path = self.entry_path(artifact_key.digest)
         entry_info = _lstat(entry_path)
@@ -698,12 +758,17 @@ class SourceGraphDiskCache:
             return DiskLookupResult(DiskValidationOutcome.UNSAFE_ENTRY)
 
         try:
+            read_started = time.perf_counter()
             manifest_bytes = self._read_private_file(
                 entry_path / SOURCE_GRAPH_DISK_CACHE_MANIFEST,
                 max_bytes=MAX_SOURCE_GRAPH_DISK_MANIFEST_BYTES,
                 cancelled=cancelled,
                 missing=DiskValidationOutcome.MANIFEST_MISSING,
                 unsafe=DiskValidationOutcome.UNSAFE_ENTRY,
+            )
+            profile["read_wall_ms"] = (
+                profile.get("read_wall_ms", 0.0)
+                + (time.perf_counter() - read_started) * 1000
             )
             manifest = _strict_json_object(manifest_bytes)
             self._validate_manifest(manifest, identity, artifact_key)
@@ -712,12 +777,17 @@ class SourceGraphDiskCache:
             declared_size = int(ir_meta["size_bytes"])
             if declared_size > self.max_bytes:
                 raise _ValidationMiss(DiskValidationOutcome.IR_TOO_LARGE)
+            read_started = time.perf_counter()
             ir_bytes = self._read_private_file(
                 entry_path / SOURCE_GRAPH_DISK_CACHE_IR,
                 max_bytes=self.max_bytes,
                 cancelled=cancelled,
                 missing=DiskValidationOutcome.IR_MISSING,
                 unsafe=DiskValidationOutcome.UNSAFE_ENTRY,
+            )
+            profile["read_wall_ms"] = (
+                profile.get("read_wall_ms", 0.0)
+                + (time.perf_counter() - read_started) * 1000
             )
             if len(ir_bytes) != declared_size:
                 raise _ValidationMiss(DiskValidationOutcome.IR_SIZE_MISMATCH)
@@ -758,6 +828,7 @@ class SourceGraphDiskCache:
                 identity=identity,
                 artifact_key=artifact_key,
                 scope_receipt=receipt,
+                ir=ir,
                 ir_json_bytes=ir_bytes,
                 ir_fingerprint_sha256=digest,
                 ir_bytes=len(ir_bytes),

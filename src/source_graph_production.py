@@ -4,17 +4,20 @@ This module owns only process/session lifecycle.  It deliberately does not
 select connectivity backends, map public schemas, read waveforms, or import
 ``pyslang``. The first eligible driver/load/path request creates one
 :class:`SourceGraphRuntime`; no build or source enumeration happens at server
-startup.  The runtime remains memory-only and uses the existing isolated
-one-shot worker contract.
+startup.  Process memory remains the first cache tier; an explicitly enabled
+disk tier is constructed lazily and uses the existing isolated one-shot worker
+contract on verified misses.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
 import threading
 
 from config import SourceGraphExecutionConfig
 
+from .source_graph_disk_cache import SourceGraphDiskCache
 from .source_graph_runtime import (
     IsolatedSourceGraphProcessRunner,
     SourceGraphRuntime,
@@ -38,7 +41,7 @@ class SourceGraphRuntimeSession:
         self._runner_factory = runner_factory
         self._lock = threading.Lock()
         self._runtime: SourceGraphRuntime | None = None
-        self._configuration_identity: tuple[str, str, float] | None = None
+        self._configuration_identity: tuple[object, ...] | None = None
 
     @property
     def created(self) -> bool:
@@ -64,10 +67,26 @@ class SourceGraphRuntimeSession:
             config.python_bin,
             config.frontend_version,
             config.timeout_sec,
+            config.disk_cache_enabled,
+            os.fspath(config.disk_cache_root),
+            config.disk_cache_max_entries,
+            config.disk_cache_max_bytes,
         )
         with self._lock:
             if self._runtime is None:
-                self._runtime = SourceGraphRuntime(self._runner_factory(config))
+                disk_cache = (
+                    SourceGraphDiskCache(
+                        config.disk_cache_root,
+                        max_entries=config.disk_cache_max_entries,
+                        max_bytes=config.disk_cache_max_bytes,
+                    )
+                    if config.disk_cache_enabled
+                    else None
+                )
+                self._runtime = SourceGraphRuntime(
+                    self._runner_factory(config),
+                    disk_cache=disk_cache,
+                )
                 self._configuration_identity = identity
             elif self._configuration_identity != identity:
                 raise RuntimeError(

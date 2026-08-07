@@ -292,6 +292,64 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.source_graph.scope_match.relation == "superset"
     assert status.source_graph.metrics.cache_eviction_count == 1
     assert status.source_graph.metrics.actual_build_count == 1
+    serialized = status.model_dump(mode="json")["source_graph"]
+    assert "cache_tier" not in serialized
+    assert "disk_validation_outcome" not in serialized
+    assert "frontend_launch_count" not in serialized["metrics"]
+    assert all(not key.startswith("disk_") for key in serialized["metrics"])
+
+
+def test_backend_status_validates_additive_exact_disk_cache_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "xcelium",
+            "backend": "source_graph",
+            "actual_backend": "source_graph",
+            "source_graph": {
+                "adapter_status": "ready",
+                "prepare_status": "ready",
+                "cache_disposition": "miss",
+                "cache_tier": "disk",
+                "disk_validation_outcome": "hit",
+                "artifact_reuse": "disk_exact_hit",
+                "cache_lookup_reason": "no_cached_artifact",
+                "metrics": {
+                    "actual_build_count": 0,
+                    "frontend_launch_count": 0,
+                    "disk_lookup_wall_ms": 3.25,
+                    "disk_read_wall_ms": 1.5,
+                    "disk_validate_wall_ms": 1.75,
+                    "disk_hit_count": 1,
+                    "disk_build_skip_count": 1,
+                    "disk_bytes_read": 8192,
+                    "disk_entry_count": 1,
+                    "disk_bytes": 9000,
+                },
+            },
+        }
+    )
+
+    receipt = status.source_graph
+    assert receipt.cache_disposition == "miss"
+    assert receipt.cache_tier == "disk"
+    assert receipt.disk_validation_outcome == "hit"
+    assert receipt.artifact_reuse == "disk_exact_hit"
+    assert receipt.metrics.actual_build_count == 0
+    assert receipt.metrics.frontend_launch_count == 0
+    assert receipt.metrics.disk_build_skip_count == 1
+    assert receipt.metrics.disk_bytes_read == 8192
+
+    with pytest.raises(ValidationError):
+        BackendStatus.model_validate(
+            {
+                "simulator": "xcelium",
+                "backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "cache_tier": "/private/cache",
+                },
+            }
+        )
 
 
 def test_trace_signal_path_validates_additive_source_graph_path_evidence():

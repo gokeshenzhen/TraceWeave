@@ -204,6 +204,10 @@ class SourceGraphExecutionConfig:
     frontend_version: str
     timeout_sec: float
     error_code: str | None = None
+    disk_cache_enabled: bool = False
+    disk_cache_root: Path = TRACEWEAVE_CACHE_ROOT
+    disk_cache_max_entries: int = 8
+    disk_cache_max_bytes: int = 512 * 1024 * 1024
 
     @property
     def valid(self) -> bool:
@@ -228,6 +232,14 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         "TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0"
     ).strip()
     raw_timeout = os.environ.get("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", "120").strip()
+    disk_cache_enabled = _env_flag("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", False)
+    disk_cache_root = _default_cache_root()
+    raw_disk_entries = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", "8"
+    ).strip()
+    raw_disk_bytes = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", str(512 * 1024 * 1024)
+    ).strip()
 
     try:
         timeout_sec = float(raw_timeout)
@@ -244,12 +256,39 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
     if timeout_sec < 0.001 or timeout_sec > 86_400:
         error_code = "source_graph_execution_config_invalid"
 
+    try:
+        disk_cache_max_entries = int(raw_disk_entries)
+        disk_cache_max_bytes = int(raw_disk_bytes)
+    except ValueError:
+        disk_cache_max_entries = 8
+        disk_cache_max_bytes = 512 * 1024 * 1024
+        if disk_cache_enabled:
+            error_code = "source_graph_disk_cache_config_invalid"
+    disk_cache_values_invalid = (
+        disk_cache_max_entries < 1
+        or disk_cache_max_entries > 1_000_000
+        or disk_cache_max_bytes < 1
+        or disk_cache_max_bytes > (1 << 63) - 1
+        or not disk_cache_root.is_absolute()
+        or ".." in disk_cache_root.parts
+        or "\x00" in os.fspath(disk_cache_root)
+    )
+    if disk_cache_values_invalid:
+        disk_cache_max_entries = 8
+        disk_cache_max_bytes = 512 * 1024 * 1024
+        if disk_cache_enabled:
+            error_code = "source_graph_disk_cache_config_invalid"
+
     return SourceGraphExecutionConfig(
         enabled=enabled,
         python_bin=python_bin or sys.executable,
         frontend_version=frontend_version or "11.0.0",
         timeout_sec=timeout_sec,
         error_code=error_code,
+        disk_cache_enabled=disk_cache_enabled,
+        disk_cache_root=disk_cache_root,
+        disk_cache_max_entries=disk_cache_max_entries,
+        disk_cache_max_bytes=disk_cache_max_bytes,
     )
 
 

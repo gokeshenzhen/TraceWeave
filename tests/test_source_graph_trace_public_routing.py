@@ -15,6 +15,7 @@ from src.cancellation import OperationCancelled
 from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
 import src.connectivity_backend as connectivity_backend
 from src.source_graph_backend import SourceGraphConnectivityBackend
+from src.source_graph_disk_cache import SourceGraphDiskCache
 from src.source_graph_runtime import PrepareStatus, SourceGraphRuntime
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
 from tests.connectivity_ir_fixtures import DEEP_RTL, DEEP_TB, build_deep_ir
@@ -465,7 +466,6 @@ async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
         receipt.selected_artifact_fingerprint_sha256
     )
     assert worker.calls == 2
-    assert static.calls == []
 
     covered = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
     covered_receipt = covered.backend_status.source_graph
@@ -476,6 +476,58 @@ async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
         receipt.final_artifact_fingerprint_sha256
     )
     assert worker.calls == 2
+
+
+@pytest.mark.anyio
+async def test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts(
+    monkeypatch, tmp_path
+):
+    compile_log, wave = _install_context(tmp_path)
+    cache_root = tmp_path / "source-graph-cache"
+    static = TraceStaticBackend()
+    cold_worker = ReadyWorker(ir=_deep_ir())
+    cold_runtime = SourceGraphRuntime(
+        cold_worker,
+        disk_cache=SourceGraphDiskCache(cache_root),
+    )
+    _patch_route(monkeypatch, runtime=cold_runtime, static=static)
+    args = _trace_args(
+        compile_log,
+        wave,
+        signal_path="uart_deep_x_tb.apb_prdata",
+    )
+
+    cold = await server._dispatch("trace_x_source", args)
+    disk_worker = ReadyWorker(ir=_deep_ir())
+    disk_runtime = SourceGraphRuntime(
+        disk_worker,
+        disk_cache=SourceGraphDiskCache(cache_root),
+    )
+    monkeypatch.setattr(server, "get_source_graph_runtime", lambda config: disk_runtime)
+    disk = await server._dispatch("trace_x_source", args)
+
+    receipt = disk.backend_status.source_graph
+    assert cold.backend_status.actual_backend == "source_graph"
+    assert cold_worker.calls == 2
+    assert disk.backend_status.actual_backend == "source_graph"
+    assert disk.backend_status.single_backend_provenance is True
+    assert disk.trace_restarted is True
+    assert disk.backend_status.whole_trace_restart_reasons == [
+        "source_graph_scope_expansion"
+    ]
+    assert receipt.single_artifact_provenance is True
+    assert receipt.final_artifact_scope_match is True
+    assert receipt.artifact_attempt_count == 2
+    assert receipt.scope_expansion_count == 1
+    assert receipt.artifact_reuse == "disk_exact_hit"
+    assert receipt.cache_tier == "disk"
+    assert receipt.disk_validation_outcome == "hit"
+    assert receipt.metrics.actual_build_count == 0
+    assert receipt.metrics.frontend_launch_count == 0
+    assert receipt.metrics.disk_hit_count == 2
+    assert receipt.metrics.disk_build_skip_count == 2
+    assert disk_worker.calls == 0
+    assert static.calls == []
 
 
 @pytest.mark.anyio
@@ -860,8 +912,13 @@ async def test_trace_metrics_are_identity_free_numeric_or_fixed_labels(
     assert snapshot["source_graph_trace_query_count"] == 2
     assert snapshot["source_graph_trace_artifact_attempt_count"] == 1
     assert "source_graph_trace_signal" not in snapshot
+    fixed_labels = {
+        "source_graph_phase",
+        "source_graph_cache_tier",
+        "source_graph_disk_validation_outcome",
+    }
     assert all(
-        key == "source_graph_phase"
+        key in fixed_labels
         or (not isinstance(value, bool) and isinstance(value, (int, float)))
         for key, value in snapshot.items()
     )

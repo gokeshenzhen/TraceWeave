@@ -31,6 +31,7 @@ from src.source_graph_contract import (
 from src.source_graph_runtime import (
     CacheDisposition,
     CacheLookupReason,
+    CacheTier,
     FlightDisposition,
     IsolatedSourceGraphProcessRunner,
     PrepareStatus,
@@ -638,6 +639,8 @@ async def test_metrics_are_numeric_or_fixed_labels_and_contain_no_private_inputs
     assert set(metrics) <= {
         "cache_disposition",
         "flight_disposition",
+        "cache_tier",
+        "disk_validation_outcome",
         "total_wall_ms",
         "admission_wait_ms",
         "build_wall_ms",
@@ -656,10 +659,33 @@ async def test_metrics_are_numeric_or_fixed_labels_and_contain_no_private_inputs
         "cache_peak_bytes",
         "cache_eviction_count",
         "cache_oversize_bypass_count",
+        "frontend_launch_count",
+        "disk_lookup_wall_ms",
+        "disk_read_wall_ms",
+        "disk_validate_wall_ms",
+        "disk_publish_wall_ms",
+        "disk_write_wall_ms",
+        "disk_eviction_wall_ms",
+        "disk_hit_count",
+        "disk_miss_count",
+        "disk_corrupt_count",
+        "disk_build_skip_count",
+        "disk_bytes_read",
+        "disk_bytes_written",
+        "disk_entry_count",
+        "disk_bytes",
+        "disk_eviction_count",
     }
     assert all(
         isinstance(value, (int, float))
-        or value in {item.value for item in (*CacheDisposition, *FlightDisposition)}
+        or value
+        in {
+            *(item.value for item in CacheDisposition),
+            *(item.value for item in FlightDisposition),
+            *(item.value for item in CacheTier),
+            "disabled",
+            "not_checked",
+        }
         for value in metrics.values()
     )
 

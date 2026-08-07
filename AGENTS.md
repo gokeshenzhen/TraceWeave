@@ -231,9 +231,17 @@ If the task involves behavior validation or regression checks, also read:
   `build_tb_hierarchy` after source changes. `src/source_graph_production.py`
   owns one lazy process-session
   runtime; the optional frontend stays in isolated one-shot workers, successful
-  IR is memory-only, and same-key cold calls are single-flight under a
+  IR first enters a bounded process-memory cache, and same-key cold calls are single-flight under a
   process-wide one-build admission limit. Adapter/query/Static work uses the
   lock-free cancellable worker path and never holds an FSDB/VCD lock.
+  The exact content-addressed disk tier is opt-in with
+  `TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE=1` and remains default-disabled. It uses
+  `TRACEWEAVE_CACHE_DIR/source_graph/disk-v1`, performs no startup scan, is
+  consulted only after a memory miss, and never substitutes a persisted
+  manifest for fresh ordered-input/options/top/compile/hierarchy content
+  validation. A verified hit skips the frontend worker, constructs a new query
+  engine, and enters memory; corrupt entries are safe misses. The persisted IR
+  may contain protected-IP-derived facts, so entry permissions remain private.
   Cancellation terminates the request without advancing the fallback chain.
   Public receipts preserve selected/attempted/actual backend, fixed fallback
   reasons, coverage and fingerprints; payload facts always come from exactly

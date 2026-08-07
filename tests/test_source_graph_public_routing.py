@@ -15,6 +15,7 @@ from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
 import src.connectivity_backend as connectivity_backend
 from src.source_graph_contract import SourceGraphScopeReceipt
 from src.source_graph_backend import SourceGraphConnectivityBackend
+from src.source_graph_disk_cache import SourceGraphDiskCache
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
 from src.source_graph_runtime import (
     PrepareStatus,
@@ -499,6 +500,72 @@ async def test_warm_public_request_reuses_compile_snapshot_and_ir(
     )
     assert worker.calls == 1
     assert static.driver_calls == 0
+    source_payload = first.model_dump(mode="json")["backend_status"]["source_graph"]
+    assert "cache_tier" not in source_payload
+    assert "disk_validation_outcome" not in source_payload
+    assert "frontend_launch_count" not in source_payload["metrics"]
+    assert all(not key.startswith("disk_") for key in source_payload["metrics"])
+
+
+@pytest.mark.anyio
+async def test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    store_root = tmp_path / "source-graph-cache"
+    signal = "sg_top.u_producer.seed[7:0]"
+    static = TrackingStaticBackend()
+    cold_worker = ReadyWorker()
+    cold_runtime = SourceGraphRuntime(
+        cold_worker,
+        disk_cache=SourceGraphDiskCache(store_root),
+    )
+    _patch_common(monkeypatch, runtime=cold_runtime, static=static)
+
+    cold = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log, signal)
+    )
+    disk_worker = ReadyWorker()
+    disk_runtime = SourceGraphRuntime(
+        disk_worker,
+        disk_cache=SourceGraphDiskCache(store_root),
+    )
+    monkeypatch.setattr(server, "get_source_graph_runtime", lambda config: disk_runtime)
+    load_args = _load_args(compile_log)
+    load_args["signal_path"] = signal
+    path_args = _path_args(
+        compile_log,
+        from_signal=signal,
+        to_signal=signal,
+    )
+
+    driver = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log, signal)
+    )
+    loads = await server._dispatch("find_signal_loads", load_args)
+    path = await server._dispatch("trace_signal_path", path_args)
+
+    assert cold.backend_status.source_graph.cache_tier == "build"
+    assert cold.backend_status.source_graph.artifact_reuse == "cold"
+    disk_receipt = driver.backend_status.source_graph
+    assert driver.backend == "source_graph"
+    assert driver.source_info_origin == "source_graph"
+    assert disk_receipt.cache_disposition == "miss"
+    assert disk_receipt.cache_tier == "disk"
+    assert disk_receipt.disk_validation_outcome == "hit"
+    assert disk_receipt.artifact_reuse == "disk_exact_hit"
+    assert disk_receipt.metrics.actual_build_count == 0
+    assert disk_receipt.metrics.frontend_launch_count == 0
+    assert loads.backend == "source_graph"
+    assert {item.backend for item in loads.loads} == {"source_graph"}
+    assert path.backend == "source_graph"
+    assert path.found is True
+    assert {hop.backend for hop in path.path} == {"source_graph"}
+    assert loads.backend_status.source_graph.cache_tier == "memory"
+    assert path.backend_status.source_graph.cache_tier == "memory"
+    assert cold_worker.calls == 1
+    assert disk_worker.calls == 0
+    assert static.driver_calls + static.load_calls + static.path_calls == 0
 
 
 @pytest.mark.anyio
@@ -1019,8 +1086,15 @@ async def test_source_graph_operation_metrics_are_numeric_or_fixed_labels_only(
     snapshot = operation_metrics.snapshot(metrics)
     assert snapshot["source_graph_phase"] == "complete"
     assert "source_graph_signal" not in snapshot
+    assert "source_graph_cache_tier" not in snapshot
+    assert "source_graph_disk_validation_outcome" not in snapshot
+    fixed_labels = {
+        "source_graph_phase",
+        "source_graph_cache_tier",
+        "source_graph_disk_validation_outcome",
+    }
     assert all(
-        key == "source_graph_phase"
+        key in fixed_labels
         or (not isinstance(value, bool) and isinstance(value, (int, float)))
         for key, value in snapshot.items()
     )
@@ -1646,8 +1720,13 @@ async def test_path_operation_metrics_exclude_endpoint_and_path_content(
     snapshot = operation_metrics.snapshot(metrics)
     assert snapshot["source_graph_phase"] == "complete"
     assert "source_graph_path" not in snapshot
+    fixed_labels = {
+        "source_graph_phase",
+        "source_graph_cache_tier",
+        "source_graph_disk_validation_outcome",
+    }
     assert all(
-        key == "source_graph_phase"
+        key in fixed_labels
         or (not isinstance(value, bool) and isinstance(value, (int, float)))
         for key, value in snapshot.items()
     )

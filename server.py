@@ -1212,6 +1212,27 @@ def _source_graph_metrics_dict(
                 ),
             }
         )
+        if prepare_metrics.disk_validation_outcome != "disabled":
+            result.update(
+                {
+                    "frontend_launch_count": prepare_metrics.frontend_launch_count,
+                    "disk_lookup_wall_ms": prepare_metrics.disk_lookup_wall_ms,
+                    "disk_read_wall_ms": prepare_metrics.disk_read_wall_ms,
+                    "disk_validate_wall_ms": prepare_metrics.disk_validate_wall_ms,
+                    "disk_publish_wall_ms": prepare_metrics.disk_publish_wall_ms,
+                    "disk_write_wall_ms": prepare_metrics.disk_write_wall_ms,
+                    "disk_eviction_wall_ms": (prepare_metrics.disk_eviction_wall_ms),
+                    "disk_hit_count": prepare_metrics.disk_hit_count,
+                    "disk_miss_count": prepare_metrics.disk_miss_count,
+                    "disk_corrupt_count": prepare_metrics.disk_corrupt_count,
+                    "disk_build_skip_count": prepare_metrics.disk_build_skip_count,
+                    "disk_bytes_read": prepare_metrics.disk_bytes_read,
+                    "disk_bytes_written": prepare_metrics.disk_bytes_written,
+                    "disk_entry_count": prepare_metrics.disk_entry_count,
+                    "disk_bytes": prepare_metrics.disk_bytes,
+                    "disk_eviction_count": prepare_metrics.disk_eviction_count,
+                }
+            )
         for source_name, public_name in (
             ("cancel_to_exit_ms", "cancel_to_exit_ms"),
             ("worker_cpu_ms", "worker_cpu_ms"),
@@ -1257,6 +1278,31 @@ def _record_source_graph_prepare_metrics(outcome) -> None:
     ):
         if value is not None:
             operation_metrics.set_value(field, value)
+    if metrics.disk_validation_outcome != "disabled":
+        for field, value in (
+            ("source_graph_frontend_launch_count", metrics.frontend_launch_count),
+            ("source_graph_disk_lookup_ms", metrics.disk_lookup_wall_ms),
+            ("source_graph_disk_read_ms", metrics.disk_read_wall_ms),
+            ("source_graph_disk_validate_ms", metrics.disk_validate_wall_ms),
+            ("source_graph_disk_publish_ms", metrics.disk_publish_wall_ms),
+            ("source_graph_disk_write_ms", metrics.disk_write_wall_ms),
+            ("source_graph_disk_eviction_ms", metrics.disk_eviction_wall_ms),
+            ("source_graph_disk_hit_count", metrics.disk_hit_count),
+            ("source_graph_disk_miss_count", metrics.disk_miss_count),
+            ("source_graph_disk_corrupt_count", metrics.disk_corrupt_count),
+            ("source_graph_disk_build_skip_count", metrics.disk_build_skip_count),
+            ("source_graph_disk_bytes_read", metrics.disk_bytes_read),
+            ("source_graph_disk_bytes_written", metrics.disk_bytes_written),
+            ("source_graph_disk_entry_count", metrics.disk_entry_count),
+            ("source_graph_disk_bytes", metrics.disk_bytes),
+            ("source_graph_disk_eviction_count", metrics.disk_eviction_count),
+        ):
+            operation_metrics.set_value(field, value)
+        operation_metrics.set_value("source_graph_cache_tier", metrics.cache_tier.value)
+        operation_metrics.set_value(
+            "source_graph_disk_validation_outcome",
+            metrics.disk_validation_outcome,
+        )
 
 
 def _accumulate_source_graph_trace_metrics(
@@ -1292,6 +1338,26 @@ def _accumulate_source_graph_trace_metrics(
         if value is not None:
             aggregate[public_name] = aggregate.get(public_name, 0) + value
 
+    if prepare_metrics.disk_validation_outcome != "disabled":
+        for public_name, source_name in (
+            ("frontend_launch_count", "frontend_launch_count"),
+            ("disk_lookup_wall_ms", "disk_lookup_wall_ms"),
+            ("disk_read_wall_ms", "disk_read_wall_ms"),
+            ("disk_validate_wall_ms", "disk_validate_wall_ms"),
+            ("disk_publish_wall_ms", "disk_publish_wall_ms"),
+            ("disk_write_wall_ms", "disk_write_wall_ms"),
+            ("disk_eviction_wall_ms", "disk_eviction_wall_ms"),
+            ("disk_hit_count", "disk_hit_count"),
+            ("disk_miss_count", "disk_miss_count"),
+            ("disk_corrupt_count", "disk_corrupt_count"),
+            ("disk_build_skip_count", "disk_build_skip_count"),
+            ("disk_bytes_read", "disk_bytes_read"),
+            ("disk_bytes_written", "disk_bytes_written"),
+            ("disk_eviction_count", "disk_eviction_count"),
+        ):
+            value = getattr(prepare_metrics, source_name)
+            aggregate[public_name] = aggregate.get(public_name, 0) + value
+
     cancel_to_exit_ms = prepare_metrics.cancel_to_exit_ms
     if cancel_to_exit_ms is not None:
         aggregate["cancel_to_exit_ms"] = max(
@@ -1309,12 +1375,11 @@ def _accumulate_source_graph_trace_metrics(
         aggregate["rss_end_kib"] = prepare_metrics.rss_end_kib
 
     # These are final/peak process-cache snapshots, not per-attempt deltas.
-    for field in (
-        "ir_bytes",
-        "cache_bytes",
-        "cache_entry_count",
-    ):
+    for field in ("ir_bytes", "cache_bytes", "cache_entry_count"):
         aggregate[field] = getattr(prepare_metrics, field)
+    if prepare_metrics.disk_validation_outcome != "disabled":
+        for field in ("disk_entry_count", "disk_bytes"):
+            aggregate[field] = getattr(prepare_metrics, field)
     for field in (
         "cache_peak_entry_count",
         "cache_peak_bytes",
@@ -1350,6 +1415,22 @@ def _publish_source_graph_trace_metrics(
         "cache_peak_bytes": "source_graph_cache_peak_bytes",
         "cache_eviction_count": "source_graph_cache_eviction_count",
         "cache_oversize_bypass_count": ("source_graph_cache_oversize_bypass_count"),
+        "frontend_launch_count": "source_graph_frontend_launch_count",
+        "disk_lookup_wall_ms": "source_graph_disk_lookup_ms",
+        "disk_read_wall_ms": "source_graph_disk_read_ms",
+        "disk_validate_wall_ms": "source_graph_disk_validate_ms",
+        "disk_publish_wall_ms": "source_graph_disk_publish_ms",
+        "disk_write_wall_ms": "source_graph_disk_write_ms",
+        "disk_eviction_wall_ms": "source_graph_disk_eviction_ms",
+        "disk_hit_count": "source_graph_disk_hit_count",
+        "disk_miss_count": "source_graph_disk_miss_count",
+        "disk_corrupt_count": "source_graph_disk_corrupt_count",
+        "disk_build_skip_count": "source_graph_disk_build_skip_count",
+        "disk_bytes_read": "source_graph_disk_bytes_read",
+        "disk_bytes_written": "source_graph_disk_bytes_written",
+        "disk_entry_count": "source_graph_disk_entry_count",
+        "disk_bytes": "source_graph_disk_bytes",
+        "disk_eviction_count": "source_graph_disk_eviction_count",
     }
     for source_name, public_name in mapping.items():
         if source_name in aggregate:
@@ -1426,7 +1507,16 @@ def _source_graph_receipt_from_prepare(
         ),
         "fallback_used": False,
     }
-    if outcome.metrics.cache_disposition.value == "hit_exact":
+    if outcome.metrics.disk_validation_outcome != "disabled":
+        receipt.update(
+            {
+                "cache_tier": outcome.metrics.cache_tier.value,
+                "disk_validation_outcome": outcome.metrics.disk_validation_outcome,
+            }
+        )
+    if outcome.metrics.cache_tier.value == "disk":
+        receipt["artifact_reuse"] = "disk_exact_hit"
+    elif outcome.metrics.cache_disposition.value == "hit_exact":
         receipt["artifact_reuse"] = "exact_hit"
     elif outcome.metrics.cache_disposition.value == "hit_superset":
         receipt["artifact_reuse"] = "dominating_hit"

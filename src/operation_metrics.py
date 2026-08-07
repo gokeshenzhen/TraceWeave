@@ -113,6 +113,24 @@ _PUBLIC_FIELDS = {
     "source_graph_cache_peak_bytes",
     "source_graph_cache_eviction_count",
     "source_graph_cache_oversize_bypass_count",
+    "source_graph_cache_tier",
+    "source_graph_disk_validation_outcome",
+    "source_graph_frontend_launch_count",
+    "source_graph_disk_lookup_ms",
+    "source_graph_disk_read_ms",
+    "source_graph_disk_validate_ms",
+    "source_graph_disk_publish_ms",
+    "source_graph_disk_write_ms",
+    "source_graph_disk_eviction_ms",
+    "source_graph_disk_hit_count",
+    "source_graph_disk_miss_count",
+    "source_graph_disk_corrupt_count",
+    "source_graph_disk_build_skip_count",
+    "source_graph_disk_bytes_read",
+    "source_graph_disk_bytes_written",
+    "source_graph_disk_entry_count",
+    "source_graph_disk_bytes",
+    "source_graph_disk_eviction_count",
     "source_graph_trace_query_count",
     "source_graph_trace_artifact_attempt_count",
     "source_graph_trace_scope_expansion_count",
@@ -132,7 +150,41 @@ _SOURCE_GRAPH_PHASES = {
     "complete",
     "cancelled",
 }
-_PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {"sweep_phase", "source_graph_phase"}
+_SOURCE_GRAPH_CACHE_TIERS = {"memory", "disk", "build"}
+_SOURCE_GRAPH_DISK_OUTCOMES = {
+    "disabled",
+    "not_checked",
+    "hit",
+    "not_found",
+    "identity_not_reusable",
+    "unsafe_namespace",
+    "unsafe_entry",
+    "manifest_missing",
+    "manifest_too_large",
+    "manifest_invalid",
+    "unknown_format",
+    "incomplete_entry",
+    "artifact_key_mismatch",
+    "artifact_identity_mismatch",
+    "build_semantics_mismatch",
+    "scope_mismatch",
+    "snapshot_mismatch",
+    "version_mismatch",
+    "coverage_receipt_mismatch",
+    "ir_missing",
+    "ir_too_large",
+    "ir_size_mismatch",
+    "ir_digest_mismatch",
+    "ir_schema_mismatch",
+    "ir_identity_mismatch",
+    "io_error",
+}
+_PUBLIC_NUMERIC_FIELDS = _PUBLIC_FIELDS - {
+    "sweep_phase",
+    "source_graph_phase",
+    "source_graph_cache_tier",
+    "source_graph_disk_validation_outcome",
+}
 
 
 @dataclass
@@ -586,6 +638,14 @@ def snapshot(metrics: OperationMetrics | None) -> dict[str, object]:
         if key == "sweep_phase" and value not in _PUBLIC_PHASES:
             continue
         if key == "source_graph_phase" and value not in _SOURCE_GRAPH_PHASES:
+            continue
+        if key == "source_graph_cache_tier" and value not in (
+            _SOURCE_GRAPH_CACHE_TIERS
+        ):
+            continue
+        if key == "source_graph_disk_validation_outcome" and value not in (
+            _SOURCE_GRAPH_DISK_OUTCOMES
+        ):
             continue
         if key in _PUBLIC_NUMERIC_FIELDS and (
             isinstance(value, bool) or not isinstance(value, (int, float))

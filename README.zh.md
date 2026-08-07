@@ -334,10 +334,10 @@ KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节
 `trace_x_source` 使用生产路由
 `Verdi NPI -> Source Graph -> Legacy Static`。Source Graph 是惰性、进程内生命周期：
 第一个满足条件的请求才启动隔离的短生命周期 frontend worker；成功的 scoped IR
-只保存在 MCP server 的内存 cache；同 key 的并发 cold 请求共享一次 build。artifact
-identity 与 query target 分离，QueryIdentity 仍绑定准确 target。它不会在
-启动时构建，不使用 disk cache，不持有 FSDB/VCD wave lock，也不会把 `pyslang`
-导入 MCP server 进程。
+进入 MCP server 的 bounded memory cache；同 key 的并发 cold 请求共享一次 build。
+artifact identity 与 query target 分离，QueryIdentity 仍绑定准确 target。默认配置下，
+它不会在启动时 build 或扫描 cache、不使用 disk persistence、不持有 FSDB/VCD wave
+lock，也不会把 `pyslang` 导入 MCP server 进程。
 
 对 `trace_x_source`，可信 NPI 结果保持 authoritative。NPI 内部 fallback 会丢弃
 部分 propagation chain，并用一个 bounded Source Graph artifact 从 root 重跑。
@@ -369,10 +369,36 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
+但默认保持关闭：
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE=1
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES=8
+export TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES=536870912
+```
+
+它沿用 `TRACEWEAVE_CACHE_DIR` 根目录，并写入私有 namespace
+`source_graph/disk-v1/`。进程内 exact/dominating cache 永远先查，memory hit 不执行
+disk I/O；memory miss 只做一次直接寻址的 exact-artifact lookup，不在启动时扫描，也不做
+disk-level dominating-scope 搜索。每个 fresh process 仍会在 disk lookup 前，对全部有序
+source/support inputs、options、tops 与 compile/hierarchy snapshots 做完整内容哈希和验证。
+verified hit 会跳过 frontend worker、创建新的 query engine，并进入 memory cache。未知版本、
+截断、损坏或版本不匹配的 entry 都只产生固定原因 safe miss，随后走正常 cold build；不会被
+解释为 connectivity negative 或 Static 结果。
+
+持久化的 canonical ConnectivityIR 可能包含 protected-IP 派生结构信息。TraceWeave 对
+namespace/entry 使用 owner-only 目录与文件权限（`0700`/`0600`），拒绝 symlink 和
+non-regular entry file，使用 atomic publish，并且只在局部 lookup/publish/maintenance 路径
+执行确定性的 entry/byte 容量维护。请选择可信的本地 `TRACEWEAVE_CACHE_DIR`，不要把这一
+opt-in cache 放在不可信或共享文件系统。failed、timed-out 或 cancelled build 不会发布。
+
 按标准工作流先运行 `build_tb_hierarchy`，使请求拥有精确的 compile/hierarchy handle。
 `backend_status` 会报告 `selected_backend`、`attempted_backend`、
 `actual_backend`、有序 `attempted_backends` 链，以及包含固定 blocker label、coverage、
 build/compile/IR fingerprint、cache disposition 和数值资源指标的 Source Graph 回执。
+新增的固定 label 会区分 `memory`、`disk`、`build` tier 和 disk validation outcome；
+回执不会暴露 cache path 或 entry name。
 partial/inconclusive coverage 下的正结果仍是 partial；只有 complete coverage 才能确定
 `not_connected`。fallback 会由 Legacy Static 整体重算结果，因此 payload provenance
 不会混合。

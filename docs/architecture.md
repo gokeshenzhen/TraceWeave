@@ -144,9 +144,15 @@ Verification
   trustworthy NPI results return directly; NPI unavailability/failure defers
   to an on-demand Source Graph; a Source Graph blocker or inconclusive no-match
   triggers a whole-result Legacy Static recomputation. The Source Graph runtime
-  is created lazily once per server process, keeps only an in-memory scoped IR
-  cache, admits at most one cold build per process, and executes its optional
-  frontend in an isolated one-shot worker. Adapter and graph queries use the
+  is created lazily once per server process, keeps a bounded in-memory scoped
+  IR cache, admits at most one cold build per process, and executes its optional
+  frontend in an isolated one-shot worker. An opt-in, default-disabled disk
+  tier stores only canonical ConnectivityIR JSON plus a versioned manifest
+  under `TRACEWEAVE_CACHE_DIR`. It performs a direct exact-identity lookup only
+  after a memory miss, never scans at startup, and never bypasses fresh adapter
+  content validation. A verified hit constructs an independent query engine;
+  corruption is a safe miss and failed/cancelled builds are never published.
+  Adapter and graph queries use the
   lock-free cancellable worker path, so neither build nor query holds a waveform
   lock or blocks light event-loop calls. Cancellation terminates the request
   without entering the next fallback. `backend_status` preserves the ordered

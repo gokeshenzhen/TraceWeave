@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
 class SchemaModel(BaseModel):
@@ -725,6 +725,47 @@ class SourceGraphMetricsReceipt(SchemaModel):
     cache_peak_bytes: int = 0
     cache_eviction_count: int = 0
     cache_oversize_bypass_count: int = 0
+    frontend_launch_count: int = 0
+    disk_lookup_wall_ms: float = 0.0
+    disk_read_wall_ms: float = 0.0
+    disk_validate_wall_ms: float = 0.0
+    disk_publish_wall_ms: float = 0.0
+    disk_write_wall_ms: float = 0.0
+    disk_eviction_wall_ms: float = 0.0
+    disk_hit_count: int = 0
+    disk_miss_count: int = 0
+    disk_corrupt_count: int = 0
+    disk_build_skip_count: int = 0
+    disk_bytes_read: int = 0
+    disk_bytes_written: int = 0
+    disk_entry_count: int = 0
+    disk_bytes: int = 0
+    disk_eviction_count: int = 0
+
+    @model_serializer(mode="wrap")
+    def _omit_inactive_phase3d_fields(self, handler):
+        data = handler(self)
+        for field in (
+            "frontend_launch_count",
+            "disk_lookup_wall_ms",
+            "disk_read_wall_ms",
+            "disk_validate_wall_ms",
+            "disk_publish_wall_ms",
+            "disk_write_wall_ms",
+            "disk_eviction_wall_ms",
+            "disk_hit_count",
+            "disk_miss_count",
+            "disk_corrupt_count",
+            "disk_build_skip_count",
+            "disk_bytes_read",
+            "disk_bytes_written",
+            "disk_entry_count",
+            "disk_bytes",
+            "disk_eviction_count",
+        ):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
 
 
 class SourceGraphScopeMatchReceipt(SchemaModel):
@@ -763,6 +804,38 @@ class SourceGraphBackendReceipt(SchemaModel):
             "miss",
             "bypass_incomplete_key",
             "bypass_capacity",
+        ]
+        | None
+    ) = None
+    cache_tier: Literal["memory", "disk", "build"] | None = None
+    disk_validation_outcome: (
+        Literal[
+            "disabled",
+            "not_checked",
+            "hit",
+            "not_found",
+            "identity_not_reusable",
+            "unsafe_namespace",
+            "unsafe_entry",
+            "manifest_missing",
+            "manifest_too_large",
+            "manifest_invalid",
+            "unknown_format",
+            "incomplete_entry",
+            "artifact_key_mismatch",
+            "artifact_identity_mismatch",
+            "build_semantics_mismatch",
+            "scope_mismatch",
+            "snapshot_mismatch",
+            "version_mismatch",
+            "coverage_receipt_mismatch",
+            "ir_missing",
+            "ir_too_large",
+            "ir_size_mismatch",
+            "ir_digest_mismatch",
+            "ir_schema_mismatch",
+            "ir_identity_mismatch",
+            "io_error",
         ]
         | None
     ) = None
@@ -831,6 +904,7 @@ class SourceGraphBackendReceipt(SchemaModel):
             "coalesced_build",
             "bypass_incomplete",
             "bypass_capacity",
+            "disk_exact_hit",
         ]
         | None
     ) = None
@@ -856,6 +930,14 @@ class SourceGraphBackendReceipt(SchemaModel):
         default_factory=SourceGraphMetricsReceipt
     )
     fallback_used: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_inactive_phase3d_fields(self, handler):
+        data = handler(self)
+        for field in ("cache_tier", "disk_validation_outcome"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
 
 
 class BackendStatus(SchemaModel):

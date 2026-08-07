@@ -38,6 +38,13 @@ from .source_graph_contract import (
     SourceGraphScopeReceipt,
     compute_source_graph_build_key,
 )
+from .source_graph_disk_cache import (
+    DiskArtifact,
+    DiskCacheCancelled,
+    DiskPublishOutcome,
+    DiskValidationOutcome,
+    SourceGraphDiskCache,
+)
 
 
 # One real cold build admission across every runtime object in this process.
@@ -70,6 +77,12 @@ class FlightDisposition(str, Enum):
     NONE = "none"
     BUILDER = "builder"
     COALESCED = "coalesced"
+
+
+class CacheTier(str, Enum):
+    MEMORY = "memory"
+    DISK = "disk"
+    BUILD = "build"
 
 
 class CacheLookupReason(str, Enum):
@@ -546,6 +559,8 @@ class SourceGraphPrepareMetrics:
     cache_disposition: CacheDisposition
     flight_disposition: FlightDisposition
     total_wall_ms: float
+    cache_tier: CacheTier = CacheTier.BUILD
+    disk_validation_outcome: str = "disabled"
     admission_wait_ms: float = 0.0
     build_wall_ms: float = 0.0
     load_wall_ms: float = 0.0
@@ -563,11 +578,29 @@ class SourceGraphPrepareMetrics:
     cache_peak_bytes: int = 0
     cache_eviction_count: int = 0
     cache_oversize_bypass_count: int = 0
+    frontend_launch_count: int = 0
+    disk_lookup_wall_ms: float = 0.0
+    disk_read_wall_ms: float = 0.0
+    disk_validate_wall_ms: float = 0.0
+    disk_publish_wall_ms: float = 0.0
+    disk_write_wall_ms: float = 0.0
+    disk_eviction_wall_ms: float = 0.0
+    disk_hit_count: int = 0
+    disk_miss_count: int = 0
+    disk_corrupt_count: int = 0
+    disk_build_skip_count: int = 0
+    disk_bytes_read: int = 0
+    disk_bytes_written: int = 0
+    disk_entry_count: int = 0
+    disk_bytes: int = 0
+    disk_eviction_count: int = 0
 
     def to_dict(self) -> dict[str, int | float | str]:
         result: dict[str, int | float | str] = {
             "cache_disposition": self.cache_disposition.value,
             "flight_disposition": self.flight_disposition.value,
+            "cache_tier": self.cache_tier.value,
+            "disk_validation_outcome": self.disk_validation_outcome,
             "total_wall_ms": _round_ms(self.total_wall_ms),
             "admission_wait_ms": _round_ms(self.admission_wait_ms),
             "build_wall_ms": _round_ms(self.build_wall_ms),
@@ -581,6 +614,22 @@ class SourceGraphPrepareMetrics:
             "cache_peak_bytes": self.cache_peak_bytes,
             "cache_eviction_count": self.cache_eviction_count,
             "cache_oversize_bypass_count": self.cache_oversize_bypass_count,
+            "frontend_launch_count": self.frontend_launch_count,
+            "disk_lookup_wall_ms": _round_ms(self.disk_lookup_wall_ms),
+            "disk_read_wall_ms": _round_ms(self.disk_read_wall_ms),
+            "disk_validate_wall_ms": _round_ms(self.disk_validate_wall_ms),
+            "disk_publish_wall_ms": _round_ms(self.disk_publish_wall_ms),
+            "disk_write_wall_ms": _round_ms(self.disk_write_wall_ms),
+            "disk_eviction_wall_ms": _round_ms(self.disk_eviction_wall_ms),
+            "disk_hit_count": self.disk_hit_count,
+            "disk_miss_count": self.disk_miss_count,
+            "disk_corrupt_count": self.disk_corrupt_count,
+            "disk_build_skip_count": self.disk_build_skip_count,
+            "disk_bytes_read": self.disk_bytes_read,
+            "disk_bytes_written": self.disk_bytes_written,
+            "disk_entry_count": self.disk_entry_count,
+            "disk_bytes": self.disk_bytes,
+            "disk_eviction_count": self.disk_eviction_count,
         }
         for name in (
             "cancel_to_exit_ms",
@@ -663,6 +712,23 @@ class _Flight:
     coalesced_waiter_count: int = 0
     actual_build_count: int = 0
     cancel_requested_at: float | None = None
+    cache_tier: CacheTier = CacheTier.BUILD
+    disk_validation_outcome: str = "disabled"
+    disk_lookup_wall_ms: float = 0.0
+    disk_read_wall_ms: float = 0.0
+    disk_validate_wall_ms: float = 0.0
+    disk_publish_wall_ms: float = 0.0
+    disk_write_wall_ms: float = 0.0
+    disk_eviction_wall_ms: float = 0.0
+    disk_hit_count: int = 0
+    disk_miss_count: int = 0
+    disk_corrupt_count: int = 0
+    disk_build_skip_count: int = 0
+    disk_bytes_read: int = 0
+    disk_bytes_written: int = 0
+    disk_entry_count: int = 0
+    disk_bytes: int = 0
+    disk_eviction_count: int = 0
 
 
 class SourceGraphRuntime:
@@ -674,6 +740,7 @@ class SourceGraphRuntime:
         *,
         max_cache_entries: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES,
         max_cache_bytes: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES,
+        disk_cache: SourceGraphDiskCache | None = None,
     ) -> None:
         if (
             not isinstance(max_cache_entries, int)
@@ -688,6 +755,7 @@ class SourceGraphRuntime:
         ):
             raise ValueError("max_cache_bytes must be a positive integer")
         self._worker_runner = worker_runner
+        self._disk_cache = disk_cache
         self._max_cache_entries = max_cache_entries
         self._max_cache_bytes = max_cache_bytes
         self._cache: OrderedDict[str, SourceGraphCacheEntry] = OrderedDict()
@@ -695,6 +763,7 @@ class SourceGraphRuntime:
         self._state_lock = asyncio.Lock()
         self._stats: dict[str, int | float] = {
             "actual_build_count": 0,
+            "frontend_launch_count": 0,
             "cache_hit_count": 0,
             "cache_miss_count": 0,
             "cache_bypass_count": 0,
@@ -707,6 +776,24 @@ class SourceGraphRuntime:
             "timeout_count": 0,
             "worker_failure_count": 0,
             "last_cancel_to_exit_ms": 0.0,
+            "disk_lookup_count": 0,
+            "disk_hit_count": 0,
+            "disk_miss_count": 0,
+            "disk_corrupt_count": 0,
+            "disk_build_skip_count": 0,
+            "disk_publish_count": 0,
+            "disk_publish_failure_count": 0,
+            "disk_bytes_read": 0,
+            "disk_bytes_written": 0,
+            "disk_entry_count": 0,
+            "disk_bytes": 0,
+            "disk_eviction_count": 0,
+            "disk_lookup_wall_ms": 0.0,
+            "disk_read_wall_ms": 0.0,
+            "disk_validate_wall_ms": 0.0,
+            "disk_publish_wall_ms": 0.0,
+            "disk_write_wall_ms": 0.0,
+            "disk_eviction_wall_ms": 0.0,
         }
 
     async def prepare(
@@ -866,6 +953,9 @@ class SourceGraphRuntime:
     ) -> SourceGraphPrepareOutcome:
         request = flight.request
         key = flight.build_key
+        disk_outcome = await self._prepare_exact_disk_hit(flight)
+        if disk_outcome is not None:
+            return disk_outcome
         admission_started = time.perf_counter()
         admitted = False
         try:
@@ -896,6 +986,7 @@ class SourceGraphRuntime:
             flight.actual_build_count = 1
             async with self._state_lock:
                 self._stats["actual_build_count"] += 1
+                self._stats["frontend_launch_count"] += 1
             build_started = time.perf_counter()
             try:
                 worker = await self._worker_runner.run(
@@ -977,6 +1068,21 @@ class SourceGraphRuntime:
                 worker_metrics=worker.metrics,
             )
 
+        if self._disk_cache is not None and key.cross_request_reusable:
+            try:
+                await self._publish_disk_entry(flight, entry)
+            except DiskCacheCancelled:
+                return self._flight_failure(
+                    flight,
+                    PrepareStatus.CANCELLED,
+                    code="request_cancelled",
+                    stage="disk_publish",
+                    admission_wait_ms=admission_wait_ms,
+                    build_wall_ms=build_wall_ms,
+                    load_wall_ms=load_wall_ms,
+                    worker_metrics=worker.metrics,
+                )
+
         if key.cross_request_reusable:
             async with self._state_lock:
                 if entry.cache_bytes > self._max_cache_bytes:
@@ -1008,6 +1114,219 @@ class SourceGraphRuntime:
                 cache_bytes=entry.cache_bytes,
             ),
         )
+
+    async def _prepare_exact_disk_hit(
+        self,
+        flight: _Flight,
+    ) -> SourceGraphPrepareOutcome | None:
+        disk_cache = self._disk_cache
+        if disk_cache is None:
+            flight.disk_validation_outcome = "disabled"
+            return None
+        if not flight.build_key.cross_request_reusable:
+            flight.disk_validation_outcome = "not_checked"
+            return None
+        if flight.worker_cancel_event.is_set():
+            return self._flight_failure(
+                flight,
+                PrepareStatus.CANCELLED,
+                code="request_cancelled",
+                stage="disk_lookup",
+            )
+
+        lookup_started = time.perf_counter()
+        try:
+            disk_result = await asyncio.to_thread(
+                disk_cache.lookup,
+                flight.request.artifact_identity,
+                cancelled=flight.worker_cancel_event.is_set,
+            )
+        except DiskCacheCancelled:
+            return self._flight_failure(
+                flight,
+                PrepareStatus.CANCELLED,
+                code="request_cancelled",
+                stage="disk_lookup",
+                load_wall_ms=(time.perf_counter() - lookup_started) * 1000,
+            )
+        except Exception:  # noqa: BLE001
+            disk_result = None
+
+        if disk_result is None:
+            flight.disk_validation_outcome = DiskValidationOutcome.IO_ERROR.value
+            flight.disk_lookup_wall_ms = (time.perf_counter() - lookup_started) * 1000
+        else:
+            flight.disk_validation_outcome = disk_result.outcome.value
+            flight.disk_lookup_wall_ms = disk_result.lookup_wall_ms
+            flight.disk_read_wall_ms = disk_result.read_wall_ms
+            flight.disk_validate_wall_ms = disk_result.validate_wall_ms
+            flight.disk_bytes_read = disk_result.bytes_read
+
+        async with self._state_lock:
+            self._stats["disk_lookup_count"] += 1
+            self._stats["disk_lookup_wall_ms"] += flight.disk_lookup_wall_ms
+            self._stats["disk_read_wall_ms"] += flight.disk_read_wall_ms
+            self._stats["disk_validate_wall_ms"] += flight.disk_validate_wall_ms
+            self._stats["disk_bytes_read"] += flight.disk_bytes_read
+
+        if disk_result is None or not disk_result.hit:
+            flight.disk_miss_count = 1
+            if disk_result is not None and disk_result.corrupt:
+                flight.disk_corrupt_count = 1
+            async with self._state_lock:
+                self._stats["disk_miss_count"] += 1
+                self._stats["disk_corrupt_count"] += flight.disk_corrupt_count
+            return None
+
+        assert disk_result.artifact is not None
+        if flight.worker_cancel_event.is_set():
+            return self._flight_failure(
+                flight,
+                PrepareStatus.CANCELLED,
+                code="request_cancelled",
+                stage="disk_validate",
+            )
+        load_started = time.perf_counter()
+        try:
+            entry = await asyncio.to_thread(
+                self._cache_entry_from_disk,
+                flight,
+                disk_result.artifact,
+            )
+        except Exception:  # noqa: BLE001
+            flight.disk_validation_outcome = (
+                DiskValidationOutcome.IR_SCHEMA_MISMATCH.value
+            )
+            flight.disk_miss_count = 1
+            flight.disk_corrupt_count = 1
+            async with self._state_lock:
+                self._stats["disk_miss_count"] += 1
+                self._stats["disk_corrupt_count"] += 1
+            return None
+        load_wall_ms = (time.perf_counter() - load_started) * 1000
+        if flight.worker_cancel_event.is_set():
+            return self._flight_failure(
+                flight,
+                PrepareStatus.CANCELLED,
+                code="request_cancelled",
+                stage="disk_load",
+                load_wall_ms=load_wall_ms,
+            )
+
+        flight.cache_tier = CacheTier.DISK
+        flight.disk_hit_count = 1
+        flight.disk_build_skip_count = 1
+        flight.disk_entry_count = 1
+        flight.disk_bytes = disk_result.artifact.entry_bytes
+        async with self._state_lock:
+            self._stats["disk_hit_count"] += 1
+            self._stats["disk_build_skip_count"] += 1
+            self._stats["disk_entry_count"] = max(
+                int(self._stats["disk_entry_count"]), 1
+            )
+            self._stats["disk_bytes"] = max(
+                int(self._stats["disk_bytes"]), disk_result.artifact.entry_bytes
+            )
+            if entry.cache_bytes > self._max_cache_bytes:
+                flight.cache_disposition = CacheDisposition.BYPASS_CAPACITY
+                flight.cache_lookup_reason = (
+                    CacheLookupReason.ARTIFACT_EXCEEDS_CACHE_CAPACITY
+                )
+                self._stats["cache_bypass_count"] += 1
+                self._stats["cache_oversize_bypass_count"] += 1
+            else:
+                self._publish_cache_entry_locked(entry.build_key.digest, entry)
+
+        scope_match = entry.artifact_scope_receipt.reuse_for(
+            flight.request.artifact_identity.scope
+        )
+        return SourceGraphPrepareOutcome(
+            status=PrepareStatus.READY,
+            build_key=flight.build_key,
+            cache_lookup_reason=flight.cache_lookup_reason,
+            entry=entry,
+            scope_match=scope_match,
+            metrics=self._prepare_metrics(
+                flight,
+                total_wall_ms=flight.disk_lookup_wall_ms + load_wall_ms,
+                load_wall_ms=load_wall_ms,
+                ir_bytes=entry.ir_bytes,
+                cache_bytes=entry.cache_bytes,
+            ),
+        )
+
+    @staticmethod
+    def _cache_entry_from_disk(
+        flight: _Flight, artifact: DiskArtifact
+    ) -> SourceGraphCacheEntry:
+        if artifact.artifact_key.digest != flight.build_key.digest:
+            raise ValueError("disk artifact key does not match flight")
+        if artifact.identity != flight.request.artifact_identity:
+            raise ValueError("disk artifact identity does not match flight")
+        engine = ConnectivityQueryEngine(artifact.ir)
+        return SourceGraphCacheEntry(
+            build_key=flight.build_key,
+            scope_receipt=artifact.scope_receipt,
+            artifact_scope_receipt=artifact.scope_receipt,
+            ir=artifact.ir,
+            query_engine=engine,
+            ir_json_bytes=artifact.ir_json_bytes,
+            ir_fingerprint_sha256=artifact.ir_fingerprint_sha256,
+            ir_bytes=artifact.ir_bytes,
+            cache_bytes=artifact.ir_bytes,
+        )
+
+    async def _publish_disk_entry(
+        self,
+        flight: _Flight,
+        entry: SourceGraphCacheEntry,
+    ) -> None:
+        assert self._disk_cache is not None
+        if flight.worker_cancel_event.is_set():
+            raise DiskCacheCancelled("cancelled before disk publish")
+        publish_started = time.perf_counter()
+        try:
+            publish_result = await asyncio.to_thread(
+                self._disk_cache.publish,
+                flight.request.artifact_identity,
+                entry.ir_json_bytes,
+                entry.artifact_scope_receipt,
+                cancelled=flight.worker_cancel_event.is_set,
+            )
+        except DiskCacheCancelled:
+            raise
+        except Exception:  # noqa: BLE001
+            flight.disk_publish_wall_ms = (time.perf_counter() - publish_started) * 1000
+            async with self._state_lock:
+                self._stats["disk_publish_wall_ms"] += flight.disk_publish_wall_ms
+                self._stats["disk_publish_failure_count"] += 1
+            return
+        flight.disk_publish_wall_ms = publish_result.publish_wall_ms
+        flight.disk_write_wall_ms = publish_result.write_wall_ms
+        flight.disk_eviction_wall_ms = publish_result.eviction_wall_ms
+        flight.disk_bytes_written = (
+            publish_result.entry_bytes if publish_result.write_wall_ms > 0 else 0
+        )
+        if publish_result.published:
+            flight.disk_entry_count = publish_result.disk_entry_count
+            flight.disk_bytes = publish_result.disk_bytes
+        flight.disk_eviction_count = publish_result.eviction_count
+        async with self._state_lock:
+            self._stats["disk_publish_wall_ms"] += flight.disk_publish_wall_ms
+            self._stats["disk_write_wall_ms"] += flight.disk_write_wall_ms
+            self._stats["disk_eviction_wall_ms"] += flight.disk_eviction_wall_ms
+            self._stats["disk_bytes_written"] += flight.disk_bytes_written
+            if publish_result.published:
+                self._stats["disk_entry_count"] = flight.disk_entry_count
+                self._stats["disk_bytes"] = flight.disk_bytes
+            self._stats["disk_eviction_count"] += flight.disk_eviction_count
+            if publish_result.outcome in {
+                DiskPublishOutcome.PUBLISHED,
+                DiskPublishOutcome.ALREADY_PRESENT,
+            }:
+                self._stats["disk_publish_count"] += 1
+            else:
+                self._stats["disk_publish_failure_count"] += 1
 
     async def _remove_flight(self, flight: _Flight) -> None:
         async with self._state_lock:
@@ -1084,6 +1403,12 @@ class SourceGraphRuntime:
         result["inflight_count"] = len(self._inflight)
         result["cache_max_entries"] = self._max_cache_entries
         result["cache_max_bytes"] = self._max_cache_bytes
+        result["disk_cache_max_entries"] = (
+            self._disk_cache.max_entries if self._disk_cache is not None else 0
+        )
+        result["disk_cache_max_bytes"] = (
+            self._disk_cache.max_bytes if self._disk_cache is not None else 0
+        )
         return result
 
     def _publish_cache_entry_locked(
@@ -1180,6 +1505,8 @@ class SourceGraphRuntime:
                 cache_disposition=disposition,
                 flight_disposition=FlightDisposition.NONE,
                 total_wall_ms=(time.perf_counter() - started) * 1000,
+                cache_tier=CacheTier.MEMORY,
+                disk_validation_outcome="not_checked",
                 ir_bytes=entry.ir_bytes,
                 cache_bytes=entry.cache_bytes,
                 **self._cache_metric_fields(),
@@ -1212,6 +1539,9 @@ class SourceGraphRuntime:
             actual_build_count=(
                 flight.actual_build_count if role is FlightDisposition.BUILDER else 0
             ),
+            frontend_launch_count=(
+                flight.actual_build_count if role is FlightDisposition.BUILDER else 0
+            ),
             coalesced_waiter_count=flight.coalesced_waiter_count,
         )
         return replace(
@@ -1241,6 +1571,8 @@ class SourceGraphRuntime:
             cache_disposition=flight.cache_disposition,
             flight_disposition=FlightDisposition.BUILDER,
             total_wall_ms=total_wall_ms,
+            cache_tier=flight.cache_tier,
+            disk_validation_outcome=flight.disk_validation_outcome,
             admission_wait_ms=admission_wait_ms,
             build_wall_ms=build_wall_ms,
             load_wall_ms=load_wall_ms,
@@ -1253,6 +1585,22 @@ class SourceGraphRuntime:
             rss_end_kib=worker_metrics.rss_end_kib,
             ir_bytes=ir_bytes or worker_metrics.ir_bytes,
             cache_bytes=cache_bytes,
+            frontend_launch_count=flight.actual_build_count,
+            disk_lookup_wall_ms=flight.disk_lookup_wall_ms,
+            disk_read_wall_ms=flight.disk_read_wall_ms,
+            disk_validate_wall_ms=flight.disk_validate_wall_ms,
+            disk_publish_wall_ms=flight.disk_publish_wall_ms,
+            disk_write_wall_ms=flight.disk_write_wall_ms,
+            disk_eviction_wall_ms=flight.disk_eviction_wall_ms,
+            disk_hit_count=flight.disk_hit_count,
+            disk_miss_count=flight.disk_miss_count,
+            disk_corrupt_count=flight.disk_corrupt_count,
+            disk_build_skip_count=flight.disk_build_skip_count,
+            disk_bytes_read=flight.disk_bytes_read,
+            disk_bytes_written=flight.disk_bytes_written,
+            disk_entry_count=flight.disk_entry_count,
+            disk_bytes=flight.disk_bytes,
+            disk_eviction_count=flight.disk_eviction_count,
             **self._cache_metric_fields(),
         )
 
@@ -1324,6 +1672,8 @@ class SourceGraphRuntime:
                 cache_disposition=flight.cache_disposition,
                 flight_disposition=role,
                 total_wall_ms=(time.perf_counter() - started) * 1000,
+                cache_tier=flight.cache_tier,
+                disk_validation_outcome=flight.disk_validation_outcome,
                 actual_build_count=(
                     flight.actual_build_count
                     if role is FlightDisposition.BUILDER
@@ -1331,6 +1681,26 @@ class SourceGraphRuntime:
                 ),
                 coalesced_waiter_count=flight.coalesced_waiter_count,
                 cancel_to_exit_ms=cancel_to_exit_ms,
+                frontend_launch_count=(
+                    flight.actual_build_count
+                    if role is FlightDisposition.BUILDER
+                    else 0
+                ),
+                disk_lookup_wall_ms=flight.disk_lookup_wall_ms,
+                disk_read_wall_ms=flight.disk_read_wall_ms,
+                disk_validate_wall_ms=flight.disk_validate_wall_ms,
+                disk_publish_wall_ms=flight.disk_publish_wall_ms,
+                disk_write_wall_ms=flight.disk_write_wall_ms,
+                disk_eviction_wall_ms=flight.disk_eviction_wall_ms,
+                disk_hit_count=flight.disk_hit_count,
+                disk_miss_count=flight.disk_miss_count,
+                disk_corrupt_count=flight.disk_corrupt_count,
+                disk_build_skip_count=flight.disk_build_skip_count,
+                disk_bytes_read=flight.disk_bytes_read,
+                disk_bytes_written=flight.disk_bytes_written,
+                disk_entry_count=flight.disk_entry_count,
+                disk_bytes=flight.disk_bytes,
+                disk_eviction_count=flight.disk_eviction_count,
             ),
         )
 
@@ -1349,5 +1719,7 @@ class SourceGraphRuntime:
                 cache_disposition=disposition,
                 flight_disposition=FlightDisposition.NONE,
                 total_wall_ms=(time.perf_counter() - started) * 1000,
+                cache_tier=CacheTier.BUILD,
+                disk_validation_outcome="not_checked",
             ),
         )

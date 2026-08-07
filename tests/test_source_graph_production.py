@@ -64,6 +64,32 @@ def test_runtime_session_rejects_invalid_disabled_or_mutated_configuration():
         session.get(_config(python_bin="/different/python"))
 
 
+def test_opt_in_disk_store_is_lazy_and_part_of_session_identity(tmp_path):
+    cache_root = tmp_path / "cache"
+    session = SourceGraphRuntimeSession(lambda _config: NeverRunWorker())
+    config = _config(
+        disk_cache_enabled=True,
+        disk_cache_root=cache_root,
+        disk_cache_max_entries=3,
+        disk_cache_max_bytes=4096,
+    )
+
+    runtime = session.get(config)
+
+    assert not cache_root.exists()
+    assert runtime.stats_snapshot()["disk_cache_max_entries"] == 3
+    assert runtime.stats_snapshot()["disk_cache_max_bytes"] == 4096
+    with pytest.raises(RuntimeError, match="changed after initialization"):
+        session.get(
+            _config(
+                disk_cache_enabled=True,
+                disk_cache_root=cache_root,
+                disk_cache_max_entries=4,
+                disk_cache_max_bytes=4096,
+            )
+        )
+
+
 def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "1")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", "/tmp/pinned/bin/python")
@@ -83,6 +109,41 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     assert get_source_graph_execution_config().error_code == (
         "source_graph_execution_config_invalid"
     )
+
+
+def test_disk_cache_config_is_namespaced_opt_in_and_bounded(monkeypatch, tmp_path):
+    cache_root = tmp_path / "cache"
+    monkeypatch.setenv("TRACEWEAVE_CACHE_DIR", str(cache_root))
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", "1")
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", "5")
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", "123456")
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.disk_cache_enabled is True
+    assert config.disk_cache_root == cache_root
+    assert config.disk_cache_max_entries == 5
+    assert config.disk_cache_max_bytes == 123456
+    assert not cache_root.exists()
+
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", "0")
+    assert get_source_graph_execution_config().error_code == (
+        "source_graph_disk_cache_config_invalid"
+    )
+
+
+def test_disabled_disk_cache_ignores_invalid_optional_capacity(monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", "0")
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", "-1")
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", "bad")
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.disk_cache_enabled is False
+    assert config.disk_cache_max_entries == 8
+    assert config.disk_cache_max_bytes == 512 * 1024 * 1024
 
 
 def test_server_startup_does_not_require_or_import_pyslang():
