@@ -11,7 +11,9 @@ records one line per MCP tool call so we can later answer, with data:
   * how often the shipped primitives (cursor/period/diff_first_divergence) are
     actually called on real workloads, and
   * in what fraction of debug *sessions* each one shows up at least once
-    (the "does it earn its tool-surface slot" number).
+    (the "does it earn its tool-surface slot" number), and
+  * whether opt-in Source Graph disk reuse produces enough exact hits and
+    frontend build skips to justify its miss, validation, and storage cost.
 
 Design constraints
 ------------------
@@ -22,6 +24,9 @@ Design constraints
   scalar decision flags, never argument values or paths (noise + privacy).
   Failed calls additionally carry a classification `error_code` (a code or
   exception class name, never the message — messages can embed paths).
+  Source Graph adds only numeric aggregates and fixed phase/tier/validation
+  labels through an independent second allowlist; no artifact fingerprint,
+  cache/source/wave path, signal, scope, value, or diagnostic can enter JSONL.
 * **Session = a get_sim_paths anchor.** The workflow always starts at
   get_sim_paths, so a new case identity opens a new logical session. The server
   calls `note_session()` from its get_sim_paths handler.
@@ -33,6 +38,7 @@ records so it can be unit-tested and reused by scripts/telemetry_report.py.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import uuid
@@ -135,11 +141,142 @@ _DIAGNOSTIC_WHITELIST = {
     "sweep_result_build_ms",
     "sweep_result_serialize_ms",
     "sweep_result_bytes",
+    "source_graph_phase",
+    "source_graph_adapter_ms",
+    "source_graph_prepare_total_ms",
+    "source_graph_admission_wait_ms",
+    "source_graph_build_ms",
+    "source_graph_load_ms",
+    "source_graph_query_ms",
+    "source_graph_actual_build_count",
+    "source_graph_coalesced_waiter_count",
+    "source_graph_cancel_to_exit_ms",
+    "source_graph_worker_cpu_ms",
+    "source_graph_rss_start_kib",
+    "source_graph_rss_peak_kib",
+    "source_graph_rss_end_kib",
+    "source_graph_ir_bytes",
+    "source_graph_cache_bytes",
+    "source_graph_cache_entry_count",
+    "source_graph_cache_peak_entry_count",
+    "source_graph_cache_peak_bytes",
+    "source_graph_cache_eviction_count",
+    "source_graph_cache_oversize_bypass_count",
+    "source_graph_cache_tier",
+    "source_graph_disk_validation_outcome",
+    "source_graph_frontend_launch_count",
+    "source_graph_disk_lookup_ms",
+    "source_graph_disk_read_ms",
+    "source_graph_disk_validate_ms",
+    "source_graph_disk_publish_ms",
+    "source_graph_disk_write_ms",
+    "source_graph_disk_eviction_ms",
+    "source_graph_disk_hit_count",
+    "source_graph_disk_miss_count",
+    "source_graph_disk_corrupt_count",
+    "source_graph_disk_build_skip_count",
+    "source_graph_disk_bytes_read",
+    "source_graph_disk_bytes_written",
+    "source_graph_disk_entry_count",
+    "source_graph_disk_bytes",
+    "source_graph_disk_eviction_count",
+    "source_graph_trace_query_count",
+    "source_graph_trace_artifact_attempt_count",
+    "source_graph_trace_scope_expansion_count",
+    "source_graph_trace_restart_count",
 }
-_DIAGNOSTIC_PHASES = {
-    "discover_valid_ready", "discover_ahb", "inspect_interfaces", "complete"
+_DIAGNOSTIC_FIXED_LABELS = {
+    "sweep_phase": {
+        "discover_valid_ready",
+        "discover_ahb",
+        "inspect_interfaces",
+        "complete",
+    },
+    "source_graph_phase": {
+        "adapter",
+        "prepare",
+        "query",
+        "fallback",
+        "complete",
+        "cancelled",
+    },
+    "source_graph_cache_tier": {"memory", "disk", "build"},
+    "source_graph_disk_validation_outcome": {
+        "disabled",
+        "not_checked",
+        "hit",
+        "not_found",
+        "identity_not_reusable",
+        "unsafe_namespace",
+        "unsafe_entry",
+        "manifest_missing",
+        "manifest_too_large",
+        "manifest_invalid",
+        "unknown_format",
+        "incomplete_entry",
+        "artifact_key_mismatch",
+        "artifact_identity_mismatch",
+        "build_semantics_mismatch",
+        "scope_mismatch",
+        "snapshot_mismatch",
+        "version_mismatch",
+        "coverage_receipt_mismatch",
+        "ir_missing",
+        "ir_too_large",
+        "ir_size_mismatch",
+        "ir_digest_mismatch",
+        "ir_schema_mismatch",
+        "ir_identity_mismatch",
+        "io_error",
+    },
 }
-_DIAGNOSTIC_NUMERIC_FIELDS = _DIAGNOSTIC_WHITELIST - {"sweep_phase"}
+_DIAGNOSTIC_NUMERIC_FIELDS = _DIAGNOSTIC_WHITELIST - set(_DIAGNOSTIC_FIXED_LABELS)
+
+_SOURCE_GRAPH_TIMING_FIELDS = {
+    "adapter": "source_graph_adapter_ms",
+    "prepare_total": "source_graph_prepare_total_ms",
+    "admission_wait": "source_graph_admission_wait_ms",
+    "build": "source_graph_build_ms",
+    "load": "source_graph_load_ms",
+    "query": "source_graph_query_ms",
+    "cancel_to_exit": "source_graph_cancel_to_exit_ms",
+    "worker_cpu": "source_graph_worker_cpu_ms",
+    "disk_lookup": "source_graph_disk_lookup_ms",
+    "disk_read": "source_graph_disk_read_ms",
+    "disk_validate": "source_graph_disk_validate_ms",
+    "disk_publish": "source_graph_disk_publish_ms",
+    "disk_write": "source_graph_disk_write_ms",
+    "disk_eviction": "source_graph_disk_eviction_ms",
+}
+_SOURCE_GRAPH_TIERS = ("memory", "disk", "build")
+_SOURCE_GRAPH_SUM_FIELDS = {
+    "actual_build_count": "source_graph_actual_build_count",
+    "frontend_launch_count": "source_graph_frontend_launch_count",
+    "coalesced_waiter_count": "source_graph_coalesced_waiter_count",
+    "cache_eviction_count": "source_graph_cache_eviction_count",
+    "cache_oversize_bypass_count": "source_graph_cache_oversize_bypass_count",
+    "disk_hit_count": "source_graph_disk_hit_count",
+    "disk_miss_count": "source_graph_disk_miss_count",
+    "disk_corrupt_count": "source_graph_disk_corrupt_count",
+    "disk_build_skip_count": "source_graph_disk_build_skip_count",
+    "disk_bytes_read": "source_graph_disk_bytes_read",
+    "disk_bytes_written": "source_graph_disk_bytes_written",
+    "disk_eviction_count": "source_graph_disk_eviction_count",
+    "trace_query_count": "source_graph_trace_query_count",
+    "trace_artifact_attempt_count": ("source_graph_trace_artifact_attempt_count"),
+    "trace_scope_expansion_count": "source_graph_trace_scope_expansion_count",
+    "trace_restart_count": "source_graph_trace_restart_count",
+}
+_SOURCE_GRAPH_MAX_FIELDS = {
+    "rss_peak_kib": "source_graph_rss_peak_kib",
+    "ir_bytes": "source_graph_ir_bytes",
+    "memory_cache_entry_count": "source_graph_cache_entry_count",
+    "memory_cache_peak_entry_count": "source_graph_cache_peak_entry_count",
+    "memory_cache_bytes": "source_graph_cache_bytes",
+    "memory_cache_peak_bytes": "source_graph_cache_peak_bytes",
+    "disk_entry_count": "source_graph_disk_entry_count",
+    "disk_bytes": "source_graph_disk_bytes",
+}
 
 # Tools grouped under a logical "feature" for reporting. Anything not listed
 # reports under its own name.
@@ -195,6 +332,32 @@ def _extract_flags(args: dict) -> dict:
     return flags
 
 
+def _sanitize_diagnostics(diagnostics: dict | None) -> dict[str, int | float | str]:
+    """Apply the recorder's independent fixed-label/numeric allowlist.
+
+    ``operation_metrics.snapshot`` already filters the live values.  Repeating
+    the check here is intentional defense in depth: callers and loaded JSONL
+    records cannot smuggle a path, scope, digest, or diagnostic string into the
+    persistent telemetry stream or its operational report.
+    """
+
+    safe: dict[str, int | float | str] = {}
+    for raw_key, value in (diagnostics or {}).items():
+        key = str(raw_key)
+        if key not in _DIAGNOSTIC_WHITELIST:
+            continue
+        fixed_values = _DIAGNOSTIC_FIXED_LABELS.get(key)
+        if fixed_values is not None:
+            if isinstance(value, str) and value in fixed_values:
+                safe[key] = value
+            continue
+        if key in _DIAGNOSTIC_NUMERIC_FIELDS:
+            number = _nonnegative_number(value)
+            if number is not None:
+                safe[key] = number
+    return safe
+
+
 def record_call(
     tool: str,
     args: dict | None,
@@ -232,16 +395,7 @@ def record_call(
         # Omitted on success to keep the line slim.
         if error_code is not None:
             record["error_code"] = str(error_code)
-        safe_diagnostics = {
-            str(key): value
-            for key, value in (diagnostics or {}).items()
-            if key in _DIAGNOSTIC_WHITELIST and isinstance(value, _SCALAR_TYPES)
-            and (key != "sweep_phase" or value in _DIAGNOSTIC_PHASES)
-            and (
-                key not in _DIAGNOSTIC_NUMERIC_FIELDS
-                or (not isinstance(value, bool) and isinstance(value, (int, float)))
-            )
-        }
+        safe_diagnostics = _sanitize_diagnostics(diagnostics)
         if safe_diagnostics:
             record["diagnostics"] = safe_diagnostics
         path = config.telemetry_log_path()
@@ -255,6 +409,7 @@ def record_call(
 
 
 # ── Aggregation (pure, testable) ──────────────────────────────────────────
+
 
 def _percentile(sorted_vals: list[float], pct: float) -> float:
     if not sorted_vals:
@@ -270,15 +425,209 @@ def _percentile(sorted_vals: list[float], pct: float) -> float:
 
 def _dist(values: list[float]) -> dict:
     if not values:
-        return {"n": 0, "min": 0, "median": 0, "p90": 0, "max": 0, "total": 0}
+        return {
+            "n": 0,
+            "min": 0,
+            "median": 0,
+            "p90": 0,
+            "p95": 0,
+            "max": 0,
+            "total": 0,
+        }
     s = sorted(values)
     return {
         "n": len(s),
         "min": s[0],
         "median": _percentile(s, 50),
         "p90": _percentile(s, 90),
+        "p95": _percentile(s, 95),
         "max": s[-1],
         "total": sum(s),
+    }
+
+
+def _nonnegative_number(value: object) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0 or not math.isfinite(float(value)):
+        return None
+    return value
+
+
+def _rate(numerator: int | float, denominator: int | float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 6)
+
+
+def _new_source_graph_tool_bucket() -> dict[str, Any]:
+    return {
+        "calls": 0,
+        "sessions": set(),
+        "cache_tiers": {tier: 0 for tier in _SOURCE_GRAPH_TIERS},
+        "tier_latencies": {tier: [] for tier in _SOURCE_GRAPH_TIERS},
+        "disk_hit_count": 0,
+        "disk_miss_count": 0,
+        "disk_corrupt_count": 0,
+        "disk_build_skip_count": 0,
+        "actual_build_count": 0,
+        "frontend_launch_count": 0,
+    }
+
+
+def _source_graph_operational_report(records: list[dict]) -> dict:
+    source_calls = 0
+    source_sessions: set[str] = set()
+    disk_hit_sessions: set[str] = set()
+    phases: dict[str, int] = {}
+    validation_outcomes: dict[str, int] = {}
+    tier_calls = {tier: 0 for tier in _SOURCE_GRAPH_TIERS}
+    tier_sessions = {tier: set() for tier in _SOURCE_GRAPH_TIERS}
+    tier_latencies = {tier: [] for tier in _SOURCE_GRAPH_TIERS}
+    all_call_latencies: list[float] = []
+    timings = {name: [] for name in _SOURCE_GRAPH_TIMING_FIELDS}
+    sums: dict[str, int | float] = {name: 0 for name in _SOURCE_GRAPH_SUM_FIELDS}
+    maxima: dict[str, int | float] = {name: 0 for name in _SOURCE_GRAPH_MAX_FIELDS}
+    per_tool: dict[str, dict[str, Any]] = {}
+
+    for rec in records:
+        raw_diagnostics = rec.get("diagnostics")
+        diagnostics = _sanitize_diagnostics(
+            raw_diagnostics if isinstance(raw_diagnostics, dict) else None
+        )
+        if not any(key.startswith("source_graph_") for key in diagnostics):
+            continue
+
+        source_calls += 1
+        sid = str(rec.get("session_id") or "(none)")
+        source_sessions.add(sid)
+        tool = str(rec.get("tool") or "(unknown)")
+        tool_bucket = per_tool.setdefault(tool, _new_source_graph_tool_bucket())
+        tool_bucket["calls"] += 1
+        tool_bucket["sessions"].add(sid)
+
+        phase = diagnostics.get("source_graph_phase")
+        if isinstance(phase, str):
+            phases[phase] = phases.get(phase, 0) + 1
+        outcome = diagnostics.get("source_graph_disk_validation_outcome")
+        if isinstance(outcome, str):
+            validation_outcomes[outcome] = validation_outcomes.get(outcome, 0) + 1
+
+        tier = diagnostics.get("source_graph_cache_tier")
+        latency = _nonnegative_number(rec.get("latency_ms"))
+        if latency is not None:
+            all_call_latencies.append(float(latency))
+        if isinstance(tier, str) and tier in tier_calls:
+            tier_calls[tier] += 1
+            tier_sessions[tier].add(sid)
+            tool_bucket["cache_tiers"][tier] += 1
+            if latency is not None:
+                tier_latencies[tier].append(float(latency))
+                tool_bucket["tier_latencies"][tier].append(float(latency))
+
+        for name, field in _SOURCE_GRAPH_TIMING_FIELDS.items():
+            value = _nonnegative_number(diagnostics.get(field))
+            # Runtime receipts use zero for a stage that was not entered. Keep
+            # those placeholders out of latency distributions so memory hits
+            # do not dilute disk/build p50 and p95 with non-applicable zeros.
+            if value is not None and value > 0:
+                timings[name].append(float(value))
+        for name, field in _SOURCE_GRAPH_SUM_FIELDS.items():
+            value = _nonnegative_number(diagnostics.get(field))
+            if value is not None:
+                sums[name] += value
+        for name, field in _SOURCE_GRAPH_MAX_FIELDS.items():
+            value = _nonnegative_number(diagnostics.get(field))
+            if value is not None:
+                maxima[name] = max(maxima[name], value)
+
+        for name in (
+            "disk_hit_count",
+            "disk_miss_count",
+            "disk_corrupt_count",
+            "disk_build_skip_count",
+            "actual_build_count",
+            "frontend_launch_count",
+        ):
+            value = _nonnegative_number(diagnostics.get(_SOURCE_GRAPH_SUM_FIELDS[name]))
+            if value is not None:
+                tool_bucket[name] += value
+        record_disk_hits = _nonnegative_number(
+            diagnostics.get("source_graph_disk_hit_count")
+        )
+        if record_disk_hits is not None and record_disk_hits > 0:
+            disk_hit_sessions.add(sid)
+
+    disk_lookup_count = sums["disk_hit_count"] + sums["disk_miss_count"]
+    tier_report = {
+        tier: {
+            "calls": tier_calls[tier],
+            "sessions": len(tier_sessions[tier]),
+            "call_latency_ms": _dist(tier_latencies[tier]),
+        }
+        for tier in _SOURCE_GRAPH_TIERS
+    }
+    tool_report = {}
+    for tool, bucket in sorted(per_tool.items()):
+        lookup_count = bucket["disk_hit_count"] + bucket["disk_miss_count"]
+        tool_report[tool] = {
+            "calls": bucket["calls"],
+            "sessions": len(bucket["sessions"]),
+            "cache_tiers": bucket["cache_tiers"],
+            "disk_lookup_count": lookup_count,
+            "disk_hit_count": bucket["disk_hit_count"],
+            "disk_miss_count": bucket["disk_miss_count"],
+            "disk_corrupt_count": bucket["disk_corrupt_count"],
+            "disk_exact_hit_rate": _rate(bucket["disk_hit_count"], lookup_count),
+            "disk_build_skip_count": bucket["disk_build_skip_count"],
+            "actual_build_count": bucket["actual_build_count"],
+            "frontend_launch_count": bucket["frontend_launch_count"],
+            "call_latency_ms_by_tier": {
+                tier: _dist(bucket["tier_latencies"][tier])
+                for tier in _SOURCE_GRAPH_TIERS
+            },
+        }
+
+    return {
+        "calls_with_metrics": source_calls,
+        "sessions_with_metrics": len(source_sessions),
+        "sessions_with_disk_hit": len(disk_hit_sessions),
+        "disk_hit_session_presence": _rate(
+            len(disk_hit_sessions), len(source_sessions)
+        ),
+        "phases": dict(sorted(phases.items())),
+        "validation_outcomes": dict(sorted(validation_outcomes.items())),
+        "cache_tiers": tier_report,
+        "disk": {
+            "lookup_count": disk_lookup_count,
+            "hit_count": sums["disk_hit_count"],
+            "miss_count": sums["disk_miss_count"],
+            "corrupt_count": sums["disk_corrupt_count"],
+            "exact_hit_rate": _rate(sums["disk_hit_count"], disk_lookup_count),
+            "build_skip_count": sums["disk_build_skip_count"],
+            "bytes_read": sums["disk_bytes_read"],
+            "bytes_written": sums["disk_bytes_written"],
+            "entry_count_max": maxima["disk_entry_count"],
+            "bytes_max": maxima["disk_bytes"],
+            "eviction_count": sums["disk_eviction_count"],
+        },
+        "execution": {
+            "actual_build_count": sums["actual_build_count"],
+            "frontend_launch_count": sums["frontend_launch_count"],
+            "coalesced_waiter_count": sums["coalesced_waiter_count"],
+            "memory_cache_eviction_count": sums["cache_eviction_count"],
+            "memory_cache_oversize_bypass_count": sums["cache_oversize_bypass_count"],
+        },
+        "resources_max": maxima,
+        "trace": {
+            "query_count": sums["trace_query_count"],
+            "artifact_attempt_count": sums["trace_artifact_attempt_count"],
+            "scope_expansion_count": sums["trace_scope_expansion_count"],
+            "restart_count": sums["trace_restart_count"],
+        },
+        "call_latency_ms": _dist(all_call_latencies),
+        "timings_ms": {name: _dist(values) for name, values in timings.items()},
+        "by_tool": tool_report,
     }
 
 
@@ -307,7 +656,9 @@ def aggregate(records: Iterable[dict]) -> dict:
         sid = rec.get("session_id") or "(none)"
         feature = feature_of(tool)
 
-        sess = sessions.setdefault(sid, {"calls": 0, "result_bytes": 0, "tools": set(), "features": set()})
+        sess = sessions.setdefault(
+            sid, {"calls": 0, "result_bytes": 0, "tools": set(), "features": set()}
+        )
         sess["calls"] += 1
         sess["result_bytes"] += int(rec.get("result_bytes") or 0)
         sess["tools"].add(tool)
@@ -315,7 +666,14 @@ def aggregate(records: Iterable[dict]) -> dict:
 
         t = per_tool.setdefault(
             tool,
-            {"calls": 0, "ok": 0, "blocked": 0, "bytes": 0, "sessions": set(), "error_codes": {}},
+            {
+                "calls": 0,
+                "ok": 0,
+                "blocked": 0,
+                "bytes": 0,
+                "sessions": set(),
+                "error_codes": {},
+            },
         )
         t["calls"] += 1
         t["ok"] += 1 if rec.get("ok") else 0
@@ -337,9 +695,13 @@ def aggregate(records: Iterable[dict]) -> dict:
             "ok_rate": round(t["ok"] / t["calls"], 3) if t["calls"] else 0.0,
             "blocked": t["blocked"],
             "sessions": len(t["sessions"]),
-            "session_presence": round(len(t["sessions"]) / total_sessions, 3) if total_sessions else 0.0,
+            "session_presence": round(len(t["sessions"]) / total_sessions, 3)
+            if total_sessions
+            else 0.0,
             "total_bytes": t["bytes"],
-            "error_codes": dict(sorted(t["error_codes"].items(), key=lambda kv: -kv[1])),
+            "error_codes": dict(
+                sorted(t["error_codes"].items(), key=lambda kv: -kv[1])
+            ),
         }
 
     tracked = {}
@@ -349,16 +711,21 @@ def aggregate(records: Iterable[dict]) -> dict:
         tracked[feature] = {
             "calls": calls,
             "sessions_used": len(used),
-            "session_presence": round(len(used) / total_sessions, 3) if total_sessions else 0.0,
+            "session_presence": round(len(used) / total_sessions, 3)
+            if total_sessions
+            else 0.0,
         }
 
     return {
         "total_records": len(records),
         "total_sessions": total_sessions,
         "calls_per_session": _dist([s["calls"] for s in sessions.values()]),
-        "result_bytes_per_session": _dist([s["result_bytes"] for s in sessions.values()]),
+        "result_bytes_per_session": _dist(
+            [s["result_bytes"] for s in sessions.values()]
+        ),
         "tracked_features": tracked,
         "per_tool": tool_report,
+        "source_graph": _source_graph_operational_report(records),
     }
 
 

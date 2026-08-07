@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import config
+from src import operation_metrics
 import src.usage_telemetry as ut
 
 
@@ -44,8 +45,14 @@ def test_record_call_appends_jsonl(tmp_path, monkeypatch):
     mod = _reset_module()
 
     mod.note_session("case-A")
-    mod.record_call("period", {"signal_path": "/tb/clk", "edge": "posedge"},
-                    result_bytes=120, ok=True, latency_ms=4.2, case="cc28")
+    mod.record_call(
+        "period",
+        {"signal_path": "/tb/clk", "edge": "posedge"},
+        result_bytes=120,
+        ok=True,
+        latency_ms=4.2,
+        case="cc28",
+    )
 
     lines = log.read_text().splitlines()
     assert len(lines) == 1
@@ -67,11 +74,12 @@ def test_record_call_error_code_written_on_failure_only(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
     mod = _reset_module()
 
-    mod.record_call("get_signal_at_time", {}, result_bytes=80, ok=False,
-                    error_code="KeyError")
+    mod.record_call(
+        "get_signal_at_time", {}, result_bytes=80, ok=False, error_code="KeyError"
+    )
     mod.record_call("get_signal_at_time", {}, result_bytes=120, ok=True)
 
-    failed, succeeded = [json.loads(l) for l in log.read_text().splitlines()]
+    failed, succeeded = [json.loads(line) for line in log.read_text().splitlines()]
     assert failed["error_code"] == "KeyError"
     # Success lines stay slim: no error_code key at all.
     assert "error_code" not in succeeded
@@ -164,11 +172,121 @@ def test_record_call_rejects_non_fixed_phase_label(tmp_path, monkeypatch):
     mod = _reset_module()
 
     mod.record_call(
-        "sweep_handshakes", {}, result_bytes=1, ok=False,
+        "sweep_handshakes",
+        {},
+        result_bytes=1,
+        ok=False,
         diagnostics={"sweep_phase": "top.customer_secret"},
     )
 
     assert "diagnostics" not in json.loads(log.read_text())
+
+
+def test_source_graph_diagnostics_persist_only_numeric_and_fixed_labels(
+    tmp_path, monkeypatch
+):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call(
+        "explain_signal_driver",
+        {"signal_path": "top.secret", "compile_log": "/private/compile.log"},
+        result_bytes=100,
+        ok=True,
+        diagnostics={
+            "source_graph_phase": "complete",
+            "source_graph_cache_tier": "disk",
+            "source_graph_disk_validation_outcome": "hit",
+            "source_graph_adapter_ms": 7.5,
+            "source_graph_disk_lookup_ms": 3.25,
+            "source_graph_disk_hit_count": 1,
+            "source_graph_disk_miss_count": 0,
+            "source_graph_disk_build_skip_count": 1,
+            "source_graph_frontend_launch_count": 0,
+            "source_graph_disk_bytes_read": 8192,
+            "source_graph_disk_entry_count": 1,
+            "source_graph_disk_bytes": 12288,
+            "source_graph_artifact_digest": "a" * 64,
+            "source_graph_scope": "top.customer",
+            "source_graph_cache_root": "/private/cache",
+            "source_graph_disk_bytes_written": "/private/entry",
+        },
+    )
+
+    text = log.read_text()
+    rec = json.loads(text)
+    assert rec["diagnostics"] == {
+        "source_graph_phase": "complete",
+        "source_graph_cache_tier": "disk",
+        "source_graph_disk_validation_outcome": "hit",
+        "source_graph_adapter_ms": 7.5,
+        "source_graph_disk_lookup_ms": 3.25,
+        "source_graph_disk_hit_count": 1,
+        "source_graph_disk_miss_count": 0,
+        "source_graph_disk_build_skip_count": 1,
+        "source_graph_frontend_launch_count": 0,
+        "source_graph_disk_bytes_read": 8192,
+        "source_graph_disk_entry_count": 1,
+        "source_graph_disk_bytes": 12288,
+    }
+    assert "top.secret" not in text
+    assert "top.customer" not in text
+    assert "/private" not in text
+    assert "a" * 64 not in text
+
+
+def test_source_graph_persistent_allowlist_matches_operation_metrics_contract():
+    operation_fields = {
+        field
+        for field in operation_metrics._PUBLIC_FIELDS
+        if field.startswith("source_graph_")
+    }
+    persistent_fields = {
+        field for field in ut._DIAGNOSTIC_WHITELIST if field.startswith("source_graph_")
+    }
+    assert persistent_fields == operation_fields
+    assert (
+        ut._DIAGNOSTIC_FIXED_LABELS["source_graph_phase"]
+        == operation_metrics._SOURCE_GRAPH_PHASES
+    )
+    assert (
+        ut._DIAGNOSTIC_FIXED_LABELS["source_graph_cache_tier"]
+        == operation_metrics._SOURCE_GRAPH_CACHE_TIERS
+    )
+    assert (
+        ut._DIAGNOSTIC_FIXED_LABELS["source_graph_disk_validation_outcome"]
+        == operation_metrics._SOURCE_GRAPH_DISK_OUTCOMES
+    )
+
+
+def test_source_graph_non_fixed_labels_are_not_persisted_or_aggregated(
+    tmp_path, monkeypatch
+):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call(
+        "explain_signal_driver",
+        {},
+        result_bytes=1,
+        ok=True,
+        diagnostics={
+            "source_graph_phase": "top.secret",
+            "source_graph_cache_tier": "/private/cache",
+            "source_graph_disk_validation_outcome": "customer_entry",
+            "source_graph_disk_hit_count": True,
+            "source_graph_disk_lookup_ms": -1,
+            "source_graph_build_ms": float("nan"),
+        },
+    )
+
+    rec = json.loads(log.read_text())
+    assert "diagnostics" not in rec
+    assert mod.aggregate([rec])["source_graph"]["calls_with_metrics"] == 0
 
 
 def test_opt_out_writes_nothing(tmp_path, monkeypatch):
@@ -199,7 +317,7 @@ def test_session_minting_on_identity_change(monkeypatch):
 
     s1 = mod.note_session("case-A")
     s1b = mod.note_session("case-A")  # same case keeps the session
-    s2 = mod.note_session("case-B")   # new case mints a new session
+    s2 = mod.note_session("case-B")  # new case mints a new session
 
     assert s1 == s1b
     assert s2 != s1
@@ -247,11 +365,28 @@ def test_aggregate_buckets_missing_session():
 
 def test_aggregate_counts_error_codes_for_failures_only():
     records = [
-        {"session_id": "s1", "tool": "explain_signal_driver", "ok": False,
-         "blocked": True, "error_code": "missing_prerequisite", "result_bytes": 300},
-        {"session_id": "s1", "tool": "explain_signal_driver", "ok": False,
-         "blocked": True, "error_code": "missing_prerequisite", "result_bytes": 300},
-        {"session_id": "s1", "tool": "explain_signal_driver", "ok": True, "result_bytes": 900},
+        {
+            "session_id": "s1",
+            "tool": "explain_signal_driver",
+            "ok": False,
+            "blocked": True,
+            "error_code": "missing_prerequisite",
+            "result_bytes": 300,
+        },
+        {
+            "session_id": "s1",
+            "tool": "explain_signal_driver",
+            "ok": False,
+            "blocked": True,
+            "error_code": "missing_prerequisite",
+            "result_bytes": 300,
+        },
+        {
+            "session_id": "s1",
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "result_bytes": 900,
+        },
         # pre-error_code record: bucketed as "(unrecorded)", never dropped
         {"session_id": "s1", "tool": "parse_sim_log", "ok": False, "result_bytes": 200},
     ]
@@ -261,3 +396,155 @@ def test_aggregate_counts_error_codes_for_failures_only():
     assert esd["error_codes"] == {"missing_prerequisite": 2}
     assert esd["blocked"] == 2
     assert report["per_tool"]["parse_sim_log"]["error_codes"] == {"(unrecorded)": 1}
+
+
+def test_aggregate_source_graph_operational_cache_metrics():
+    records = [
+        {
+            "session_id": "s1",
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "result_bytes": 500,
+            "latency_ms": 220.0,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "build",
+                "source_graph_disk_validation_outcome": "not_found",
+                "source_graph_actual_build_count": 1,
+                "source_graph_frontend_launch_count": 1,
+                "source_graph_disk_lookup_ms": 2.0,
+                "source_graph_disk_publish_ms": 4.0,
+                "source_graph_disk_miss_count": 1,
+                "source_graph_disk_bytes_written": 140,
+                "source_graph_disk_entry_count": 1,
+                "source_graph_disk_bytes": 140,
+            },
+        },
+        {
+            "session_id": "s2",
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "result_bytes": 500,
+            "latency_ms": 30.0,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "disk",
+                "source_graph_disk_validation_outcome": "hit",
+                "source_graph_actual_build_count": 0,
+                "source_graph_frontend_launch_count": 0,
+                "source_graph_disk_lookup_ms": 12.0,
+                "source_graph_disk_validate_ms": 10.0,
+                "source_graph_disk_hit_count": 1,
+                "source_graph_disk_build_skip_count": 1,
+                "source_graph_disk_bytes_read": 140,
+                "source_graph_disk_entry_count": 1,
+                "source_graph_disk_bytes": 140,
+            },
+        },
+        {
+            "session_id": "s2",
+            "tool": "find_signal_loads",
+            "ok": True,
+            "result_bytes": 400,
+            "latency_ms": 2.0,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "memory",
+                "source_graph_disk_validation_outcome": "not_checked",
+                "source_graph_actual_build_count": 0,
+                "source_graph_frontend_launch_count": 0,
+            },
+        },
+        {
+            "session_id": "s3",
+            "tool": "trace_x_source",
+            "ok": True,
+            "result_bytes": 800,
+            "latency_ms": 240.0,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "build",
+                "source_graph_disk_validation_outcome": "ir_digest_mismatch",
+                "source_graph_actual_build_count": 1,
+                "source_graph_frontend_launch_count": 1,
+                "source_graph_disk_lookup_ms": 3.0,
+                "source_graph_disk_miss_count": 1,
+                "source_graph_disk_corrupt_count": 1,
+                "source_graph_disk_bytes_written": 150,
+                "source_graph_disk_entry_count": 1,
+                "source_graph_disk_bytes": 150,
+                "source_graph_trace_query_count": 2,
+                "source_graph_trace_artifact_attempt_count": 1,
+                "source_graph_trace_restart_count": 1,
+            },
+        },
+    ]
+
+    source_graph = ut.aggregate(records)["source_graph"]
+    assert source_graph["calls_with_metrics"] == 4
+    assert source_graph["sessions_with_metrics"] == 3
+    assert source_graph["sessions_with_disk_hit"] == 1
+    assert source_graph["disk_hit_session_presence"] == 0.333333
+    assert source_graph["cache_tiers"]["memory"]["calls"] == 1
+    assert source_graph["cache_tiers"]["disk"]["calls"] == 1
+    assert source_graph["cache_tiers"]["build"]["calls"] == 2
+    assert source_graph["cache_tiers"]["disk"]["call_latency_ms"]["p95"] == 30
+
+    disk = source_graph["disk"]
+    assert disk == {
+        "lookup_count": 3,
+        "hit_count": 1,
+        "miss_count": 2,
+        "corrupt_count": 1,
+        "exact_hit_rate": 0.333333,
+        "build_skip_count": 1,
+        "bytes_read": 140,
+        "bytes_written": 290,
+        "entry_count_max": 1,
+        "bytes_max": 150,
+        "eviction_count": 0,
+    }
+    assert source_graph["execution"]["actual_build_count"] == 2
+    assert source_graph["execution"]["frontend_launch_count"] == 2
+    assert source_graph["timings_ms"]["disk_lookup"]["n"] == 3
+    assert source_graph["trace"] == {
+        "query_count": 2,
+        "artifact_attempt_count": 1,
+        "scope_expansion_count": 0,
+        "restart_count": 1,
+    }
+
+    driver = source_graph["by_tool"]["explain_signal_driver"]
+    assert driver["cache_tiers"] == {"memory": 0, "disk": 1, "build": 1}
+    assert driver["disk_lookup_count"] == 2
+    assert driver["disk_exact_hit_rate"] == 0.5
+    assert source_graph["by_tool"]["find_signal_loads"]["disk_lookup_count"] == 0
+
+
+def test_telemetry_report_renders_source_graph_operational_section():
+    from scripts.telemetry_report import render
+
+    report = ut.aggregate(
+        [
+            {
+                "session_id": "s1",
+                "tool": "explain_signal_driver",
+                "ok": True,
+                "result_bytes": 500,
+                "latency_ms": 25.0,
+                "diagnostics": {
+                    "source_graph_phase": "complete",
+                    "source_graph_cache_tier": "disk",
+                    "source_graph_disk_validation_outcome": "hit",
+                    "source_graph_disk_hit_count": 1,
+                    "source_graph_disk_build_skip_count": 1,
+                },
+            }
+        ]
+    )
+
+    text = render(report)
+    assert "Source Graph disk cache — operational telemetry" in text
+    assert "memory=0  disk=1  build=0" in text
+    assert "hit=1  miss=0  corrupt=0  hit-rate=100.0%" in text
+    assert "explain_signal_driver" in text

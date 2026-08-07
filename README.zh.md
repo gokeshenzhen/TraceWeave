@@ -506,7 +506,9 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 
 ### 使用遥测
 
-启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。普通用户默认没有设置 `TRACEWEAVE_TELEMETRY`,此时记录功能关闭,也不会创建 telemetry 文件。需要主动开启时,应在 MCP server 启动前设置 `TRACEWEAVE_TELEMETRY=1`;修改变量后需重启或重新连接 MCP server。用 `python scripts/telemetry_report.py` 汇总。
+启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。普通用户默认没有设置 `TRACEWEAVE_TELEMETRY`,此时记录功能关闭,也不会创建 telemetry 文件。需要主动开启时,应在 MCP server 启动前设置 `TRACEWEAVE_TELEMETRY=1`;修改变量后需重启或重新连接 MCP server。
+
+同时启用 opt-in Source Graph disk cache 后，同一条记录会通过第二层独立校验的 numeric/fixed-label allowlist 持久化 `memory`/`disk`/`build` tier、exact disk hit/miss/corrupt/build-skip、frontend launch、lookup/read/validate/write/publish/eviction timing、artifact bytes/entry count 与 process resource aggregates。它绝不持久化 artifact fingerprint、cache/source/wave path、signal/scope/value、diagnostic 或 exception text。运行 `python3.11 scripts/telemetry_report.py` 可查看按 tool/session 的使用率，以及 Source Graph tier count、exact disk hit rate、validation outcome、build/skip、bytes/entries/evictions 和各 tier latency p50/p95；加 `--json` 输出机器可读结果。正式 operational soak 应使用新的 private `TRACEWEAVE_CACHE_DIR` 获得隔离的观察窗口。
 
 ## 测试
 
