@@ -12,7 +12,7 @@ from scripts import benchmark_source_graph_phase3d as benchmark
 ROOT = Path(__file__).resolve().parents[1]
 PHASE3D_EVIDENCE = ROOT / "benchmarks/source_graph_connectivity_phase3d_results.json"
 PHASE3D_EVIDENCE_SHA256 = (
-    "7200c6a79b763ec261663acd322748de025623197cf10d1635263a5e8b391d5b"
+    "0880ac7615a803b79e184602f1730b2c7843b677caf18149bc784a373b759434"
 )
 
 
@@ -87,6 +87,11 @@ def test_fake_phase3d_gate_uses_distinct_processes_and_stops_before_closure():
     assert result["x_trace_correctness"]["gate"]["passed"] is True
     assert result["architecture"]["waveform_locking_model_changed"] is False
     assert result["architecture"]["startup_cache_scan"] is False
+    telemetry = result["operational_telemetry"]
+    assert telemetry["gate"]["passed"] is True
+    assert telemetry["disk_lookup_count"] == 2
+    assert telemetry["disk_exact_hit_rate"] == 0.5
+    assert telemetry["paths_or_artifact_digests_recorded"] is False
 
 
 def test_cli_writes_fake_phase3d_result_atomically(tmp_path):
@@ -166,9 +171,26 @@ def test_tracked_phase3d_evidence_is_immutable_and_passes_all_gates():
     assert assessment["sqlite_or_global_database"] is False
     assert assessment["phase3e_started"] is False
     assert assessment["default_on_authorized"] is False
+    assert assessment["operational_telemetry_persistent"] is True
+    assert assessment["operational_telemetry_privacy_gate_passed"] is True
+    assert assessment["operational_telemetry_report_gate_passed"] is True
 
     assert payload["correctness_suite"]["gate"]["passed"] is True
-    assert payload["correctness_suite"]["passed_count"] >= 170
+    assert payload["correctness_suite"]["passed_count"] >= 187
+    telemetry = payload["operational_telemetry"]
+    assert telemetry["gate"]["passed"] is True
+    assert all(telemetry["gate"]["checks"].values())
+    assert telemetry["persistent_field_count"] >= 40
+    assert telemetry["disk_lookup_count"] == 2
+    assert telemetry["disk_exact_hit_rate"] == 0.5
+    assert telemetry["cache_tier_calls"] == {
+        "memory": 1,
+        "disk": 1,
+        "build": 1,
+    }
+    assert telemetry["artifact_cache_scan"] is False
+    assert telemetry["network_export"] is False
+    assert telemetry["paths_or_artifact_digests_recorded"] is False
     assert payload["corruption_recovery"]["gate"]["passed"] is True
     assert payload["x_trace_correctness"]["gate"]["passed"] is True
     assert payload["architecture"]["wave_lock_gate_passed"] is True

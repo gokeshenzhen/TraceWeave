@@ -43,7 +43,9 @@ from scripts import benchmark_source_graph_phase2 as phase2  # noqa: E402
 from scripts import benchmark_source_graph_phase3a as phase3a  # noqa: E402
 from scripts import benchmark_source_graph_phase3b as phase3b  # noqa: E402
 from scripts import benchmark_source_graph_phase3c as phase3c  # noqa: E402
+from scripts import telemetry_report  # noqa: E402
 import src.connectivity_backend as connectivity_backend  # noqa: E402
+from src import operation_metrics, usage_telemetry  # noqa: E402
 from src.source_graph_adapter import (  # noqa: E402
     _reset_source_graph_adapter_cache_for_tests,
 )
@@ -60,7 +62,7 @@ from src.source_graph_runtime import (  # noqa: E402
 SCHEMA_VERSION = "1.0"
 BENCHMARK_NAME = "source_graph_connectivity_phase3d"
 FRONTEND_VERSION = "11.0.0"
-MEASUREMENT_HEAD = "0e706588c57e90518f127893bb1dfeb4cc95fce3"
+MEASUREMENT_HEAD = "a461dd946ed2df3bdfb2d59d5c01e19db919068f"
 DEFAULT_FRONTEND_PYTHON = phase3a.DEFAULT_FRONTEND_PYTHON
 DEFAULT_OPENTITAN_COMPILE_LOG = phase3a.DEFAULT_OPENTITAN_COMPILE_LOG
 DEFAULT_OUTPUT = ROOT / "benchmarks/source_graph_connectivity_phase3d_results.json"
@@ -131,7 +133,9 @@ CORRECTNESS_TESTS = (
     "tests/test_source_graph_production.py",
     "tests/test_source_graph_public_routing.py",
     "tests/test_source_graph_trace_public_routing.py",
+    "tests/test_source_graph_operational_telemetry.py",
     "tests/test_operation_metrics.py",
+    "tests/test_usage_telemetry.py",
     "tests/test_schemas.py",
 )
 
@@ -1165,6 +1169,152 @@ def _architecture_receipt() -> dict[str, Any]:
     }
 
 
+def _operational_telemetry_receipt() -> dict[str, Any]:
+    operation_fields = {
+        name
+        for name in operation_metrics._PUBLIC_FIELDS
+        if name.startswith("source_graph_")
+    }
+    persistent_fields = {
+        name
+        for name in usage_telemetry._DIAGNOSTIC_WHITELIST
+        if name.startswith("source_graph_")
+    }
+    sanitized = usage_telemetry._sanitize_diagnostics(
+        {
+            "source_graph_phase": "complete",
+            "source_graph_cache_tier": "disk",
+            "source_graph_disk_validation_outcome": "hit",
+            "source_graph_disk_hit_count": 1,
+            "source_graph_disk_lookup_ms": 2.5,
+            "source_graph_scope": "sensitive_scope",
+            "source_graph_cache_root": "sensitive_cache_root",
+            "source_graph_artifact_digest": "sensitive_digest",
+            "source_graph_disk_bytes_read": "sensitive_entry",
+        }
+    )
+    records = [
+        {
+            "session_id": "build-session",
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "latency_ms": 200.0,
+            "result_bytes": 1,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "build",
+                "source_graph_disk_validation_outcome": "not_found",
+                "source_graph_actual_build_count": 1,
+                "source_graph_frontend_launch_count": 1,
+                "source_graph_disk_miss_count": 1,
+            },
+        },
+        {
+            "session_id": "disk-session",
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "latency_ms": 20.0,
+            "result_bytes": 1,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "disk",
+                "source_graph_disk_validation_outcome": "hit",
+                "source_graph_actual_build_count": 0,
+                "source_graph_frontend_launch_count": 0,
+                "source_graph_disk_hit_count": 1,
+                "source_graph_disk_build_skip_count": 1,
+            },
+        },
+        {
+            "session_id": "disk-session",
+            "tool": "find_signal_loads",
+            "ok": True,
+            "latency_ms": 1.0,
+            "result_bytes": 1,
+            "diagnostics": {
+                "source_graph_phase": "complete",
+                "source_graph_cache_tier": "memory",
+                "source_graph_disk_validation_outcome": "not_checked",
+            },
+        },
+    ]
+    aggregate = usage_telemetry.aggregate(records)
+    report = aggregate["source_graph"]
+    rendered = telemetry_report.render(aggregate)
+    probe_env = os.environ.copy()
+    probe_env.pop("TRACEWEAVE_TELEMETRY", None)
+    default_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import config; print(config.TELEMETRY_ENABLED)",
+        ],
+        cwd=ROOT,
+        env=probe_env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    sensitive_values_absent = not any(
+        token in json.dumps(sanitized, sort_keys=True)
+        for token in (
+            "sensitive_scope",
+            "sensitive_cache_root",
+            "sensitive_digest",
+            "sensitive_entry",
+        )
+    )
+    checks = {
+        "default_disabled": (
+            default_probe.returncode == 0 and default_probe.stdout.strip() == "False"
+        ),
+        "persistent_allowlist_matches_operation_metrics": (
+            persistent_fields == operation_fields
+        ),
+        "numeric_and_fixed_labels_persist": sanitized
+        == {
+            "source_graph_phase": "complete",
+            "source_graph_cache_tier": "disk",
+            "source_graph_disk_validation_outcome": "hit",
+            "source_graph_disk_hit_count": 1,
+            "source_graph_disk_lookup_ms": 2.5,
+        },
+        "sensitive_content_rejected": sensitive_values_absent,
+        "exact_hit_rate_aggregates": (
+            report["disk"]["lookup_count"] == 2
+            and report["disk"]["hit_count"] == 1
+            and report["disk"]["miss_count"] == 1
+            and report["disk"]["exact_hit_rate"] == 0.5
+        ),
+        "tier_latency_aggregates": (
+            report["cache_tiers"]["memory"]["calls"] == 1
+            and report["cache_tiers"]["disk"]["calls"] == 1
+            and report["cache_tiers"]["build"]["calls"] == 1
+            and report["cache_tiers"]["disk"]["call_latency_ms"]["p95"] == 20.0
+        ),
+        "report_exposes_operational_summary": (
+            "Source Graph disk cache — operational telemetry" in rendered
+            and "hit-rate=50.0%" in rendered
+        ),
+    }
+    return {
+        "gate": {"passed": all(checks.values()), "checks": checks},
+        "persistent_field_count": len(persistent_fields),
+        "calls_with_metrics": report["calls_with_metrics"],
+        "sessions_with_metrics": report["sessions_with_metrics"],
+        "disk_lookup_count": report["disk"]["lookup_count"],
+        "disk_exact_hit_rate": report["disk"]["exact_hit_rate"],
+        "cache_tier_calls": {
+            tier: report["cache_tiers"][tier]["calls"]
+            for tier in ("memory", "disk", "build")
+        },
+        "artifact_cache_scan": False,
+        "network_export": False,
+        "paths_or_artifact_digests_recorded": False,
+    }
+
+
 def _hand_performance_gate(
     workload: Mapping[str, Any], before: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1342,6 +1492,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         else _run_correctness_suite()
     )
     architecture = _architecture_receipt()
+    operational_telemetry = _operational_telemetry_receipt()
     by_name = {item["name"]: item for item in measured}
     hand_gate = _hand_performance_gate(by_name["hand_fixture"], before["hand_fixture"])
     representative_selected = "opentitan_core" in by_name and args.real_frontend
@@ -1358,6 +1509,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         and architecture["startup_full_design_enumeration"] is False
         and architecture["startup_cache_scan"] is False
         and architecture["sqlite_or_global_database"] is False
+        and operational_telemetry["gate"]["passed"]
         and hand_gate["passed"]
     )
     performance_available = representative_selected and (
@@ -1410,6 +1562,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         },
         "gate_targets": GATE_TARGETS,
         "architecture": architecture,
+        "operational_telemetry": operational_telemetry,
         "correctness_suite": correctness,
         "corruption_recovery": corruption,
         "x_trace_correctness": x_trace,
@@ -1446,7 +1599,14 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "sqlite_or_global_database": False,
             "phase3e_started": False,
             "default_on_authorized": False,
-            "next_step": "stop after Phase 3D; do not enter Phase 3E",
+            "operational_telemetry_persistent": operational_telemetry["gate"]["passed"],
+            "operational_telemetry_privacy_gate_passed": operational_telemetry["gate"][
+                "checks"
+            ]["sensitive_content_rejected"],
+            "operational_telemetry_report_gate_passed": operational_telemetry["gate"][
+                "checks"
+            ]["report_exposes_operational_summary"],
+            "next_step": ("optional opt-in operational soak; do not enter Phase 3E"),
         },
     }
 
