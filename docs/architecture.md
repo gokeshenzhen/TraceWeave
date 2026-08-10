@@ -148,10 +148,11 @@ Verification
   IR cache, admits at most one cold build per process, and executes its optional
   frontend in an isolated one-shot worker. An opt-in, default-disabled disk
   tier stores only canonical ConnectivityIR JSON plus a versioned manifest
-  under `TRACEWEAVE_CACHE_DIR`. It performs a direct exact-identity lookup only
-  after a memory miss, never scans at startup, and never bypasses fresh adapter
-  content validation. A verified hit constructs an independent query engine;
-  corruption is a safe miss and failed/cancelled builds are never published.
+  under `TRACEWEAVE_CACHE_DIR/source_graph/disk-v1`. It performs a direct
+  exact-identity lookup only after a memory miss, never scans at startup, and
+  never bypasses fresh adapter content validation. A verified hit constructs
+  an independent query engine; corruption is a safe miss and failed/cancelled
+  builds are never published.
   Adapter and graph queries use the
   lock-free cancellable worker path, so neither build nor query holds a waveform
   lock or blocks light event-loop calls. Cancellation terminates the request
@@ -167,9 +168,9 @@ Verification
   partial, while only complete coverage can establish `not_connected`;
   inconclusive/truncated negatives fall through to Static's structured
   unsupported result. `expand_assigns` changes only whether real assignment
-  evidence is exposed. `trace_x_source` uses the same process-memory artifact
-  runtime while retaining split-phase waveform locking and whole-trace restart
-  semantics.
+  evidence is exposed. `trace_x_source` uses the same memory-first artifact
+  runtime and optional exact disk tier while retaining split-phase waveform
+  locking and whole-trace restart semantics.
   The adapter content-hashes every ordered source/support input on the first
   request for a hierarchy handle. A bounded process-memory manifest cache then
   reuses that immutable compile-session snapshot; its key includes compile-log
@@ -547,10 +548,11 @@ verbatim instead of suggesting `build_kdb`.
 
 ## Usage Telemetry (`src/usage_telemetry.py`)
 
-Passive, local-only instrumentation built to answer the auto-debug v2
-retrospective's open question with data rather than guesses: *how often
-are the shipped primitives (cursor / period / diff_first_divergence)
-actually used on real workloads, and in what fraction of debug sessions?*
+Passive, local-only instrumentation built to answer two operational questions
+with data rather than guesses: *how often are the shipped primitives actually
+used on real workloads?* and *does opt-in Source Graph disk reuse produce exact
+cross-process hits and frontend build skips often enough to justify its lookup,
+validation, and storage cost?*
 
 - `server.call_tool` is the single choke point every tool call passes
   through. It wraps `_dispatch` in a `finally` that calls
@@ -565,17 +567,40 @@ actually used on real workloads, and in what fraction of debug sessions?*
   failure telemetry is analyzable without guessing from byte sizes. Long wave
   operations additionally attach a strictly whitelisted `diagnostics` block:
   wave-lock wait, fixed sweep phase, aggregate search count/total/max duration,
-  discovery phase durations, and preemption-to-cancel latency. It never records
-  waveform paths, scopes, search keywords, signal names, or values.
+  discovery phase durations, and preemption-to-cancel latency.
+- Source Graph calls use a second, independently enforced persistent allowlist.
+  It accepts only finite non-negative numeric aggregates plus fixed phase,
+  `memory`/`disk`/`build` tier, and disk-validation labels. Numeric fields cover
+  adapter/prepare/build/load/query and disk lookup/read/validate/write/publish/
+  eviction timing; exact hit/miss/corrupt/build-skip and frontend-launch counts;
+  IR/cache/disk bytes, entries and evictions; bounded resource peaks; and
+  X-trace artifact-attempt/restart counts. The recorder reapplies this allowlist
+  before writing, and aggregation reapplies it to loaded JSONL as defense in
+  depth. Artifact fingerprints/digests, cache/source/wave paths,
+  signal/scope/value content, free-form diagnostics, and exception text cannot
+  enter this block.
 - **A session = a `get_sim_paths` case.** The get_sim_paths handler calls
   `note_session(identity)`; a new case identity mints a new `session_id`,
   re-discovering the same case keeps it. This makes "sessions in which a
   primitive was used at least once" a meaningful presence metric.
 - Recording is strictly best-effort — every public function swallows its own
   exceptions so telemetry can never break a tool call.
-- `aggregate(records)` is a pure function (per-tool counts, ok-rate,
-  per-session distributions, tracked-feature presence) backing the offline
-  `scripts/telemetry_report.py` CLI; it is deliberately NOT an MCP tool.
+- `aggregate(records)` is a pure function backing the offline
+  `scripts/telemetry_report.py` CLI; it is deliberately NOT an MCP tool. In
+  addition to per-tool/session usage, its Source Graph block reports calls and
+  sessions with metrics, tier counts and p50/p90/p95/max call latency, exact
+  hit rate (`hit / (hit + miss)`), validation outcomes, build skips and
+  frontend launches, bytes/entries/evictions, internal timing distributions,
+  and per-tool tier summaries. Zero placeholders for stages that were not
+  entered are excluded from timing distributions. The report reads only the
+  append-only JSONL file and never discovers or scans artifact-cache entries.
 
 `TELEMETRY_ENABLED` defaults to False. Opt in with `TRACEWEAVE_TELEMETRY=1`
-(or `true`/`yes`/`on`). Telemetry is local-only; nothing is sent anywhere.
+(or `true`/`yes`/`on`) and restart/reconnect the MCP server. This switch is
+independent of `TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE`: both must be enabled to
+measure disk-cache usage, while either feature can operate without the other.
+Setting the variable alone does not create a directory; the first recorded
+call lazily creates `$TRACEWEAVE_CACHE_DIR/telemetry/` and appends to
+`usage.jsonl`. Existing records remain readable, including older records with
+no Source Graph diagnostics, which are excluded from Source Graph hit-rate
+denominators. Telemetry is local-only; nothing is sent anywhere.
