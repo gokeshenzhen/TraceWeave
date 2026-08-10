@@ -128,8 +128,28 @@ TraceWeave/
 
 TraceWeave requires Python `3.11+`.
 
+The recommended installation includes the pinned `pyslang` frontend used by
+Source Graph and keeps all Python packages in a repository-local `.venv`:
+
 ```bash
-pip install mcp pyyaml --user
+bash scripts/setup_source_graph.sh
+```
+
+The script installs `requirements-source-graph.txt` (the MCP runtime, PyYAML,
+and `pyslang==11.0.0`) into `.venv`. Run it after the initial clone and rerun it
+after a pull that changes that requirements file. It is idempotent, never edits
+shell or MCP client configuration, and prints the absolute interpreter path and
+optional Codex / Claude registration commands when it succeeds. Its read-only
+check mode performs no installation:
+
+```bash
+bash scripts/setup_source_graph.sh --check
+```
+
+For a minimal installation without the optional Source Graph frontend:
+
+```bash
+python3.11 -m pip install "mcp==1.27.0" pyyaml --user
 ```
 
 For FSDB support, one of these runtime sources must be available:
@@ -170,7 +190,7 @@ bash scripts/verify_fsdb.sh
 
 Any MCP client that supports stdio transport can connect to this server. The minimum configuration is:
 
-- command: `python3.11`
+- command: `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/setup_source_graph.sh` (`python3.11` remains valid for a separately managed minimal environment)
 - args: `["<TRACEWEAVE_HOME>/server.py"]`
 - env: provide either repo-local `third_party/verdi_runtime/linux64` or `VERDI_HOME` if FSDB support is required
 
@@ -192,7 +212,7 @@ Add this to `~/.claude.json`:
 {
   "mcpServers": {
     "TraceWeave": {
-      "command": "python3.11",
+      "command": "<TRACEWEAVE_HOME>/.venv/bin/python",
       "args": ["<TRACEWEAVE_HOME>/server.py"],
       "env": {
         "VERDI_HOME": "<verdi-install>",
@@ -226,7 +246,7 @@ required values explicitly in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.TraceWeave]
-command = "python3.11"
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 
@@ -292,7 +312,7 @@ the setup above, then restart or reconnect the MCP server:
 
 ```toml
 [mcp_servers.TraceWeave]
-command = "python3.11"
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
@@ -396,7 +416,18 @@ Source Graph stays aligned with the simulated compile session.
 
 Source Graph is enabled by default. If the MCP interpreter does not have the
 optional frontend, the dependency blocker is recorded and the request continues
-to Legacy Static. To use an isolated pinned frontend environment, configure:
+to Legacy Static. The recommended setup installs `pyslang==11.0.0` into the
+same repository-local interpreter used to launch the MCP server:
+
+```bash
+bash scripts/setup_source_graph.sh
+# Configure the MCP command as <TRACEWEAVE_HOME>/.venv/bin/python
+```
+
+No Source Graph-specific environment variable is required on that path: the
+default policy is enabled, expects frontend version `11.0.0`, and launches its
+isolated worker with the MCP interpreter. Sites that deliberately keep the
+native frontend in a separate pinned Python environment can instead configure:
 
 ```bash
 export TRACEWEAVE_SOURCE_GRAPH=1

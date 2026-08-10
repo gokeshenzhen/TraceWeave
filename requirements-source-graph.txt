@@ -1,0 +1,4 @@
+# Complete local runtime for TraceWeave with the optional Source Graph frontend.
+mcp==1.27.0
+PyYAML
+pyslang==11.0.0

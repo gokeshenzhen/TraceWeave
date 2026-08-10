@@ -91,6 +91,10 @@ def test_opt_in_disk_store_is_lazy_and_part_of_session_identity(tmp_path):
 
 
 def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
+    # Keep the default-value assertion independent of developer shell settings.
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", raising=False)
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", raising=False)
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", raising=False)
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "1")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", "/tmp/pinned/bin/python")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0")

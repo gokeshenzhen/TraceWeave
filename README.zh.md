@@ -121,8 +121,27 @@ TraceWeave/
 
 TraceWeave 需要 Python `3.11+`。
 
+推荐安装方式会包含 Source Graph 使用的固定版本 `pyslang` frontend，并把全部
+Python package 放进仓库本地 `.venv`：
+
 ```bash
-pip install mcp pyyaml --user
+bash scripts/setup_source_graph.sh
+```
+
+该脚本会把 `requirements-source-graph.txt`（MCP runtime、PyYAML 和
+`pyslang==11.0.0`）安装进 `.venv`。首次 clone 后运行一次；以后 pull 若改动了该
+requirements 文件，再运行一次即可。脚本可重复执行，不会修改 shell 或 MCP client
+配置；成功后会打印解释器绝对路径，以及可选的 Codex / Claude 注册命令。只读检查
+模式不会执行安装：
+
+```bash
+bash scripts/setup_source_graph.sh --check
+```
+
+若只需要不包含 Source Graph frontend 的最小安装：
+
+```bash
+python3.11 -m pip install "mcp==1.27.0" pyyaml --user
 ```
 
 要使用 FSDB,需要以下任一运行时:
@@ -154,7 +173,7 @@ bash scripts/verify_fsdb.sh
 
 任何支持 stdio 传输的 MCP 客户端都能连接本服务器。最小配置:
 
-- command:`python3.11`
+- command:运行 `scripts/setup_source_graph.sh` 后使用 `<TRACEWEAVE_HOME>/.venv/bin/python`（若另行管理不含 Source Graph 的最小环境，仍可使用 `python3.11`）
 - args:`["<TRACEWEAVE_HOME>/server.py"]`
 - env:如果需要 FSDB,提供仓库本地 `third_party/verdi_runtime/linux64` 或者 `VERDI_HOME`
 
@@ -175,7 +194,7 @@ IDE/GUI 启动或其他 MCP client 则不一定。为了让 Claude Code 配置�
 {
   "mcpServers": {
     "TraceWeave": {
-      "command": "python3.11",
+      "command": "<TRACEWEAVE_HOME>/.venv/bin/python",
       "args": ["<TRACEWEAVE_HOME>/server.py"],
       "env": {
         "VERDI_HOME": "<verdi-install>",
@@ -208,7 +227,7 @@ Codex 可以用 `env_vars` 转发其父进程已经继承的变量;固定值则�
 
 ```toml
 [mcp_servers.TraceWeave]
-command = "python3.11"
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 
@@ -271,7 +290,7 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 
 ```toml
 [mcp_servers.TraceWeave]
-command = "python3.11"
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
 env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
@@ -360,7 +379,17 @@ IR/source assignment evidence，不改变端点是否连通。
 使 Source Graph 与实际仿真 compile session 保持一致。
 
 Source Graph 默认启用。若 MCP Python 没有 optional frontend，会记录 dependency blocker
-并继续 Legacy Static。要使用隔离的 pinned frontend 环境，可配置：
+并继续 Legacy Static。推荐安装方式会把 `pyslang==11.0.0` 安装进启动 MCP server
+所使用的同一个仓库本地解释器：
+
+```bash
+bash scripts/setup_source_graph.sh
+# 将 MCP command 配置为 <TRACEWEAVE_HOME>/.venv/bin/python
+```
+
+这一路径不需要额外设置 Source Graph 环境变量：默认策略已经启用、预期 frontend
+版本为 `11.0.0`，并使用 MCP 解释器启动隔离 worker。只有明确需要把 native frontend
+放入另一套 pinned Python 环境的站点，才需要配置：
 
 ```bash
 export TRACEWEAVE_SOURCE_GRAPH=1

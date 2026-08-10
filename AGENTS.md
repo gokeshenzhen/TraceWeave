@@ -41,6 +41,24 @@ For performance optimizations:
    impact when relevant, and any behavioral or compatibility trade-offs before
    claiming a performance improvement.
 
+## Installation Discipline
+
+When a user explicitly asks to install TraceWeave, first run the read-only
+check:
+
+```bash
+bash scripts/setup_source_graph.sh --check
+```
+
+If the repository-local environment is missing or incompatible, run
+`bash scripts/setup_source_graph.sh` only as part of that requested installation.
+The setup creates/updates `.venv`, installs
+`requirements-source-graph.txt`, verifies the pinned `pyslang` frontend, and
+prints MCP registration commands. It never edits shell startup files, Codex
+configuration, or Claude configuration. Do not run dependency installation on
+ordinary analysis/debug tasks, and do not modify a user's MCP client
+configuration unless the user explicitly requests that additional action.
+
 ## TraceWeave Usage
 
 When the task involves simulation logs or waveforms (VCS/Xcelium logs, FSDB/VCD), the default toolchain is:
