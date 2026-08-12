@@ -7578,9 +7578,64 @@ def _format_error(exc: Exception) -> schemas.ToolErrorResult:
 # ═══════════════════════════════════════════════════════════════════
 
 
+_STDIO_TRANSPORT_PREPARED = False
+
+
+def _prepare_stdio_transport():
+    """Keep MCP protocol bytes separate from native-library stdout noise.
+
+    Verdi NPI and the native FSDB reader can write banners directly to file
+    descriptor 1, bypassing Python's logging and stream redirection. A single
+    non-JSON line corrupts an MCP stdio session. Preserve a private duplicate
+    of the original stdout for the protocol writer, then route both native fd 1
+    and ordinary Python stdout to stderr before any EDA library is opened.
+    """
+
+    global _STDIO_TRANSPORT_PREPARED
+    if _STDIO_TRANSPORT_PREPARED:
+        raise RuntimeError("MCP stdio transport is already prepared")
+
+    try:
+        stdout_fd = sys.stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("MCP stdio requires file-backed standard streams") from exc
+    if stderr_fd == 1:
+        raise RuntimeError("MCP stdio requires a stderr channel distinct from stdout")
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    protocol_fd = os.dup(stdout_fd)
+    os.set_inheritable(protocol_fd, False)
+    protocol_file = os.fdopen(
+        protocol_fd,
+        "w",
+        buffering=1,
+        encoding="utf-8",
+        errors="strict",
+        newline="\n",
+    )
+    protocol_stream = anyio.wrap_file(protocol_file)
+    try:
+        os.dup2(stderr_fd, 1, inheritable=False)
+    except Exception:
+        protocol_file.close()
+        raise
+
+    sys.stdout = sys.stderr
+    _STDIO_TRANSPORT_PREPARED = True
+    return protocol_stream
+
+
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    protocol_stdout = _prepare_stdio_transport()
+    try:
+        async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
+            await app.run(
+                read_stream, write_stream, app.create_initialization_options()
+            )
+    finally:
+        await protocol_stdout.aclose()
 
 
 if __name__ == "__main__":
