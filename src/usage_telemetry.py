@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import stat
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -399,10 +400,24 @@ def record_call(
         if safe_diagnostics:
             record["diagnostics"] = safe_diagnostics
         path = config.telemetry_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with _lock:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if path.parent.is_symlink():
+                return
+            os.chmod(path.parent, stat.S_IRWXU)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
+            try:
+                os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+                with os.fdopen(descriptor, "a", encoding="utf-8") as fh:
+                    descriptor = -1
+                    fh.write(line + "\n")
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
     except Exception:
         # Telemetry is strictly best-effort; never let it surface.
         pass

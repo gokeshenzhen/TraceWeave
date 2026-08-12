@@ -476,6 +476,23 @@ def _build_result(
             query.get("positive_fact") is True for query in queries
         ),
         "operations_covered": operations,
+        "coverage_status_counts": {
+            status: sum(query.get("coverage_status") == status for query in queries)
+            for status in ("complete", "partial", "inconclusive")
+        },
+        "query_status_counts": {
+            status: sum(query.get("query_status") == status for query in queries)
+            for status in ("found", "not_connected", "inconclusive")
+        },
+        "single_backend_provenance_count": sum(
+            query.get("single_backend_provenance") is True for query in queries
+        ),
+        "kdb_validation_status_counts": {
+            status: sum(
+                query.get("kdb_validation_status") == status for query in queries
+            )
+            for status in ("usable", "elaboration_error", "unavailable")
+        },
         "cache_tier_counts": {
             tier: sum(query.get("cache_tier") == tier for query in queries)
             for tier in ("build", "disk", "memory")
@@ -526,6 +543,13 @@ def _build_result(
             for query in memory_hits
         ),
     }
+    build_median = aggregate_result["query_wall_ms_by_tier"]["build"]["median"]
+    disk_median = aggregate_result["query_wall_ms_by_tier"]["disk"]["median"]
+    aggregate_result["disk_vs_build_median_reduction_percent"] = (
+        round((build_median - disk_median) / build_median * 100.0, 3)
+        if build_median and disk_median is not None
+        else None
+    )
     telemetry_matches = (
         telemetry_summary["calls_with_metrics"] == len(queries)
         and telemetry_summary["sessions_with_metrics"] >= args.sessions

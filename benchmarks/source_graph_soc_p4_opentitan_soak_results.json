@@ -1,0 +1,514 @@
+{
+  "aggregate": {
+    "actual_build_count": 5,
+    "cache_tier_counts": {
+      "build": 5,
+      "disk": 20,
+      "memory": 5
+    },
+    "coverage_status_counts": {
+      "complete": 0,
+      "inconclusive": 30,
+      "partial": 0
+    },
+    "disk_build_skip_count": 20,
+    "disk_corrupt_count": 0,
+    "disk_eviction_count": 0,
+    "disk_hit_count": 20,
+    "disk_lookup_outcome_count": 25,
+    "disk_lookup_wall_ms": {
+      "max": 262.522,
+      "median": 136.482,
+      "min": 0.843,
+      "n": 25,
+      "p95": 261.036
+    },
+    "disk_miss_count": 5,
+    "disk_read_wall_ms": {
+      "max": 0.615,
+      "median": 0.48,
+      "min": 0.319,
+      "n": 20,
+      "p95": 0.605
+    },
+    "disk_vs_build_median_reduction_percent": 90.198,
+    "fresh_process_count": 5,
+    "frontend_launch_count": 5,
+    "hierarchy_stats_stable": true,
+    "kdb_validation_status_counts": {
+      "elaboration_error": 30,
+      "unavailable": 0,
+      "usable": 0
+    },
+    "memory_hits_skip_disk": true,
+    "operations_covered": [
+      "driver",
+      "loads",
+      "path"
+    ],
+    "positive_fact_count": 30,
+    "query_count": 30,
+    "query_status_counts": {
+      "found": 30,
+      "inconclusive": 0,
+      "not_connected": 0
+    },
+    "query_wall_ms_by_tier": {
+      "build": {
+        "max": 5506.226,
+        "median": 4491.865,
+        "min": 4410.938,
+        "n": 5,
+        "p95": 5347.727
+      },
+      "disk": {
+        "max": 1454.973,
+        "median": 440.276,
+        "min": 355.789,
+        "n": 20,
+        "p95": 1451.555
+      },
+      "memory": {
+        "max": 253.097,
+        "median": 218.792,
+        "min": 216.36,
+        "n": 5,
+        "p95": 246.962
+      }
+    },
+    "single_backend_provenance_count": 30,
+    "source_graph_query_count": 30,
+    "structural_scan_complete": true,
+    "verified_disk_hits_skip_build": true
+  },
+  "assessment": {
+    "decision": "p4_operational_soak_passed_keep_opt_in",
+    "default_on_authorized": false,
+    "passed": true,
+    "persistent_worker_authorized": false,
+    "privacy_safe_aggregate_only": true,
+    "telemetry_cross_check_passed": true
+  },
+  "generated_at_utc": "2026-08-12T08:39:44.020454+00:00",
+  "measurement_policy": {
+    "disk_cache_default_changed": false,
+    "disk_cache_opt_in": true,
+    "disk_max_bytes": 536870912,
+    "disk_max_entries": 8,
+    "fresh_process_per_session": true,
+    "persistent_worker": false,
+    "production_backend_order_preserved": true,
+    "raw_cache_artifacts_committed": false,
+    "raw_telemetry_committed": false,
+    "requested_sessions": 5,
+    "startup_cache_scan": false,
+    "telemetry_opt_in": true
+  },
+  "repository_head": "a8f14820a16fa8096026b72cd76979b582d2d0fe",
+  "schema_version": "1.0",
+  "session_aggregates": [
+    {
+      "actual_build_count": 5,
+      "cache_bytes_max": 6702450,
+      "cache_entry_count_max": 5,
+      "cache_tier_counts": {
+        "build": 5,
+        "disk": 0,
+        "memory": 1
+      },
+      "disk_build_skip_count": 0,
+      "disk_corrupt_count": 0,
+      "disk_eviction_count": 0,
+      "disk_hit_count": 0,
+      "disk_lookup_outcome_count": 5,
+      "disk_miss_count": 5,
+      "frontend_launch_count": 5,
+      "hierarchy_stats": {
+        "class_count": 1171,
+        "file_count": 1117,
+        "instance_count": 34101,
+        "interface_count": 51,
+        "module_count": 986,
+        "tree_depth": 14,
+        "uvm_file_count": 109
+      },
+      "ordinal": 0,
+      "positive_fact_count": 6,
+      "query_count": 6,
+      "session_anchored": true,
+      "source_graph_query_count": 6,
+      "structural_scan": {
+        "coverage_status": "complete",
+        "eligible_file_count": 1117,
+        "files_scanned": 1117,
+        "total_risks": 2064,
+        "wall_ms": 71265.245
+      }
+    },
+    {
+      "actual_build_count": 0,
+      "cache_bytes_max": 1545322,
+      "cache_entry_count_max": 1,
+      "cache_tier_counts": {
+        "build": 0,
+        "disk": 5,
+        "memory": 1
+      },
+      "disk_build_skip_count": 5,
+      "disk_corrupt_count": 0,
+      "disk_eviction_count": 0,
+      "disk_hit_count": 5,
+      "disk_lookup_outcome_count": 5,
+      "disk_miss_count": 0,
+      "frontend_launch_count": 0,
+      "hierarchy_stats": {
+        "class_count": 1171,
+        "file_count": 1117,
+        "instance_count": 34101,
+        "interface_count": 51,
+        "module_count": 986,
+        "tree_depth": 14,
+        "uvm_file_count": 109
+      },
+      "ordinal": 1,
+      "positive_fact_count": 6,
+      "query_count": 6,
+      "session_anchored": true,
+      "source_graph_query_count": 6,
+      "structural_scan": {
+        "coverage_status": "complete",
+        "eligible_file_count": 1117,
+        "files_scanned": 1117,
+        "total_risks": 2064,
+        "wall_ms": 71169.02
+      }
+    },
+    {
+      "actual_build_count": 0,
+      "cache_bytes_max": 1545322,
+      "cache_entry_count_max": 1,
+      "cache_tier_counts": {
+        "build": 0,
+        "disk": 5,
+        "memory": 1
+      },
+      "disk_build_skip_count": 5,
+      "disk_corrupt_count": 0,
+      "disk_eviction_count": 0,
+      "disk_hit_count": 5,
+      "disk_lookup_outcome_count": 5,
+      "disk_miss_count": 0,
+      "frontend_launch_count": 0,
+      "hierarchy_stats": {
+        "class_count": 1171,
+        "file_count": 1117,
+        "instance_count": 34101,
+        "interface_count": 51,
+        "module_count": 986,
+        "tree_depth": 14,
+        "uvm_file_count": 109
+      },
+      "ordinal": 2,
+      "positive_fact_count": 6,
+      "query_count": 6,
+      "session_anchored": true,
+      "source_graph_query_count": 6,
+      "structural_scan": {
+        "coverage_status": "complete",
+        "eligible_file_count": 1117,
+        "files_scanned": 1117,
+        "total_risks": 2064,
+        "wall_ms": 71165.41
+      }
+    },
+    {
+      "actual_build_count": 0,
+      "cache_bytes_max": 1545322,
+      "cache_entry_count_max": 1,
+      "cache_tier_counts": {
+        "build": 0,
+        "disk": 5,
+        "memory": 1
+      },
+      "disk_build_skip_count": 5,
+      "disk_corrupt_count": 0,
+      "disk_eviction_count": 0,
+      "disk_hit_count": 5,
+      "disk_lookup_outcome_count": 5,
+      "disk_miss_count": 0,
+      "frontend_launch_count": 0,
+      "hierarchy_stats": {
+        "class_count": 1171,
+        "file_count": 1117,
+        "instance_count": 34101,
+        "interface_count": 51,
+        "module_count": 986,
+        "tree_depth": 14,
+        "uvm_file_count": 109
+      },
+      "ordinal": 3,
+      "positive_fact_count": 6,
+      "query_count": 6,
+      "session_anchored": true,
+      "source_graph_query_count": 6,
+      "structural_scan": {
+        "coverage_status": "complete",
+        "eligible_file_count": 1117,
+        "files_scanned": 1117,
+        "total_risks": 2064,
+        "wall_ms": 70743.679
+      }
+    },
+    {
+      "actual_build_count": 0,
+      "cache_bytes_max": 1545322,
+      "cache_entry_count_max": 1,
+      "cache_tier_counts": {
+        "build": 0,
+        "disk": 5,
+        "memory": 1
+      },
+      "disk_build_skip_count": 5,
+      "disk_corrupt_count": 0,
+      "disk_eviction_count": 0,
+      "disk_hit_count": 5,
+      "disk_lookup_outcome_count": 5,
+      "disk_miss_count": 0,
+      "frontend_launch_count": 0,
+      "hierarchy_stats": {
+        "class_count": 1171,
+        "file_count": 1117,
+        "instance_count": 34101,
+        "interface_count": 51,
+        "module_count": 986,
+        "tree_depth": 14,
+        "uvm_file_count": 109
+      },
+      "ordinal": 4,
+      "positive_fact_count": 6,
+      "query_count": 6,
+      "session_anchored": true,
+      "source_graph_query_count": 6,
+      "structural_scan": {
+        "coverage_status": "complete",
+        "eligible_file_count": 1117,
+        "files_scanned": 1117,
+        "total_risks": 2064,
+        "wall_ms": 71379.36
+      }
+    }
+  ],
+  "soak": "source_graph_soc_p4_operational_soak",
+  "telemetry": {
+    "by_tool": {
+      "explain_signal_driver": {
+        "actual_build_count": 4,
+        "cache_tiers": {
+          "build": 4,
+          "disk": 16,
+          "memory": 0
+        },
+        "call_latency_ms_by_tier": {
+          "build": {
+            "max": 5506.0,
+            "median": 4451.9,
+            "min": 4410.7,
+            "n": 4,
+            "p90": 5201.68,
+            "p95": 5353.84,
+            "total": 18820.5
+          },
+          "disk": {
+            "max": 1454.6,
+            "median": 433.5,
+            "min": 355.3,
+            "n": 16,
+            "p90": 1448.45,
+            "p95": 1451.825,
+            "total": 10636.2
+          },
+          "memory": {
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "n": 0,
+            "p90": 0,
+            "p95": 0,
+            "total": 0
+          }
+        },
+        "calls": 20,
+        "disk_build_skip_count": 16,
+        "disk_corrupt_count": 0,
+        "disk_exact_hit_rate": 0.8,
+        "disk_hit_count": 16,
+        "disk_lookup_count": 20,
+        "disk_miss_count": 4,
+        "frontend_launch_count": 4,
+        "sessions": 5
+      },
+      "find_signal_loads": {
+        "actual_build_count": 1,
+        "cache_tiers": {
+          "build": 1,
+          "disk": 4,
+          "memory": 0
+        },
+        "call_latency_ms_by_tier": {
+          "build": {
+            "max": 4713.3,
+            "median": 4713.3,
+            "min": 4713.3,
+            "n": 1,
+            "p90": 4713.3,
+            "p95": 4713.3,
+            "total": 4713.3
+          },
+          "disk": {
+            "max": 491.6,
+            "median": 485.5,
+            "min": 478.7,
+            "n": 4,
+            "p90": 491.27000000000004,
+            "p95": 491.435,
+            "total": 1941.3000000000002
+          },
+          "memory": {
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "n": 0,
+            "p90": 0,
+            "p95": 0,
+            "total": 0
+          }
+        },
+        "calls": 5,
+        "disk_build_skip_count": 4,
+        "disk_corrupt_count": 0,
+        "disk_exact_hit_rate": 0.8,
+        "disk_hit_count": 4,
+        "disk_lookup_count": 5,
+        "disk_miss_count": 1,
+        "frontend_launch_count": 1,
+        "sessions": 5
+      },
+      "trace_signal_path": {
+        "actual_build_count": 0,
+        "cache_tiers": {
+          "build": 0,
+          "disk": 0,
+          "memory": 5
+        },
+        "call_latency_ms_by_tier": {
+          "build": {
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "n": 0,
+            "p90": 0,
+            "p95": 0,
+            "total": 0
+          },
+          "disk": {
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "n": 0,
+            "p90": 0,
+            "p95": 0,
+            "total": 0
+          },
+          "memory": {
+            "max": 252.8,
+            "median": 218.5,
+            "min": 216.1,
+            "n": 5,
+            "p90": 240.52,
+            "p95": 246.66,
+            "total": 1126.4
+          }
+        },
+        "calls": 5,
+        "disk_build_skip_count": 0,
+        "disk_corrupt_count": 0,
+        "disk_exact_hit_rate": 0.0,
+        "disk_hit_count": 0,
+        "disk_lookup_count": 0,
+        "disk_miss_count": 0,
+        "frontend_launch_count": 0,
+        "sessions": 5
+      }
+    },
+    "cache_tiers": {
+      "build": {
+        "call_latency_ms": {
+          "max": 5506.0,
+          "median": 4491.6,
+          "min": 4410.7,
+          "n": 5,
+          "p90": 5188.92,
+          "p95": 5347.46,
+          "total": 23533.8
+        },
+        "calls": 5,
+        "sessions": 1
+      },
+      "disk": {
+        "call_latency_ms": {
+          "max": 1454.6,
+          "median": 439.95,
+          "min": 355.3,
+          "n": 20,
+          "p90": 1446.49,
+          "p95": 1451.085,
+          "total": 12577.5
+        },
+        "calls": 20,
+        "sessions": 4
+      },
+      "memory": {
+        "call_latency_ms": {
+          "max": 252.8,
+          "median": 218.5,
+          "min": 216.1,
+          "n": 5,
+          "p90": 240.52,
+          "p95": 246.66,
+          "total": 1126.4
+        },
+        "calls": 5,
+        "sessions": 5
+      }
+    },
+    "calls_with_metrics": 30,
+    "disk": {
+      "build_skip_count": 20,
+      "bytes_max": 6702450,
+      "bytes_read": 26809800,
+      "bytes_written": 6702450,
+      "corrupt_count": 0,
+      "entry_count_max": 5,
+      "eviction_count": 0,
+      "exact_hit_rate": 0.8,
+      "hit_count": 20,
+      "lookup_count": 25,
+      "miss_count": 5
+    },
+    "execution": {
+      "actual_build_count": 5,
+      "coalesced_waiter_count": 0,
+      "frontend_launch_count": 5,
+      "memory_cache_eviction_count": 0,
+      "memory_cache_oversize_bypass_count": 0
+    },
+    "sessions_with_metrics": 5,
+    "total_records": 40,
+    "total_sessions": 5,
+    "validation_outcomes": {
+      "hit": 20,
+      "not_checked": 5,
+      "not_found": 5
+    }
+  }
+}

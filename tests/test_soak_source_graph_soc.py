@@ -39,11 +39,14 @@ def _query(tool: str, tier: str, *, hit: int = 0, miss: int = 0) -> dict:
     return {
         "tool": tool,
         "operation": operation,
-        "wall_ms": 2.0,
+        "wall_ms": {"build": 10.0, "disk": 2.0, "memory": 1.0}[tier],
         "actual_backend": "source_graph",
         "single_backend_provenance": True,
+        "kdb_validation_status": "elaboration_error",
         "positive_fact": True,
         "cache_tier": tier,
+        "coverage_status": "inconclusive",
+        "query_status": "found",
         "metrics": {
             "disk_hit_count": hit,
             "disk_miss_count": miss,
@@ -170,6 +173,19 @@ def test_build_result_passes_five_sessions_and_twenty_five_lookups(tmp_path):
     assert result["aggregate"]["disk_lookup_outcome_count"] == 25
     assert result["aggregate"]["disk_miss_count"] == 5
     assert result["aggregate"]["disk_hit_count"] == 20
+    assert result["aggregate"]["disk_vs_build_median_reduction_percent"] == 80.0
+    assert result["aggregate"]["coverage_status_counts"] == {
+        "complete": 0,
+        "partial": 0,
+        "inconclusive": 30,
+    }
+    assert result["aggregate"]["query_status_counts"]["found"] == 30
+    assert result["aggregate"]["single_backend_provenance_count"] == 30
+    assert result["aggregate"]["kdb_validation_status_counts"] == {
+        "usable": 0,
+        "elaboration_error": 30,
+        "unavailable": 0,
+    }
     assert result["aggregate"]["verified_disk_hits_skip_build"] is True
     assert result["aggregate"]["memory_hits_skip_disk"] is True
     assert soak._contains_forbidden_evidence_key(result) is False

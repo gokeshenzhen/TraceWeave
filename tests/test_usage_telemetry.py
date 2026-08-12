@@ -4,6 +4,7 @@ and the pure aggregation function backing scripts/telemetry_report.py."""
 import importlib
 import json
 import os
+import stat
 import subprocess
 import sys
 
@@ -66,6 +67,38 @@ def test_record_call_appends_jsonl(tmp_path, monkeypatch):
     assert rec["result_bytes"] == 120
     assert rec["case"] == "cc28"
     assert rec["session_id"]
+    assert stat.S_IMODE(log.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_record_call_tightens_existing_telemetry_permissions(tmp_path, monkeypatch):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    log.parent.mkdir(mode=0o755)
+    log.write_text("", encoding="utf-8")
+    log.chmod(0o644)
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call("period", {}, result_bytes=10, ok=True)
+
+    assert stat.S_IMODE(log.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_record_call_refuses_symlink_telemetry_directory(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    telemetry = tmp_path / "telemetry"
+    telemetry.symlink_to(target, target_is_directory=True)
+    log = telemetry / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call("period", {}, result_bytes=10, ok=True)
+
+    assert not (target / "usage.jsonl").exists()
 
 
 def test_record_call_error_code_written_on_failure_only(tmp_path, monkeypatch):
