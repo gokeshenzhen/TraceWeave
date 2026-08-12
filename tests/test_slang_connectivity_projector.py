@@ -102,8 +102,18 @@ def test_concat_mapping_preserves_ordered_slice_bits():
     assert _map_concat_to_target(sources, SignalSelection("short", (3, 2), "x")) is None
 
 
-def test_source_paths_normalize_against_projection_root(tmp_path: Path):
+def test_source_paths_normalize_against_projection_root(tmp_path: Path, monkeypatch):
     source = tmp_path / "rtl" / "core.sv"
 
     assert normalize_source_path(str(source), tmp_path) == "rtl/core.sv"
     assert normalize_source_path(str(source), None) == source.as_posix()
+
+    worker_root = tmp_path / "traceweave" / "worker"
+    external_source = tmp_path / "soc" / "rtl" / "core.sv"
+    worker_root.mkdir(parents=True)
+    monkeypatch.chdir(worker_root)
+    frontend_name = "../../soc/rtl/core.sv"
+
+    assert normalize_source_path(frontend_name, worker_root) == (
+        external_source.resolve().as_posix()
+    )

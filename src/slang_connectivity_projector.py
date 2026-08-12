@@ -1533,9 +1533,19 @@ def normalize_source_path(file_name: str, source_root: Path | None) -> str:
     if source_root is None:
         return path.as_posix()
     try:
-        return path.resolve().relative_to(source_root.resolve()).as_posix()
-    except (OSError, ValueError):
+        resolved = path.resolve()
+        root = source_root.resolve()
+    except OSError:
         return path.as_posix()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        # Frontends commonly report sources outside the worker cwd as a
+        # relative ``../../...`` path even when the compile manifest used an
+        # absolute input.  Preserve in-root paths as portable IR-relative
+        # names, but make an out-of-root location unambiguous for public
+        # driver/load/path results.
+        return resolved.as_posix()
 
 
 def _source_file_count(definitions: Sequence[DefinitionTemplate]) -> int:
