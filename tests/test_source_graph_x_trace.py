@@ -332,6 +332,41 @@ def test_trace_backend_preserves_partial_positive_and_query_identity():
     assert "tb.dut.left.q" not in str(receipt)
 
 
+def test_trace_backend_accepts_namespaced_frontend_diagnostic_gap():
+    response = _driver_response(status="found", coverage="inconclusive")
+    response["_source_graph_query_receipt"]["unresolved_boundary_codes"] = [
+        "bind_semantics",
+        "frontend_diagnostic:ConcatWithStringInt",
+        "frontend_diagnostic:UnknownPackage",
+    ]
+    backend = _guarded_backend(response)
+
+    result = _query(backend)
+    receipt = backend.ledger.to_dict()
+
+    assert result["driver_status"] == "resolved"
+    assert receipt["query_count"] == 1
+    assert receipt["positive_query_count"] == 1
+    assert receipt["query_gap_codes"] == [
+        "bind_semantics",
+        "frontend_diagnostic",
+    ]
+
+
+def test_trace_backend_invalid_gap_receipt_does_not_partially_mutate_ledger():
+    response = _driver_response(status="found", coverage="inconclusive")
+    response["_source_graph_query_receipt"]["unresolved_boundary_codes"] = [
+        "unexpected:project_path"
+    ]
+    backend = _guarded_backend(response)
+
+    with pytest.raises(ValueError, match="fixed query gap label"):
+        _query(backend)
+
+    assert backend.ledger.to_dict()["query_count"] == 0
+    assert backend.ledger.to_dict()["query_statuses"] == []
+
+
 def test_trace_backend_separates_complete_and_inconclusive_negatives():
     complete = _guarded_backend(
         _driver_response(status="not_connected", coverage="complete")

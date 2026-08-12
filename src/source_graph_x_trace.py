@@ -39,6 +39,26 @@ def _fixed_label(value: str, label: str) -> str:
     return value
 
 
+def _query_gap_label(value: str) -> str:
+    """Return an identity-free public label for an internal coverage gap.
+
+    Frontend diagnostics intentionally retain their tool-specific diagnostic
+    code inside the Connectivity IR (for example
+    ``frontend_diagnostic:UnknownPackage``).  The X-trace ledger is a compact,
+    privacy-safe aggregate and must not reject an otherwise valid query merely
+    because a frontend uses a namespaced, CamelCase diagnostic code.  Collapse
+    that established namespace to one fixed label; continue rejecting unknown
+    non-fixed shapes so arbitrary strings cannot enter the public ledger.
+    """
+
+    if _FIXED_LABEL_RE.fullmatch(value):
+        return value
+    namespace, separator, detail = value.partition(":")
+    if namespace == "frontend_diagnostic" and separator and detail:
+        return "frontend_diagnostic"
+    raise ValueError("unresolved boundary code must be a fixed query gap label")
+
+
 class SourceGraphTraceScopeExpansion(RuntimeError):
     """A proved target lies outside the current artifact projection."""
 
@@ -150,6 +170,11 @@ class SourceGraphTraceQueryLedger:
         recursive: bool,
         query_receipt: Mapping[str, Any],
     ) -> None:
+        raw_gap_codes = query_receipt.get("unresolved_boundary_codes", ())
+        if isinstance(raw_gap_codes, (str, bytes)) or not isinstance(
+            raw_gap_codes, Sequence
+        ):
+            raise ValueError("unresolved boundary codes must be a sequence")
         identity = SourceGraphQueryIdentity(
             target=ConnectivityTarget(
                 operation=QueryOperation.DRIVER,
@@ -158,9 +183,7 @@ class SourceGraphTraceQueryLedger:
             max_depth=max_depth,
             recursive=recursive,
         )
-        self.query_fingerprints_sha256.append(
-            compute_source_graph_query_key(identity).digest
-        )
+        query_fingerprint = compute_source_graph_query_key(identity).digest
         status = _fixed_label(
             str(query_receipt.get("status") or "unknown"), "query status"
         )
@@ -168,12 +191,14 @@ class SourceGraphTraceQueryLedger:
             str(query_receipt.get("coverage_status") or "inconclusive"),
             "coverage status",
         )
+        gap_codes = {_query_gap_label(str(code)) for code in raw_gap_codes}
+
+        # Mutate only after the complete receipt has been validated.  A bad
+        # internal receipt must not leave a partially recorded public query.
+        self.query_fingerprints_sha256.append(query_fingerprint)
         self.query_statuses.append(status)
         self.coverage_statuses.append(coverage)
-        self.unresolved_boundary_codes.update(
-            _fixed_label(str(code), "unresolved boundary code")
-            for code in query_receipt.get("unresolved_boundary_codes", ())
-        )
+        self.unresolved_boundary_codes.update(gap_codes)
         self.last_query_receipt = dict(query_receipt)
         if status == "found":
             self.positive_query_count += 1
