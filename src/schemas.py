@@ -694,6 +694,7 @@ class BackendAttemptReceipt(SchemaModel):
         "blocked",
         "timed_out",
         "inconclusive",
+        "skipped",
     ]
     reason: str | None = None
     coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
@@ -978,6 +979,8 @@ class BackendStatus(SchemaModel):
     whole_trace_restart_reasons: list[str] = Field(default_factory=list)
     single_backend_provenance: bool | None = None
     fallback_reason: str | None = None
+    connectivity_route: Literal["auto", "source_graph"] = "auto"
+    connectivity_route_error: Literal["connectivity_route_config_invalid"] | None = None
     source_graph: SourceGraphBackendReceipt | None = None
     execution_mode: Literal["local", "lsf", "invalid"] | None = None
     scheduler_status: (

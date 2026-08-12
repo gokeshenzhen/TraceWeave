@@ -398,6 +398,21 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+当已有可用 KDB，但需要专门验证 Source Graph 的 driver、load、path 或 X-trace
+路径时，可以显式选择：
+
+```bash
+export TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph
+```
+
+这不会重命名、移动或破坏 KDB；上述四个公共 connectivity 工具不会构造或调用
+NPI，Source Graph 无法安全回答时仍按正常规则整体 fallback 到 Static。回执会保留
+`kdb_validation_status="usable"`，报告 `connectivity_route="source_graph"`，并把
+NPI attempt 记为 `status="skipped"`、`reason="npi_skipped_by_policy"`。取消该变量或
+设为 `auto` 即恢复默认的 trusted NPI -> Source Graph -> Legacy Static 路由。非法值
+不会悄悄改变路由，而是保持 `auto` 并报告固定的
+`connectivity_route_config_invalid`。
+
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：
 

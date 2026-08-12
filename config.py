@@ -190,6 +190,32 @@ KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"
 
 
 @dataclass(frozen=True)
+class ConnectivityRouteConfig:
+    """Validated process-local route for public connectivity tools.
+
+    ``auto`` preserves trusted NPI, Source Graph, then Legacy Static.
+    ``source_graph`` explicitly skips NPI without hiding or mutating a usable
+    KDB. Invalid input safely preserves ``auto`` with a fixed error label.
+    """
+
+    mode: str = "auto"
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_connectivity_route_config() -> ConnectivityRouteConfig:
+    raw_mode = os.environ.get("TRACEWEAVE_CONNECTIVITY_ROUTE", "auto").strip().lower()
+    if raw_mode in {"", "auto"}:
+        return ConnectivityRouteConfig()
+    if raw_mode == "source_graph":
+        return ConnectivityRouteConfig(mode="source_graph")
+    return ConnectivityRouteConfig(error_code="connectivity_route_config_invalid")
+
+
+@dataclass(frozen=True)
 class SourceGraphExecutionConfig:
     """Validated process-local policy for the optional Source Graph worker.
 

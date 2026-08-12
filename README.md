@@ -436,6 +436,24 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+When a usable KDB is present but you specifically need to exercise Source Graph
+for a driver, load, path, or X-trace test, select it explicitly:
+
+```bash
+export TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph
+```
+
+This does not rename, move, or invalidate the KDB. It avoids constructing or
+calling NPI for those four public connectivity tools, then uses the normal
+Source Graph-to-Static fallback if Source Graph cannot answer safely. The
+receipt keeps `kdb_validation_status="usable"`, reports
+`connectivity_route="source_graph"`, and records the NPI attempt as
+`status="skipped"` with `reason="npi_skipped_by_policy"`. Unset the variable or
+set it to `auto` to restore the default trusted NPI -> Source Graph -> Legacy
+Static route. Invalid values preserve `auto` and surface the fixed
+`connectivity_route_config_invalid` receipt instead of silently changing the
+route.
+
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
 

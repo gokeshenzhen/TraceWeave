@@ -49,6 +49,7 @@ from config import (
     DEFAULT_MAX_GROUPS,
     DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
+    get_connectivity_route_config,
     get_fsdb_runtime_info,
     get_source_graph_execution_config,
 )
@@ -434,6 +435,44 @@ def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
             "kdb_flow": "none",
             "kdb_hint": None,
         }
+
+
+_NPI_SKIPPED_BY_POLICY = "npi_skipped_by_policy"
+
+
+def _select_public_npi_backend(*, backend_status: dict, deferred, selector):
+    """Apply the explicit route before constructing any NPI backend.
+
+    The selector-signature check retains compatibility with older or mocked
+    selectors that predate the injected deferred-fallback argument.
+    """
+
+    route = get_connectivity_route_config()
+    backend_status["connectivity_route"] = route.mode
+    if route.error_code:
+        backend_status["connectivity_route_error"] = route.error_code
+    else:
+        backend_status.pop("connectivity_route_error", None)
+    if route.mode == "source_graph":
+        return deferred, _NPI_SKIPPED_BY_POLICY
+
+    try:
+        selector_parameters = inspect.signature(selector).parameters.values()
+        supports_injected_fallback = any(
+            parameter.name == "fallback"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in selector_parameters
+        )
+        backend = (
+            selector(backend_status, fallback=deferred)
+            if supports_injected_fallback
+            else selector(backend_status)
+        )
+    except Exception:  # noqa: BLE001
+        # Backend construction must not deny Source Graph its fallback slot.
+        # Keep exception text out of both public receipts and metrics.
+        return deferred, "npi_backend_initialization_failed"
+    return backend, None
 
 
 def _resolve_session_simulator(args: dict) -> str:
@@ -1685,14 +1724,11 @@ async def _route_public_connectivity(
 
     backend_status = _safe_probe_backend(args["compile_log"], simulator)
     deferred = DeferredConnectivityFallbackBackend()
-    npi_selection_reason: str | None = None
-    try:
-        npi_backend = select_backend(backend_status, fallback=deferred)
-    except Exception:  # noqa: BLE001
-        # Backend construction must not deny Source Graph its fallback slot.
-        # Keep exception text out of both public receipts and metrics.
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_backend, npi_selection_reason = _select_public_npi_backend(
+        backend_status=backend_status,
+        deferred=deferred,
+        selector=select_backend,
+    )
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
@@ -1752,7 +1788,13 @@ async def _route_public_connectivity(
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                (
+                    "skipped"
+                    if npi_selection_reason == _NPI_SKIPPED_BY_POLICY
+                    else "failed"
+                    if npi_selection_reason
+                    else "unavailable"
+                ),
                 reason=fallback_reason,
             )
         )
@@ -2176,12 +2218,11 @@ async def _route_public_signal_path(
 
     backend_status = _safe_probe_backend(args["compile_log"], simulator)
     deferred = DeferredConnectivityFallbackBackend()
-    npi_selection_reason: str | None = None
-    try:
-        npi_backend = select_backend(backend_status, fallback=deferred)
-    except Exception:  # noqa: BLE001
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_backend, npi_selection_reason = _select_public_npi_backend(
+        backend_status=backend_status,
+        deferred=deferred,
+        selector=select_backend,
+    )
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
@@ -2246,7 +2287,13 @@ async def _route_public_signal_path(
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                (
+                    "skipped"
+                    if npi_selection_reason == _NPI_SKIPPED_BY_POLICY
+                    else "failed"
+                    if npi_selection_reason
+                    else "unavailable"
+                ),
                 reason=fallback_reason,
             )
         )
@@ -2740,22 +2787,11 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     max_depth = args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH)
     backend_status = _safe_probe_backend(compile_log, simulator)
     deferred = DeferredConnectivityFallbackBackend()
-    npi_selection_reason: str | None = None
-    try:
-        selector_parameters = inspect.signature(select_backend).parameters.values()
-        supports_injected_fallback = any(
-            parameter.name == "fallback"
-            or parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in selector_parameters
-        )
-        npi_backend = (
-            select_backend(backend_status, fallback=deferred)
-            if supports_injected_fallback
-            else select_backend(backend_status)
-        )
-    except Exception:  # noqa: BLE001
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_backend, npi_selection_reason = _select_public_npi_backend(
+        backend_status=backend_status,
+        deferred=deferred,
+        selector=select_backend,
+    )
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
@@ -2835,7 +2871,13 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                (
+                    "skipped"
+                    if npi_selection_reason == _NPI_SKIPPED_BY_POLICY
+                    else "failed"
+                    if npi_selection_reason
+                    else "unavailable"
+                ),
                 reason=npi_reason,
             )
         )

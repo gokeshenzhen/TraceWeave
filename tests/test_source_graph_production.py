@@ -5,7 +5,12 @@ import sys
 
 import pytest
 
-from config import SourceGraphExecutionConfig, get_source_graph_execution_config
+from config import (
+    ConnectivityRouteConfig,
+    SourceGraphExecutionConfig,
+    get_connectivity_route_config,
+    get_source_graph_execution_config,
+)
 from src.source_graph_production import SourceGraphRuntimeSession
 
 
@@ -112,6 +117,21 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", "not-a-number")
     assert get_source_graph_execution_config().error_code == (
         "source_graph_execution_config_invalid"
+    )
+
+
+def test_connectivity_route_is_explicit_and_invalid_values_preserve_auto(monkeypatch):
+    monkeypatch.delenv("TRACEWEAVE_CONNECTIVITY_ROUTE", raising=False)
+    assert get_connectivity_route_config() == ConnectivityRouteConfig()
+
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+    assert get_connectivity_route_config() == ConnectivityRouteConfig(
+        mode="source_graph"
+    )
+
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "npi-off")
+    assert get_connectivity_route_config() == ConnectivityRouteConfig(
+        error_code="connectivity_route_config_invalid"
     )
 
 

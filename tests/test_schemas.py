@@ -214,6 +214,8 @@ def test_backend_status_keeps_legacy_payload_backward_compatible():
     assert status.attempted_backend is None
     assert status.attempted_backends == []
     assert status.source_graph is None
+    assert status.connectivity_route == "auto"
+    assert status.connectivity_route_error is None
 
 
 def test_backend_status_validates_additive_source_graph_route_receipt():
@@ -224,11 +226,12 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
             "selected_backend": "source_graph",
             "attempted_backend": "source_graph",
             "actual_backend": "source_graph",
+            "connectivity_route": "source_graph",
             "attempted_backends": [
                 {
                     "backend": "verdi_npi",
-                    "status": "unavailable",
-                    "reason": "npi_kdb_unavailable",
+                    "status": "skipped",
+                    "reason": "npi_skipped_by_policy",
                 },
                 {
                     "backend": "source_graph",
@@ -280,6 +283,8 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     )
 
     assert status.actual_backend == "source_graph"
+    assert status.connectivity_route == "source_graph"
+    assert status.attempted_backends[0].status == "skipped"
     assert status.source_graph.query_confidence == "partial"
     assert status.source_graph.coverage_files_total == 785
     assert status.source_graph.coverage_files_projected == 4

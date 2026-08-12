@@ -49,6 +49,7 @@ def _probe(*, with_kdb: bool = False) -> dict:
         "parser_match": "approximate",
         "kdb_path": "/private/kdb.elab++" if with_kdb else None,
         "kdb_flow": "vcs_two_step" if with_kdb else "none",
+        "kdb_validation_status": "usable" if with_kdb else "unavailable",
         "kdb_hint": None,
     }
 
@@ -432,6 +433,51 @@ async def test_npi_load_success_skips_source_graph_and_static(monkeypatch, tmp_p
     assert result.backend_status.source_graph is None
     assert npi.calls == 1
     assert static.load_calls == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["driver", "loads", "path"])
+async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
+    monkeypatch, tmp_path, operation
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend({})
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+
+    if operation == "driver":
+        result = await server._dispatch(
+            "explain_signal_driver", _driver_args(compile_log)
+        )
+    elif operation == "loads":
+        result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+    else:
+        result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    status = result.backend_status
+    assert result.backend == "source_graph"
+    assert status.kdb_validation_status == "usable"
+    assert status.connectivity_route == "source_graph"
+    assert status.connectivity_route_error is None
+    assert status.selected_backend == "source_graph"
+    assert status.actual_backend == "source_graph"
+    assert status.fallback_reason == "npi_skipped_by_policy"
+    assert [
+        (item.backend, item.status, item.reason) for item in status.attempted_backends
+    ] == [
+        ("verdi_npi", "skipped", "npi_skipped_by_policy"),
+        ("source_graph", "success", None),
+    ]
+    assert npi.calls == 0
+    assert static.driver_calls + static.load_calls + static.path_calls == 0
 
 
 @pytest.mark.anyio

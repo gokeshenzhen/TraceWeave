@@ -253,6 +253,7 @@ def _patch_route(
             "parser_match": "approximate",
             "kdb_path": "/private/kdb.elab++" if with_kdb else None,
             "kdb_flow": "vcs_two_step" if with_kdb else "none",
+            "kdb_validation_status": "usable" if with_kdb else "unavailable",
             "kdb_hint": None,
         },
     )
@@ -355,6 +356,58 @@ async def test_trusted_npi_terminal_result_skips_source_graph_and_static(
     assert result.backend_status.source_graph is None
     assert result.backend_status.whole_trace_restart_count == 0
     assert npi.calls == 1
+    assert static.calls == []
+
+
+@pytest.mark.anyio
+async def test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb(
+    monkeypatch, tmp_path
+):
+    compile_log, wave = _install_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker(ir=_deep_ir()))
+    static = TraceStaticBackend()
+
+    class MustNotRunNpi:
+        name = "verdi_npi"
+        execution_mode = "local"
+        uses_external_worker = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def find_driver(self, **kwargs):
+            del kwargs
+            self.calls += 1
+            raise AssertionError("explicit Source Graph route must not call NPI")
+
+    npi = MustNotRunNpi()
+    _patch_route(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+
+    status = result.backend_status
+    assert status.kdb_validation_status == "usable"
+    assert status.connectivity_route == "source_graph"
+    assert status.connectivity_route_error is None
+    assert status.selected_backend == "source_graph"
+    assert status.actual_backend == "source_graph"
+    assert status.fallback_reason == "npi_skipped_by_policy"
+    assert status.single_backend_provenance is True
+    assert [
+        (item.backend, item.status, item.reason) for item in status.attempted_backends
+    ] == [
+        ("verdi_npi", "skipped", "npi_skipped_by_policy"),
+        ("source_graph", "success", None),
+    ]
+    assert status.source_graph.single_artifact_provenance is True
+    assert npi.calls == 0
     assert static.calls == []
 
 
