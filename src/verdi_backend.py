@@ -24,11 +24,11 @@ parsed compile_command when available.
 from __future__ import annotations
 
 import os
-import re
 from typing import Any
 
 
 _KDB_DIRNAME = "kdb.elab++"
+_KDB_ELAB_ERROR_MARKER = ".hasElabcomError"
 _SETUP_FILENAME = "synopsys_sim.setup"
 
 
@@ -72,6 +72,16 @@ def probe_verdi_backend(
         if cached:
             kdb_path, kdb_flow = cached, "traceweave_cached"
 
+    kdb_validation_status = (
+        "usable"
+        if kdb_path is not None
+        else (
+            "elaboration_error"
+            if _failed_elab_kdb_under(case_dir)
+            else "unavailable"
+        )
+    )
+
     verdi_home = os.environ.get("VERDI_HOME")
     license_env = (
         os.environ.get("SNPSLMD_LICENSE_FILE")
@@ -84,6 +94,12 @@ def probe_verdi_backend(
             f"cross-hierarchy driver/load tracing (uses fan-in on the elaborated "
             f"netlist). Static source-trace serves as fallback when NPI cannot load."
         )
+    elif kdb_validation_status == "elaboration_error":
+        kdb_hint = (
+            "Verdi KDB rejected because its elaboration-error marker is present. "
+            "Inspect the KDB elaboration log and rebuild a clean elaborated KDB; "
+            "TraceWeave will use Source Graph meanwhile."
+        )
     else:
         kdb_hint = _build_kdb_hint(simulator, compile_result, verdi_home, license_env)
 
@@ -93,6 +109,7 @@ def probe_verdi_backend(
         "parser_match": "approximate",
         "kdb_path": kdb_path,
         "kdb_flow": kdb_flow,
+        "kdb_validation_status": kdb_validation_status,
         "kdb_hint": kdb_hint,
     }
 
@@ -118,7 +135,7 @@ def _probe_vcs_kdb(case_dir: str | None) -> tuple[str | None, str]:
     if case_dir is None:
         return None, "none"
     two_step = os.path.join(case_dir, "simv.daidir", _KDB_DIRNAME)
-    if os.path.isdir(two_step):
+    if os.path.isdir(two_step) and _elab_kdb_is_usable(two_step):
         return two_step, "vcs_two_step"
 
     setup_path = os.path.join(case_dir, _SETUP_FILENAME)
@@ -184,7 +201,38 @@ def _probe_traceweave_cached_kdb(
         / inputs["hash"]
         / _KDB_DIRNAME
     )
-    return str(candidate) if candidate.is_dir() else None
+    return (
+        str(candidate)
+        if candidate.is_dir() and _elab_kdb_is_usable(os.fspath(candidate))
+        else None
+    )
+
+
+def _elab_kdb_is_usable(path: str) -> bool:
+    return not os.path.isfile(os.path.join(path, _KDB_ELAB_ERROR_MARKER))
+
+
+def _elab_kdb_candidates(directory: str | None) -> list[str]:
+    """Return only the bounded direct/one-level elaborated-KDB candidates."""
+
+    if not directory or not os.path.isdir(directory):
+        return []
+    candidates = [os.path.join(directory, _KDB_DIRNAME)]
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return candidates
+    candidates.extend(
+        os.path.join(directory, entry, _KDB_DIRNAME) for entry in entries
+    )
+    return candidates
+
+
+def _failed_elab_kdb_under(directory: str | None) -> bool:
+    return any(
+        os.path.isdir(candidate) and not _elab_kdb_is_usable(candidate)
+        for candidate in _elab_kdb_candidates(directory)
+    )
 
 
 def _find_elab_kdb_under(directory: str) -> str | None:
@@ -194,19 +242,9 @@ def _find_elab_kdb_under(directory: str) -> str | None:
     that emit the elab DB next to (or inside) the case dir are both
     picked up.
     """
-    if not os.path.isdir(directory):
-        return None
-    direct = os.path.join(directory, _KDB_DIRNAME)
-    if os.path.isdir(direct):
-        return direct
-    try:
-        entries = os.listdir(directory)
-    except OSError:
-        return None
-    for entry in entries:
-        nested = os.path.join(directory, entry, _KDB_DIRNAME)
-        if os.path.isdir(nested):
-            return nested
+    for candidate in _elab_kdb_candidates(directory):
+        if os.path.isdir(candidate) and _elab_kdb_is_usable(candidate):
+            return candidate
     return None
 
 

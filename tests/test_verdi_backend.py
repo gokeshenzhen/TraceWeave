@@ -29,6 +29,24 @@ def test_vcs_two_step_kdb_detected(tmp_path):
     assert status["kdb_flow"] == "vcs_two_step"
     assert status["kdb_path"] == str(kdb)
     assert status["simulator"] == "vcs"
+    assert status["kdb_validation_status"] == "usable"
+
+
+def test_vcs_kdb_with_elaboration_error_marker_is_rejected(tmp_path):
+    case_dir = tmp_path
+    kdb = case_dir / "simv.daidir" / "kdb.elab++"
+    kdb.mkdir(parents=True)
+    (kdb / ".hasElabcomError").write_text("elabcomLog/compiler.log\n")
+    log = case_dir / "comp.log"
+    log.write_text("Command: vcs -kdb top.sv\n")
+
+    cr = _make_compile_result("vcs", compile_command="vcs -kdb top.sv")
+    status = probe_verdi_backend(cr, str(log))
+
+    assert status["kdb_flow"] == "none"
+    assert status["kdb_path"] is None
+    assert status["kdb_validation_status"] == "elaboration_error"
+    assert "elaboration-error marker" in status["kdb_hint"]
 
 
 def test_vcs_three_step_kdb_via_synopsys_setup(tmp_path):

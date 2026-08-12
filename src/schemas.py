@@ -1008,6 +1008,11 @@ class BackendStatus(SchemaModel):
         "traceweave_cached",
         "none",
     ] = "none"
+    kdb_validation_status: Literal[
+        "usable",
+        "elaboration_error",
+        "unavailable",
+    ] = "unavailable"
     kdb_hint: str | None = None
 
 

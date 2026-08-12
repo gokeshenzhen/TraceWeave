@@ -767,6 +767,22 @@ class TestRerunHints:
 
 
 class TestMixedLogRuntimeSafety:
+    def test_simulator_command_source_echo_is_not_a_runtime_error(self, tmp_path):
+        log_path = tmp_path / "run.log"
+        log_path.write_text(
+            "ucli% if {[info exists ::env(dv_root)]} {\n"
+            '  puts "ERROR: Script run without dv_root environment variable."\n'
+            "}\n"
+            "ERROR: actual runtime failure @ 10 ns\n"
+        )
+
+        events = SimLogParser(str(log_path), "vcs").parse_failure_events()
+
+        assert len(events) == 1
+        assert events[0]["line"] == 4
+        assert events[0]["time_ps"] == 10_000
+        assert events[0]["message_text"] == "ERROR: actual runtime failure @ 10 ns"
+
     def test_mixed_log_ignores_compile_errors_and_keeps_runtime_counts(self):
         log_path = _write_log(MIXED_LOG_SAMPLE)
         try:

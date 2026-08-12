@@ -61,6 +61,11 @@ _UVM_RE = re.compile(
 )
 
 _GENERIC_ERROR_RE = re.compile(r"\berror\b", re.IGNORECASE)
+_MESSAGE_SOURCE_ECHO_RE = re.compile(
+    r"^\s*(?:(?:ucli%|ncsim>|xmsim>)\s*)?"
+    r"(?:puts|echo|print|printf|\$(?:display|write|error|fatal))\b",
+    re.IGNORECASE,
+)
 _UVM_TABLE_SEPARATOR_RE = re.compile(r"^\s*-{5,}\s*$")
 _UVM_TABLE_HEADER_RE = re.compile(r"^\s*Name\s+Type\s+Size\s+Value\s*$")
 _TIME_PATTERNS = (
@@ -261,6 +266,12 @@ def _is_non_runtime_diagnostic(line_lower: str) -> bool:
 
 
 def _is_non_runtime_candidate(error: "ParsedError", line_lower: str) -> bool:
+    # Interactive simulator transcripts may echo Tcl/shell/SV source whose
+    # string literal contains ERROR or FATAL.  The emitted runtime message does
+    # not retain the leading puts/echo/$display token, so this narrow syntax
+    # check removes source text without hiding the actual output.
+    if _MESSAGE_SOURCE_ECHO_RE.match(line_lower):
+        return True
     if not _is_non_runtime_diagnostic(line_lower):
         return False
     signature = error.group_signature.lower()
@@ -854,7 +865,6 @@ def _extract_transaction_hint(
 def _compute_missing_fields(event: dict[str, Any]) -> list[str]:
     relevant: list[str] = ["time_ps", "failure_source", "failure_mechanism"]
     failure_source = event.get("failure_source")
-    message_text = (event.get("message_text") or "").lower()
     group_signature = (event.get("group_signature") or "").lower()
 
     if failure_source in {"assertion", "scoreboard", "checker"} or group_signature.startswith("assertion_fail:"):
