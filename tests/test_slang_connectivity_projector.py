@@ -12,6 +12,7 @@ from src.slang_connectivity_projector import (
     ProjectionDiagnostic,
     ProjectionExclusion,
     ProjectionOptions,
+    SlangConnectivityProjector,
     _map_concat_to_target,
     _parameterization,
     normalize_source_path,
@@ -85,6 +86,27 @@ def test_parameterization_handles_value_and_type_parameters_without_pyslang():
     )
 
     assert _parameterization(instance) == (("WIDTH", "16"), ("T", "bit[1:0]"))
+
+
+@pytest.mark.parametrize(
+    "symbol_kind",
+    ["EnumValue", "Genvar", "Parameter", "Specparam", "TypeParameter"],
+)
+def test_elaboration_constants_are_not_runtime_signal_dependencies(symbol_kind):
+    packed_range = SimpleNamespace(width=32, left=31, right=0)
+    symbol = SimpleNamespace(
+        kind=SimpleNamespace(name=symbol_kind),
+        hierarchicalPath="tb.u_leaf.Width",
+        type=SimpleNamespace(getBitVectorRange=lambda: packed_range),
+    )
+    expression = SimpleNamespace(
+        kind=SimpleNamespace(name="NamedValue"),
+        symbol=symbol,
+    )
+    record = SimpleNamespace(path="tb.u_leaf")
+    projector = SlangConnectivityProjector(source_manager=object())
+
+    assert projector._template_selection(expression, record, {}) is None
 
 
 def test_concat_mapping_preserves_ordered_slice_bits():

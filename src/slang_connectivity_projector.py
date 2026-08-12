@@ -1352,6 +1352,8 @@ class SlangConnectivityProjector:
         if symbol is None:
             return None
         symbol = _underlying_symbol(symbol)
+        if _is_elaboration_constant_symbol(symbol):
+            return None
         absolute_path = str(getattr(symbol, "hierarchicalPath", ""))
         if not absolute_path:
             return None
@@ -1404,6 +1406,9 @@ class SlangConnectivityProjector:
         return (selection,) if selection is not None else ()
 
     def _bound_symbol_selection(self, symbol: Any) -> SignalSelection | None:
+        symbol = _underlying_symbol(symbol)
+        if _is_elaboration_constant_symbol(symbol):
+            return None
         absolute_path = str(getattr(symbol, "hierarchicalPath", ""))
         packed_range = _packed_range(symbol)
         if not absolute_path or packed_range is None:
@@ -1712,6 +1717,17 @@ def _underlying_symbol(symbol: Any) -> Any:
         if internal is not None:
             return internal
     return symbol
+
+
+_ELABORATION_CONSTANT_SYMBOL_KINDS = frozenset(
+    {"EnumValue", "Genvar", "Parameter", "Specparam", "TypeParameter"}
+)
+
+
+def _is_elaboration_constant_symbol(symbol: Any) -> bool:
+    """Whether a Slang symbol is fixed during elaboration, not wave-sampleable."""
+
+    return _kind_name(symbol) in _ELABORATION_CONSTANT_SYMBOL_KINDS
 
 
 def _expression_symbol(expression: Any) -> Any | None:
