@@ -91,6 +91,32 @@ def test_select_backend_can_defer_static_for_source_graph_routing():
     assert select_backend(status, fallback=deferred) is deferred
 
 
+def test_explicit_source_graph_route_skips_usable_kdb_before_npi_construction(
+    monkeypatch,
+):
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+    status = {
+        "simulator": "vcs",
+        "kdb_flow": "vcs_two_step",
+        "kdb_path": "/some/kdb.elab++",
+    }
+    deferred = DeferredConnectivityFallbackBackend()
+
+    assert select_backend(status, fallback=deferred) is deferred
+    assert status["connectivity_route"] == "source_graph"
+    assert "connectivity_route_error" not in status
+
+
+def test_invalid_connectivity_route_preserves_auto_selection_with_receipt(monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "npi-off")
+    status = {"simulator": "vcs", "kdb_flow": "none", "kdb_path": None}
+    deferred = DeferredConnectivityFallbackBackend()
+
+    assert select_backend(status, fallback=deferred) is deferred
+    assert status["connectivity_route"] == "auto"
+    assert status["connectivity_route_error"] == ("connectivity_route_config_invalid")
+
+
 def test_npi_backend_uses_injected_deferred_fallback(monkeypatch):
     status = {
         "simulator": "vcs",

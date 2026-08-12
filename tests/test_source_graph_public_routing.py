@@ -440,6 +440,7 @@ async def test_npi_load_success_skips_source_graph_and_static(monkeypatch, tmp_p
 async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
     monkeypatch, tmp_path, operation
 ):
+    policy_selector = connectivity_backend.select_backend
     compile_log, _ = _install_source_context(tmp_path)
     runtime = SourceGraphRuntime(ReadyWorker())
     static = TrackingStaticBackend()
@@ -452,6 +453,7 @@ async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
         with_kdb=True,
     )
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+    monkeypatch.setattr(connectivity_backend, "select_backend", policy_selector)
 
     if operation == "driver":
         result = await server._dispatch(

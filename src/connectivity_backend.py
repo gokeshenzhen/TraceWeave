@@ -240,8 +240,24 @@ def select_backend(
     If no KDB is detected, the configured fallback is returned directly —
     starting NPI without a design to load would just consume a license
     for nothing.
+
+    ``TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph`` is an explicit validation
+    policy: retain the probe's usable-KDB facts but return the injected
+    deferred fallback before constructing an NPI backend. Public routing then
+    attempts Source Graph and records NPI as skipped by policy.
     """
     fallback_backend = fallback or StaticConnectivityBackend()
+    from config import get_connectivity_route_config  # noqa: PLC0415
+
+    route = get_connectivity_route_config()
+    backend_status["connectivity_route"] = route.mode
+    if route.error_code:
+        backend_status["connectivity_route_error"] = route.error_code
+    else:
+        backend_status.pop("connectivity_route_error", None)
+    if route.mode == "source_graph":
+        return fallback_backend
+
     if backend_status.get("kdb_flow", "none") != "none" and backend_status.get(
         "kdb_path"
     ):

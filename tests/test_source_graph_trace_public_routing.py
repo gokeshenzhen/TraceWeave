@@ -363,6 +363,7 @@ async def test_trusted_npi_terminal_result_skips_source_graph_and_static(
 async def test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb(
     monkeypatch, tmp_path
 ):
+    policy_selector = connectivity_backend.select_backend
     compile_log, wave = _install_context(tmp_path)
     runtime = SourceGraphRuntime(ReadyWorker(ir=_deep_ir()))
     static = TraceStaticBackend()
@@ -389,6 +390,7 @@ async def test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb(
         with_kdb=True,
     )
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+    monkeypatch.setattr(connectivity_backend, "select_backend", policy_selector)
 
     result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
 
