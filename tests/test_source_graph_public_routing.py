@@ -392,6 +392,7 @@ async def test_npi_success_skips_source_graph_and_static(monkeypatch, tmp_path):
 
     assert result.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "verdi_npi"
+    assert result.backend_status.single_backend_provenance is True
     assert [item.backend for item in result.backend_status.attempted_backends] == [
         "verdi_npi"
     ]
@@ -463,6 +464,7 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
     assert result.backend == "source_graph"
     assert result.backend_status.selected_backend == "source_graph"
     assert result.backend_status.actual_backend == "source_graph"
+    assert result.backend_status.single_backend_provenance is True
     assert result.backend_status.source_graph.prepare_status == "ready"
     assert result.backend_status.source_graph.query_status == "found"
     assert result.backend_status.source_graph.coverage_status == "complete"
@@ -724,6 +726,7 @@ async def test_source_graph_prepare_failures_fall_back_to_legacy_static(
     assert result.backend == "static"
     assert result.resolved_module == "legacy_static_module"
     assert result.backend_status.actual_backend == "static"
+    assert result.backend_status.single_backend_provenance is True
     assert result.backend_status.attempted_backend == "source_graph"
     assert result.backend_status.fallback_reason == expected_reason
     assert result.backend_status.source_graph.prepare_status == prepare_status.value
@@ -1322,6 +1325,7 @@ async def test_path_npi_unavailable_routes_to_source_graph_found(monkeypatch, tm
     assert result.path[1].edge_id == "sg_producer:always_comb:84:bus.data"
     assert result.backend_status.selected_backend == "source_graph"
     assert result.backend_status.actual_backend == "source_graph"
+    assert result.backend_status.single_backend_provenance is True
     receipt = result.backend_status.source_graph
     assert receipt.prepare_status == "ready"
     assert receipt.query_status == "found"

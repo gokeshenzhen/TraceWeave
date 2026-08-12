@@ -1604,6 +1604,10 @@ def _finalize_public_connectivity_status(
     status["attempted_backend"] = attempted_backend
     status["attempted_backends"] = attempts
     status["actual_backend"] = actual_backend
+    # Every successful public driver/load/path return reaches this helper only
+    # after its payload has passed the backend-specific provenance check.  Make
+    # that existing guarantee explicit for the non-X-trace tools too.
+    status["single_backend_provenance"] = True
     if fallback_reason:
         status["fallback_reason"] = fallback_reason
     else:
