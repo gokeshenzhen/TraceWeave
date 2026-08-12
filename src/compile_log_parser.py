@@ -27,6 +27,10 @@ _VCS_BACK_RE = re.compile(r"Back to file '([^']+)'")
 _VCS_TOP_RE = re.compile(r"^\s+([A-Za-z_]\w*)\s*$")
 _VCS_MODULE_RE = re.compile(r"recompiling module (\w+)", re.IGNORECASE)
 _VCS_IF_RE = re.compile(r"recompiling interface (\w+)", re.IGNORECASE)
+_VCS_SHELL_COMMAND_RE = re.compile(
+    r"^\s*cd\s+(?P<cwd>.+?)\s+&&\s+"
+    r"(?P<command>(?:\S*/)?vcs(?:\s+.*)?)\s*$"
+)
 
 _XCE_FILE_RE = re.compile(r"^file:\s+(.+)$")
 _XCE_ENTITY_RE = re.compile(
@@ -41,6 +45,7 @@ _SNAPSHOT_RE = re.compile(r"(?:^|\s)-snapshot\s+(\w+)")
 _SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
 _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
+_SIMULATOR_DETECT_MAX_LINES = 1_000
 _VCS_FLAGS_WITH_VALUE = frozenset(
     {
         "-assert",
@@ -69,6 +74,7 @@ _VCS_MARKERS = (
     "vcs_home",
     "simv.daidir",
     "script_home",
+    "&& vcs ",
 )
 _XCE_MARKERS = (
     "xrun",
@@ -114,7 +120,7 @@ def _categorize(path: str) -> str:
 def detect_simulator(log_path: str) -> str:
     try:
         with open(log_path, "r", errors="replace") as f:
-            for _, line in zip(range(200), f):
+            for _, line in zip(range(_SIMULATOR_DETECT_MAX_LINES), f):
                 lower = line.lower()
                 if any(marker in lower for marker in _VCS_MARKERS):
                     return "vcs"
@@ -150,19 +156,31 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     with open(log_path, "r", errors="replace") as f:
         lines = f.readlines()
 
-    compile_command = _extract_vcs_command(lines)
+    log_dir = os.path.dirname(log_path)
+    compile_command, command_dir = _extract_vcs_invocation(lines, log_dir)
     parse_warnings: list[str] = []
     command_tokens = _tokenize_vcs_text(
         compile_command or "", "VCS Command", parse_warnings
     )
-    log_dir = os.path.dirname(log_path)
-    incdirs = _extract_vcs_incdirs(command_tokens, log_dir)
-    filelist_tree = _direct_vcs_filelist_tree(command_tokens, log_dir)
+    incdirs = _extract_vcs_incdirs(command_tokens, command_dir)
+    filelist_tree = _direct_vcs_filelist_tree(command_tokens, command_dir)
+    recovered_files: dict[str, dict] = {}
+    if command_tokens:
+        recovered_files, recovered_tree, recovered_incdirs = (
+            _recover_vcs_command_files(
+                command_tokens,
+                command_dir,
+                parse_warnings,
+            )
+        )
+        if recovered_tree:
+            filelist_tree = recovered_tree
+        incdirs = list(dict.fromkeys((*incdirs, *recovered_incdirs)))
 
     include_tree: dict[str, list[str]] = {}
     file_info: dict[str, dict] = {}
     interfaces: set[str] = set()
-    top_modules: list[str] = []
+    reported_top_modules: list[str] = []
     stack: list[str] = []
     in_top_section = False
 
@@ -173,13 +191,13 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         if in_top_section:
             match = _VCS_TOP_RE.match(line)
             if match:
-                top_modules.append(match.group(1))
+                reported_top_modules.append(match.group(1))
                 continue
             in_top_section = False
 
         match = _VCS_FILE_RE.search(line)
         if match:
-            path = _normalize_path(match.group(1), os.path.dirname(log_path))
+            path = _normalize_path(match.group(1), command_dir)
             stack = [path]
             file_info.setdefault(path, {"type": "module"})
             continue
@@ -190,8 +208,12 @@ def parse_vcs_compile_log(log_path: str) -> dict:
             raw_child = match.group(1)
             child = _normalize_path(raw_child, os.path.dirname(parent))
             if not os.path.isabs(raw_child):
-                for incdir in incdirs:
-                    candidate = _normalize_path(raw_child, incdir)
+                # VCS may echo an include either as a bare basename (resolved
+                # through +incdir) or as a cwd-relative path such as
+                # ``src/core/defs.svh``. Trying the compile cwd first avoids
+                # incorrectly nesting the latter beneath the including file.
+                for base in (command_dir, *incdirs):
+                    candidate = _normalize_path(raw_child, base)
                     if os.path.exists(candidate):
                         child = candidate
                         break
@@ -204,7 +226,7 @@ def parse_vcs_compile_log(log_path: str) -> dict:
 
         match = _VCS_BACK_RE.search(line)
         if match:
-            target = _normalize_path(match.group(1), os.path.dirname(log_path))
+            target = _normalize_path(match.group(1), command_dir)
             while stack and stack[-1] != target:
                 stack.pop()
             continue
@@ -218,27 +240,26 @@ def parse_vcs_compile_log(log_path: str) -> dict:
 
     used_command_fallback = not file_info
     if used_command_fallback and command_tokens:
-        recovered_files, recovered_tree = _recover_vcs_command_files(
-            command_tokens,
-            log_dir,
-            parse_warnings,
-        )
         file_info.update(recovered_files)
-        filelist_tree = recovered_tree
 
-    if not top_modules:
-        top_modules.extend(_extract_vcs_tops(command_tokens))
+    command_tops = _extract_vcs_tops(command_tokens)
+    top_modules = command_tops or list(dict.fromkeys(reported_top_modules))
+    primary_top = _select_primary_top(top_modules)
+    if primary_top:
+        top_modules = [primary_top, *(top for top in top_modules if top != primary_top)]
 
     user, filtered_count = _collect_user_files(
         file_info, preserve_order=used_command_fallback
     )
     return {
         "simulator": "vcs",
-        # Adapter-facing provenance: relative command/filelist inputs are
-        # interpreted from the directory that contained the captured VCS log.
-        # Xcelium can record a different cwd explicitly; see its parser below.
-        "compile_cwd": log_dir,
+        # Adapter-facing provenance: relative command/filelist and parser-output
+        # paths are interpreted from the directory in which VCS actually ran.
+        # DVSim/FuseSoC wrapper logs commonly live one level above that cwd.
+        "compile_cwd": command_dir,
+        "primary_top": primary_top,
         "top_modules": top_modules,
+        "reported_top_modules": list(dict.fromkeys(reported_top_modules)),
         "files": {
             "user": user,
             "filtered_count": filtered_count,
@@ -276,6 +297,31 @@ def _extract_vcs_command(lines: list[str]) -> str | None:
     return None
 
 
+def _extract_vcs_invocation(lines: list[str], log_dir: str) -> tuple[str | None, str]:
+    """Recover a VCS command and its execution directory without a shell.
+
+    Native VCS logs use ``Command: vcs ...``. Orchestrators such as DVSim emit
+    the bounded wrapper shape ``cd <workdir> && vcs ...`` before the VCS banner.
+    Only those two textual forms are recognized; neither is evaluated.
+    """
+
+    command = _extract_vcs_command(lines)
+    if command:
+        return command, log_dir
+
+    for line in lines:
+        match = _VCS_SHELL_COMMAND_RE.match(line.rstrip("\n"))
+        if not match:
+            continue
+        command_dir = _normalize_path(match.group("cwd"), log_dir)
+        command = match.group("command")
+        executable, separator, rest = command.partition(" ")
+        if Path(executable).name == "vcs":
+            command = f"vcs{separator}{rest}"
+        return command, command_dir
+    return None, log_dir
+
+
 def _tokenize_vcs_text(
     text: str,
     context: str,
@@ -308,6 +354,26 @@ def _extract_vcs_tops(tokens: list[str]) -> list[str]:
         if value and re.fullmatch(r"[A-Za-z_]\w*", value) and value not in tops:
             tops.append(value)
     return tops
+
+
+def _select_primary_top(tops: list[str]) -> str | None:
+    """Choose the user-facing simulation root while retaining every top.
+
+    Multi-top DV builds place bind modules before the actual testbench. Prefer
+    the conventional exact ``tb`` root, then a single unambiguous ``*_tb`` or
+    ``tb_*`` name; otherwise preserve the tool's first top.
+    """
+
+    if not tops:
+        return None
+    if "tb" in tops:
+        return "tb"
+    tb_like = [
+        top
+        for top in tops
+        if top.lower().startswith("tb_") or top.lower().endswith("_tb")
+    ]
+    return tb_like[0] if len(tb_like) == 1 else tops[0]
 
 
 def _extract_vcs_incdirs(tokens: list[str], command_dir: str) -> list[str]:
@@ -343,7 +409,7 @@ def _recover_vcs_command_files(
     tokens: list[str],
     command_dir: str,
     warnings: list[str],
-) -> tuple[dict[str, dict], dict[str, list[str]]]:
+) -> tuple[dict[str, dict], dict[str, list[str]], list[str]]:
     """Recover sources from a no-op VCS command and its filelists.
 
     This is deliberately a tokenizer plus bounded local-file reader. It never
@@ -357,6 +423,7 @@ def _recover_vcs_command_files(
         "visited": set(),
         "token_count": 0,
         "token_limit_reported": False,
+        "incdirs": [],
     }
     _scan_vcs_tokens(
         tokens,
@@ -369,7 +436,7 @@ def _recover_vcs_command_files(
         parent_filelist=None,
         depth=0,
     )
-    return file_info, filelist_tree
+    return file_info, filelist_tree, state["incdirs"]
 
 
 def _scan_vcs_tokens(
@@ -397,6 +464,15 @@ def _scan_vcs_tokens(
     while index < len(tokens):
         token = tokens[index]
         if index == 0 and Path(token).name in {"vcs", "vlogan"}:
+            index += 1
+            continue
+        if token.startswith("+incdir+"):
+            for raw_path in token[len("+incdir+") :].split("+"):
+                if not raw_path:
+                    continue
+                path = _normalize_path(raw_path, source_base)
+                if path not in state["incdirs"]:
+                    state["incdirs"].append(path)
             index += 1
             continue
         if token in {"-f", "-F"} and index + 1 < len(tokens):

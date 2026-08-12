@@ -331,6 +331,36 @@ def test_unclassified_option_forbids_cross_request_exact_reuse(tmp_path):
     )
 
 
+def test_common_vcs_runtime_options_preserve_exact_source_manifest(tmp_path):
+    source = tmp_path / "rtl" / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command=(
+            "vcs -full64 -sverilog -Mdir=simv.csrc "
+            "-ntb_opts uvm-1.2 -assert svaext -xlrm uniq_prior_final "
+            "'-Xcflags=-Wno-error=implicit-function-declaration "
+            "-Wno-error=int-conversion' -Wl,--no-as-needed "
+            "+warn=SV-NFIVC -error=IPDW -deraceclockdata "
+            "-xprop=config/xprop.cfg -xprop=mmsopt rtl/top.sv -top tb"
+        ),
+        sources=(source,),
+    )
+    compile_result["simulator"] = "vcs"
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "compile_option_unclassified" not in plan.receipt.gap_codes
+    assert set(plan.receipt.gap_codes) == {"native_runtime_input_excluded"}
+    assert {"dpi_runtime", "uvm_dynamic_connectivity"} <= set(
+        plan.receipt.objective_exclusions
+    )
+
+
 def test_unprovable_hierarchy_scope_is_a_structured_blocker(tmp_path):
     source = tmp_path / "top.sv"
     _write(source, "module tb; logic q; endmodule\n")

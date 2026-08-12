@@ -48,6 +48,15 @@ class TestDetectSimulator:
         fixture = Path(__file__).parent / "fixtures" / "uvm_demo_cc18_comp_head.log"
         assert detect_simulator(str(fixture)) == "vcs"
 
+    def test_detect_vcs_dvsim_wrapper_after_long_setup_preamble(self, tmp_path):
+        log = tmp_path / "build.log"
+        log.write_text(
+            "".join(f"setup line {index}\n" for index in range(450))
+            + f"cd {tmp_path} && vcs -full64 -sverilog -top tb\n"
+        )
+
+        assert detect_simulator(str(log)) == "vcs"
+
 
 class TestParseCompileLog:
     def test_parse_vcs_compile_log(self):
@@ -172,6 +181,80 @@ file: {root / "tb" / "top_tb.sv"}
             }
         ]
         assert result["interfaces"] == ["chip_if"]
+
+    def test_vcs_wrapper_command_anchors_relative_files_to_vcs_cwd(self, tmp_path):
+        work = tmp_path / "fusesoc work"
+        source = work / "src" / "dut.sv"
+        include = work / "src" / "includes" / "common.svh"
+        filelist = work / "design.scr"
+        _write(source, 'module dut; `include "common.svh" endmodule\n')
+        _write(include, "localparam int CommonValue = 1;\n")
+        _write(
+            filelist,
+            "+incdir+src/includes\n"
+            "src/dut.sv\n",
+        )
+        log = tmp_path / "default" / "build.log"
+        _write(
+            log,
+            "[make]: build\n"
+            f"cd '{work}' && /tools/synopsys/vcs/bin/vcs "
+            "-f design.scr -top helper_bind -top tb\n"
+            "Chronologic VCS simulator\n"
+            "Parsing design file 'src/dut.sv'\n"
+            "Parsing included file 'common.svh'.\n"
+            "Back to file 'src/dut.sv'.\n"
+            "Top Level Modules:\n"
+            "       uvm_custom_install_verdi_recording\n"
+            "       helper_bind\n"
+            "       tb\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert result["compile_command"] == (
+            "vcs -f design.scr -top helper_bind -top tb"
+        )
+        assert result["compile_cwd"] == str(work.resolve())
+        assert result["primary_top"] == "tb"
+        assert result["top_modules"] == ["tb", "helper_bind"]
+        assert result["reported_top_modules"] == [
+            "uvm_custom_install_verdi_recording",
+            "helper_bind",
+            "tb",
+        ]
+        assert result["files"]["user"] == [
+            {
+                "path": str(source.resolve()),
+                "type": "module",
+                "category": "rtl",
+            },
+            {
+                "path": str(include.resolve()),
+                "type": "unknown",
+                "category": "other",
+            },
+        ]
+        assert result["include_tree"] == {
+            str(source.resolve()): [str(include.resolve())]
+        }
+        assert result["filelist_tree"] == {"design.scr": []}
+        assert result["parse_warnings"] == []
+
+    def test_vcs_multi_top_prefers_single_conventional_tb_name(self, tmp_path):
+        source = tmp_path / "chip_tb.sv"
+        _write(source, "module chip_tb; endmodule\n")
+        log = tmp_path / "build.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs {source} -top reset_bind -top chip_tb\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert result["primary_top"] == "chip_tb"
+        assert result["top_modules"] == ["chip_tb", "reset_bind"]
 
     def test_vcs_incremental_command_recovers_direct_sources_and_top(self, tmp_path):
         rtl = tmp_path / "rtl" / "deep uart.sv"

@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.compile_log_parser import parse_compile_log
-from src.tb_hierarchy_builder import build_hierarchy
+from src.tb_hierarchy_builder import build_hierarchy, scan_sv_file
 
 
 def _write(path: Path, text: str):
@@ -173,6 +173,113 @@ Top Level Modules:
             assert "if" not in top
         finally:
             tmp.cleanup()
+
+    def test_parameterized_multiline_instances_build_nested_hierarchy(self, tmp_path):
+        source = tmp_path / "soc.sv"
+        _write(
+            source,
+            """
+module rv_core;
+endmodule
+
+module soc;
+  rv_core #(
+    .Width(32)
+  ) u_core [2] (
+    .clk_i(clk_i)
+  );
+
+  always_comb begin
+    unique case (state_q)
+      1'b0: state_d = 1'b1;
+      default: state_d = state_q;
+    endcase
+  end
+endmodule
+
+module tb;
+  soc #(
+    .Enable(1'b1)
+  ) dut (
+    .clk_i(clk)
+  );
+endmodule
+""",
+        )
+        log = tmp_path / "build.log"
+        _write(
+            log,
+            f"Parsing design file '{source}'\n"
+            "Top Level Modules:\n"
+            "       helper_bind\n"
+            "       tb\n",
+        )
+        compile_result = parse_compile_log(str(log), "vcs")
+        compile_result["primary_top"] = "tb"
+
+        scanned = scan_sv_file(str(source))
+        hierarchy = build_hierarchy(compile_result)
+
+        assert scanned["module_instances"] == [
+            {"module_name": "rv_core", "instance_name": "u_core"},
+            {"module_name": "soc", "instance_name": "dut"},
+        ]
+        assert hierarchy["project"]["top_module"] == "tb"
+        dut = hierarchy["component_tree"]["tb"]["dut"]
+        assert dut["class"] == "soc"
+        assert dut["children"]["u_core"]["class"] == "rv_core"
+        assert "case" not in dut["children"]
+
+    def test_common_soc_instance_forms_and_declaration_false_positives(self, tmp_path):
+        source = tmp_path / "soc_top.sv"
+        _write(
+            source,
+            """
+interface fabric_if #(parameter int Width = 32);
+endinterface
+
+module leaf(input logic clk_i);
+endmodule
+
+module soc_top(input logic clk_i);
+  fabric_if #(.Width(64)) fabric();
+
+  generate
+    if (1) begin : gen_enabled
+      leaf u_leaf0 (.clk_i(clk_i)),
+           u_leaf1 [2] (.clk_i(clk_i));
+    end
+  endgenerate
+
+  function automatic int helper(input int value);
+    return value;
+  endfunction
+  task automatic tick();
+  endtask
+  property p_known;
+    !$isunknown(clk_i);
+  endproperty
+  sequence s_tick;
+    ##1 clk_i;
+  endsequence
+  covergroup cg_soc @(posedge clk_i);
+  endgroup
+  always_comb begin
+    priority case (clk_i)
+      default: ;
+    endcase
+  end
+endmodule
+""",
+        )
+
+        scanned = scan_sv_file(str(source))
+
+        assert scanned["module_instances"] == [
+            {"module_name": "fabric_if", "instance_name": "fabric"},
+            {"module_name": "leaf", "instance_name": "u_leaf0"},
+            {"module_name": "leaf", "instance_name": "u_leaf1"},
+        ]
 
 
 # ---------------------------------------------------------------------------

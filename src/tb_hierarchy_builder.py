@@ -13,13 +13,28 @@ _CLASS_RE = re.compile(r"\bclass\s+(\w+)(?:\s+extends\s+\w+)?", re.IGNORECASE)
 _MODULE_RE = re.compile(r"^\s*module\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
 _INTERFACE_RE = re.compile(r"^\s*interface\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
 _CREATE_RE = re.compile(r'(\w+)\s*=\s*(\w+)::type_id::create\s*\(\s*"([^"]+)"', re.IGNORECASE)
-_MODULE_INSTANCE_RE = re.compile(r"^\s*(\w+)\s+(\w+)\s*\(", re.MULTILINE)
 _VIRTUAL_IF_RE = re.compile(r"\bvirtual\s+(\w+)\s+(\w+)", re.IGNORECASE)
+_SV_TOKEN_RE = re.compile(
+    r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_$]*|::|[#$(),;.\[\]{}:]'
+)
+_SV_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 
 _MODULE_INSTANCE_EXCLUDES = {
     "if", "for", "while", "case", "function", "task", "module", "class",
     "interface", "package", "return", "assign", "always", "initial",
-    "else", "repeat", "generate", "begin", "end",
+    "else", "repeat", "generate", "begin", "end", "unique", "priority",
+    "always_comb", "always_ff", "always_latch", "typedef", "property",
+    "sequence", "covergroup", "constraint", "assert", "assume", "cover",
+    "expect", "logic", "wire", "reg", "bit", "byte", "shortint", "int",
+    "longint", "integer", "time", "realtime", "string", "void", "event",
+    "input", "output", "inout", "ref", "const", "var", "parameter",
+    "localparam", "genvar", "automatic", "static", "rand", "randc",
+}
+
+_MODULE_INSTANCE_PRECEDING_EXCLUDES = {
+    "function", "task", "typedef", "class", "property", "sequence",
+    "covergroup", "constraint", "import", "export", "return", "new",
+    "automatic", "static",
 }
 
 
@@ -38,6 +53,117 @@ def _strip_comments(text: str) -> str:
     return text
 
 
+def _sv_tokens(text: str) -> list[str]:
+    return [
+        token
+        for token in _SV_TOKEN_RE.findall(text)
+        if not token.startswith('"')
+    ]
+
+
+def _skip_balanced(
+    tokens: list[str], index: int, opener: str, closer: str
+) -> int | None:
+    if index >= len(tokens) or tokens[index] != opener:
+        return None
+    depth = 0
+    for cursor in range(index, len(tokens)):
+        token = tokens[cursor]
+        if token == opener:
+            depth += 1
+        elif token == closer:
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+    return None
+
+
+def _module_bodies(tokens: list[str]):
+    index = 0
+    while index < len(tokens):
+        if tokens[index].lower() != "module":
+            index += 1
+            continue
+        header_end = index + 1
+        nesting = 0
+        while header_end < len(tokens):
+            token = tokens[header_end]
+            if token in {"(", "[", "{"}:
+                nesting += 1
+            elif token in {")", "]", "}"} and nesting:
+                nesting -= 1
+            elif token == ";" and nesting == 0:
+                break
+            header_end += 1
+        if header_end >= len(tokens):
+            return
+        body_end = header_end + 1
+        while body_end < len(tokens) and tokens[body_end].lower() != "endmodule":
+            body_end += 1
+        yield tokens[header_end + 1 : body_end]
+        index = body_end + 1
+
+
+def _parse_instance_statement(
+    tokens: list[str], index: int
+) -> tuple[list[dict], int] | None:
+    module_name = tokens[index]
+    if not _SV_IDENTIFIER_RE.fullmatch(module_name):
+        return None
+    if module_name.lower() in _MODULE_INSTANCE_EXCLUDES:
+        return None
+    if index and tokens[index - 1].lower() in _MODULE_INSTANCE_PRECEDING_EXCLUDES:
+        return None
+
+    cursor = index + 1
+    if cursor < len(tokens) and tokens[cursor] == "#":
+        cursor = _skip_balanced(tokens, cursor + 1, "(", ")") or -1
+        if cursor < 0:
+            return None
+
+    instances: list[dict] = []
+    while cursor < len(tokens):
+        instance_name = tokens[cursor]
+        if (
+            not _SV_IDENTIFIER_RE.fullmatch(instance_name)
+            or instance_name.lower() in _MODULE_INSTANCE_EXCLUDES
+        ):
+            return None
+        cursor += 1
+        while cursor < len(tokens) and tokens[cursor] == "[":
+            cursor = _skip_balanced(tokens, cursor, "[", "]") or -1
+            if cursor < 0:
+                return None
+        port_end = _skip_balanced(tokens, cursor, "(", ")")
+        if port_end is None:
+            return None
+        instances.append(
+            {"module_name": module_name, "instance_name": instance_name}
+        )
+        cursor = port_end
+        if cursor < len(tokens) and tokens[cursor] == ",":
+            cursor += 1
+            continue
+        if cursor < len(tokens) and tokens[cursor] == ";":
+            return instances, cursor + 1
+        return None
+    return None
+
+
+def _extract_module_instances(text: str) -> list[dict]:
+    instances: list[dict] = []
+    for body in _module_bodies(_sv_tokens(text)):
+        index = 0
+        while index < len(body):
+            parsed = _parse_instance_statement(body, index)
+            if parsed is None:
+                index += 1
+                continue
+            found, index = parsed
+            instances.extend(found)
+    return instances
+
+
 def scan_sv_file(file_path: str) -> dict:
     with open(file_path, "r", errors="replace") as f:
         raw = f.read()
@@ -52,16 +178,7 @@ def scan_sv_file(file_path: str) -> dict:
         for var, cls, inst in _CREATE_RE.findall(text)
     ]
 
-    module_instances = []
-    for module_name, instance_name in _MODULE_INSTANCE_RE.findall(text):
-        if module_name.lower() in _MODULE_INSTANCE_EXCLUDES:
-            continue
-        if instance_name in modules:
-            continue
-        module_instances.append({
-            "module_name": module_name,
-            "instance_name": instance_name,
-        })
+    module_instances = _extract_module_instances(text)
 
     virtual_interfaces = [
         {"interface_name": if_name, "var_name": var_name}
@@ -207,7 +324,11 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
     source_root = _compute_source_root(file_entries)
     interface_defs, interface_bindings = _collect_interface_metadata(scan_results, source_text_cache)
 
-    top_module = compile_result.get("top_modules", [""])[0] if compile_result.get("top_modules") else ""
+    top_module = compile_result.get("primary_top") or (
+        compile_result.get("top_modules", [""])[0]
+        if compile_result.get("top_modules")
+        else ""
+    )
     interfaces = []
     for interface_name in sorted(set(compile_result.get("interfaces", [])) | set(interface_defs)):
         src = interface_defs.get(interface_name, {}).get("name", "")

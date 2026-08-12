@@ -77,10 +77,9 @@ _BASE_OPTIONS = {
 }
 
 _IGNORED_VALUE_OPTIONS = {
-    "-CFLAGS",
-    "-LDFLAGS",
     "-Mdir",
     "-access",
+    "-assert",
     "-covfile",
     "-covtest",
     "-covworkdir",
@@ -90,15 +89,23 @@ _IGNORED_VALUE_OPTIONS = {
     "-log",
     "-logfile",
     "-nowarn",
+    "-ntb_opts",
     "-o",
     "-seed",
     "-snapshot",
     "-svseed",
     "-uvmpackagename",
     "-work",
+    "-xlrm",
     "-xprop",
     "-xmlibdirname",
     "-xmerror",
+}
+_NATIVE_TOOLCHAIN_VALUE_OPTIONS = {
+    "-CFLAGS",
+    "-LDFLAGS",
+    "-Xcflags",
+    "-Xldflags",
 }
 _IGNORED_FLAGS = {
     "+v2k",
@@ -107,6 +114,7 @@ _IGNORED_FLAGS = {
     "-R",
     "-coverage",
     "-covoverwrite",
+    "-deraceclockdata",
     "-elaborate",
     "-enable_abv_asrtctrl_enh",
     "-enable_strict_timescale",
@@ -125,6 +133,15 @@ _IGNORED_FLAGS = {
     "-verbose",
     "-xverbose",
 }
+_IGNORED_OPTION_PREFIXES = (
+    "+ntb_",
+    "+vcs+",
+    "+warn=",
+    "+xm",
+    "-covoverwrite",
+    "-debug",
+    "-error=",
+)
 _SEMANTIC_GAP_OPTIONS = {
     "-ALLOWREDEFINITION": "definition_replacement_semantics",
     "-disable_sem2009": "pre_2009_semantics",
@@ -411,6 +428,13 @@ def _mark_unclassified(state: _TranslationState) -> None:
     state.objective_exclusions.add("unclassified_compile_option")
 
 
+def _mark_native_toolchain_exclusion(state: _TranslationState) -> None:
+    """Record C/C++ or linker inputs that cannot affect the static HDL graph."""
+
+    state.objective_exclusions.add("dpi_runtime")
+    state.gap_codes.add("native_runtime_input_excluded")
+
+
 def _translate_filelist(
     state: _TranslationState,
     raw_path: str,
@@ -594,24 +618,43 @@ def _translate_tokens(
                 state.inputs_complete = False
             index += 2
             continue
+        if token == "-ntb_opts":
+            if index + 1 >= len(tokens):
+                _mark_unclassified(state)
+                index += 1
+                continue
+            if tokens[index + 1].lower().startswith("uvm"):
+                state.objective_exclusions.add("uvm_dynamic_connectivity")
+            index += 2
+            continue
         if token == "-L" and index + 1 < len(tokens):
-            state.objective_exclusions.add("dpi_runtime")
-            state.gap_codes.add("native_runtime_input_excluded")
+            _mark_native_toolchain_exclusion(state)
             index += 2
             continue
         if token.startswith("-L") or (
             token.startswith("-l") and token not in {"-l", "-licqueue"}
         ):
-            state.objective_exclusions.add("dpi_runtime")
-            state.gap_codes.add("native_runtime_input_excluded")
+            _mark_native_toolchain_exclusion(state)
+            index += 1
+            continue
+        if token in _NATIVE_TOOLCHAIN_VALUE_OPTIONS:
+            _mark_native_toolchain_exclusion(state)
+            index += 2 if index + 1 < len(tokens) else 1
+            continue
+        if any(
+            token.startswith(f"{option}=")
+            for option in _NATIVE_TOOLCHAIN_VALUE_OPTIONS
+        ) or token.startswith(("-Wl,", "-Xlinker=")):
+            _mark_native_toolchain_exclusion(state)
             index += 1
             continue
         if token in _IGNORED_VALUE_OPTIONS:
             index += 2 if index + 1 < len(tokens) else 1
             continue
-        if token in _IGNORED_FLAGS or token.startswith(
-            ("-debug", "+ntb_", "+vcs+", "+xm", "-covoverwrite")
-        ):
+        if any(token.startswith(f"{option}=") for option in _IGNORED_VALUE_OPTIONS):
+            index += 1
+            continue
+        if token in _IGNORED_FLAGS or token.startswith(_IGNORED_OPTION_PREFIXES):
             index += 1
             continue
         if token in {"&&", ";", "|"}:
