@@ -456,6 +456,16 @@ new query engine, and enters the memory cache. Unknown, truncated, corrupt, or
 version-mismatched entries are fixed-reason misses followed by the normal cold
 build; they are never connectivity negatives or Static results.
 
+For a reproducible cross-restart observation on any SoC layout, use
+`scripts/soak_source_graph_soc.py`. It takes an explicit verification root,
+compile log, simulation log, waveform, top, and an external JSON list of public
+driver/load/path queries; no DVSim, FuseSoC, or Bazel directory convention is
+embedded. Every sample is a fresh process, and the script refuses a non-empty
+cache root unless `--resume` is explicit. Raw cache/telemetry stays under that
+owner-private root; the optional `--output` file contains numeric and
+fixed-label aggregates only. Run the script with `--help` for the complete
+invocation.
+
 The persisted canonical ConnectivityIR can contain protected-IP-derived
 structural information. TraceWeave creates its namespace and entries with
 owner-only directory/file permissions (`0700`/`0600`), rejects symlinks and

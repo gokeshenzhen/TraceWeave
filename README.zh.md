@@ -416,6 +416,13 @@ verified hit 会跳过 frontend worker、创建新的 query engine，并进入 m
 截断、损坏或版本不匹配的 entry 都只产生固定原因 safe miss，随后走正常 cold build；不会被
 解释为 connectivity negative 或 Static 结果。
 
+若要在任意 SoC 目录结构上做可复现的跨重启观察，可使用
+`scripts/soak_source_graph_soc.py`。它显式接收 verification root、compile log、sim log、
+waveform、top，以及外部 JSON 格式的 public driver/load/path 查询列表，不内置 DVSim、FuseSoC
+或 Bazel 目录约定。每个样本都是 fresh process；除非显式传入 `--resume`，脚本会拒绝非空 cache
+root。原始 cache/telemetry 只留在 owner-private root 下，可选 `--output` 仅写数值和固定 label
+聚合。完整调用方式见该脚本的 `--help`。
+
 持久化的 canonical ConnectivityIR 可能包含 protected-IP 派生结构信息。TraceWeave 对
 namespace/entry 使用 owner-only 目录与文件权限（`0700`/`0600`），拒绝 symlink 和
 non-regular entry file，使用 atomic publish，并且只在局部 lookup/publish/maintenance 路径
