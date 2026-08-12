@@ -1,0 +1,3370 @@
+{
+  "aggregate": {
+    "actual_build_count": 3,
+    "all_memory_queries_hit_memory": true,
+    "all_queries_single_backend": true,
+    "all_queries_source_graph": true,
+    "by_operation_wall_ms": {
+      "driver": {
+        "max": 5370.521,
+        "median": 245.142,
+        "min": 210.645,
+        "n": 12,
+        "p95": 5356.752
+      },
+      "loads": {
+        "max": 214.162,
+        "median": 212.099,
+        "min": 211.865,
+        "n": 3,
+        "p95": 213.956
+      },
+      "path": {
+        "max": 214.618,
+        "median": 213.88,
+        "min": 213.549,
+        "n": 3,
+        "p95": 214.544
+      }
+    },
+    "cache_tier_counts": {
+      "build": 3,
+      "disk": 0,
+      "memory": 15
+    },
+    "cold_build_wall_ms": {
+      "max": 3970.798,
+      "median": 3957.295,
+      "min": 3910.349,
+      "n": 3,
+      "p95": 3969.448
+    },
+    "cold_driver_wall_ms": {
+      "max": 5370.521,
+      "median": 5345.487,
+      "min": 5332.232,
+      "n": 3,
+      "p95": 5368.018
+    },
+    "cold_prepare_wall_ms": {
+      "max": 4132.053,
+      "median": 4124.73,
+      "min": 4079.439,
+      "n": 3,
+      "p95": 4131.321
+    },
+    "cold_worker_cpu_ms": {
+      "max": 3706.225,
+      "median": 3699.63,
+      "min": 3661.93,
+      "n": 3,
+      "p95": 3705.566
+    },
+    "cold_worker_rss_peak_kib": {
+      "max": 420484.0,
+      "median": 419464.0,
+      "min": 418368.0,
+      "n": 3,
+      "p95": 420382.0
+    },
+    "disk_activity_count": 0,
+    "disk_cache_inactive": true,
+    "fresh_process_count": 3,
+    "frontend_launch_count": null,
+    "frontend_launch_metric_sample_count": 0,
+    "memory_query_wall_ms": {
+      "max": 287.402,
+      "median": 213.549,
+      "min": 210.645,
+      "n": 15,
+      "p95": 281.202
+    },
+    "parent_rss_peak_kib": {
+      "max": 132596.0,
+      "median": 132192.0,
+      "min": 129780.0,
+      "n": 3,
+      "p95": 132555.6
+    },
+    "preparation_wall_ms": {
+      "max": 71068.771,
+      "median": 70867.556,
+      "min": 69982.908,
+      "n": 3,
+      "p95": 71048.649
+    },
+    "query_count": 18,
+    "source_graph_query_count": 18,
+    "stable_fact_hashes": {
+      "driver": [
+        "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0"
+      ],
+      "loads": [
+        "422b7a758bfd71c763e72f3f8461ac389505d79f1167b33afaba1f126814fa77"
+      ],
+      "path": [
+        "ed0470d392f66cd4740c22bccc82b94cc6d8bd8c1947299e68a2c8fc51cd77d3"
+      ]
+    },
+    "stable_facts": true
+  },
+  "assessment": {
+    "decision": "p3_source_graph_soc_baseline_recorded",
+    "hierarchy_stats_stable": true,
+    "passed": true,
+    "performance_improvement_claimed": false,
+    "source_graph_coverage_claim": "preserved_from_each_query_receipt",
+    "structural_scan_complete": true
+  },
+  "benchmark": "source_graph_soc_p3",
+  "frontend": {
+    "python": "/home/robin/Projects/mcp/TraceWeave/.venv/bin/python",
+    "version": "11.0.0",
+    "worker_timeout_seconds": 240.0
+  },
+  "generated_at_utc": "2026-08-12T08:14:55.272595+00:00",
+  "measurement_policy": {
+    "auto_kdb_build_enabled": false,
+    "disk_cache_enabled": false,
+    "fresh_process_count": 3,
+    "fresh_process_per_sample": true,
+    "full_design_enumeration": false,
+    "hierarchy_and_structural_scan_overlap": true,
+    "production_backend_order_preserved": true,
+    "telemetry_enabled": false,
+    "warm_driver_repeats_per_process": 3
+  },
+  "repository": {
+    "head": "189267731ae1a739119613d1d00f6ef724d28e7c",
+    "root": "/home/robin/Projects/mcp/TraceWeave"
+  },
+  "runs": [
+    {
+      "preparation": {
+        "hierarchy": {
+          "hierarchy_handle_present": true,
+          "project": {
+            "simulator": "vcs",
+            "source_root": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src",
+            "top_module": "tb"
+          },
+          "stats": {
+            "class_count": 1171,
+            "file_count": 1117,
+            "instance_count": 34101,
+            "interface_count": 51,
+            "module_count": 986,
+            "tree_depth": 14,
+            "uvm_file_count": 109
+          }
+        },
+        "hierarchy_wall_ms": 17897.217,
+        "parallel": true,
+        "structural_scan": {
+          "coverage_status": "complete",
+          "files_scanned": 1117,
+          "files_skipped": 0,
+          "files_total": 1117,
+          "total_risks": 2064,
+          "wall_ms": 69981.732
+        },
+        "wall_ms": 69982.908
+      },
+      "process_id": 2455279,
+      "process_memory": {
+        "frontend_children_peak_kib_after": 420340,
+        "frontend_children_peak_kib_before": 0,
+        "rss_end_kib": 132596,
+        "rss_peak_kib_after": 132596,
+        "rss_peak_kib_before": 65552,
+        "rss_start_kib": 65552
+      },
+      "queries": [
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "cold",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "miss",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "cold",
+            "blocker": null,
+            "cache_disposition": "miss",
+            "cache_tier": null,
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "build",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 991.2903248332441,
+              "admission_wait_ms": 0.002434011548757553,
+              "build_wall_ms": 3910.348509903997,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 168.02160907536745,
+              "prepare_total_wall_ms": 4079.439359717071,
+              "query_wall_ms": 0.7820390164852142,
+              "rss_end_kib": 419464,
+              "rss_peak_kib": 419464,
+              "rss_start_kib": 25292,
+              "worker_cpu_ms": 3661.930273
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 5332.232
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.396344069391489,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.6753318011760712,
+              "query_wall_ms": 0.44688768684864044,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 213.413
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.294398404657841,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7466231472790241,
+              "query_wall_ms": 0.609569251537323,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 276.539
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.284739192575216,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7394398562610149,
+              "query_wall_ms": 0.6087780930101871,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 213.744
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "completeness": "approximate",
+            "loads": [
+              {
+                "backend": "source_graph",
+                "confidence": "partial",
+                "expr": null,
+                "kind": "rhs_expr",
+                "load_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "422b7a758bfd71c763e72f3f8461ac389505d79f1167b33afaba1f126814fa77",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "loads",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "8e2afc334523af0a933a3505b8d9474fe7422977a2feb4597e06946daab1c7b3",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.562101326882839,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7266462780535221,
+              "query_wall_ms": 0.4251580685377121,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 214.162
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 2,
+          "facts": {
+            "found": true,
+            "hops": 1,
+            "path": [
+              {
+                "backend": "source_graph",
+                "edge_id": null,
+                "edge_kind": null,
+                "edge_source_path": null,
+                "exact_bit_mapping": null,
+                "index": 0,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 253
+              },
+              {
+                "backend": "source_graph",
+                "edge_id": "assign_87c5d2411837caa827b5",
+                "edge_kind": "continuous_assign",
+                "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "exact_bit_mapping": false,
+                "index": 1,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "ed0470d392f66cd4740c22bccc82b94cc6d8bd8c1947299e68a2c8fc51cd77d3",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "path",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "a5277729548922053f4f70d4e6613db5fba6de3faef5cc4551db50be18963e4e",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 2,
+                "kind": "dual_endpoint_path",
+                "lca_depth": 3,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "path_bit_mapping_inexact",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.797045607119799,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7268162444233894,
+              "query_wall_ms": 0.6054309196770191,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 213.88
+        }
+      ],
+      "repository_head": "189267731ae1a739119613d1d00f6ef724d28e7c"
+    },
+    {
+      "preparation": {
+        "hierarchy": {
+          "hierarchy_handle_present": true,
+          "project": {
+            "simulator": "vcs",
+            "source_root": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src",
+            "top_module": "tb"
+          },
+          "stats": {
+            "class_count": 1171,
+            "file_count": 1117,
+            "instance_count": 34101,
+            "interface_count": 51,
+            "module_count": 986,
+            "tree_depth": 14,
+            "uvm_file_count": 109
+          }
+        },
+        "hierarchy_wall_ms": 22316.31,
+        "parallel": true,
+        "structural_scan": {
+          "coverage_status": "complete",
+          "files_scanned": 1117,
+          "files_skipped": 0,
+          "files_total": 1117,
+          "total_risks": 2064,
+          "wall_ms": 70866.646
+        },
+        "wall_ms": 70867.556
+      },
+      "process_id": 2455519,
+      "process_memory": {
+        "frontend_children_peak_kib_after": 421276,
+        "frontend_children_peak_kib_before": 0,
+        "rss_end_kib": 129272,
+        "rss_peak_kib_after": 129780,
+        "rss_peak_kib_before": 65564,
+        "rss_start_kib": 65564
+      },
+      "queries": [
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "cold",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "miss",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "cold",
+            "blocker": null,
+            "cache_disposition": "miss",
+            "cache_tier": null,
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "build",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1037.7774578519166,
+              "admission_wait_ms": 0.002575106918811798,
+              "build_wall_ms": 3957.2949847206473,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 166.53768019750714,
+              "prepare_total_wall_ms": 4124.729637056589,
+              "query_wall_ms": 0.8965409360826015,
+              "rss_end_kib": 420484,
+              "rss_peak_kib": 420484,
+              "rss_start_kib": 25332,
+              "worker_cpu_ms": 3706.225388
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 5370.521
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 70.05858886986971,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7008588872849941,
+              "query_wall_ms": 0.47392817214131355,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 287.402
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.11508621275425,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.6876736879348755,
+              "query_wall_ms": 0.48445817083120346,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 211.834
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.683057941496372,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7003769278526306,
+              "query_wall_ms": 0.4740278236567974,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 212.505
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "completeness": "approximate",
+            "loads": [
+              {
+                "backend": "source_graph",
+                "confidence": "partial",
+                "expr": null,
+                "kind": "rhs_expr",
+                "load_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "422b7a758bfd71c763e72f3f8461ac389505d79f1167b33afaba1f126814fa77",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "loads",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "8e2afc334523af0a933a3505b8d9474fe7422977a2feb4597e06946daab1c7b3",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.830771289765835,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7328568026423454,
+              "query_wall_ms": 0.5156546831130981,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 212.099
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 2,
+          "facts": {
+            "found": true,
+            "hops": 1,
+            "path": [
+              {
+                "backend": "source_graph",
+                "edge_id": null,
+                "edge_kind": null,
+                "edge_source_path": null,
+                "exact_bit_mapping": null,
+                "index": 0,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 253
+              },
+              {
+                "backend": "source_graph",
+                "edge_id": "assign_87c5d2411837caa827b5",
+                "edge_kind": "continuous_assign",
+                "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "exact_bit_mapping": false,
+                "index": 1,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "ed0470d392f66cd4740c22bccc82b94cc6d8bd8c1947299e68a2c8fc51cd77d3",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "path",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "a5277729548922053f4f70d4e6613db5fba6de3faef5cc4551db50be18963e4e",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 2,
+                "kind": "dual_endpoint_path",
+                "lca_depth": 3,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "path_bit_mapping_inexact",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.297423340380192,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7939408533275127,
+              "query_wall_ms": 0.9705265983939171,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 213.549
+        }
+      ],
+      "repository_head": "189267731ae1a739119613d1d00f6ef724d28e7c"
+    },
+    {
+      "preparation": {
+        "hierarchy": {
+          "hierarchy_handle_present": true,
+          "project": {
+            "simulator": "vcs",
+            "source_root": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src",
+            "top_module": "tb"
+          },
+          "stats": {
+            "class_count": 1171,
+            "file_count": 1117,
+            "instance_count": 34101,
+            "interface_count": 51,
+            "module_count": 986,
+            "tree_depth": 14,
+            "uvm_file_count": 109
+          }
+        },
+        "hierarchy_wall_ms": 14152.39,
+        "parallel": true,
+        "structural_scan": {
+          "coverage_status": "complete",
+          "files_scanned": 1117,
+          "files_skipped": 0,
+          "files_total": 1117,
+          "total_risks": 2064,
+          "wall_ms": 71067.866
+        },
+        "wall_ms": 71068.771
+      },
+      "process_id": 2455940,
+      "process_memory": {
+        "frontend_children_peak_kib_after": 419160,
+        "frontend_children_peak_kib_before": 0,
+        "rss_end_kib": 132192,
+        "rss_peak_kib_after": 132192,
+        "rss_peak_kib_before": 65552,
+        "rss_start_kib": 65552
+      },
+      "queries": [
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "cold",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "miss",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "cold",
+            "blocker": null,
+            "cache_disposition": "miss",
+            "cache_tier": null,
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "build",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 1,
+              "adapter_wall_ms": 1003.544092644006,
+              "admission_wait_ms": 0.002445187419652939,
+              "build_wall_ms": 3970.798379275948,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 160.28989711776376,
+              "prepare_total_wall_ms": 4132.053333800286,
+              "query_wall_ms": 0.7449002005159855,
+              "rss_end_kib": 418368,
+              "rss_peak_kib": 418368,
+              "rss_start_kib": 25144,
+              "worker_cpu_ms": 3699.630342
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 5345.487
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 70.06154395639896,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7996410131454468,
+              "query_wall_ms": 0.6023556925356388,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 278.545
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.763273987919092,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7205046713352203,
+              "query_wall_ms": 0.5697649903595448,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 210.645
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "driver_chain": [
+              {
+                "backend": "source_graph",
+                "backend_confidence": "partial",
+                "branch_candidates": null,
+                "depth": 0,
+                "driver_kind": "continuous_assign",
+                "expression_summary": null,
+                "instance_port_connections": null,
+                "resolved_instance_path": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "resolved_module": "rv_core_ibex",
+                "signal_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265,
+                "stopped_at": null,
+                "upstream_signals": [
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+                  "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+                ]
+              }
+            ],
+            "driver_kind": "continuous_assign",
+            "driver_status": "resolved",
+            "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+            "source_line": 265,
+            "upstream_signals": [
+              "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.dbus_intg_err",
+              "tb.dut.top_earlgrey.u_rv_core_ibex.alert_major_bus"
+            ]
+          },
+          "facts_sha256": "f02c44848ac560bbb2cf5628f62248c9b9774a268c26c133c0467ecce4d07da0",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "driver",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "59d5958ac5d7ee388bed8b5f067aa9edab761eef4d62787b3f58daa2393b01b2",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.4938549399375916,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.688925851136446,
+              "query_wall_ms": 0.4413672722876072,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 211.03
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 1,
+          "facts": {
+            "completeness": "approximate",
+            "loads": [
+              {
+                "backend": "source_graph",
+                "confidence": "partial",
+                "expr": null,
+                "kind": "rhs_expr",
+                "load_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "422b7a758bfd71c763e72f3f8461ac389505d79f1167b33afaba1f126814fa77",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "loads",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "8e2afc334523af0a933a3505b8d9474fe7422977a2feb4597e06946daab1c7b3",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 1,
+                "kind": "single_endpoint",
+                "lca_depth": null,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 4.910065792500973,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.585043802857399,
+              "query_wall_ms": 0.39588287472724915,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 211.865
+        },
+        {
+          "actual_backend": "source_graph",
+          "attempted_backends": [
+            {
+              "backend": "verdi_npi",
+              "coverage_status": null,
+              "reason": "npi_kdb_unavailable",
+              "status": "unavailable"
+            },
+            {
+              "backend": "source_graph",
+              "coverage_status": "inconclusive",
+              "reason": null,
+              "status": "success"
+            }
+          ],
+          "fact_count": 2,
+          "facts": {
+            "found": true,
+            "hops": 1,
+            "path": [
+              {
+                "backend": "source_graph",
+                "edge_id": null,
+                "edge_kind": null,
+                "edge_source_path": null,
+                "exact_bit_mapping": null,
+                "index": 0,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 253
+              },
+              {
+                "backend": "source_graph",
+                "edge_id": "assign_87c5d2411837caa827b5",
+                "edge_kind": "continuous_assign",
+                "edge_source_path": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err[0]",
+                "exact_bit_mapping": false,
+                "index": 1,
+                "is_endpoint": true,
+                "net_path": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event[0]",
+                "scope_inst": "tb.dut.top_earlgrey.u_rv_core_ibex",
+                "source_file": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_earlgrey_ip_rv_core_ibex_0.1/rtl/rv_core_ibex.sv",
+                "source_info_origin": "source_graph",
+                "source_line": 265
+              }
+            ]
+          },
+          "facts_sha256": "ed0470d392f66cd4740c22bccc82b94cc6d8bd8c1947299e68a2c8fc51cd77d3",
+          "fallback_reason": "npi_kdb_unavailable",
+          "kdb_flow": "none",
+          "kdb_validation_status": "elaboration_error",
+          "operation": "path",
+          "phase": "memory",
+          "selected_backend": "source_graph",
+          "single_backend_provenance": true,
+          "source_graph": {
+            "adapter": {
+              "adapter_version": "3.0",
+              "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+              "cross_request_reusable": true,
+              "gap_codes": [
+                "native_runtime_input_excluded"
+              ],
+              "manifest": {
+                "complete": true,
+                "fingerprint_cache_disposition": "hit_session_snapshot",
+                "incomplete_reasons": [],
+                "input_count": 783,
+                "option_count": 80,
+                "top_count": 11
+              },
+              "query_fingerprint_sha256": "a5277729548922053f4f70d4e6613db5fba6de3faef5cc4551db50be18963e4e",
+              "scope": {
+                "ancestor_count": 4,
+                "coverage_boundary_instance_count": 4,
+                "endpoint_count": 2,
+                "kind": "dual_endpoint_path",
+                "lca_depth": 3,
+                "objective_exclusions": [
+                  "bind_semantics",
+                  "dpi_runtime",
+                  "procedural_force_release",
+                  "protected_region",
+                  "uvm_dynamic_connectivity"
+                ],
+                "requested_cone_instance_count": 4
+              },
+              "snapshot_identity_complete": true,
+              "status": "ready"
+            },
+            "artifact_fingerprint_sha256": "ac1c874d4047e43847fb3044c4be25a180bbf96e52787afb17120affd056a643",
+            "artifact_reuse": "exact_hit",
+            "blocker": null,
+            "cache_disposition": "hit_exact",
+            "cache_tier": "memory",
+            "compile_fingerprint_sha256": "5f902467a105297163f69d9fe8c4c8422c456c334028c6c91b11759a6ffd02a0",
+            "coverage_files_projected": 783,
+            "coverage_files_total": 783,
+            "coverage_gap_codes": [
+              "assignment_target_unresolved",
+              "bind_semantics",
+              "concat_lvalue_partial",
+              "continuous_assignment_unresolved",
+              "dpi_runtime",
+              "frontend_diagnostic:ConcatWithStringInt",
+              "frontend_diagnostic:CouldNotOpenIncludeFile",
+              "frontend_diagnostic:UnknownClassOrPackage",
+              "frontend_diagnostic:UnknownDirective",
+              "frontend_diagnostic:UnknownPackage",
+              "frontend_diagnostic_concatwithstringint",
+              "frontend_diagnostic_couldnotopenincludefile",
+              "frontend_diagnostic_unknownclassorpackage",
+              "frontend_diagnostic_unknowndirective",
+              "frontend_diagnostic_unknownpackage",
+              "hierarchy_projection_scoped",
+              "path_bit_mapping_inexact",
+              "port_expression_unresolved",
+              "procedural_control_shape_partial",
+              "procedural_force_release",
+              "projection_gaps_truncated",
+              "protected_region",
+              "runtime_force_not_modeled",
+              "signal_shape_unresolved",
+              "subroutine_body_not_projected",
+              "uvm_dynamic_connectivity"
+            ],
+            "coverage_status": "inconclusive",
+            "effective_cache_tier": "memory",
+            "ir_fingerprint_sha256": "fe5539be039dd3bdb674819a52f1d2456b8c8fed8831ce9626527c330775db35",
+            "metrics": {
+              "actual_build_count": 0,
+              "adapter_wall_ms": 5.668271332979202,
+              "admission_wait_ms": 0.0,
+              "build_wall_ms": 0.0,
+              "cache_bytes": 1416227,
+              "cache_entry_count": 1,
+              "cache_eviction_count": 0,
+              "cache_oversize_bypass_count": 0,
+              "cache_peak_bytes": 1416227,
+              "cache_peak_entry_count": 1,
+              "cancel_to_exit_ms": null,
+              "coalesced_waiter_count": 0,
+              "disk_build_skip_count": 0,
+              "disk_bytes": 0,
+              "disk_bytes_read": 0,
+              "disk_bytes_written": 0,
+              "disk_corrupt_count": 0,
+              "disk_entry_count": 0,
+              "disk_eviction_count": 0,
+              "disk_eviction_wall_ms": 0.0,
+              "disk_hit_count": 0,
+              "disk_lookup_wall_ms": 0.0,
+              "disk_miss_count": 0,
+              "disk_publish_wall_ms": 0.0,
+              "disk_read_wall_ms": 0.0,
+              "disk_validate_wall_ms": 0.0,
+              "disk_write_wall_ms": 0.0,
+              "frontend_launch_count": 0,
+              "ir_bytes": 1416227,
+              "load_wall_ms": 0.0,
+              "prepare_total_wall_ms": 0.7173488847911358,
+              "query_wall_ms": 0.563174020498991,
+              "rss_end_kib": null,
+              "rss_peak_kib": null,
+              "rss_start_kib": null,
+              "worker_cpu_ms": null
+            },
+            "prepare_status": "ready",
+            "query_confidence": "partial",
+            "query_match_count": 1,
+            "query_status": "found"
+          },
+          "wall_ms": 214.618
+        }
+      ],
+      "repository_head": "189267731ae1a739119613d1d00f6ef724d28e7c"
+    }
+  ],
+  "schema_version": "1.0",
+  "workload": {
+    "compile_log": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/build.log",
+    "driver_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+    "from_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+    "load_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.ibus_intg_err",
+    "simulator": "vcs",
+    "to_signal": "tb.dut.top_earlgrey.u_rv_core_ibex.fatal_intg_event",
+    "top_hint": "tb",
+    "wave_path": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/0.chip_sw_uart_tx_rx/latest/waves.fsdb"
+  }
+}

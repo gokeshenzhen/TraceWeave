@@ -97,10 +97,23 @@ def test_aggregate_distinguishes_cold_memory_and_disk_activity():
     assert result["query_count"] == 8
     assert result["cache_tier_counts"] == {"build": 2, "memory": 6, "disk": 0}
     assert result["actual_build_count"] == 2
+    assert result["frontend_launch_count"] == 2
+    assert result["frontend_launch_metric_sample_count"] == 2
     assert result["all_queries_source_graph"] is True
     assert result["all_memory_queries_hit_memory"] is True
     assert result["disk_cache_inactive"] is True
     assert result["stable_facts"] is True
+
+
+def test_aggregate_does_not_turn_omitted_launch_metric_into_zero():
+    run = _run()
+    del run["queries"][0]["source_graph"]["metrics"]["frontend_launch_count"]
+
+    result = benchmark._aggregate_runs([run])
+
+    assert result["actual_build_count"] == 1
+    assert result["frontend_launch_count"] is None
+    assert result["frontend_launch_metric_sample_count"] == 0
 
 
 def test_aggregate_rejects_backend_fallback_and_unstable_facts():

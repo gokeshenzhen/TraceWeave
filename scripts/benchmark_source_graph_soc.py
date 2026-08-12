@@ -471,6 +471,11 @@ def _aggregate_runs(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         for metrics in cold_metrics
         for field in ("disk_hit_count", "disk_miss_count", "disk_corrupt_count")
     )
+    frontend_launch_values = [
+        int(metrics["frontend_launch_count"])
+        for metrics in cold_metrics
+        if metrics.get("frontend_launch_count") is not None
+    ]
     return {
         "fresh_process_count": len(runs),
         "query_count": len(queries),
@@ -513,9 +518,12 @@ def _aggregate_runs(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "actual_build_count": sum(
             int(metrics.get("actual_build_count") or 0) for metrics in cold_metrics
         ),
-        "frontend_launch_count": sum(
-            int(metrics.get("frontend_launch_count") or 0) for metrics in cold_metrics
+        "frontend_launch_count": (
+            sum(frontend_launch_values)
+            if len(frontend_launch_values) == len(cold_metrics)
+            else None
         ),
+        "frontend_launch_metric_sample_count": len(frontend_launch_values),
         "disk_activity_count": disk_activity,
         "stable_fact_hashes": fact_hashes,
         "stable_facts": all(len(values) == 1 for values in fact_hashes.values()),
