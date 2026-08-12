@@ -376,6 +376,44 @@ Top Level Modules:
             assert node["source_file"] == "/elaborated/dut.sv"
             assert node["source_line"] == 137
             assert node["source_info_origin"] == "npi"
+            assert hierarchy["project"]["source_info_overlay"] == "npi"
+            assert hierarchy["project"]["source_info_overlay_reason"] is None
+        finally:
+            tmp.cleanup()
+
+    def test_explicit_source_graph_route_skips_npi_annotation(self, monkeypatch):
+        """A pure Source Graph run must not probe or construct NPI during its
+        hierarchy prerequisite, even when the compile log has a usable KDB."""
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "tb" / "top_tb.sv"
+            _write(top_path, "module dut; endmodule\nmodule top_tb;\n  dut dut_i();\nendmodule\n")
+            log = root / "comp.log"
+            log.write_text(
+                f"""Parsing design file '{top_path}'
+Top Level Modules:
+       top_tb
+"""
+            )
+            monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
+
+            def _must_not_probe(*args, **kwargs):
+                del args, kwargs
+                raise AssertionError("Source Graph route must not probe NPI hierarchy overlay")
+
+            monkeypatch.setattr("src.verdi_backend.probe_verdi_backend", _must_not_probe)
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                compile_log_path=str(log),
+            )
+            node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+            assert node["source_info_origin"] == "compile_log"
+            assert hierarchy["project"]["source_info_overlay"] == "compile_log"
+            assert hierarchy["project"]["source_info_overlay_reason"] == (
+                "npi_skipped_by_policy"
+            )
         finally:
             tmp.cleanup()
 

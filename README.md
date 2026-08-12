@@ -444,8 +444,12 @@ export TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph
 ```
 
 This does not rename, move, or invalidate the KDB. It avoids constructing or
-calling NPI for those four public connectivity tools, then uses the normal
-Source Graph-to-Static fallback if Source Graph cannot answer safely. The
+calling NPI for those four public connectivity tools and for the optional
+`build_tb_hierarchy` file/line overlay, then uses the normal Source
+Graph-to-Static fallback if Source Graph cannot answer safely. Hierarchy
+topology still comes from the compile log; its `project` receipt reports
+`source_info_overlay="compile_log"` and
+`source_info_overlay_reason="npi_skipped_by_policy"`. The connectivity
 receipt keeps `kdb_validation_status="usable"`, reports
 `connectivity_route="source_graph"`, and records the NPI attempt as
 `status="skipped"` with `reason="npi_skipped_by_policy"`. Unset the variable or
