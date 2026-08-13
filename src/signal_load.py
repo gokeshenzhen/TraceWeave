@@ -33,6 +33,7 @@ from .signal_driver import (
     _line_of_offset,
     _resolve_instance_module,
     _rtl_leaf_name,
+    _rtl_symbol_suffix,
 )
 
 
@@ -91,6 +92,14 @@ def find_signal_loads(
     module_name, instance_path, scan = resolved
     base["resolved_module"] = module_name
     base["resolved_instance_path"] = instance_path
+    symbol_suffix = _rtl_symbol_suffix(signal_path, instance_path)
+    if "." in symbol_suffix:
+        base["resolved_rtl_name"] = symbol_suffix
+        base["stopped_at"] = "dotted_signal_member_unsupported"
+        base["unsupported_reason"] = (
+            "dotted_signal_member_requires_source_graph"
+        )
+        return base
 
     # If the signal is an output port of this module, the loads live in
     # the parent's scope. Static path cannot walk upward reliably.

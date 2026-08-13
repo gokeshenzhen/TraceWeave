@@ -161,7 +161,11 @@ async def test_fake_phase3c_gate_covers_trace_routing_reuse_and_cleanup():
     assert result["concurrency_probe"]["gate"]["passed"] is True
     assert result["different_artifact_admission_probe"]["gate"]["passed"]
     assert result["capacity_probe"]["gate"]["passed"] is True
-    assert result["scope_blocker_probes"]["gate"]["passed"] is True
+    # The historical probe required every dotted suffix to be rejected as an
+    # unproved instance. Packed-member support now defers that suffix to exact
+    # IR declaration lookup, so this superseded Phase 3C sub-gate is expected
+    # to report false along with the already expected overall no-go.
+    assert result["scope_blocker_probes"]["gate"]["passed"] is False
     assert result["driver_load_path_compatibility"]["gate"]["passed"] is True
     assert result["opentitan_x_trace"]["status"] == "unavailable"
     assert result["opentitan_x_trace"]["bounded_measurement_performed"] is False

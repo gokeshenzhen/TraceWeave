@@ -7,7 +7,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.connectivity_ir import BindingSourceKind, CoverageStatus, SignalSelection
+from src.connectivity_ir import (
+    BindingSourceKind,
+    ConnectivityIR,
+    CoverageStatus,
+    SignalSelection,
+)
+from src.connectivity_query import (
+    ConnectivityQueryEngine,
+    PathQueryStatus,
+    QueryStatus,
+)
 from src.slang_connectivity_projector import (
     ProjectionDiagnostic,
     ProjectionExclusion,
@@ -225,6 +235,111 @@ endmodule
     binding = projection.ir.bindings[0]
     assert binding.instance_path == "top.u_leaf"
     assert binding.evidence.location.line == 6
+
+
+def test_real_frontend_projects_parameterized_generate_and_packed_members():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+typedef struct packed {
+  logic [1:0] opcode;
+  logic       flag;
+} meta_t;
+
+typedef struct packed {
+  logic [23:0] data;
+  meta_t       meta;
+  logic        valid;
+} rsp_t;
+
+module lane #(parameter int W = 24) (
+  input  rsp_t         rsp_i,
+  output logic [W-1:0] data_o
+);
+  assign data_o = rsp_i.data[W-1:0];
+endmodule
+
+module top;
+  rsp_t rsp;
+  logic [23:0] out24;
+  logic [15:0] out16;
+  generate
+    if (1) begin : g24
+      lane #(.W(24)) u_lane(.rsp_i(rsp), .data_o(out24));
+    end
+    if (1) begin : g16
+      lane #(.W(16)) u_lane(.rsp_i(rsp), .data_o(out16));
+    end
+  endgenerate
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+    ir = projection.ir
+
+    lane_instances = [item for item in ir.instances if item.name == "u_lane"]
+    assert {item.path for item in lane_instances} == {
+        "top.g16.u_lane",
+        "top.g24.u_lane",
+    }
+    assert {item.generate_scope for item in lane_instances} == {"g16", "g24"}
+    assert {dict(item.parameterization)["W"] for item in lane_instances} == {
+        "16",
+        "24",
+    }
+    assert len({item.definition_id for item in lane_instances}) == 2
+
+    top = next(item for item in ir.definitions if item.name == "top")
+    data = top.packed_member("rsp.data")
+    meta = top.packed_member("rsp.meta")
+    opcode = top.packed_member("rsp.meta.opcode")
+    valid = top.packed_member("rsp.valid")
+    assert data is not None and meta is not None
+    assert opcode is not None and valid is not None
+    assert data.packed_range.indices == tuple(range(23, -1, -1))
+    assert data.aggregate_bits == tuple(range(27, 3, -1))
+    assert meta.aggregate_bits == (3, 2, 1)
+    assert opcode.aggregate_bits == (3, 2)
+    assert valid.aggregate_bits == (0,)
+
+    lane16 = next(
+        item
+        for item in ir.definitions
+        if item.definition_id
+        == next(
+            instance.definition_id
+            for instance in lane_instances
+            if dict(instance.parameterization)["W"] == "16"
+        )
+    )
+    assignment = lane16.assignments[0]
+    assert assignment.target.bits == tuple(range(15, -1, -1))
+    assert assignment.dependencies[0].source.symbol == "rsp_i"
+    assert assignment.dependencies[0].source.bits == tuple(range(19, 3, -1))
+
+    restored = ConnectivityIR.from_json_bytes(ir.to_json_bytes())
+    assert restored.to_dict() == ir.to_dict()
+    engine = ConnectivityQueryEngine(restored)
+    resolved = engine.resolve_signal("top.rsp.data[15:8]")
+    assert resolved.symbol == "rsp"
+    assert resolved.bits == tuple(range(19, 11, -1))
+    nested = engine.resolve_signal("top.rsp.meta.opcode[1:0]")
+    assert nested.symbol == "rsp"
+    assert nested.bits == (3, 2)
+
+    loads = engine.query_loads("top.rsp.data[15:8]", max_depth=8)
+    assert loads.status is QueryStatus.FOUND
+    path = engine.query_path(
+        "top.rsp.data[15:8]",
+        "top.g16.u_lane.data_o[15:8]",
+        expand_assigns=True,
+    )
+    assert path.status is PathQueryStatus.FOUND
+    assert [edge.exact_bit_mapping for edge in path.path] == [True, True]
 
 
 def test_source_paths_normalize_against_projection_root(tmp_path: Path, monkeypatch):

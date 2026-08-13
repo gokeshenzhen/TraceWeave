@@ -13,6 +13,7 @@ from src.connectivity_ir import (
     CoverageReport,
     CoverageStatus,
     DefinitionKind,
+    PackedMemberDecl,
     PortDirection,
     selections_for_concat,
     SignalSelection,
@@ -132,7 +133,7 @@ def test_ir_serialization_roundtrip_and_fingerprint_are_deterministic():
     decoded = json.loads(payload)
     restored = ConnectivityIR.from_json_bytes(payload)
 
-    assert decoded["ir_version"] == "1.1"
+    assert decoded["ir_version"] == "1.2"
     assert restored.to_dict() == ir.to_dict()
     assert restored.fingerprint_sha256() == ir.fingerprint_sha256()
     assert len(ir.fingerprint_sha256()) == 64
@@ -166,6 +167,35 @@ def test_ir_serialization_roundtrip_and_fingerprint_are_deterministic():
     )
     restored_segmented = ConnectivityIR.from_json_bytes(segmented.to_json_bytes())
     assert restored_segmented.to_dict() == segmented.to_dict()
+
+    definition = next(
+        item for item in ir.definitions if item.direct_signal_range("lane_data")
+    )
+    lane_range = definition.direct_signal_range("lane_data")
+    assert lane_range is not None
+    with_member = replace(
+        ir,
+        definitions=tuple(
+            replace(
+                item,
+                packed_members=(
+                    PackedMemberDecl(
+                        name="lane_data.low",
+                        aggregate="lane_data",
+                        packed_range=BitRange(7, 0),
+                        aggregate_bits=tuple(range(7, -1, -1)),
+                        location=item.location,
+                    ),
+                ),
+            )
+            if item.definition_id == definition.definition_id
+            else item
+            for item in ir.definitions
+        ),
+    )
+    restored_member = ConnectivityIR.from_json_bytes(with_member.to_json_bytes())
+    assert restored_member.to_dict() == with_member.to_dict()
+    assert restored_member.stats()["packed_member_count"] == 1
 
 
 def test_ir_rejects_complete_coverage_with_a_gap():

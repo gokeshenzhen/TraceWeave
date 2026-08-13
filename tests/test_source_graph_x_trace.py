@@ -180,7 +180,7 @@ def test_trace_plan_keeps_artifact_and_query_identity_separate(tmp_path):
     assert expanded.receipt.endpoint_count == 2
 
 
-def test_trace_plan_blocks_different_top_and_missing_hierarchy(tmp_path):
+def test_trace_plan_blocks_different_top_and_defers_dotted_suffix(tmp_path):
     different_top = _trace_plan(
         tmp_path / "different",
         ("tb.q", "other.q"),
@@ -194,8 +194,14 @@ def test_trace_plan_blocks_different_top_and_missing_hierarchy(tmp_path):
 
     assert different_top.receipt.blocker is not None
     assert different_top.receipt.blocker.code == "trace_target_top_mismatch"
-    assert missing.receipt.blocker is not None
-    assert missing.receipt.blocker.code == "trace_hierarchy_scope_unresolved"
+    assert missing.status is AdapterStatus.READY
+    assert missing.request is not None
+    assert missing.receipt.endpoint_count == 2
+    assert missing.request.artifact_identity.scope.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.left",
+    )
 
 
 def _artifact_scope(*chains: tuple[str, ...]) -> SourceGraphArtifactScope:
@@ -247,17 +253,15 @@ def test_artifact_guard_requires_expansion_but_larger_scope_covers_target():
     larger.require(("tb.dut.right.q",))
 
 
-def test_artifact_guard_blocks_unproved_and_different_top_targets():
+def test_artifact_guard_defers_dotted_suffix_but_blocks_different_top():
     guard = SourceGraphTraceArtifactGuard(
         artifact_scope=_artifact_scope(("tb", "tb.dut", "tb.dut.left")),
         hierarchy_result=_branch_hierarchy(),
     )
 
-    with pytest.raises(SourceGraphTraceFallbackRequired) as missing:
-        guard.require(("tb.dut.missing.q",))
+    guard.require(("tb.dut.missing.q",))
     with pytest.raises(SourceGraphTraceFallbackRequired) as other_top:
         guard.require(("other.dut.q",))
-    assert missing.value.code == "source_graph_trace_hierarchy_scope_unresolved"
     assert other_top.value.code == "source_graph_trace_target_top_mismatch"
 
 

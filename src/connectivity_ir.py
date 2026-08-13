@@ -16,7 +16,7 @@ import json
 from typing import Any, Iterable, Mapping
 
 
-CONNECTIVITY_IR_VERSION = "1.1"
+CONNECTIVITY_IR_VERSION = "1.2"
 
 
 class DefinitionKind(str, Enum):
@@ -178,6 +178,27 @@ class PortDecl:
             self.interface_definition or self.modport
         ):
             raise ValueError("plain ports cannot name an interface or modport")
+
+
+@dataclass(frozen=True)
+class PackedMemberDecl:
+    """A named packed-aggregate member mapped onto its root signal bits."""
+
+    name: str
+    aggregate: str
+    packed_range: BitRange
+    aggregate_bits: tuple[int, ...]
+    location: SourceLocation
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.aggregate:
+            raise ValueError("packed member name and aggregate must not be empty")
+        if not self.name.startswith(f"{self.aggregate}."):
+            raise ValueError("packed member name must be rooted at its aggregate")
+        if len(self.aggregate_bits) != self.packed_range.width:
+            raise ValueError("packed member and aggregate bit widths must match")
+        if len(self.aggregate_bits) != len(set(self.aggregate_bits)):
+            raise ValueError("packed member aggregate bits must be unique")
 
 
 @dataclass(frozen=True)
@@ -404,6 +425,7 @@ class DefinitionTemplate:
     location: SourceLocation
     ports: tuple[PortDecl, ...] = ()
     signals: tuple[SignalDecl, ...] = ()
+    packed_members: tuple[PackedMemberDecl, ...] = ()
     modports: tuple[ModportDecl, ...] = ()
     assignments: tuple[AssignmentFact, ...] = ()
 
@@ -420,6 +442,24 @@ class DefinitionTemplate:
             raise ValueError(
                 f"port and internal signal names overlap in definition {self.definition_id}"
             )
+        member_names = [member.name for member in self.packed_members]
+        if len(member_names) != len(set(member_names)):
+            raise ValueError(
+                f"duplicate packed member in definition {self.definition_id}"
+            )
+        direct_ranges = {
+            item.name: item.packed_range for item in (*self.ports, *self.signals)
+        }
+        for member in self.packed_members:
+            aggregate_range = direct_ranges.get(member.aggregate)
+            if aggregate_range is None:
+                raise ValueError(
+                    f"packed member {member.name} references unknown aggregate"
+                )
+            if not set(member.aggregate_bits).issubset(aggregate_range.indices):
+                raise ValueError(
+                    f"packed member {member.name} exceeds its aggregate range"
+                )
         ordinals = [port.ordinal for port in self.ports]
         if len(ordinals) != len(set(ordinals)):
             raise ValueError(
@@ -445,6 +485,12 @@ class DefinitionTemplate:
 
     def port(self, name: str) -> PortDecl | None:
         return next((port for port in self.ports if port.name == name), None)
+
+    def packed_member(self, name: str) -> PackedMemberDecl | None:
+        return next(
+            (member for member in self.packed_members if member.name == name),
+            None,
+        )
 
 
 @dataclass(frozen=True)
@@ -666,6 +712,9 @@ class ConnectivityIR:
             "definition_count": len(self.definitions),
             "instance_count": len(self.instances),
             "signal_decl_count": signal_count,
+            "packed_member_count": sum(
+                len(item.packed_members) for item in self.definitions
+            ),
             "modport_count": sum(len(item.modports) for item in self.definitions),
             "binding_count": len(self.bindings),
             "binding_segment_count": binding_segment_count,
@@ -686,6 +735,9 @@ class ConnectivityIR:
             )
             definition["signals"] = sorted(
                 definition["signals"], key=lambda item: item["name"]
+            )
+            definition["packed_members"] = sorted(
+                definition["packed_members"], key=lambda item: item["name"]
             )
             definition["modports"] = sorted(
                 definition["modports"], key=lambda item: item["name"]
@@ -910,6 +962,16 @@ def _definition_from_dict(payload: Mapping[str, Any]) -> DefinitionTemplate:
         )
         for item in payload.get("modports", ())
     )
+    packed_members = tuple(
+        PackedMemberDecl(
+            name=str(item["name"]),
+            aggregate=str(item["aggregate"]),
+            packed_range=_range_from_dict(item["packed_range"]),
+            aggregate_bits=tuple(int(bit) for bit in item["aggregate_bits"]),
+            location=_location_from_dict(item["location"]),
+        )
+        for item in payload.get("packed_members", ())
+    )
     return DefinitionTemplate(
         definition_id=str(payload["definition_id"]),
         name=str(payload["name"]),
@@ -917,6 +979,7 @@ def _definition_from_dict(payload: Mapping[str, Any]) -> DefinitionTemplate:
         location=_location_from_dict(payload["location"]),
         ports=ports,
         signals=signals,
+        packed_members=packed_members,
         modports=modports,
         assignments=tuple(
             _assignment_from_dict(item) for item in payload.get("assignments", ())

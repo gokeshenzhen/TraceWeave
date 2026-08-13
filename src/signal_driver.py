@@ -237,6 +237,22 @@ def _resolve_single_hop(
     rtl_name = _rtl_leaf_name(signal_path)
     module_name, instance_path, scan = resolved
     ctx = _build_hierarchy_context(instance_path, top_module, module_index, module_name)
+    symbol_suffix = _rtl_symbol_suffix(signal_path, instance_path)
+    if "." in symbol_suffix:
+        unsupported = _unsupported_result(signal_path)
+        unsupported.update(
+            {
+                "resolved_rtl_name": symbol_suffix,
+                "resolved_module": module_name,
+                "resolved_instance_path": instance_path,
+                "unsupported_reason": "dotted_signal_member_requires_source_graph",
+                "expression_summary": (
+                    f"packed/interface member {symbol_suffix} requires elaborated "
+                    "Source Graph or NPI resolution"
+                ),
+            }
+        )
+        return unsupported, ctx
 
     exact = _find_local_driver(scan, rtl_name)
     if exact:
@@ -740,6 +756,14 @@ def _rtl_leaf_name(signal_path: str) -> str:
     leaf = signal_path.rsplit(".", 1)[-1].strip()
     match = _RTL_LEAF_RE.fullmatch(leaf)
     return match.group("name") if match is not None else leaf
+
+
+def _rtl_symbol_suffix(signal_path: str, instance_path: str) -> str:
+    prefix = f"{instance_path}."
+    suffix = signal_path[len(prefix) :] if signal_path.startswith(prefix) else signal_path
+    parts = suffix.split(".")
+    parts[-1] = _rtl_leaf_name(parts[-1])
+    return ".".join(parts)
 
 
 def _signal_name_from_expr(expr: str) -> str | None:

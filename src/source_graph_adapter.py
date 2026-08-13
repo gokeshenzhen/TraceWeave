@@ -50,7 +50,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.1"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.2"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
@@ -1195,12 +1195,11 @@ def resolve_source_graph_hierarchy_ancestors(
         nested = node.get("children")
         children = nested if isinstance(nested, Mapping) else None
         index += 1
-    # The build contract treats everything before the final symbol as an
-    # instance path.  Require every such segment to exist in the cached source
-    # hierarchy; otherwise a dotted interface/struct member could be guessed as
-    # an instance and create a dishonest scope boundary.
-    if index != len(parts) - 1:
-        return None
+    # Once a segment is not a proved child instance, the remaining suffix is
+    # deferred to the frontend/query as a signal, interface field, or packed
+    # aggregate member. This never invents an instance: the artifact remains
+    # bounded to the last proved ancestor and an invalid suffix is rejected by
+    # exact IR declaration lookup before any fact can be returned.
     return tuple(ancestors)
 
 
@@ -1321,7 +1320,11 @@ def build_source_graph_plan(
             exclusions=exclusions,
         )
 
-    target = ConnectivityTarget(operation=operation, signal_path=normalized_signal)
+    target = ConnectivityTarget(
+        operation=operation,
+        signal_path=normalized_signal,
+        instance_path_hint=ancestors[-1],
+    )
     # The proved ancestor chain is the canonical bounded projection.  It lets
     # driver/load and same-chain path queries share one artifact without adding
     # siblings or descendants; every admitted path came directly from the

@@ -9,6 +9,8 @@ from src.connectivity_ir import (
     CoverageGap,
     CoverageReport,
     CoverageStatus,
+    BitRange,
+    PackedMemberDecl,
     ResolutionKind,
 )
 from src.connectivity_query import ConnectivityQueryEngine, QueryConfidence
@@ -164,6 +166,41 @@ def test_driver_reports_selection_out_of_range_as_a_fixed_query_blocker():
         )
 
     assert caught.value.code == "signal_selection_out_of_range"
+
+
+def test_packed_member_query_preserves_requested_public_spelling():
+    ir = build_hand_ir()
+    definitions = tuple(
+        replace(
+            definition,
+            packed_members=(
+                PackedMemberDecl(
+                    name="lane_data.low",
+                    aggregate="lane_data",
+                    packed_range=BitRange(7, 0),
+                    aggregate_bits=tuple(range(7, -1, -1)),
+                    location=definition.location,
+                ),
+            ),
+        )
+        if definition.name == "sg_top"
+        else definition
+        for definition in ir.definitions
+    )
+    backend = SourceGraphConnectivityBackend(_entry(replace(ir, definitions=definitions)))
+
+    result = backend.find_driver(
+        signal_path="sg_top.lane_data.low[7:0]",
+        wave_path="wave.fsdb",
+        compile_log="compile.log",
+        recursive=True,
+        max_depth=8,
+    )
+
+    assert result["driver_status"] == "resolved"
+    assert result["signal_path"] == "sg_top.lane_data.low[7:0]"
+    assert result["resolved_rtl_name"] == "lane_data.low"
+    assert result["resolved_bit_count"] == 8
 
 
 def test_load_mapping_preserves_terminal_assignment_evidence():

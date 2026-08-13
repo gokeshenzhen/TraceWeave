@@ -163,6 +163,34 @@ endmodule
     assert result["driver_chain"][0]["upstream_signals"] == []
 
 
+def test_static_does_not_collapse_dotted_member_onto_unrelated_leaf(
+    monkeypatch, tmp_path
+):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  logic [7:0] data, source;
+  assign data = source;
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = explain_signal_driver(
+        signal_path="top_tb.rsp.data[7:0]",
+        wave_path=str(tmp_path / "wave.vcd"),
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+    )
+
+    assert result["driver_status"] == "unsupported"
+    assert result["resolved_rtl_name"] == "rsp.data"
+    assert result["unsupported_reason"] == (
+        "dotted_signal_member_requires_source_graph"
+    )
+
+
 def test_single_hop_stopped_at_port(monkeypatch, tmp_path):
     rtl = tmp_path / "dut.sv"
     rtl.write_text(

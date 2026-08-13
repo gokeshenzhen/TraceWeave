@@ -190,6 +190,33 @@ endmodule
     ]
 
 
+def test_static_loads_do_not_collapse_dotted_member_onto_leaf_name(
+    monkeypatch, tmp_path
+):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  logic [7:0] data, sink;
+  assign sink = data;
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = find_signal_loads(
+        signal_path="top_tb.rsp.data[7:0]",
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+    )
+
+    assert result["loads"] == []
+    assert result["resolved_rtl_name"] == "rsp.data"
+    assert result["unsupported_reason"] == (
+        "dotted_signal_member_requires_source_graph"
+    )
+
+
 def test_output_port_loads_in_parent_scope(monkeypatch, tmp_path):
     rtl = tmp_path / "m.sv"
     rtl.write_text(

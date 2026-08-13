@@ -208,6 +208,13 @@ class _TerminalBindingSegment:
 
 
 @dataclass(frozen=True)
+class _ResolvedSymbol:
+    symbol: str
+    declared_bits: tuple[int, ...]
+    canonical_bits: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class _PathEdge:
     edge_id: str
     edge_kind: EdgeKind
@@ -786,26 +793,31 @@ class ConnectivityQueryEngine:
                 f"signal path does not resolve to an IR instance: {signal_path}",
             )
         symbol = base[len(instance_path) + 1 :]
-        declared = self._resolve_symbol_range(instance_path, symbol)
-        if declared is None:
+        resolved = self._resolve_symbol(instance_path, symbol)
+        if resolved is None:
             raise SignalNotDeclared(
                 signal_path,
                 f"signal is not declared in the IR: {signal_path}",
             )
         if match.group("left") is None:
-            bits = declared.indices
+            requested_bits = resolved.declared_bits
         else:
             left = int(match.group("left"))
             right = int(match.group("right") or left)
             step = -1 if left > right else 1
-            bits = tuple(range(left, right + step, step))
-            undeclared = set(bits) - set(declared.indices)
+            requested_bits = tuple(range(left, right + step, step))
+            undeclared = set(requested_bits) - set(resolved.declared_bits)
             if undeclared:
                 raise SignalSelectionOutOfRange(
                     signal_path,
                     f"selection {signal_path} contains undeclared bits {sorted(undeclared)}",
                 )
-        return SignalSelection(instance_path=instance_path, symbol=symbol, bits=bits)
+        bit_map = dict(zip(resolved.declared_bits, resolved.canonical_bits))
+        return SignalSelection(
+            instance_path=instance_path,
+            symbol=resolved.symbol,
+            bits=tuple(bit_map[bit] for bit in requested_bits),
+        )
 
     def _build_indexes(self) -> None:
         for binding in self.ir.bindings:
@@ -925,12 +937,21 @@ class ConnectivityQueryEngine:
         else:
             raise ValueError(f"unsupported binding direction {binding.direction}")
 
-    def _resolve_symbol_range(self, instance_path: str, symbol: str):
+    def _resolve_symbol(
+        self, instance_path: str, symbol: str
+    ) -> _ResolvedSymbol | None:
         instance = self._instances[instance_path]
         definition = self._definitions[instance.definition_id]
         direct = definition.direct_signal_range(symbol)
         if direct is not None:
-            return direct
+            return _ResolvedSymbol(symbol, direct.indices, direct.indices)
+        packed_member = definition.packed_member(symbol)
+        if packed_member is not None:
+            return _ResolvedSymbol(
+                packed_member.aggregate,
+                packed_member.packed_range.indices,
+                packed_member.aggregate_bits,
+            )
         if "." not in symbol:
             return None
         port_name, member_name = symbol.split(".", 1)
@@ -938,7 +959,10 @@ class ConnectivityQueryEngine:
         if port is None or not port.interface_definition:
             return None
         interface_definition = self._definition_by_name(port.interface_definition)
-        return interface_definition.direct_signal_range(member_name)
+        member_range = interface_definition.direct_signal_range(member_name)
+        if member_range is None:
+            return None
+        return _ResolvedSymbol(symbol, member_range.indices, member_range.indices)
 
     def _definition_by_name(self, name: str) -> DefinitionTemplate:
         exact = self._definitions.get(name)

@@ -451,7 +451,7 @@ def test_common_vcs_runtime_options_preserve_exact_source_manifest(tmp_path):
     )
 
 
-def test_unprovable_hierarchy_scope_is_a_structured_blocker(tmp_path):
+def test_dotted_symbol_suffix_is_deferred_to_exact_ir_resolution(tmp_path):
     source = tmp_path / "top.sv"
     _write(source, "module tb; logic q; endmodule\n")
     compile_result = _compile_result(
@@ -467,14 +467,11 @@ def test_unprovable_hierarchy_scope_is_a_structured_blocker(tmp_path):
         hierarchy={"component_tree": {"tb": {}}},
     )
 
-    assert plan.status is AdapterStatus.BLOCKED
-    assert plan.request is None
-    assert plan.receipt.blocker is not None
-    assert plan.receipt.blocker.code == "hierarchy_scope_unresolved"
-    assert plan.receipt.to_dict()["blocker"] == {
-        "code": "hierarchy_scope_unresolved",
-        "stage": "target_scope",
-    }
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.request.scope.hierarchy_ancestors == ("tb",)
+    assert plan.request.scope.target.instance_path == "tb"
+    assert plan.request.scope.target.signal_path == "tb.missing.q"
 
 
 def test_scope_resolution_does_not_enumerate_siblings(tmp_path):
@@ -645,7 +642,7 @@ def test_path_sibling_scope_uses_only_proved_ancestor_union_and_lca(tmp_path):
     }
 
 
-def test_path_different_top_and_missing_hierarchy_are_structured_blockers(tmp_path):
+def test_path_different_top_is_blocked_and_dotted_suffix_is_deferred(tmp_path):
     source = tmp_path / "top.sv"
     _write(source, "module tb_a; endmodule module tb_b; endmodule\n")
     compile_result = _compile_result(
@@ -673,7 +670,10 @@ def test_path_different_top_and_missing_hierarchy_are_structured_blockers(tmp_pa
     )
 
     assert different_top.receipt.blocker.code == "path_endpoint_top_mismatch"
-    assert missing.receipt.blocker.code == "path_from_hierarchy_unresolved"
+    assert missing.status is AdapterStatus.READY
+    assert missing.request is not None
+    assert missing.request.scope.path_hierarchy is not None
+    assert missing.request.scope.path_hierarchy.from_ancestors == ("tb_a",)
     assert different_top.receipt.to_dict()["scope"]["endpoint_count"] == 2
 
 

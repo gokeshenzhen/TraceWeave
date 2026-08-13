@@ -8,6 +8,7 @@ does not invoke NPI or Legacy Static, so a returned result has one provenance.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from .connectivity_ir import CoverageStatus, EdgeKind, ResolutionKind, SignalSelection
@@ -21,6 +22,9 @@ from .connectivity_query import (
     SignalResolutionError,
 )
 from .source_graph_runtime import SourceGraphCacheEntry
+
+
+_DISPLAY_SIGNAL_RE = re.compile(r"^(?P<base>.+?)(?:\[-?\d+(?::-?\d+)?\])?$")
 
 
 @dataclass(frozen=True)
@@ -128,6 +132,13 @@ def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, An
     return segments
 
 
+def _requested_symbol(signal_path: str, instance_path: str | None) -> str:
+    match = _DISPLAY_SIGNAL_RE.fullmatch(signal_path.strip())
+    base = match.group("base") if match is not None else signal_path.strip()
+    prefix = f"{instance_path}." if instance_path else ""
+    return base[len(prefix) :] if prefix and base.startswith(prefix) else base
+
+
 def _path_confidence(result: ConnectivityPathQueryResult) -> str | None:
     if result.status is not PathQueryStatus.FOUND:
         return "exact" if result.status is PathQueryStatus.NOT_CONNECTED else None
@@ -195,6 +206,7 @@ class SourceGraphConnectivityBackend:
             query,
             wave_path=wave_path,
             recursive=recursive,
+            requested_signal_path=signal_path,
         )
         result["_source_graph_query_receipt"] = _query_receipt(query)
         return result
@@ -220,7 +232,11 @@ class SourceGraphConnectivityBackend:
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
-        result = self._map_loads(query, include_expr=include_expr)
+        result = self._map_loads(
+            query,
+            include_expr=include_expr,
+            requested_signal_path=signal_path,
+        )
         result["_source_graph_query_receipt"] = _query_receipt(query)
         return result
 
@@ -356,6 +372,7 @@ class SourceGraphConnectivityBackend:
         *,
         wave_path: str,
         recursive: bool,
+        requested_signal_path: str,
     ) -> dict[str, Any]:
         matches = query.matches
         head = matches[0] if matches else None
@@ -407,9 +424,12 @@ class SourceGraphConnectivityBackend:
             expression_summary = None
 
         result: dict[str, Any] = {
-            "signal_path": query.signal.path(),
+            "signal_path": requested_signal_path,
             "wave_path": wave_path,
-            "resolved_rtl_name": query.signal.symbol,
+            "resolved_rtl_name": _requested_symbol(
+                requested_signal_path,
+                query.signal.instance_path,
+            ),
             "resolved_module": (
                 self._definition_name(instance_path) if instance_path else None
             ),
@@ -471,6 +491,7 @@ class SourceGraphConnectivityBackend:
         query: ConnectivityQueryResult,
         *,
         include_expr: bool,
+        requested_signal_path: str,
     ) -> dict[str, Any]:
         del include_expr
         loads = [
@@ -500,8 +521,11 @@ class SourceGraphConnectivityBackend:
             stopped_at = None
             unsupported_reason = None
         return {
-            "signal_path": query.signal.path(),
-            "resolved_rtl_name": query.signal.symbol,
+            "signal_path": requested_signal_path,
+            "resolved_rtl_name": _requested_symbol(
+                requested_signal_path,
+                query.signal.instance_path,
+            ),
             "resolved_module": (
                 self._definition_name(instance_path) if instance_path else None
             ),

@@ -19,6 +19,7 @@ from src.connectivity_ir import (
     DependencyFact,
     EdgeKind,
     InstanceDecl,
+    PackedMemberDecl,
     PortBinding,
     PortDecl,
     PortDirection,
@@ -43,6 +44,33 @@ DEEP_LEAF = (
     "uart_deep_x_tb.u_apb_bridge.u_uart.u_control.u_rx_channel."
     "u_rx_fifo.u_storage_bank.u_x_cell"
 )
+
+
+def test_packed_member_resolution_preserves_ascending_field_indices():
+    ir = build_hand_ir()
+    definitions = tuple(
+        replace(
+            definition,
+            packed_members=(
+                PackedMemberDecl(
+                    name="lane_data.asc",
+                    aggregate="lane_data",
+                    packed_range=BitRange(0, 7),
+                    aggregate_bits=tuple(range(15, 7, -1)),
+                    location=definition.location,
+                ),
+            ),
+        )
+        if definition.name == "sg_top"
+        else definition
+        for definition in ir.definitions
+    )
+    engine = ConnectivityQueryEngine(replace(ir, definitions=definitions))
+
+    resolved = engine.resolve_signal("sg_top.lane_data.asc[0:3]")
+
+    assert resolved.symbol == "lane_data"
+    assert resolved.bits == (15, 14, 13, 12)
 
 
 def _build_scalar_path_ir(

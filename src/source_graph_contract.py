@@ -28,7 +28,7 @@ from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.0"
 SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.0"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.2"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.3"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_MAPPING_VERSION = "1.0"
@@ -258,6 +258,7 @@ class SourceGraphIdentity:
 class ConnectivityTarget:
     operation: QueryOperation
     signal_path: str
+    instance_path_hint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "operation", QueryOperation(self.operation))
@@ -271,15 +272,21 @@ class ConnectivityTarget:
             "signal_path",
             signal_path,
         )
+        if self.instance_path_hint is not None:
+            hint = _hier_path(self.instance_path_hint, "target instance_path_hint")
+            if not signal_path.startswith(f"{hint}."):
+                raise ValueError("target signal_path must be below instance_path_hint")
+            object.__setattr__(self, "instance_path_hint", hint)
 
     @property
     def instance_path(self) -> str:
-        return self.signal_path.rsplit(".", 1)[0]
+        return self.instance_path_hint or self.signal_path.rsplit(".", 1)[0]
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "operation": self.operation.value,
             "signal_path": self.signal_path,
+            "instance_path_hint": self.instance_path_hint,
         }
 
     @classmethod
@@ -287,6 +294,7 @@ class ConnectivityTarget:
         return cls(
             operation=QueryOperation(value["operation"]),
             signal_path=value["signal_path"],
+            instance_path_hint=value.get("instance_path_hint"),
         )
 
 

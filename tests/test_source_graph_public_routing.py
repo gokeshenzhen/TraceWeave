@@ -21,6 +21,7 @@ from src.connectivity_ir import (
     DefinitionKind,
     DefinitionTemplate,
     InstanceDecl,
+    PackedMemberDecl,
     PortBinding,
     PortDecl,
     PortDirection,
@@ -1197,6 +1198,45 @@ async def test_source_graph_signal_resolution_blockers_are_exact(
 
 
 @pytest.mark.anyio
+async def test_public_route_accepts_dotted_packed_member_endpoint(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    ir = _production_ir()
+    definitions = tuple(
+        replace(
+            definition,
+            packed_members=(
+                PackedMemberDecl(
+                    name="lane_data.low",
+                    aggregate="lane_data",
+                    packed_range=BitRange(7, 0),
+                    aggregate_bits=tuple(range(7, -1, -1)),
+                    location=definition.location,
+                ),
+            ),
+        )
+        if definition.name == "sg_top"
+        else definition
+        for definition in ir.definitions
+    )
+    runtime = SourceGraphRuntime(ReadyWorker(ir=replace(ir, definitions=definitions)))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    signal = "sg_top.lane_data.low[7:0]"
+
+    result = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log, signal)
+    )
+
+    assert result.backend == "source_graph"
+    assert result.signal_path == signal
+    assert result.resolved_rtl_name == "lane_data.low"
+    assert result.driver_status == "resolved"
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
 async def test_explicit_mixed_npi_provenance_is_discarded(monkeypatch, tmp_path):
     compile_log, _ = _install_source_context(tmp_path)
     npi = FakeNpiBackend(
@@ -2143,7 +2183,7 @@ async def test_raised_npi_path_failure_still_routes_to_source_graph(
 
 
 @pytest.mark.anyio
-async def test_path_adapter_blocker_preserved_when_static_is_final(
+async def test_dotted_path_suffix_is_rejected_by_exact_query_before_static(
     monkeypatch, tmp_path
 ):
     compile_log, _ = _install_source_context(tmp_path)
@@ -2162,9 +2202,10 @@ async def test_path_adapter_blocker_preserved_when_static_is_final(
 
     assert result.backend == "static"
     assert result.unsupported_reason == "static_backend_no_path_api"
-    assert result.backend_status.source_graph.adapter_status == "blocked"
-    assert result.backend_status.source_graph.blocker.code == (
-        "path_from_hierarchy_unresolved"
+    assert result.backend_status.source_graph.adapter_status == "ready"
+    assert result.backend_status.source_graph.query_status == "from_unresolved"
+    assert result.backend_status.fallback_reason == (
+        "source_graph_path_from_unresolved"
     )
     assert result.backend_status.source_graph.fallback_used is True
     assert static.path_calls == 1

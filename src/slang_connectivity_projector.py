@@ -38,6 +38,7 @@ from .connectivity_ir import (
     InstanceDecl,
     ModportDecl,
     ModportMember,
+    PackedMemberDecl,
     PortBinding,
     PortDecl,
     PortDirection,
@@ -620,7 +621,7 @@ class SlangConnectivityProjector:
             else DefinitionKind.MODULE
         )
         aliases = self._interface_aliases(instance)
-        ports, port_internal_paths = self._project_ports(record)
+        ports, port_internal_paths, packed_members = self._project_ports(record)
         if (
             self.options.focus_instance_paths
             and record.definition_id not in self._assignment_definition_ids
@@ -631,6 +632,7 @@ class SlangConnectivityProjector:
                 kind=definition_kind,
                 location=definition_location,
                 ports=tuple(ports),
+                packed_members=tuple(packed_members),
             )
         signals: list[SignalDecl] = []
         modports: list[ModportDecl] = []
@@ -668,6 +670,15 @@ class SlangConnectivityProjector:
                         location=location,
                     )
                 )
+                packed_members.extend(
+                    self._project_packed_members(
+                        member,
+                        aggregate=relative,
+                        aggregate_bits=packed_range.indices,
+                        fallback_location=location,
+                        scope=record.path,
+                    )
+                )
             elif kind == "Modport":
                 projected = self._project_modport(member)
                 if projected is not None:
@@ -695,6 +706,7 @@ class SlangConnectivityProjector:
             location=definition_location,
             ports=tuple(ports),
             signals=tuple(_dedupe_signals(signals)),
+            packed_members=tuple(_dedupe_packed_members(packed_members)),
             modports=tuple(sorted(modports, key=lambda item: item.name)),
             assignments=tuple(assignments),
         )
@@ -702,9 +714,10 @@ class SlangConnectivityProjector:
     def _project_ports(
         self,
         record: _InstanceRecord,
-    ) -> tuple[list[PortDecl], set[str]]:
+    ) -> tuple[list[PortDecl], set[str], list[PackedMemberDecl]]:
         ports: list[PortDecl] = []
         internal_paths: set[str] = set()
+        packed_members: list[PackedMemberDecl] = []
         for ordinal, port in enumerate(tuple(record.symbol.body.portList)):
             kind = _kind_name(port)
             location = self._location(port.location)
@@ -756,10 +769,91 @@ class SlangConnectivityProjector:
                     location=location,
                 )
             )
+            packed_members.extend(
+                self._project_packed_members(
+                    port,
+                    aggregate=str(port.name),
+                    aggregate_bits=packed_range.indices,
+                    fallback_location=location,
+                    scope=record.path,
+                )
+            )
             internal = getattr(port, "internalSymbol", None)
             if internal is not None:
                 internal_paths.add(str(internal.hierarchicalPath))
-        return ports, internal_paths
+        return ports, internal_paths, packed_members
+
+    def _project_packed_members(
+        self,
+        symbol: Any,
+        *,
+        aggregate: str,
+        aggregate_bits: tuple[int, ...],
+        fallback_location: SourceLocation,
+        scope: str,
+    ) -> list[PackedMemberDecl]:
+        """Flatten packed struct/union fields onto one root aggregate."""
+
+        projected: list[PackedMemberDecl] = []
+
+        def walk(value_type: Any, prefix: str, container_bits: tuple[int, ...]) -> None:
+            canonical = getattr(value_type, "canonicalType", value_type)
+            if not (
+                bool(getattr(canonical, "isStruct", False))
+                or bool(getattr(canonical, "isPackedUnion", False))
+            ) or bool(getattr(canonical, "isUnpackedStruct", False)):
+                return
+            try:
+                fields = tuple(canonical)
+            except Exception:
+                self._gaps.add(
+                    code="packed_members_unresolved",
+                    message=f"cannot enumerate packed members for {scope}.{prefix}",
+                    impact=CoverageStatus.PARTIAL,
+                    constructs=("packed_aggregate",),
+                    scopes=(f"{scope}.{prefix}",),
+                    location=fallback_location,
+                )
+                return
+            for field in fields:
+                if _kind_name(field) != "Field":
+                    continue
+                field_range = _packed_range(field)
+                try:
+                    offset = int(field.bitOffset)
+                except Exception:
+                    offset = -1
+                field_bits = _packed_member_bits(
+                    container_bits,
+                    offset=offset,
+                    width=field_range.width if field_range is not None else 0,
+                )
+                location = self._location(getattr(field, "location", None))
+                location = location or fallback_location
+                name = f"{prefix}.{field.name}"
+                if field_range is None or not field_bits:
+                    self._gaps.add(
+                        code="packed_member_shape_unresolved",
+                        message=f"cannot map packed member {scope}.{name}",
+                        impact=CoverageStatus.PARTIAL,
+                        constructs=("packed_aggregate",),
+                        scopes=(f"{scope}.{name}",),
+                        location=location,
+                    )
+                    continue
+                projected.append(
+                    PackedMemberDecl(
+                        name=name,
+                        aggregate=aggregate,
+                        packed_range=field_range,
+                        aggregate_bits=field_bits,
+                        location=location,
+                    )
+                )
+                walk(field.type, name, field_bits)
+
+        walk(getattr(symbol, "type", None), aggregate, aggregate_bits)
+        return projected
 
     def _connected_interface_definition_id(self, port: Any) -> str:
         connection = getattr(port, "connection", None)
@@ -1385,6 +1479,7 @@ class SlangConnectivityProjector:
                 "NamedValue",
                 "HierarchicalValue",
                 "ArbitrarySymbol",
+                "MemberAccess",
                 "RangeSelect",
                 "ElementSelect",
             }:
@@ -1407,8 +1502,37 @@ class SlangConnectivityProjector:
     ) -> SignalSelection | None:
         expression = _unwrap_expression(expression)
         kind = _kind_name(expression)
-        if kind in {"RangeSelect", "ElementSelect"}:
+        if kind == "MemberAccess":
             base = self._template_selection(expression.value, record, aliases)
+            if base is None:
+                return None
+            selected_bits = _packed_member_bits(
+                base.bits,
+                offset=int(getattr(expression.member, "bitOffset", -1)),
+                width=_expression_width(expression) or 0,
+            )
+            if not selected_bits:
+                return None
+            return SignalSelection(symbol=base.symbol, bits=selected_bits)
+        if kind in {"RangeSelect", "ElementSelect"}:
+            selected_value = _unwrap_expression(expression.value)
+            if _kind_name(selected_value) == "MemberAccess":
+                base = self._template_selection(
+                    selected_value.value,
+                    record,
+                    aliases,
+                )
+                if base is None:
+                    return None
+                selected_bits = _selected_packed_member_bits(
+                    expression,
+                    selected_value.member,
+                    base.bits,
+                )
+                if not selected_bits:
+                    return None
+                return SignalSelection(symbol=base.symbol, bits=selected_bits)
+            base = self._template_selection(selected_value, record, aliases)
             if base is None:
                 return None
             selected_bits = _selected_bits(expression, base.bits)
@@ -1505,6 +1629,49 @@ class SlangConnectivityProjector:
 
         if kind in {"RangeSelect", "ElementSelect"}:
             base_expression = expression.value
+            selected_value = _unwrap_expression(base_expression)
+            if _kind_name(selected_value) == "MemberAccess":
+                base = self._bound_expression_operands(
+                    selected_value.value,
+                    context_symbol,
+                )
+                if len(base) != 1 or base[0].source is None:
+                    return (
+                        (
+                            _BindingOperand.unresolved(
+                                width,
+                                "selected_member_source_unresolved",
+                            ),
+                        )
+                        if width is not None
+                        else ()
+                    )
+                bits = _selected_packed_member_bits(
+                    expression,
+                    selected_value.member,
+                    base[0].source.bits,
+                    context_symbol,
+                )
+                if not bits:
+                    return (
+                        (
+                            _BindingOperand.unresolved(
+                                width,
+                                "selected_member_mapping_unresolved",
+                            ),
+                        )
+                        if width is not None
+                        else ()
+                    )
+                return (
+                    _BindingOperand.signal(
+                        SignalSelection(
+                            instance_path=base[0].source.instance_path,
+                            symbol=base[0].source.symbol,
+                            bits=bits,
+                        )
+                    ),
+                )
             base = self._bound_expression_operands(base_expression, context_symbol)
             if len(base) != 1 or base[0].source is None:
                 return (
@@ -1516,6 +1683,38 @@ class SlangConnectivityProjector:
             if not bits:
                 return (
                     (_BindingOperand.unresolved(width, "selection_unresolved"),)
+                    if width is not None
+                    else ()
+                )
+            return (
+                _BindingOperand.signal(
+                    SignalSelection(
+                        instance_path=base[0].source.instance_path,
+                        symbol=base[0].source.symbol,
+                        bits=bits,
+                    )
+                ),
+            )
+
+        if kind == "MemberAccess":
+            base = self._bound_expression_operands(
+                expression.value,
+                context_symbol,
+            )
+            if len(base) != 1 or base[0].source is None:
+                return (
+                    (_BindingOperand.unresolved(width, "member_source_unresolved"),)
+                    if width is not None
+                    else ()
+                )
+            bits = _packed_member_bits(
+                base[0].source.bits,
+                offset=int(getattr(expression.member, "bitOffset", -1)),
+                width=width or 0,
+            )
+            if not bits:
+                return (
+                    (_BindingOperand.unresolved(width, "member_selection_unresolved"),)
                     if width is not None
                     else ()
                 )
@@ -1802,6 +2001,21 @@ def _packed_range(symbol: Any) -> BitRange | None:
         except Exception:
             return None
         return BitRange.from_width(width) if width > 0 else None
+
+
+def _packed_member_bits(
+    container_bits: tuple[int, ...],
+    *,
+    offset: int,
+    width: int,
+) -> tuple[int, ...]:
+    """Map a Slang packed-field LSB offset into source-order root bits."""
+
+    if offset < 0 or width < 1 or offset + width > len(container_bits):
+        return ()
+    start = len(container_bits) - offset - width
+    stop = len(container_bits) - offset
+    return container_bits[start:stop]
 
 
 def _port_direction(direction: Any) -> PortDirection:
@@ -2104,6 +2318,34 @@ def _selected_bits(
     return tuple(bit for bit in base_bits if bit in selected)
 
 
+def _selected_packed_member_bits(
+    selection: Any,
+    member: Any,
+    container_bits: tuple[int, ...],
+    context_symbol: Any | None = None,
+) -> tuple[int, ...]:
+    member_range = _packed_range(member)
+    if member_range is None:
+        return ()
+    physical_bits = _packed_member_bits(
+        container_bits,
+        offset=int(getattr(member, "bitOffset", -1)),
+        width=member_range.width,
+    )
+    if not physical_bits:
+        return ()
+    local_bits = _selected_bits(
+        selection,
+        member_range.indices,
+        context_symbol,
+    )
+    physical_by_local = dict(zip(member_range.indices, physical_bits))
+    try:
+        return tuple(physical_by_local[bit] for bit in local_bits)
+    except KeyError:
+        return ()
+
+
 def _syntax_text(expression: Any) -> str:
     syntax = getattr(expression, "syntax", None)
     if syntax is None:
@@ -2155,6 +2397,15 @@ def _dedupe_selections(
         seen.add(key)
         result.append(selection)
     return tuple(result)
+
+
+def _dedupe_packed_members(
+    members: Sequence[PackedMemberDecl],
+) -> tuple[PackedMemberDecl, ...]:
+    by_name: dict[str, PackedMemberDecl] = {}
+    for member in members:
+        by_name.setdefault(member.name, member)
+    return tuple(by_name[name] for name in sorted(by_name))
 
 
 def _prefer_specific_selections(
