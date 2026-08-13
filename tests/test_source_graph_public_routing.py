@@ -1171,6 +1171,32 @@ async def test_complete_not_connected_and_inconclusive_no_match_are_distinct(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("signal", "code"),
+    [
+        ("sg_top.not_a_signal[7:0]", "signal_not_declared"),
+        ("sg_top.lane_data[31:24]", "signal_selection_out_of_range"),
+    ],
+)
+async def test_source_graph_signal_resolution_blockers_are_exact(
+    monkeypatch, tmp_path, signal, code
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log, signal)
+    )
+
+    assert result.backend == "static"
+    assert result.backend_status.source_graph.blocker.code == code
+    assert result.backend_status.fallback_reason == f"source_graph_{code}"
+    assert static.driver_calls == 1
+
+
+@pytest.mark.anyio
 async def test_explicit_mixed_npi_provenance_is_discarded(monkeypatch, tmp_path):
     compile_log, _ = _install_source_context(tmp_path)
     npi = FakeNpiBackend(

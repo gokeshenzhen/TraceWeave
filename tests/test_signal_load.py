@@ -161,6 +161,35 @@ def test_signal_path_too_short(monkeypatch, tmp_path):
     assert r["loads"] == []
 
 
+def test_packed_range_query_resolves_bare_name_for_static_loads(
+    monkeypatch, tmp_path
+):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module leaf(input logic [23:0] data_i);
+endmodule
+
+module top_tb;
+  logic [31:0] instr_rdata;
+  leaf u_leaf(.data_i(instr_rdata[23:0]));
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = find_signal_loads(
+        signal_path="top_tb.instr_rdata[23:0]",
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+    )
+
+    assert result["resolved_rtl_name"] == "instr_rdata"
+    assert [load["load_path"] for load in result["loads"]] == [
+        "top_tb.u_leaf.data_i"
+    ]
+
+
 def test_output_port_loads_in_parent_scope(monkeypatch, tmp_path):
     rtl = tmp_path / "m.sv"
     rtl.write_text(

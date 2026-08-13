@@ -76,6 +76,93 @@ endmodule
     assert result["driver_chain"] is None
 
 
+def test_packed_range_query_resolves_bare_input_port_name(monkeypatch, tmp_path):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut(input logic [31:0] instr_rdata_i);
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = explain_signal_driver(
+        signal_path="top_tb.u0.instr_rdata_i[31:0]",
+        wave_path=str(tmp_path / "wave.vcd"),
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+    )
+
+    assert result["resolved_rtl_name"] == "instr_rdata_i"
+    assert result["driver_kind"] == "input_port"
+    assert result["source_line"] == 5
+    assert result["stopped_at"] == "port_boundary"
+
+
+def test_packed_range_query_matches_selected_assign_lhs(monkeypatch, tmp_path):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module top_tb;
+  dut u0();
+endmodule
+
+module dut;
+  logic [31:0] q, d;
+  assign q[23:0] = d[23:0];
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = explain_signal_driver(
+        signal_path="top_tb.u0.q[23:0]",
+        wave_path=str(tmp_path / "wave.vcd"),
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+    )
+
+    assert result["resolved_rtl_name"] == "q"
+    assert result["driver_status"] == "resolved"
+    assert result["driver_kind"] == "assign"
+    assert result["source_line"] == 7
+
+
+def test_recursive_static_does_not_promote_concat_operand_to_full_port(
+    monkeypatch, tmp_path
+):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text(
+        """\
+module leaf(input logic [31:0] data_i);
+endmodule
+
+module top_tb;
+  logic [23:0] payload;
+  leaf u_leaf(.data_i({8'h0, payload}));
+endmodule
+"""
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = explain_signal_driver(
+        signal_path="top_tb.u_leaf.data_i[31:0]",
+        wave_path=str(tmp_path / "wave.vcd"),
+        compile_log=str(tmp_path / "compile.log"),
+        top_hint="top_tb",
+        recursive=True,
+    )
+
+    assert result["driver_kind"] == "input_port"
+    assert result["stopped_at"] == "port_boundary"
+    assert len(result["driver_chain"]) == 1
+    assert result["driver_chain"][0]["upstream_signals"] == []
+
+
 def test_single_hop_stopped_at_port(monkeypatch, tmp_path):
     rtl = tmp_path / "dut.sv"
     rtl.write_text(

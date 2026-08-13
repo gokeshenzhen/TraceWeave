@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 
+import pytest
+
 from src.connectivity_ir import (
     CoverageGap,
     CoverageReport,
@@ -12,6 +14,7 @@ from src.connectivity_ir import (
 from src.connectivity_query import ConnectivityQueryEngine, QueryConfidence
 from src.source_graph_backend import (
     SourceGraphConnectivityBackend,
+    SourceGraphQueryBlocked,
     _public_confidence,
 )
 from src.source_graph_contract import (
@@ -135,6 +138,32 @@ def test_segmented_driver_mapping_reports_composite_bit_provenance():
     assert receipt["queried_bit_count"] == 8
     assert receipt["resolved_bit_count"] == 8
     assert receipt["expansion_frontiers"] == []
+
+
+def test_driver_reports_signal_not_declared_as_a_fixed_query_blocker():
+    backend = SourceGraphConnectivityBackend(_entry())
+
+    with pytest.raises(SourceGraphQueryBlocked) as caught:
+        backend.find_driver(
+            signal_path="sg_top.not_a_signal[7:0]",
+            wave_path="wave.fsdb",
+            compile_log="compile.log",
+        )
+
+    assert caught.value.code == "signal_not_declared"
+
+
+def test_driver_reports_selection_out_of_range_as_a_fixed_query_blocker():
+    backend = SourceGraphConnectivityBackend(_entry())
+
+    with pytest.raises(SourceGraphQueryBlocked) as caught:
+        backend.find_driver(
+            signal_path="sg_top.lane_data[31:24]",
+            wave_path="wave.fsdb",
+            compile_log="compile.log",
+        )
+
+    assert caught.value.code == "signal_selection_out_of_range"
 
 
 def test_load_mapping_preserves_terminal_assignment_evidence():

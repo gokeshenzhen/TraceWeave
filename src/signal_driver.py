@@ -16,12 +16,22 @@ from .tb_hierarchy_builder import scan_sv_file
 
 _PORT_DECL_RE = re.compile(r"\b(?P<dir>input|output)\b(?P<rest>[^;\n)]*)", re.IGNORECASE)
 _IDENT_RE = re.compile(r"\b(?P<name>[A-Za-z_]\w*)\b")
-_ASSIGN_RE_TEMPLATE = r"assign\s+{name}\s*=\s*(?P<expr>[^;]+);"
+_ASSIGN_RE_TEMPLATE = (
+    r"assign\s+{name}(?:\s*\[[^\]]+\])*\s*=\s*(?P<expr>[^;]+);"
+)
 _ALWAYS_BLOCK_RE = re.compile(r"always(?:_comb|_ff)?(?:\s*@\s*\([^)]*\))?\s*begin(?P<body>.*?)end", re.IGNORECASE | re.DOTALL)
-_ASSIGNMENT_RE_TEMPLATE = r"\b{name}\b\s*(?:<=|=)\s*(?P<expr>[^;]+);"
+_ASSIGNMENT_RE_TEMPLATE = (
+    r"\b{name}\b(?:\s*\[[^\]]+\])*\s*(?:<=|=)\s*(?P<expr>[^;]+);"
+)
 _INSTANCE_RE = re.compile(r"(?P<module>\w+)\s+(?P<inst>\w+)\s*\((?P<body>.*?)\);", re.DOTALL)
 _PORT_CONN_RE = re.compile(r"\.(?P<port>\w+)\s*\(\s*(?P<expr>[^)]+)\)")
 _SIGNAL_REF_RE = re.compile(r"(?P<ref>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\[[^\]]+\])*")
+_RTL_LEAF_RE = re.compile(
+    r"^(?P<name>[A-Za-z_]\w*)(?:\[\s*-?\d+\s*(?::\s*-?\d+\s*)?\])*$"
+)
+_SIMPLE_SIGNAL_EXPR_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_]\w*)(?P<selects>(?:\s*\[[^\]]+\])*)\s*$"
+)
 _UPSTREAM_FILTER_KEYWORDS = {
     "assign", "if", "else", "begin", "end", "case", "endcase",
     "reg", "wire", "logic", "signed", "unsigned", "input", "output",
@@ -120,7 +130,7 @@ def _explain_single(
     result = {
         "signal_path": signal_path,
         "wave_path": wave_path,
-        "resolved_rtl_name": signal_path.split(".")[-1],
+        "resolved_rtl_name": _rtl_leaf_name(signal_path),
         "recursive": False,
         "driver_chain": None,
         "chain_summary": None,
@@ -155,7 +165,9 @@ def _explain_recursive(
     result = {
         "signal_path": signal_path,
         "wave_path": wave_path,
-        "resolved_rtl_name": head.get("resolved_rtl_name", signal_path.split(".")[-1]),
+        "resolved_rtl_name": head.get(
+            "resolved_rtl_name", _rtl_leaf_name(signal_path)
+        ),
         "resolved_module": head.get("resolved_module"),
         "resolved_instance_path": head.get("resolved_instance_path"),
         "driver_status": head.get("driver_status"),
@@ -222,7 +234,7 @@ def _resolve_single_hop(
     if resolved is None:
         return _unsupported_result(signal_path), None
 
-    rtl_name = signal_path.split(".")[-1]
+    rtl_name = _rtl_leaf_name(signal_path)
     module_name, instance_path, scan = resolved
     ctx = _build_hierarchy_context(instance_path, top_module, module_index, module_name)
 
@@ -452,10 +464,16 @@ def _traverse_upward(
         for port_match in _PORT_CONN_RE.finditer(inst_match.group("body")):
             if port_match.group("port") != signal_name:
                 continue
-            upstream_names = _extract_upstream_signals(port_match.group("expr"))
-            if not upstream_names:
+            expression = port_match.group("expr")
+            simple = _SIMPLE_SIGNAL_EXPR_RE.fullmatch(expression)
+            if simple is None:
+                # A concat, cast, operator, or aggregate needs per-bit
+                # provenance. Legacy Static must stop at the boundary instead
+                # of promoting the first dynamic operand to whole-port driver.
                 return None
-            parent_signal_name = upstream_names[0].split(".")[-1]
+            parent_signal_name = simple.group("name") + re.sub(
+                r"\s+", "", simple.group("selects")
+            )
             parent_signal_path = f"{ctx.parent_instance_path}.{parent_signal_name}"
             parent_parent_path = (
                 ctx.parent_instance_path.rsplit(".", 1)[0]
@@ -695,7 +713,7 @@ def _is_top_level_instance(instance_path: str | None) -> bool:
 def _unsupported_result(signal_path: str) -> dict[str, Any]:
     return {
         "signal_path": signal_path,
-        "resolved_rtl_name": signal_path.split(".")[-1],
+        "resolved_rtl_name": _rtl_leaf_name(signal_path),
         "driver_status": "unsupported",
         "driver_kind": None,
         "unsupported_reason": "complex_generate_or_unresolved_hierarchy",
@@ -708,6 +726,20 @@ def _unsupported_result(signal_path: str) -> dict[str, Any]:
         "expression_summary": None,
         "instance_port_connections": None,
     }
+
+
+def _rtl_leaf_name(signal_path: str) -> str:
+    """Return a bare RTL symbol for a waveform path with packed selects.
+
+    Static source matching is symbol based. A waveform spelling such as
+    ``u_core.instr_rdata_i[31:0]`` therefore resolves against the declaration
+    ``instr_rdata_i`` while the original selected path remains in the result.
+    Multiple trailing constant selects are accepted for packed arrays.
+    """
+
+    leaf = signal_path.rsplit(".", 1)[-1].strip()
+    match = _RTL_LEAF_RE.fullmatch(leaf)
+    return match.group("name") if match is not None else leaf
 
 
 def _signal_name_from_expr(expr: str) -> str | None:

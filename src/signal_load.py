@@ -18,11 +18,9 @@ Out of scope for static path (returned as stopped_at when applicable):
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
-from .compile_log_parser import parse_compile_log
 from .signal_driver import (
     _ALWAYS_BLOCK_RE,
     _INSTANCE_RE,
@@ -34,8 +32,8 @@ from .signal_driver import (
     _find_output_port,
     _line_of_offset,
     _resolve_instance_module,
+    _rtl_leaf_name,
 )
-from .tb_hierarchy_builder import scan_sv_file
 
 
 _ALWAYS_HEADER_RE = re.compile(
@@ -71,7 +69,7 @@ def find_signal_loads(
         compile_log, top_hint, simulator, signal_path=signal_path,
     )
     resolved = _resolve_instance_module(signal_path, top_module, module_index)
-    rtl_name = signal_path.split(".")[-1]
+    rtl_name = _rtl_leaf_name(signal_path)
     base = {
         "signal_path": signal_path,
         "resolved_rtl_name": rtl_name,

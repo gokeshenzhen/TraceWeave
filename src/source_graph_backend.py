@@ -18,6 +18,7 @@ from .connectivity_query import (
     QueryConfidence,
     QueryMatch,
     QueryStatus,
+    SignalResolutionError,
 )
 from .source_graph_runtime import SourceGraphCacheEntry
 
@@ -183,10 +184,13 @@ class SourceGraphConnectivityBackend:
         simulator: str = "auto",
     ) -> dict[str, Any]:
         del compile_log, top_hint, simulator
-        query = self._entry.query_engine.query_driver(
-            signal_path,
-            max_depth=max_depth,
-        )
+        try:
+            query = self._entry.query_engine.query_driver(
+                signal_path,
+                max_depth=max_depth,
+            )
+        except SignalResolutionError as exc:
+            raise SourceGraphQueryBlocked(exc.code) from exc
         result = self._map_driver(
             query,
             wave_path=wave_path,
@@ -209,10 +213,13 @@ class SourceGraphConnectivityBackend:
         del compile_log, top_hint, simulator
         if kind_filter is not None and "rhs_expr" not in kind_filter:
             raise SourceGraphQueryBlocked("kind_filter_unsupported")
-        query = self._entry.query_engine.query_loads(
-            signal_path,
-            max_depth=max_depth,
-        )
+        try:
+            query = self._entry.query_engine.query_loads(
+                signal_path,
+                max_depth=max_depth,
+            )
+        except SignalResolutionError as exc:
+            raise SourceGraphQueryBlocked(exc.code) from exc
         result = self._map_loads(query, include_expr=include_expr)
         result["_source_graph_query_receipt"] = _query_receipt(query)
         return result

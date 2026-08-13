@@ -201,6 +201,32 @@ endmodule
     ]
 
 
+def test_real_frontend_binding_evidence_points_to_actual_expression():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic [31:0] data_i); endmodule
+module top;
+  logic [23:0] payload;
+  leaf u_leaf (
+    .data_i(
+      {8'h0, payload}
+    )
+  );
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+
+    binding = projection.ir.bindings[0]
+    assert binding.instance_path == "top.u_leaf"
+    assert binding.evidence.location.line == 6
+
+
 def test_source_paths_normalize_against_projection_root(tmp_path: Path, monkeypatch):
     source = tmp_path / "rtl" / "core.sv"
 

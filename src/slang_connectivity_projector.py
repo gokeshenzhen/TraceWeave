@@ -874,10 +874,12 @@ class SlangConnectivityProjector:
                     scopes=(formal.path(include_bits=True),),
                     location=self._expression_location(expression),
                 )
-            location = self._required_location(
-                instance.location,
-                f"instance port binding {record.path}.{port.name}",
-            )
+            location = self._expression_location(expression)
+            if location is None:
+                location = self._required_location(
+                    instance.location,
+                    f"instance port binding {record.path}.{port.name}",
+                )
             bindings.append(
                 PortBinding(
                     binding_id=f"{record.path}:{position}:{port.name}",

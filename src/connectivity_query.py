@@ -53,6 +53,32 @@ class QueryConfidence(str, Enum):
     PARTIAL = "partial"
 
 
+class SignalResolutionError(ValueError):
+    """Fixed-code failure to resolve a public signal path against the IR."""
+
+    code = "signal_resolution_failed"
+
+    def __init__(self, signal_path: str, detail: str) -> None:
+        self.signal_path = signal_path
+        super().__init__(detail)
+
+
+class SignalPathInvalid(SignalResolutionError):
+    code = "signal_path_invalid"
+
+
+class SignalInstanceUnresolved(SignalResolutionError):
+    code = "signal_instance_unresolved"
+
+
+class SignalNotDeclared(SignalResolutionError):
+    code = "signal_not_declared"
+
+
+class SignalSelectionOutOfRange(SignalResolutionError):
+    code = "signal_selection_out_of_range"
+
+
 class PathQueryStatus(str, Enum):
     FOUND = "found"
     NOT_CONNECTED = "not_connected"
@@ -741,7 +767,10 @@ class ConnectivityQueryEngine:
     def resolve_signal(self, signal_path: str) -> SignalSelection:
         match = _TRAILING_SELECT_RE.fullmatch(signal_path.strip())
         if not match:
-            raise ValueError(f"invalid signal path {signal_path!r}")
+            raise SignalPathInvalid(
+                signal_path,
+                f"invalid signal path {signal_path!r}",
+            )
         base = match.group("base")
         instance_path = next(
             (
@@ -752,13 +781,17 @@ class ConnectivityQueryEngine:
             None,
         )
         if instance_path is None:
-            raise KeyError(
-                f"signal path does not resolve to an IR instance: {signal_path}"
+            raise SignalInstanceUnresolved(
+                signal_path,
+                f"signal path does not resolve to an IR instance: {signal_path}",
             )
         symbol = base[len(instance_path) + 1 :]
         declared = self._resolve_symbol_range(instance_path, symbol)
         if declared is None:
-            raise KeyError(f"signal is not declared in the IR: {signal_path}")
+            raise SignalNotDeclared(
+                signal_path,
+                f"signal is not declared in the IR: {signal_path}",
+            )
         if match.group("left") is None:
             bits = declared.indices
         else:
@@ -768,8 +801,9 @@ class ConnectivityQueryEngine:
             bits = tuple(range(left, right + step, step))
             undeclared = set(bits) - set(declared.indices)
             if undeclared:
-                raise ValueError(
-                    f"selection {signal_path} contains undeclared bits {sorted(undeclared)}"
+                raise SignalSelectionOutOfRange(
+                    signal_path,
+                    f"selection {signal_path} contains undeclared bits {sorted(undeclared)}",
                 )
         return SignalSelection(instance_path=instance_path, symbol=symbol, bits=bits)
 
