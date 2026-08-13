@@ -16,6 +16,7 @@ from typing import Any, Iterable
 from .cancellation import check_cancelled
 from .connectivity_ir import (
     AssignmentFact,
+    BindingSourceKind,
     BindingStyle,
     BitMapping,
     BoundaryKind,
@@ -633,6 +634,8 @@ class ConnectivityQueryEngine:
     def _build_indexes(self) -> None:
         for binding in self.ir.bindings:
             for mapping in binding.mappings:
+                if mapping.source_kind is not BindingSourceKind.SIGNAL:
+                    continue
                 for segment in self._oriented_segments(binding, mapping):
                     self._incoming[_endpoint_key(segment.target)].append(segment)
                     self._outgoing[_endpoint_key(segment.source)].append(segment)
@@ -714,6 +717,8 @@ class ConnectivityQueryEngine:
     ) -> Iterable[_FlowSegment]:
         actual = mapping.source
         formal = mapping.target
+        if actual is None:
+            raise ValueError("signal binding mapping is missing its source")
         if binding.direction is PortDirection.INPUT:
             yield _FlowSegment(source=actual, target=formal, binding=binding)
         elif binding.direction is PortDirection.OUTPUT:

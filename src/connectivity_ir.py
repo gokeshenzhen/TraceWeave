@@ -16,7 +16,7 @@ import json
 from typing import Any, Iterable, Mapping
 
 
-CONNECTIVITY_IR_VERSION = "1.0"
+CONNECTIVITY_IR_VERSION = "1.1"
 
 
 class DefinitionKind(str, Enum):
@@ -43,6 +43,14 @@ class BindingStyle(str, Enum):
     POSITIONAL = "positional"
     INTERFACE = "interface"
     MODPORT = "modport"
+
+
+class BindingSourceKind(str, Enum):
+    """Provenance kind for one ordered port-binding bit segment."""
+
+    SIGNAL = "signal"
+    CONSTANT = "constant"
+    UNRESOLVED = "unresolved"
 
 
 class EdgeKind(str, Enum):
@@ -272,18 +280,57 @@ class SignalSelection:
 
 @dataclass(frozen=True)
 class BitMapping:
-    """An exact ordered mapping between equal-width signal selections."""
+    """Ordered provenance for one port-binding target bit segment.
 
-    source: SignalSelection
+    Signal segments retain the historical equal-width source/target mapping.
+    Constant segments preserve their four-state bits in target order, while an
+    unresolved segment reserves the affected target bits without inventing a
+    signal source.  Keeping all three forms in the same ordered collection lets
+    a binding such as ``.data_i({8'h0, payload[23:0]})`` remain useful without
+    pretending that the complete 32-bit formal is driven by ``payload``.
+    """
+
+    source: SignalSelection | None
     target: SignalSelection
+    source_kind: BindingSourceKind = BindingSourceKind.SIGNAL
+    constant_bits: tuple[str, ...] = ()
+    unresolved_reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.source.width != self.target.width:
-            raise ValueError("bit mapping source and target widths must match")
+        object.__setattr__(self, "source_kind", BindingSourceKind(self.source_kind))
+        if self.source_kind is BindingSourceKind.SIGNAL:
+            if self.source is None:
+                raise ValueError("signal bit mapping requires a source selection")
+            if self.source.width != self.target.width:
+                raise ValueError("bit mapping source and target widths must match")
+            if self.constant_bits or self.unresolved_reason is not None:
+                raise ValueError(
+                    "signal bit mapping cannot carry non-signal provenance"
+                )
+            return
+        if self.source is not None:
+            raise ValueError("non-signal bit mapping cannot carry a source selection")
+        if self.source_kind is BindingSourceKind.CONSTANT:
+            normalized = tuple(str(bit).lower() for bit in self.constant_bits)
+            if len(normalized) != self.target.width:
+                raise ValueError("constant mapping width must match target width")
+            if any(bit not in {"0", "1", "x", "z"} for bit in normalized):
+                raise ValueError("constant mapping bits must be 0, 1, x, or z")
+            if self.unresolved_reason is not None:
+                raise ValueError("constant mapping cannot carry an unresolved reason")
+            object.__setattr__(self, "constant_bits", normalized)
+            return
+        if self.constant_bits:
+            raise ValueError("unresolved mapping cannot carry constant bits")
+        if (
+            not self.unresolved_reason
+            or self.unresolved_reason.strip() != self.unresolved_reason
+        ):
+            raise ValueError("unresolved mapping requires a non-empty trimmed reason")
 
     @property
     def width(self) -> int:
-        return self.source.width
+        return self.target.width
 
 
 @dataclass(frozen=True)
@@ -449,9 +496,12 @@ class PortBinding:
         elif self.interface_definition or self.modport:
             raise ValueError("plain binding cannot name an interface or modport")
         for mapping in self.mappings:
+            if mapping.target.instance_path is None:
+                raise ValueError("port binding mappings must be hierarchy-bound")
             if (
-                mapping.source.instance_path is None
-                or mapping.target.instance_path is None
+                mapping.source_kind is BindingSourceKind.SIGNAL
+                and mapping.source is not None
+                and mapping.source.instance_path is None
             ):
                 raise ValueError("port binding mappings must be hierarchy-bound")
 
@@ -574,7 +624,12 @@ class ConnectivityIR:
                     f"{binding.instance_path}"
                 )
             for mapping in binding.mappings:
-                for selection in (mapping.source, mapping.target):
+                selections = (
+                    (mapping.source, mapping.target)
+                    if mapping.source is not None
+                    else (mapping.target,)
+                )
+                for selection in selections:
                     if selection.instance_path not in instance_set:
                         raise ValueError(
                             f"binding {binding.binding_id} references unknown endpoint "
@@ -900,8 +955,21 @@ def _binding_from_dict(payload: Mapping[str, Any]) -> PortBinding:
         style=BindingStyle(payload["style"]),
         mappings=tuple(
             BitMapping(
-                source=_selection_from_dict(item["source"]),
+                source=(
+                    _selection_from_dict(item["source"])
+                    if item.get("source") is not None
+                    else None
+                ),
                 target=_selection_from_dict(item["target"]),
+                source_kind=BindingSourceKind(
+                    item.get("source_kind", BindingSourceKind.SIGNAL)
+                ),
+                constant_bits=tuple(str(bit) for bit in item.get("constant_bits", ())),
+                unresolved_reason=(
+                    str(item["unresolved_reason"])
+                    if item.get("unresolved_reason") is not None
+                    else None
+                ),
             )
             for item in payload.get("mappings", ())
         ),

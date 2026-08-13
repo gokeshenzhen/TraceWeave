@@ -4,7 +4,9 @@ from dataclasses import replace
 import pytest
 
 from src.connectivity_ir import (
+    BindingSourceKind,
     BindingStyle,
+    BitMapping,
     BitRange,
     ConnectivityIR,
     CoverageGap,
@@ -33,6 +35,47 @@ def test_bit_range_preserves_declared_direction_and_concat_mapping():
 
     assert dependencies[0].target.bits == (7, 6, 5, 4)
     assert dependencies[1].target.bits == (3, 2, 1, 0)
+
+
+def test_bit_mapping_preserves_signal_constant_and_unresolved_segments():
+    target = SignalSelection("data_i", tuple(range(31, -1, -1)), "top.u_leaf")
+    dynamic = SignalSelection("payload", tuple(range(23, -1, -1)), "top")
+    mappings = (
+        BitMapping(
+            source=None,
+            target=SignalSelection(
+                target.symbol,
+                target.bits[:8],
+                target.instance_path,
+            ),
+            source_kind=BindingSourceKind.CONSTANT,
+            constant_bits=("0",) * 8,
+        ),
+        BitMapping(
+            source=dynamic,
+            target=SignalSelection(
+                target.symbol,
+                target.bits[8:],
+                target.instance_path,
+            ),
+        ),
+    )
+
+    assert [mapping.source_kind for mapping in mappings] == [
+        BindingSourceKind.CONSTANT,
+        BindingSourceKind.SIGNAL,
+    ]
+    assert mappings[0].target.bits == tuple(range(31, 23, -1))
+    assert mappings[1].target.bits == tuple(range(23, -1, -1))
+
+    with pytest.raises(ValueError, match="constant mapping width"):
+        replace(mappings[0], constant_bits=("0",))
+    with pytest.raises(ValueError, match="unresolved mapping requires"):
+        BitMapping(
+            source=None,
+            target=mappings[0].target,
+            source_kind=BindingSourceKind.UNRESOLVED,
+        )
 
 
 def test_hand_ir_contract_covers_required_constructs_and_template_reuse():
@@ -89,7 +132,7 @@ def test_ir_serialization_roundtrip_and_fingerprint_are_deterministic():
     decoded = json.loads(payload)
     restored = ConnectivityIR.from_json_bytes(payload)
 
-    assert decoded["ir_version"] == "1.0"
+    assert decoded["ir_version"] == "1.1"
     assert restored.to_dict() == ir.to_dict()
     assert restored.fingerprint_sha256() == ir.fingerprint_sha256()
     assert len(ir.fingerprint_sha256()) == 64
@@ -101,6 +144,28 @@ def test_ir_serialization_roundtrip_and_fingerprint_are_deterministic():
         bindings=tuple(reversed(ir.bindings)),
     )
     assert reordered.fingerprint_sha256() == ir.fingerprint_sha256()
+
+    first = ir.bindings[0]
+    target = first.mappings[0].target
+    segmented = replace(
+        ir,
+        bindings=(
+            replace(
+                first,
+                mappings=(
+                    BitMapping(
+                        source=None,
+                        target=target,
+                        source_kind=BindingSourceKind.CONSTANT,
+                        constant_bits=("1",) * target.width,
+                    ),
+                ),
+            ),
+            *ir.bindings[1:],
+        ),
+    )
+    restored_segmented = ConnectivityIR.from_json_bytes(segmented.to_json_bytes())
+    assert restored_segmented.to_dict() == segmented.to_dict()
 
 
 def test_ir_rejects_complete_coverage_with_a_gap():

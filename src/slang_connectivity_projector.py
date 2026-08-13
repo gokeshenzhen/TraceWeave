@@ -21,6 +21,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .connectivity_ir import (
     AssignmentFact,
+    BindingSourceKind,
     BindingStyle,
     BitMapping,
     BitRange,
@@ -182,6 +183,53 @@ class _InstanceRecord:
     generate_scope: str | None
     definition_id: str
     parameterization: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class _BindingOperand:
+    """One ordered actual-expression segment before formal-bit placement."""
+
+    width: int
+    source: SignalSelection | None = None
+    constant_bits: tuple[str, ...] = ()
+    unresolved_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.width < 1:
+            raise ValueError("binding operand width must be positive")
+        present = sum(
+            (
+                self.source is not None,
+                bool(self.constant_bits),
+                self.unresolved_reason is not None,
+            )
+        )
+        if present != 1:
+            raise ValueError("binding operand requires exactly one provenance kind")
+        if self.source is not None and self.source.width != self.width:
+            raise ValueError("binding operand source width must match operand width")
+        if self.constant_bits:
+            normalized = tuple(str(bit).lower() for bit in self.constant_bits)
+            if len(normalized) != self.width:
+                raise ValueError("binding operand constant width must match")
+            if any(bit not in {"0", "1", "x", "z"} for bit in normalized):
+                raise ValueError("binding operand constants must be four-state bits")
+            object.__setattr__(self, "constant_bits", normalized)
+        if self.unresolved_reason is not None and not self.unresolved_reason:
+            raise ValueError("binding operand unresolved reason must not be empty")
+
+    @classmethod
+    def signal(cls, source: SignalSelection) -> _BindingOperand:
+        return cls(width=source.width, source=source)
+
+    @classmethod
+    def constant(cls, bits: Sequence[str]) -> _BindingOperand:
+        normalized = tuple(bits)
+        return cls(width=len(normalized), constant_bits=normalized)
+
+    @classmethod
+    def unresolved(cls, width: int, reason: str) -> _BindingOperand:
+        return cls(width=width, unresolved_reason=reason)
 
 
 class _GapAccumulator:
@@ -785,7 +833,7 @@ class SlangConnectivityProjector:
             expression = connection.expression
             if _kind_name(expression) == "Assignment":
                 expression = expression.left
-            actuals = self._bound_expression_operands(expression)
+            actuals = self._bound_expression_operands(expression, record.symbol)
             port_range = _packed_range(port)
             if not actuals or port_range is None:
                 self._skip_binding(
@@ -809,6 +857,23 @@ class SlangConnectivityProjector:
                     "actual and formal packed widths differ or require a conversion",
                 )
                 continue
+            unresolved = tuple(
+                mapping
+                for mapping in mappings
+                if mapping.source_kind is BindingSourceKind.UNRESOLVED
+            )
+            if unresolved:
+                self._gaps.add(
+                    code="port_segment_unresolved",
+                    message=(
+                        "one or more port-expression bit segments could not be "
+                        "mapped to signal or constant provenance"
+                    ),
+                    impact=CoverageStatus.INCONCLUSIVE,
+                    constructs=("port_binding", "bit_provenance"),
+                    scopes=(formal.path(include_bits=True),),
+                    location=self._expression_location(expression),
+                )
             location = self._required_location(
                 instance.location,
                 f"instance port binding {record.path}.{port.name}",
@@ -1373,37 +1438,103 @@ class SlangConnectivityProjector:
         return SignalSelection(symbol=relative, bits=packed_range.indices)
 
     def _bound_expression_operands(
-        self, expression: Any
-    ) -> tuple[SignalSelection, ...]:
-        expression = _unwrap_expression(expression)
-        if _kind_name(expression) == "Concatenation":
-            result: list[SignalSelection] = []
+        self,
+        expression: Any,
+        context_symbol: Any | None = None,
+    ) -> tuple[_BindingOperand, ...]:
+        """Return width-preserving, ordered actual-expression provenance.
+
+        Unsupported dynamic expressions reserve only their own target bits.
+        This is intentionally different from assignment dependency extraction:
+        constants are terminal port-driver facts here, but never waveform
+        signals or runtime assignment dependencies.
+        """
+
+        kind = _kind_name(expression)
+        width = _expression_width(expression)
+        constant_bits = _constant_expression_bits(expression, context_symbol)
+        if constant_bits is not None:
+            return (_BindingOperand.constant(constant_bits),)
+
+        if kind == "Concatenation":
+            result: list[_BindingOperand] = []
             for operand in expression.operands:
-                nested = self._bound_expression_operands(operand)
+                nested = self._bound_expression_operands(operand, context_symbol)
                 if not nested:
-                    return ()
+                    operand_width = _expression_width(operand)
+                    if operand_width is None:
+                        return ()
+                    nested = (
+                        _BindingOperand.unresolved(
+                            operand_width,
+                            "port_operand_width_known_source_unresolved",
+                        ),
+                    )
                 result.extend(nested)
             return tuple(result)
-        if _kind_name(expression) in {"RangeSelect", "ElementSelect"}:
+
+        if kind == "Replication":
+            count = _constant_int(expression.count, context_symbol)
+            repeated = self._bound_expression_operands(
+                expression.concat,
+                context_symbol,
+            )
+            if count is None or count < 1 or not repeated:
+                return (
+                    (_BindingOperand.unresolved(width, "replication_unresolved"),)
+                    if width is not None
+                    else ()
+                )
+            return tuple(item for _ in range(count) for item in repeated)
+
+        if kind == "Conversion":
+            nested = self._bound_expression_operands(
+                expression.operand,
+                context_symbol,
+            )
+            if width is None or not nested:
+                return (
+                    (_BindingOperand.unresolved(width, "conversion_unresolved"),)
+                    if width is not None
+                    else ()
+                )
+            signed = bool(getattr(expression.operand.type, "isSigned", False))
+            return _resize_binding_operands(nested, width, signed=signed)
+
+        if kind in {"RangeSelect", "ElementSelect"}:
             base_expression = expression.value
-            base = self._bound_expression_operands(base_expression)
-            if len(base) != 1:
-                return ()
-            bits = _selected_bits(expression, base[0].bits)
+            base = self._bound_expression_operands(base_expression, context_symbol)
+            if len(base) != 1 or base[0].source is None:
+                return (
+                    (_BindingOperand.unresolved(width, "selected_source_unresolved"),)
+                    if width is not None
+                    else ()
+                )
+            bits = _selected_bits(expression, base[0].source.bits, context_symbol)
             if not bits:
-                return ()
+                return (
+                    (_BindingOperand.unresolved(width, "selection_unresolved"),)
+                    if width is not None
+                    else ()
+                )
             return (
-                SignalSelection(
-                    instance_path=base[0].instance_path,
-                    symbol=base[0].symbol,
-                    bits=bits,
+                _BindingOperand.signal(
+                    SignalSelection(
+                        instance_path=base[0].source.instance_path,
+                        symbol=base[0].source.symbol,
+                        bits=bits,
+                    )
                 ),
             )
+
         symbol = _expression_symbol(expression)
-        if symbol is None:
+        if symbol is not None:
+            selection = self._bound_symbol_selection(_underlying_symbol(symbol))
+            if selection is not None:
+                return (_BindingOperand.signal(selection),)
+        if width is None:
             return ()
-        selection = self._bound_symbol_selection(_underlying_symbol(symbol))
-        return (selection,) if selection is not None else ()
+        return (_BindingOperand.unresolved(width, "port_expression_dynamic"),)
 
     def _bound_symbol_selection(self, symbol: Any) -> SignalSelection | None:
         symbol = _underlying_symbol(symbol)
@@ -1692,22 +1823,121 @@ def _binding_style(instance: Any) -> BindingStyle:
 
 
 def _map_concat_to_target(
-    sources: Sequence[SignalSelection],
+    sources: Sequence[SignalSelection | _BindingOperand],
     target: SignalSelection,
 ) -> tuple[BitMapping, ...] | None:
-    if sum(item.width for item in sources) != target.width:
+    operands = tuple(
+        item if isinstance(item, _BindingOperand) else _BindingOperand.signal(item)
+        for item in sources
+    )
+    if sum(item.width for item in operands) != target.width:
         return None
     mappings: list[BitMapping] = []
     offset = 0
-    for source in sources:
+    for operand in operands:
         target_part = SignalSelection(
             instance_path=target.instance_path,
             symbol=target.symbol,
-            bits=target.bits[offset : offset + source.width],
+            bits=target.bits[offset : offset + operand.width],
         )
-        mappings.append(BitMapping(source=source, target=target_part))
-        offset += source.width
+        if operand.source is not None:
+            mapping = BitMapping(source=operand.source, target=target_part)
+        elif operand.constant_bits:
+            mapping = BitMapping(
+                source=None,
+                target=target_part,
+                source_kind=BindingSourceKind.CONSTANT,
+                constant_bits=operand.constant_bits,
+            )
+        else:
+            mapping = BitMapping(
+                source=None,
+                target=target_part,
+                source_kind=BindingSourceKind.UNRESOLVED,
+                unresolved_reason=operand.unresolved_reason,
+            )
+        mappings.append(mapping)
+        offset += operand.width
     return tuple(mappings)
+
+
+def _slice_binding_operand(
+    operand: _BindingOperand,
+    start: int,
+    stop: int,
+) -> _BindingOperand:
+    width = stop - start
+    if width < 1 or start < 0 or stop > operand.width:
+        raise ValueError("invalid binding operand slice")
+    if operand.source is not None:
+        return _BindingOperand.signal(
+            SignalSelection(
+                instance_path=operand.source.instance_path,
+                symbol=operand.source.symbol,
+                bits=operand.source.bits[start:stop],
+            )
+        )
+    if operand.constant_bits:
+        return _BindingOperand.constant(operand.constant_bits[start:stop])
+    return _BindingOperand.unresolved(width, operand.unresolved_reason or "unresolved")
+
+
+def _trim_binding_operands_msb(
+    operands: Sequence[_BindingOperand],
+    trim: int,
+) -> tuple[_BindingOperand, ...]:
+    remaining = trim
+    result: list[_BindingOperand] = []
+    for operand in operands:
+        if remaining >= operand.width:
+            remaining -= operand.width
+            continue
+        if remaining:
+            result.append(_slice_binding_operand(operand, remaining, operand.width))
+            remaining = 0
+        else:
+            result.append(operand)
+    if remaining:
+        raise ValueError("binding operand trim exceeds total width")
+    return tuple(result)
+
+
+def _sign_extension_operands(
+    operand: _BindingOperand,
+    width: int,
+) -> tuple[_BindingOperand, ...]:
+    if operand.source is not None:
+        sign = _slice_binding_operand(operand, 0, 1)
+        # Keep each alias separate because SignalSelection intentionally rejects
+        # repeated bit indices inside one exact mapping.
+        return tuple(sign for _ in range(width))
+    if operand.constant_bits:
+        return (_BindingOperand.constant((operand.constant_bits[0],) * width),)
+    return (
+        _BindingOperand.unresolved(
+            width,
+            operand.unresolved_reason or "sign_extension_source_unresolved",
+        ),
+    )
+
+
+def _resize_binding_operands(
+    operands: Sequence[_BindingOperand],
+    width: int,
+    *,
+    signed: bool,
+) -> tuple[_BindingOperand, ...]:
+    current = sum(item.width for item in operands)
+    if current == width:
+        return tuple(operands)
+    if current > width:
+        return _trim_binding_operands_msb(operands, current - width)
+    extension = width - current
+    if signed:
+        prefix = _sign_extension_operands(operands[0], extension)
+    else:
+        prefix = (_BindingOperand.constant(("0",) * extension),)
+    return (*prefix, *operands)
 
 
 def _underlying_symbol(symbol: Any) -> Any:
@@ -1747,29 +1977,117 @@ def _unwrap_expression(expression: Any) -> Any:
     return current
 
 
-def _constant_int(expression: Any) -> int | None:
-    constant = getattr(expression, "constant", None)
-    if constant is None:
+def _expression_width(expression: Any) -> int | None:
+    value_type = getattr(expression, "type", None)
+    if value_type is None:
         return None
     try:
-        rendered = str(constant)
-        if any(char.lower() in {"x", "z"} for char in rendered):
+        width = int(value_type.bitWidth)
+    except Exception:
+        try:
+            width = int(value_type.getBitVectorRange().width)
+        except Exception:
             return None
-        return int(rendered, 0)
-    except (TypeError, ValueError):
+    return width if width > 0 else None
+
+
+def _constant_value(expression: Any, context_symbol: Any | None) -> Any | None:
+    for candidate in (
+        getattr(expression, "constant", None),
+        getattr(expression, "value", None),
+        getattr(getattr(expression, "symbol", None), "value", None),
+    ):
+        if candidate is not None and (
+            getattr(candidate, "value", None) is not None
+            or getattr(candidate, "bitWidth", None) is not None
+        ):
+            return candidate
+    if context_symbol is None or not hasattr(expression, "eval"):
         return None
+    try:
+        # Keep pyslang optional at module import time.  This path runs only in
+        # the isolated frontend worker (or an explicit frontend regression).
+        from pyslang import ast as slang_ast
+
+        evaluated = expression.eval(slang_ast.EvalContext(context_symbol))
+    except Exception:
+        return None
+    return evaluated if getattr(evaluated, "value", None) is not None else None
 
 
-def _selected_bits(expression: Any, base_bits: tuple[int, ...]) -> tuple[int, ...]:
+def _constant_svint(expression: Any, context_symbol: Any | None) -> Any | None:
+    value = _constant_value(expression, context_symbol)
+    if value is None:
+        return None
+    nested = getattr(value, "value", None)
+    candidate = nested if nested is not None else value
+    if getattr(candidate, "bitWidth", None) is None or not hasattr(
+        candidate, "__getitem__"
+    ):
+        return None
+    return candidate
+
+
+def _constant_expression_bits(
+    expression: Any,
+    context_symbol: Any | None,
+) -> tuple[str, ...] | None:
+    value = _constant_svint(expression, context_symbol)
+    if value is None:
+        return None
+    try:
+        source_width = int(value.bitWidth)
+        bits = tuple(
+            str(value[index]).lower() for index in range(source_width - 1, -1, -1)
+        )
+    except Exception:
+        return None
+    if not bits or any(bit not in {"0", "1", "x", "z"} for bit in bits):
+        return None
+    width = _expression_width(expression) or source_width
+    if source_width > width:
+        return bits[-width:]
+    if source_width < width:
+        signed = bool(getattr(value, "isSigned", False))
+        extension = bits[0] if signed else "0"
+        return (extension,) * (width - source_width) + bits
+    return bits
+
+
+def _constant_int(
+    expression: Any,
+    context_symbol: Any | None = None,
+) -> int | None:
+    value = _constant_svint(expression, context_symbol)
+    if value is None:
+        return None
+    try:
+        width = int(value.bitWidth)
+        bits = tuple(str(value[index]).lower() for index in range(width - 1, -1, -1))
+    except Exception:
+        return None
+    if not bits or any(bit in {"x", "z"} for bit in bits):
+        return None
+    result = int("".join(bits), 2)
+    if bool(getattr(value, "isSigned", False)) and bits[0] == "1":
+        result -= 1 << width
+    return result
+
+
+def _selected_bits(
+    expression: Any,
+    base_bits: tuple[int, ...],
+    context_symbol: Any | None = None,
+) -> tuple[int, ...]:
     kind = _kind_name(expression)
     if kind == "ElementSelect":
         selector = getattr(expression, "selector", None)
-        index = _constant_int(selector)
+        index = _constant_int(selector, context_symbol)
         return (index,) if index in set(base_bits) else ()
     if kind != "RangeSelect":
         return ()
-    left = _constant_int(expression.left)
-    right = _constant_int(expression.right)
+    left = _constant_int(expression.left, context_symbol)
+    right = _constant_int(expression.right, context_symbol)
     if left is None or right is None:
         return ()
     selection_kind = str(expression.selectionKind.name)

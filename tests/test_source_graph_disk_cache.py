@@ -10,7 +10,12 @@ import stat
 
 import pytest
 
-from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
+from src.connectivity_ir import (
+    CONNECTIVITY_IR_VERSION,
+    CoverageGap,
+    CoverageReport,
+    CoverageStatus,
+)
 from src.source_graph_contract import (
     SourceGraphArtifactIdentity,
     SourceGraphArtifactScopeReceipt,
@@ -128,7 +133,7 @@ def test_exact_round_trip_uses_canonical_ir_manifest_and_private_permissions(tmp
     )
     assert manifest["ir"] == {
         "file": SOURCE_GRAPH_DISK_CACHE_IR,
-        "schema_version": "1.0",
+        "schema_version": CONNECTIVITY_IR_VERSION,
         "sha256": ir.fingerprint_sha256(),
         "size_bytes": len(ir.to_json_bytes()),
     }
