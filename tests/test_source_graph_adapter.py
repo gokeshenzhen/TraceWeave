@@ -12,6 +12,7 @@ from src.hierarchy_handles import compute_snapshot_fingerprint
 from src.source_graph_adapter import (
     AdapterStatus,
     SOURCE_GRAPH_ADAPTER_VERSION,
+    build_source_graph_frontier_plan,
     build_source_graph_path_plan,
     build_source_graph_plan,
 )
@@ -137,6 +138,42 @@ def _path_plan(
     )
 
 
+def _frontier_plan(
+    tmp_path: Path,
+    compile_result: dict,
+    *,
+    max_instances: int = 128,
+):
+    hierarchy = {
+        "component_tree": {
+            "tb": {
+                "dut": {
+                    "module": "dut",
+                    "children": {
+                        "u_leaf": {"module": "leaf", "children": {}},
+                        "u_source": {"module": "source", "children": {}},
+                    },
+                }
+            }
+        }
+    }
+    return build_source_graph_frontier_plan(
+        compile_log=str(tmp_path / "compile.log"),
+        compile_result=compile_result,
+        hierarchy_result=hierarchy,
+        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+            str(tmp_path / "compile.log"), "xcelium"
+        ),
+        operation=QueryOperation.DRIVER,
+        signal_path="tb.dut.u_leaf.data_i[31:0]",
+        frontier_signal_paths=("tb.dut.parent_net[31:0]",),
+        top_hint="tb",
+        max_hops=8,
+        frontend_version="11.0.0",
+        max_instances=max_instances,
+    )
+
+
 def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     child = tmp_path / "rtl" / "child.sv"
     top = tmp_path / "tb" / "top.sv"
@@ -174,6 +211,59 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert receipt["adapter_version"] == SOURCE_GRAPH_ADAPTER_VERSION
     assert receipt["manifest"]["complete"] is True
     assert receipt["cross_request_reusable"] is True
+
+
+def test_frontier_plan_admits_only_proved_direct_sibling_scope(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(
+        source,
+        "module tb; logic q; endmodule\n",
+    )
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+
+    plan = _frontier_plan(tmp_path, compile_result)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.request.scope.hierarchy_ancestors == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+    artifact = plan.request.artifact_identity.scope
+    assert artifact.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+        "tb.dut.u_source",
+    )
+    assert artifact.proved_ancestor_chains == (
+        ("tb", "tb.dut"),
+        ("tb", "tb.dut", "tb.dut.u_leaf"),
+        ("tb", "tb.dut", "tb.dut.u_source"),
+    )
+    assert plan.receipt.scope_kind == "single_endpoint_expanded"
+    assert plan.receipt.lca_depth == 1
+
+
+def test_frontier_plan_blocks_before_exceeding_direct_child_cap(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+
+    plan = _frontier_plan(tmp_path, compile_result, max_instances=1)
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "frontier_instance_limit"
 
 
 def test_native_xrun_replay_avoids_filelist_echo_duplication_and_resolves_uvmhome(

@@ -70,6 +70,7 @@ from src.hierarchy_handles import (
 )
 from src.source_graph_adapter import (
     AdapterStatus,
+    build_source_graph_frontier_plan,
     build_source_graph_path_plan,
     build_source_graph_plan,
     build_source_graph_trace_plan,
@@ -1555,6 +1556,15 @@ def _merge_source_graph_query_receipt(
     receipt["traversed_binding_edges"] = int(query.get("traversed_binding_edges", 0))
     receipt["max_depth"] = query.get("max_depth")
     for field in (
+        "queried_bit_count",
+        "resolved_bit_count",
+        "unresolved_bit_count",
+        "constant_bit_count",
+        "multi_driver_bit_count",
+    ):
+        if field in query:
+            receipt[field] = int(query[field])
+    for field in (
         "path_edge_count",
         "traversed_edge_count",
         "visited_state_count",
@@ -1694,6 +1704,132 @@ async def _call_public_connectivity_operation(
     if not isinstance(raw, dict):
         raise TypeError("connectivity backend result must be a mapping")
     return raw
+
+
+async def _execute_source_graph_connectivity_plan(
+    *,
+    plan,
+    config,
+    operation: str,
+    args: dict,
+    simulator: str,
+    adapter_wall_ms: float,
+) -> dict:
+    """Prepare and query exactly one Source Graph artifact attempt."""
+
+    assert plan.request is not None
+    operation_metrics.set_value("source_graph_phase", "prepare")
+    try:
+        runtime = get_source_graph_runtime(config)
+        outcome = await runtime.prepare(
+            plan.request,
+            timeout_seconds=config.timeout_sec,
+        )
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except RuntimeError:
+        outcome = None
+        reason = "source_graph_runtime_config_changed"
+    except Exception:  # noqa: BLE001
+        outcome = None
+        reason = "source_graph_prepare_failed"
+    if outcome is None:
+        receipt = _blocked_source_graph_receipt(
+            "ready",
+            code=reason,
+            stage="runtime_prepare",
+            adapter=plan.receipt.to_dict(),
+            adapter_wall_ms=adapter_wall_ms,
+        )
+        receipt["prepare_status"] = "build_failed"
+        receipt["build_key_sha256"] = compute_source_graph_build_key(
+            plan.request
+        ).digest
+        receipt["compile_fingerprint_sha256"] = (
+            plan.request.identity.compile_inputs.fingerprint
+        )
+        return {
+            "outcome": None,
+            "receipt": receipt,
+            "result": None,
+            "query": None,
+            "frontiers": (),
+            "reason": reason,
+        }
+
+    _record_source_graph_prepare_metrics(outcome)
+    receipt = _source_graph_receipt_from_prepare(
+        plan,
+        outcome,
+        adapter_wall_ms=adapter_wall_ms,
+    )
+    if outcome.status is PrepareStatus.CANCELLED:
+        operation_metrics.set_value("source_graph_phase", "cancelled")
+        raise asyncio.CancelledError
+    if outcome.status is not PrepareStatus.READY:
+        return {
+            "outcome": outcome,
+            "receipt": receipt,
+            "result": None,
+            "query": None,
+            "frontiers": (),
+            "reason": _SOURCE_GRAPH_PREPARE_REASONS.get(
+                outcome.status,
+                "source_graph_prepare_failed",
+            ),
+        }
+
+    assert outcome.entry is not None
+    operation_metrics.set_value("source_graph_phase", "query")
+    query_started = time.perf_counter()
+    source_backend = SourceGraphConnectivityBackend(outcome.entry)
+    source_result = None
+    query_receipt = None
+    frontiers: tuple[str, ...] = ()
+    try:
+        source_result = await _call_public_connectivity_operation(
+            source_backend,
+            operation=operation,
+            args=args,
+            simulator=simulator,
+        )
+        query_receipt = source_result.pop("_source_graph_query_receipt")
+        raw_frontiers = query_receipt.pop("expansion_frontiers", ())
+        if isinstance(raw_frontiers, list) and all(
+            isinstance(item, str) for item in raw_frontiers
+        ):
+            frontiers = tuple(dict.fromkeys(raw_frontiers))
+        reason = "source_graph_coverage_inconclusive"
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except SourceGraphQueryBlocked as exc:
+        reason = f"source_graph_{exc.code}"
+    except (KeyError, ValueError):
+        reason = "source_graph_query_target_unresolved"
+    except Exception:  # noqa: BLE001
+        reason = "source_graph_query_failed"
+    query_wall_ms = (time.perf_counter() - query_started) * 1000.0
+    operation_metrics.set_value("source_graph_query_ms", query_wall_ms)
+    if query_receipt is not None:
+        _merge_source_graph_query_receipt(
+            receipt,
+            query_receipt,
+            query_wall_ms=query_wall_ms,
+        )
+    else:
+        receipt["blocker"] = {
+            "code": reason.removeprefix("source_graph_"),
+            "stage": "query",
+        }
+        receipt["metrics"]["query_wall_ms"] = query_wall_ms
+    return {
+        "outcome": outcome,
+        "receipt": receipt,
+        "result": source_result,
+        "query": query_receipt,
+        "frontiers": frontiers,
+        "reason": reason,
+    }
 
 
 async def _route_public_connectivity(
@@ -1899,196 +2035,333 @@ async def _route_public_connectivity(
                         )
                     )
                 else:
-                    assert plan.request is not None
-                    operation_metrics.set_value("source_graph_phase", "prepare")
-                    try:
-                        runtime = get_source_graph_runtime(config)
-                        outcome = await runtime.prepare(
-                            plan.request,
-                            timeout_seconds=config.timeout_sec,
+                    current_plan = plan
+                    current_adapter_ms = adapter_wall_ms
+                    accumulated_frontiers: list[str] = []
+                    attempted_artifacts: list[str] = []
+                    artifact_attempt_count = 0
+                    attempted_query_count = 0
+                    scope_expansion_count = 0
+                    aggregate_metrics: dict[str, int | float] = {}
+                    previous_artifact: str | None = None
+                    while True:
+                        assert current_plan.request is not None
+                        artifact_fingerprint = compute_source_graph_build_key(
+                            current_plan.request
+                        ).digest
+                        attempted_artifacts.append(artifact_fingerprint)
+                        artifact_attempt_count += 1
+                        execution = await _execute_source_graph_connectivity_plan(
+                            plan=current_plan,
+                            config=config,
+                            operation=operation,
+                            args=args,
+                            simulator=simulator,
+                            adapter_wall_ms=current_adapter_ms,
                         )
-                    except RuntimeError:
-                        outcome = None
-                        source_graph_reason = "source_graph_runtime_config_changed"
-                    except Exception:  # noqa: BLE001
-                        outcome = None
-                        source_graph_reason = "source_graph_prepare_failed"
-                    if outcome is None:
-                        source_graph_receipt = _blocked_source_graph_receipt(
-                            "ready",
-                            code=source_graph_reason,
-                            stage="runtime_prepare",
-                            adapter=plan.receipt.to_dict(),
-                            adapter_wall_ms=adapter_wall_ms,
+                        outcome = execution["outcome"]
+                        source_graph_receipt = execution["receipt"]
+                        source_graph_reason = execution["reason"]
+                        source_result = execution["result"]
+                        query_receipt = execution["query"]
+                        frontiers = execution["frontiers"]
+                        query_wall_ms = source_graph_receipt.get("metrics", {}).get(
+                            "query_wall_ms"
                         )
-                        source_graph_receipt["prepare_status"] = "build_failed"
-                        source_graph_receipt["build_key_sha256"] = (
-                            compute_source_graph_build_key(plan.request).digest
+                        _accumulate_source_graph_trace_metrics(
+                            aggregate_metrics,
+                            adapter_wall_ms=current_adapter_ms,
+                            prepare_metrics=(
+                                outcome.metrics if outcome is not None else None
+                            ),
+                            query_wall_ms=query_wall_ms,
                         )
-                        source_graph_receipt["compile_fingerprint_sha256"] = (
-                            plan.request.identity.compile_inputs.fingerprint
-                        )
-                        attempts.append(
-                            _backend_attempt(
-                                "source_graph",
-                                "failed",
-                                reason=source_graph_reason,
+                        if outcome is not None and outcome.entry is not None:
+                            artifact_fingerprint = outcome.entry.build_key.digest
+                            attempted_artifacts[-1] = artifact_fingerprint
+                        if query_receipt is not None:
+                            attempted_query_count += 1
+
+                        source_provenance_ok = (
+                            source_result is not None
+                            and _single_backend_provenance(
+                                source_result,
+                                operation=operation,
+                                expected="source_graph",
                             )
                         )
-                    else:
-                        _record_source_graph_prepare_metrics(outcome)
-                        source_graph_receipt = _source_graph_receipt_from_prepare(
-                            plan,
-                            outcome,
-                            adapter_wall_ms=adapter_wall_ms,
+                        if source_result is not None and not source_provenance_ok:
+                            source_graph_reason = (
+                                "source_graph_mixed_provenance_rejected"
+                            )
+                            source_graph_receipt["blocker"] = {
+                                "code": "mixed_provenance_rejected",
+                                "stage": "query",
+                            }
+
+                        gap_codes = set(
+                            query_receipt.get("unresolved_boundary_codes", ())
+                            if query_receipt is not None
+                            else ()
                         )
-                        if outcome.status is PrepareStatus.CANCELLED:
-                            operation_metrics.set_value(
-                                "source_graph_phase", "cancelled"
-                            )
-                            raise asyncio.CancelledError
-                        if outcome.status is not PrepareStatus.READY:
-                            source_graph_reason = _SOURCE_GRAPH_PREPARE_REASONS.get(
-                                outcome.status,
-                                "source_graph_prepare_failed",
-                            )
-                            attempts.append(
-                                _backend_attempt(
-                                    "source_graph",
-                                    (
-                                        "timed_out"
-                                        if outcome.status is PrepareStatus.TIMED_OUT
-                                        else "failed"
-                                    ),
-                                    reason=source_graph_reason,
-                                    coverage_status=(
-                                        outcome.coverage_status.value
-                                        if outcome.coverage_status is not None
-                                        else None
-                                    ),
+                        scope_limited = bool(
+                            gap_codes
+                            & {
+                                "hierarchy_projection_scoped",
+                                "ancestor_definition_skeleton_only",
+                            }
+                        )
+                        query_status = (
+                            query_receipt.get("status")
+                            if query_receipt is not None
+                            else None
+                        )
+                        needs_more_bits = bool(
+                            query_receipt is not None
+                            and query_status == "found"
+                            and int(query_receipt.get("unresolved_bit_count", 0)) > 0
+                        )
+                        can_expand = (
+                            bool(frontiers)
+                            and scope_limited
+                            and source_provenance_ok
+                            and "query_depth_limit" not in gap_codes
+                            and (
+                                query_status == "inconclusive"
+                                or needs_more_bits
+                                or (
+                                    operation == "loads"
+                                    and query_receipt is not None
+                                    and query_receipt.get("coverage_status")
+                                    != "complete"
                                 )
                             )
-                        else:
-                            assert outcome.entry is not None
-                            operation_metrics.set_value("source_graph_phase", "query")
-                            query_started = time.perf_counter()
-                            source_backend = SourceGraphConnectivityBackend(
-                                outcome.entry
-                            )
-                            try:
-                                source_result = (
-                                    await _call_public_connectivity_operation(
-                                        source_backend,
-                                        operation=operation,
-                                        args=args,
-                                        simulator=simulator,
-                                    )
-                                )
-                                query_receipt = source_result.pop(
-                                    "_source_graph_query_receipt"
-                                )
+                        )
+                        if can_expand:
+                            if scope_expansion_count >= config.frontier_max_rounds:
                                 source_graph_reason = (
-                                    "source_graph_coverage_inconclusive"
-                                )
-                            except OperationCancelled as exc:
-                                raise asyncio.CancelledError from exc
-                            except SourceGraphQueryBlocked as exc:
-                                source_result = None
-                                query_receipt = None
-                                source_graph_reason = f"source_graph_{exc.code}"
-                            except (KeyError, ValueError):
-                                source_result = None
-                                query_receipt = None
-                                source_graph_reason = (
-                                    "source_graph_query_target_unresolved"
-                                )
-                            except Exception:  # noqa: BLE001
-                                source_result = None
-                                query_receipt = None
-                                source_graph_reason = "source_graph_query_failed"
-                            query_wall_ms = (
-                                time.perf_counter() - query_started
-                            ) * 1000.0
-                            operation_metrics.set_value(
-                                "source_graph_query_ms", query_wall_ms
-                            )
-                            if query_receipt is not None:
-                                _merge_source_graph_query_receipt(
-                                    source_graph_receipt,
-                                    query_receipt,
-                                    query_wall_ms=query_wall_ms,
-                                )
-                            else:
-                                source_graph_receipt["blocker"] = {
-                                    "code": source_graph_reason.removeprefix(
-                                        "source_graph_"
-                                    ),
-                                    "stage": "query",
-                                }
-                                source_graph_receipt["metrics"]["query_wall_ms"] = (
-                                    query_wall_ms
-                                )
-                            source_provenance_ok = (
-                                source_result is not None
-                                and _single_backend_provenance(
-                                    source_result,
-                                    operation=operation,
-                                    expected="source_graph",
-                                )
-                            )
-                            if source_result is not None and not source_provenance_ok:
-                                source_graph_reason = (
-                                    "source_graph_mixed_provenance_rejected"
+                                    "source_graph_frontier_round_limit"
                                 )
                                 source_graph_receipt["blocker"] = {
-                                    "code": "mixed_provenance_rejected",
-                                    "stage": "query",
+                                    "code": "frontier_round_limit",
+                                    "stage": "target_scope",
                                 }
-                            if (
-                                source_result is not None
-                                and query_receipt is not None
-                                and source_provenance_ok
-                                and query_receipt.get("status")
-                                in {"found", "not_connected"}
-                            ):
-                                coverage_status = query_receipt.get("coverage_status")
-                                attempts.append(
-                                    _backend_attempt(
-                                        "source_graph",
-                                        "success",
-                                        coverage_status=coverage_status,
-                                    )
+                                break
+                            new_frontiers = [
+                                item
+                                for item in frontiers
+                                if item not in accumulated_frontiers
+                            ]
+                            if not new_frontiers:
+                                source_graph_reason = (
+                                    "source_graph_frontier_expansion_stalled"
                                 )
-                                clean = _strip_connectivity_internal_receipts(
-                                    source_result
-                                )
-                                clean["backend"] = "source_graph"
-                                operation_metrics.set_value(
-                                    "source_graph_phase", "complete"
-                                )
-                                status = _finalize_public_connectivity_status(
-                                    backend_status=backend_status,
-                                    selected_backend=selected_backend,
-                                    actual_backend="source_graph",
-                                    attempts=attempts,
-                                    fallback_reason=fallback_reason,
-                                    npi_backend=(npi_backend if npi_selected else None),
-                                    npi_execution=npi_execution,
-                                    source_graph_receipt=source_graph_receipt,
-                                )
-                                return clean, status
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_expansion_stalled",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            accumulated_frontiers.extend(new_frontiers)
                             attempts.append(
                                 _backend_attempt(
                                     "source_graph",
                                     "inconclusive",
-                                    reason=source_graph_reason,
+                                    reason="source_graph_scope_expansion",
                                     coverage_status=(
                                         query_receipt.get("coverage_status")
                                         if query_receipt is not None
-                                        else outcome.coverage_status.value
+                                        else None
                                     ),
                                 )
                             )
+                            operation_metrics.set_value("source_graph_phase", "adapter")
+                            expansion_started = time.perf_counter()
+                            try:
+                                expanded = await _run_in_cancellable_thread(
+                                    lambda: build_source_graph_frontier_plan(
+                                        compile_log=args["compile_log"],
+                                        compile_result=compile_result,
+                                        hierarchy_result=hierarchy_result,
+                                        hierarchy_snapshot_sha256=(
+                                            compute_snapshot_fingerprint(
+                                                args["compile_log"], simulator
+                                            )
+                                        ),
+                                        operation=(
+                                            QueryOperation.DRIVER
+                                            if operation == "driver"
+                                            else QueryOperation.LOADS
+                                        ),
+                                        signal_path=args["signal_path"],
+                                        frontier_signal_paths=tuple(
+                                            accumulated_frontiers
+                                        ),
+                                        top_hint=args.get("top_hint"),
+                                        max_hops=args.get(
+                                            "max_depth",
+                                            10 if operation == "driver" else 1,
+                                        ),
+                                        frontend_version=config.frontend_version,
+                                        recursive=(
+                                            bool(args.get("recursive", False))
+                                            if operation == "driver"
+                                            else False
+                                        ),
+                                        include_expr=(
+                                            bool(args.get("include_expr", True))
+                                            if operation == "loads"
+                                            else True
+                                        ),
+                                        kind_filter=(
+                                            tuple(args.get("kind_filter") or ())
+                                            if operation == "loads"
+                                            else ()
+                                        ),
+                                        max_instances=(config.frontier_max_instances),
+                                    )
+                                )
+                            except OperationCancelled as exc:
+                                raise asyncio.CancelledError from exc
+                            except Exception:  # noqa: BLE001
+                                expanded = None
+                            current_adapter_ms = (
+                                time.perf_counter() - expansion_started
+                            ) * 1000.0
+                            operation_metrics.set_value(
+                                "source_graph_adapter_ms", current_adapter_ms
+                            )
+                            if expanded is None:
+                                source_graph_reason = (
+                                    "source_graph_frontier_adapter_failed"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_adapter_failed",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            if expanded.status is AdapterStatus.BLOCKED:
+                                assert expanded.receipt.blocker is not None
+                                source_graph_reason = (
+                                    f"source_graph_{expanded.receipt.blocker.code}"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": expanded.receipt.blocker.code,
+                                    "stage": expanded.receipt.blocker.stage,
+                                }
+                                break
+                            assert expanded.request is not None
+                            expanded_fingerprint = compute_source_graph_build_key(
+                                expanded.request
+                            ).digest
+                            if expanded_fingerprint in {
+                                previous_artifact,
+                                artifact_fingerprint,
+                            }:
+                                source_graph_reason = (
+                                    "source_graph_frontier_expansion_stalled"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_expansion_stalled",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            previous_artifact = artifact_fingerprint
+                            current_plan = expanded
+                            scope_expansion_count += 1
+                            continue
+
+                        if (
+                            source_result is not None
+                            and query_receipt is not None
+                            and source_provenance_ok
+                            and query_status in {"found", "not_connected"}
+                        ):
+                            source_graph_receipt["artifact_attempt_count"] = (
+                                artifact_attempt_count
+                            )
+                            source_graph_receipt["scope_expansion_count"] = (
+                                scope_expansion_count
+                            )
+                            source_graph_receipt["attempted_query_count"] = (
+                                attempted_query_count
+                            )
+                            source_graph_receipt[
+                                "attempted_artifact_fingerprints_sha256"
+                            ] = attempted_artifacts
+                            source_graph_receipt[
+                                "final_artifact_fingerprint_sha256"
+                            ] = artifact_fingerprint
+                            source_graph_receipt["single_artifact_provenance"] = True
+                            source_graph_receipt["final_artifact_scope_match"] = True
+                            source_graph_receipt["metrics"].update(aggregate_metrics)
+                            _publish_source_graph_trace_metrics(aggregate_metrics)
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "success",
+                                    coverage_status=query_receipt.get(
+                                        "coverage_status"
+                                    ),
+                                )
+                            )
+                            clean = _strip_connectivity_internal_receipts(source_result)
+                            clean["backend"] = "source_graph"
+                            operation_metrics.set_value(
+                                "source_graph_phase", "complete"
+                            )
+                            status = _finalize_public_connectivity_status(
+                                backend_status=backend_status,
+                                selected_backend=selected_backend,
+                                actual_backend="source_graph",
+                                attempts=attempts,
+                                fallback_reason=fallback_reason,
+                                npi_backend=(npi_backend if npi_selected else None),
+                                npi_execution=npi_execution,
+                                source_graph_receipt=source_graph_receipt,
+                            )
+                            return clean, status
+
+                        if outcome is None:
+                            attempt_status = "failed"
+                        elif outcome.status is PrepareStatus.TIMED_OUT:
+                            attempt_status = "timed_out"
+                        elif outcome.status is not PrepareStatus.READY:
+                            attempt_status = "failed"
+                        else:
+                            attempt_status = "inconclusive"
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                attempt_status,
+                                reason=source_graph_reason,
+                                coverage_status=(
+                                    query_receipt.get("coverage_status")
+                                    if query_receipt is not None
+                                    else (
+                                        outcome.coverage_status.value
+                                        if outcome is not None
+                                        and outcome.coverage_status is not None
+                                        else None
+                                    )
+                                ),
+                            )
+                        )
+                        break
+
+                    source_graph_receipt["artifact_attempt_count"] = (
+                        artifact_attempt_count
+                    )
+                    source_graph_receipt["scope_expansion_count"] = (
+                        scope_expansion_count
+                    )
+                    source_graph_receipt["attempted_query_count"] = (
+                        attempted_query_count
+                    )
+                    source_graph_receipt["attempted_artifact_fingerprints_sha256"] = (
+                        attempted_artifacts
+                    )
+                    source_graph_receipt["metrics"].update(aggregate_metrics)
+                    _publish_source_graph_trace_metrics(aggregate_metrics)
 
     # Legacy Static is always a whole-result recomputation.  No NPI or Source
     # Graph facts survive into the payload; their attempt receipts remain only
@@ -4140,6 +4413,12 @@ async def list_tools():
                 "the static source-regex backend cannot reach. If NPI is unavailable or "
                 "cannot return a trustworthy result, TraceWeave next attempts a bounded, "
                 "on-demand Source Graph projection; Legacy Static remains the final fallback. "
+                "Source Graph preserves per-bit port-binding provenance, so mixed bindings "
+                "such as concatenations, constants, truncation, and width extension are "
+                "reported as segments instead of forcing an all-or-nothing exact-width match. "
+                "When a dynamic segment reaches a projection boundary, bounded sibling-scope "
+                "expansion re-runs the original query from a fresh artifact; constant segments "
+                "are terminal and never trigger expansion. "
                 "backend_status records the selected/attempted/actual backends, fixed fallback "
                 "reason, Source Graph coverage and cache/build receipt. A Source Graph positive "
                 "under partial/inconclusive coverage remains partial; only complete coverage can "

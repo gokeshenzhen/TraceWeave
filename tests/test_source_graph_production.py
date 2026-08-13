@@ -100,6 +100,8 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", raising=False)
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", raising=False)
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", raising=False)
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", raising=False)
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", raising=False)
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "1")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", "/tmp/pinned/bin/python")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0")
@@ -117,6 +119,27 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", "not-a-number")
     assert get_source_graph_execution_config().error_code == (
         "source_graph_execution_config_invalid"
+    )
+
+
+def test_source_graph_frontier_limits_are_namespaced_and_bounded(monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "257")
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", "7")
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.frontier_max_instances == 257
+    assert config.frontier_max_rounds == 7
+
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "4097")
+    assert get_source_graph_execution_config().error_code == (
+        "source_graph_frontier_config_invalid"
+    )
+
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "bad")
+    assert get_source_graph_execution_config().error_code == (
+        "source_graph_frontier_config_invalid"
     )
 
 

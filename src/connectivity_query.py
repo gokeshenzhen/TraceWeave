@@ -88,6 +88,7 @@ class QueryMatch:
     fact_id: str
     kind: EdgeKind
     target: SignalSelection
+    covered_signal: SignalSelection
     source: SignalSelection | None
     dependencies: tuple[QueryDependency, ...]
     dependency_role: str | None
@@ -98,6 +99,15 @@ class QueryMatch:
     evidence: SourceEvidence
     traversal: tuple[TraversalHop, ...]
     confidence: QueryConfidence
+    constant_bits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QueryFrontier:
+    """A dynamic signal segment whose surrounding scope may need expansion."""
+
+    signal: SignalSelection
+    query_target: SignalSelection
 
 
 @dataclass(frozen=True)
@@ -110,6 +120,11 @@ class ConnectivityQueryResult:
     unresolved_boundaries: tuple[CoverageGap, ...]
     traversed_binding_edges: int
     max_depth: int
+    resolved_bits: tuple[int, ...] = ()
+    unresolved_bits: tuple[int, ...] = ()
+    constant_bits: tuple[int, ...] = ()
+    multi_driver_bits: tuple[int, ...] = ()
+    frontiers: tuple[QueryFrontier, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return _enum_values(asdict(self))
@@ -161,6 +176,12 @@ class _FlowSegment:
 
 
 @dataclass(frozen=True)
+class _TerminalBindingSegment:
+    mapping: BitMapping
+    binding: PortBinding
+
+
+@dataclass(frozen=True)
 class _PathEdge:
     edge_id: str
     edge_kind: EdgeKind
@@ -189,6 +210,12 @@ class ConnectivityQueryEngine:
         self._instance_paths = sorted(self._instances, key=len, reverse=True)
         self._incoming: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
         self._outgoing: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
+        self._constant_incoming: dict[
+            tuple[str, str], list[_TerminalBindingSegment]
+        ] = defaultdict(list)
+        self._unresolved_incoming: dict[
+            tuple[str, str], list[_TerminalBindingSegment]
+        ] = defaultdict(list)
         self._writes: dict[tuple[str, str], list[AssignmentFact]] = defaultdict(list)
         self._reads: dict[
             tuple[str, str], list[tuple[AssignmentFact, DependencyFact]]
@@ -209,22 +236,28 @@ class ConnectivityQueryEngine:
             raise ValueError("max_depth must not be negative")
         signal = self.resolve_signal(signal_path)
         matches: list[QueryMatch] = []
-        visited: set[tuple[str, str, tuple[int, ...]]] = set()
+        visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
+        frontiers: list[QueryFrontier] = []
+        query_gaps: list[CoverageGap] = []
         traversed = 0
         depth_limited = False
         touched_paths: set[str] = {signal.path()}
 
         def visit(
             current: SignalSelection,
+            query_target: SignalSelection,
             depth: int,
             traversal: tuple[TraversalHop, ...],
         ) -> None:
             nonlocal traversed, depth_limited
-            state = _state_key(current)
+            if current.width != query_target.width:
+                raise ValueError("driver traversal lost query-bit alignment")
+            state = (*_state_key(current), query_target.bits)
             if state in visited:
                 return
             visited.add(state)
             touched_paths.add(current.path())
+            covered_positions: set[int] = set()
 
             assignments = [
                 assignment
@@ -232,12 +265,65 @@ class ConnectivityQueryEngine:
                 if _overlaps(assignment.target.bits, current.bits)
             ]
             for assignment in assignments:
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    assignment.target.bits,
+                )
+                covered_positions.update(positions)
                 matches.append(
                     self._driver_match(
                         assignment,
                         current.instance_path or "",
-                        current,
+                        selected,
+                        covered,
                         traversal,
+                    )
+                )
+
+            for terminal in self._constant_incoming.get(_endpoint_key(current), ()):
+                mapping = terminal.mapping
+                if not _overlaps(mapping.target.bits, current.bits):
+                    continue
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    mapping.target.bits,
+                )
+                covered_positions.update(positions)
+                matches.append(
+                    self._constant_driver_match(
+                        terminal,
+                        selected_target=selected,
+                        covered_signal=covered,
+                        traversal=traversal,
+                    )
+                )
+
+            for terminal in self._unresolved_incoming.get(_endpoint_key(current), ()):
+                mapping = terminal.mapping
+                if not _overlaps(mapping.target.bits, current.bits):
+                    continue
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    mapping.target.bits,
+                )
+                covered_positions.update(positions)
+                query_gaps.append(
+                    CoverageGap(
+                        code="port_segment_unresolved",
+                        message=(
+                            "port binding contains a dynamic bit segment with "
+                            "unresolved source provenance"
+                        ),
+                        impact=CoverageStatus.INCONCLUSIVE,
+                        constructs=("port_binding", "bit_provenance"),
+                        scopes=(
+                            selected.path(include_bits=True),
+                            covered.path(include_bits=True),
+                        ),
+                        location=terminal.binding.evidence.location,
                     )
                 )
 
@@ -246,22 +332,42 @@ class ConnectivityQueryEngine:
                 for segment in self._incoming.get(_endpoint_key(current), ())
                 if _overlaps(segment.target.bits, current.bits)
             ]
-            if not segments:
-                return
-            if depth >= max_depth:
-                depth_limited = True
-                return
             for segment in segments:
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    segment.target.bits,
+                )
+                covered_positions.update(positions)
                 upstream = _map_selection(
-                    selected=current,
+                    selected=selected,
                     mapped_from=segment.target,
                     mapped_to=segment.source,
                 )
-                hop = _hop(segment)
+                if depth >= max_depth:
+                    depth_limited = True
+                    frontiers.append(
+                        QueryFrontier(signal=upstream, query_target=covered)
+                    )
+                    continue
+                hop = _hop(segment, source=upstream, target=selected)
                 traversed += 1
-                visit(upstream, depth + 1, traversal + (hop,))
+                visit(upstream, covered, depth + 1, traversal + (hop,))
 
-        visit(signal, 0, ())
+            residual = tuple(
+                index
+                for index in range(current.width)
+                if index not in covered_positions
+            )
+            if residual:
+                frontiers.append(
+                    QueryFrontier(
+                        signal=_selection_at_positions(current, residual),
+                        query_target=_selection_at_positions(query_target, residual),
+                    )
+                )
+
+        visit(signal, signal, 0, ())
         return self._finish_result(
             operation="driver",
             signal=signal,
@@ -270,6 +376,8 @@ class ConnectivityQueryEngine:
             traversed=traversed,
             depth_limited=depth_limited,
             max_depth=max_depth,
+            frontiers=frontiers,
+            query_gaps=query_gaps,
         )
 
     def query_loads(
@@ -282,32 +390,44 @@ class ConnectivityQueryEngine:
             raise ValueError("max_depth must not be negative")
         signal = self.resolve_signal(signal_path)
         matches: list[QueryMatch] = []
-        visited: set[tuple[str, str, tuple[int, ...]]] = set()
+        visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
+        frontiers: list[QueryFrontier] = []
         traversed = 0
         depth_limited = False
         touched_paths: set[str] = {signal.path()}
 
         def visit(
             current: SignalSelection,
+            query_target: SignalSelection,
             depth: int,
             traversal: tuple[TraversalHop, ...],
         ) -> None:
             nonlocal traversed, depth_limited
-            state = _state_key(current)
+            if current.width != query_target.width:
+                raise ValueError("load traversal lost query-bit alignment")
+            state = (*_state_key(current), query_target.bits)
             if state in visited:
                 return
             visited.add(state)
             touched_paths.add(current.path())
+            covered_positions: set[int] = set()
 
             for assignment, dependency in self._reads.get(_endpoint_key(current), ()):
                 if not _overlaps(dependency.source.bits, current.bits):
                     continue
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    dependency.source.bits,
+                )
+                covered_positions.update(positions)
                 matches.append(
                     self._load_match(
                         assignment,
                         dependency,
                         current.instance_path or "",
-                        current,
+                        selected,
+                        covered,
                         traversal,
                     )
                 )
@@ -317,22 +437,42 @@ class ConnectivityQueryEngine:
                 for segment in self._outgoing.get(_endpoint_key(current), ())
                 if _overlaps(segment.source.bits, current.bits)
             ]
-            if not segments:
-                return
-            if depth >= max_depth:
-                depth_limited = True
-                return
             for segment in segments:
+                selected, covered, positions = _aligned_overlap(
+                    current,
+                    query_target,
+                    segment.source.bits,
+                )
+                covered_positions.update(positions)
                 downstream = _map_selection(
-                    selected=current,
+                    selected=selected,
                     mapped_from=segment.source,
                     mapped_to=segment.target,
                 )
-                hop = _hop(segment)
+                if depth >= max_depth:
+                    depth_limited = True
+                    frontiers.append(
+                        QueryFrontier(signal=downstream, query_target=covered)
+                    )
+                    continue
+                hop = _hop(segment, source=selected, target=downstream)
                 traversed += 1
-                visit(downstream, depth + 1, traversal + (hop,))
+                visit(downstream, covered, depth + 1, traversal + (hop,))
 
-        visit(signal, 0, ())
+            residual = tuple(
+                index
+                for index in range(current.width)
+                if index not in covered_positions
+            )
+            if residual:
+                frontiers.append(
+                    QueryFrontier(
+                        signal=_selection_at_positions(current, residual),
+                        query_target=_selection_at_positions(query_target, residual),
+                    )
+                )
+
+        visit(signal, signal, 0, ())
         return self._finish_result(
             operation="load",
             signal=signal,
@@ -341,6 +481,8 @@ class ConnectivityQueryEngine:
             traversed=traversed,
             depth_limited=depth_limited,
             max_depth=max_depth,
+            frontiers=frontiers,
+            query_gaps=(),
         )
 
     def query_path(
@@ -634,7 +776,23 @@ class ConnectivityQueryEngine:
     def _build_indexes(self) -> None:
         for binding in self.ir.bindings:
             for mapping in binding.mappings:
-                if mapping.source_kind is not BindingSourceKind.SIGNAL:
+                if mapping.source_kind is BindingSourceKind.CONSTANT:
+                    if binding.direction in {
+                        PortDirection.INPUT,
+                        PortDirection.INOUT,
+                    }:
+                        self._constant_incoming[_endpoint_key(mapping.target)].append(
+                            _TerminalBindingSegment(mapping=mapping, binding=binding)
+                        )
+                    continue
+                if mapping.source_kind is BindingSourceKind.UNRESOLVED:
+                    if binding.direction in {
+                        PortDirection.INPUT,
+                        PortDirection.INOUT,
+                    }:
+                        self._unresolved_incoming[_endpoint_key(mapping.target)].append(
+                            _TerminalBindingSegment(mapping=mapping, binding=binding)
+                        )
                     continue
                 for segment in self._oriented_segments(binding, mapping):
                     self._incoming[_endpoint_key(segment.target)].append(segment)
@@ -762,6 +920,7 @@ class ConnectivityQueryEngine:
         assignment: AssignmentFact,
         instance_path: str,
         selected_target: SignalSelection,
+        covered_signal: SignalSelection,
         traversal: tuple[TraversalHop, ...],
     ) -> QueryMatch:
         dependencies = tuple(
@@ -774,6 +933,7 @@ class ConnectivityQueryEngine:
             fact_id=assignment.assignment_id,
             kind=assignment.kind,
             target=assignment.target.bind(instance_path),
+            covered_signal=covered_signal,
             source=None,
             dependencies=dependencies,
             dependency_role=None,
@@ -786,12 +946,46 @@ class ConnectivityQueryEngine:
             confidence=_base_confidence(assignment.evidence, traversal),
         )
 
+    def _constant_driver_match(
+        self,
+        terminal: _TerminalBindingSegment,
+        *,
+        selected_target: SignalSelection,
+        covered_signal: SignalSelection,
+        traversal: tuple[TraversalHop, ...],
+    ) -> QueryMatch:
+        mapping = terminal.mapping
+        bit_values = dict(zip(mapping.target.bits, mapping.constant_bits))
+        constant_bits = tuple(bit_values[bit] for bit in selected_target.bits)
+        return QueryMatch(
+            instance_path=selected_target.instance_path or "",
+            fact_id=(
+                f"{terminal.binding.binding_id}:constant:"
+                + ",".join(str(bit) for bit in selected_target.bits)
+            ),
+            kind=EdgeKind.CONSTANT_DRIVER,
+            target=selected_target,
+            covered_signal=covered_signal,
+            source=None,
+            dependencies=(),
+            dependency_role=None,
+            boundary=BoundaryKind.COMBINATIONAL,
+            procedure_kind=None,
+            guard=None,
+            generate_scope=None,
+            evidence=terminal.binding.evidence,
+            traversal=traversal,
+            confidence=_base_confidence(terminal.binding.evidence, traversal),
+            constant_bits=constant_bits,
+        )
+
     def _load_match(
         self,
         assignment: AssignmentFact,
         dependency: DependencyFact,
         instance_path: str,
         selected_source: SignalSelection,
+        covered_signal: SignalSelection,
         traversal: tuple[TraversalHop, ...],
     ) -> QueryMatch:
         bound = _bound_dependency(dependency, instance_path)
@@ -808,6 +1002,7 @@ class ConnectivityQueryEngine:
             fact_id=assignment.assignment_id,
             kind=assignment.kind,
             target=assignment.target.bind(instance_path),
+            covered_signal=covered_signal,
             source=source,
             dependencies=(bound,),
             dependency_role=dependency.role.value,
@@ -830,19 +1025,60 @@ class ConnectivityQueryEngine:
         traversed: int,
         depth_limited: bool,
         max_depth: int,
+        frontiers: list[QueryFrontier],
+        query_gaps: Iterable[CoverageGap],
     ) -> ConnectivityQueryResult:
-        gaps = _relevant_gaps(self.ir.coverage.gaps, touched_paths)
-        if depth_limited:
-            gaps = gaps + (
-                CoverageGap(
-                    code="query_depth_limit",
-                    message=f"query traversal reached max_depth={max_depth}",
-                    impact=CoverageStatus.INCONCLUSIVE,
-                    scopes=(signal.path(),),
-                ),
+        gaps_by_key = {
+            _gap_key(gap): gap
+            for gap in (
+                *_relevant_gaps(self.ir.coverage.gaps, touched_paths),
+                *query_gaps,
             )
-        coverage = _query_coverage(self.ir.coverage, gaps)
+        }
+        if depth_limited:
+            gap = CoverageGap(
+                code="query_depth_limit",
+                message=f"query traversal reached max_depth={max_depth}",
+                impact=CoverageStatus.INCONCLUSIVE,
+                scopes=(signal.path(),),
+            )
+            gaps_by_key[_gap_key(gap)] = gap
         deduped = _dedupe_matches(matches)
+        drivers_by_bit: dict[int, set[tuple[str, str]]] = defaultdict(set)
+        constant_bit_set: set[int] = set()
+        for match in deduped:
+            driver_key = (match.instance_path, match.fact_id)
+            for bit in match.covered_signal.bits:
+                drivers_by_bit[bit].add(driver_key)
+                if match.kind is EdgeKind.CONSTANT_DRIVER:
+                    constant_bit_set.add(bit)
+        resolved_bit_set = set(drivers_by_bit)
+        unresolved_bits = tuple(
+            bit for bit in signal.bits if bit not in resolved_bit_set
+        )
+        if operation == "driver" and deduped and unresolved_bits:
+            base_gaps = tuple(gaps_by_key.values())
+            base_coverage = _query_coverage(self.ir.coverage, base_gaps)
+            gap = CoverageGap(
+                code=(
+                    "driver_bits_unconnected"
+                    if base_coverage is CoverageStatus.COMPLETE
+                    else "driver_bits_unresolved"
+                ),
+                message=(
+                    "only a subset of the requested signal bits has proved driver "
+                    "provenance"
+                ),
+                impact=(
+                    CoverageStatus.PARTIAL
+                    if base_coverage is CoverageStatus.COMPLETE
+                    else CoverageStatus.INCONCLUSIVE
+                ),
+                scopes=(signal.path(include_bits=True),),
+            )
+            gaps_by_key[_gap_key(gap)] = gap
+        gaps = tuple(gaps_by_key[key] for key in sorted(gaps_by_key))
+        coverage = _query_coverage(self.ir.coverage, gaps)
         if deduped:
             status = QueryStatus.FOUND
             if coverage is not CoverageStatus.COMPLETE:
@@ -863,6 +1099,13 @@ class ConnectivityQueryEngine:
             unresolved_boundaries=gaps,
             traversed_binding_edges=traversed,
             max_depth=max_depth,
+            resolved_bits=tuple(bit for bit in signal.bits if bit in resolved_bit_set),
+            unresolved_bits=unresolved_bits,
+            constant_bits=tuple(bit for bit in signal.bits if bit in constant_bit_set),
+            multi_driver_bits=tuple(
+                bit for bit in signal.bits if len(drivers_by_bit.get(bit, ())) > 1
+            ),
+            frontiers=_dedupe_frontiers(frontiers),
         )
 
 
@@ -887,6 +1130,38 @@ def _overlaps(left: tuple[int, ...], right: tuple[int, ...]) -> bool:
     return not set(left).isdisjoint(right)
 
 
+def _selection_at_positions(
+    selection: SignalSelection,
+    positions: Iterable[int],
+) -> SignalSelection:
+    indexes = tuple(positions)
+    return SignalSelection(
+        instance_path=selection.instance_path,
+        symbol=selection.symbol,
+        bits=tuple(selection.bits[index] for index in indexes),
+    )
+
+
+def _aligned_overlap(
+    selected: SignalSelection,
+    aligned: SignalSelection,
+    overlap_bits: tuple[int, ...],
+) -> tuple[SignalSelection, SignalSelection, tuple[int, ...]]:
+    if selected.width != aligned.width:
+        raise ValueError("aligned selections must have equal widths")
+    overlap = set(overlap_bits)
+    positions = tuple(
+        index for index, bit in enumerate(selected.bits) if bit in overlap
+    )
+    if not positions:
+        raise ValueError("aligned selections do not overlap requested bits")
+    return (
+        _selection_at_positions(selected, positions),
+        _selection_at_positions(aligned, positions),
+        positions,
+    )
+
+
 def _map_selection(
     *,
     selected: SignalSelection,
@@ -902,6 +1177,14 @@ def _map_selection(
         symbol=mapped_to.symbol,
         bits=tuple(bit_map[bit] for bit in selected_bits),
     )
+
+
+def _dedupe_frontiers(frontiers: Iterable[QueryFrontier]) -> tuple[QueryFrontier, ...]:
+    by_key = {
+        (*_state_key(frontier.signal), frontier.query_target.bits): frontier
+        for frontier in frontiers
+    }
+    return tuple(by_key[key] for key in sorted(by_key))
 
 
 def _follow_path_edge(
@@ -1003,11 +1286,16 @@ def _path_evidence_gaps(
     return tuple(gaps)
 
 
-def _hop(segment: _FlowSegment) -> TraversalHop:
+def _hop(
+    segment: _FlowSegment,
+    *,
+    source: SignalSelection | None = None,
+    target: SignalSelection | None = None,
+) -> TraversalHop:
     return TraversalHop(
         edge_kind=segment.binding.edge_kind,
-        source=segment.source,
-        target=segment.target,
+        source=source or segment.source,
+        target=target or segment.target,
         binding_id=segment.binding.binding_id,
         binding_style=segment.binding.style,
         evidence=segment.binding.evidence,
@@ -1076,13 +1364,24 @@ def _query_coverage(
 
 
 def _dedupe_matches(matches: list[QueryMatch]) -> tuple[QueryMatch, ...]:
-    by_key: dict[tuple[str, str, str, tuple[int, ...], str | None], QueryMatch] = {}
+    by_key: dict[
+        tuple[
+            str,
+            str,
+            str,
+            tuple[int, ...],
+            tuple[int, ...],
+            str | None,
+        ],
+        QueryMatch,
+    ] = {}
     for match in matches:
         key = (
             match.instance_path,
             match.fact_id,
             match.target.symbol,
             match.target.bits,
+            match.covered_signal.bits,
             match.dependency_role,
         )
         current = by_key.get(key)
@@ -1108,6 +1407,7 @@ def _with_confidence(match: QueryMatch, confidence: QueryConfidence) -> QueryMat
         fact_id=match.fact_id,
         kind=match.kind,
         target=match.target,
+        covered_signal=match.covered_signal,
         source=match.source,
         dependencies=match.dependencies,
         dependency_role=match.dependency_role,
@@ -1118,6 +1418,7 @@ def _with_confidence(match: QueryMatch, confidence: QueryConfidence) -> QueryMat
         evidence=match.evidence,
         traversal=match.traversal,
         confidence=confidence,
+        constant_bits=match.constant_bits,
     )
 
 

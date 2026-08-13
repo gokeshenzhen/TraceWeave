@@ -62,6 +62,7 @@ class EdgeKind(str, Enum):
     PROCEDURAL_ASSIGN = "procedural_assign"
     DATA_DEPENDENCY = "data_dependency"
     CONTROL_DEPENDENCY = "control_dependency"
+    CONSTANT_DRIVER = "constant_driver"
 
 
 class DependencyRole(str, Enum):

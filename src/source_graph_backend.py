@@ -61,7 +61,70 @@ def _query_receipt(result: ConnectivityQueryResult) -> dict[str, Any]:
         "unresolved_boundary_codes": _gap_codes(result),
         "traversed_binding_edges": result.traversed_binding_edges,
         "max_depth": result.max_depth,
+        "queried_bit_count": result.signal.width,
+        "resolved_bit_count": len(result.resolved_bits),
+        "unresolved_bit_count": len(result.unresolved_bits),
+        "constant_bit_count": len(result.constant_bits),
+        "multi_driver_bit_count": len(result.multi_driver_bits),
+        # Internal orchestration input. The server removes this before merging
+        # the privacy-safe public receipt or recording telemetry.
+        "expansion_frontiers": [
+            frontier.signal.path(include_bits=True) for frontier in result.frontiers
+        ],
     }
+
+
+def _constant_text(bits: tuple[str, ...]) -> str:
+    return f"{len(bits)}'b{''.join(bits)}"
+
+
+def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, Any]]:
+    multiple = set(result.multi_driver_bits)
+    segments: list[dict[str, Any]] = []
+    for match in result.matches:
+        is_constant = match.kind is EdgeKind.CONSTANT_DRIVER
+        source_path = None
+        if not is_constant and match.traversal:
+            source_path = match.traversal[0].source.path(include_bits=True)
+        segments.append(
+            {
+                "target_path": match.covered_signal.path(include_bits=True),
+                "source_kind": "constant" if is_constant else "signal",
+                "source_path": source_path,
+                "terminal_path": match.target.path(include_bits=True),
+                "constant_value": (
+                    _constant_text(match.constant_bits) if is_constant else None
+                ),
+                "driver_kind": match.kind.value,
+                "source_file": match.evidence.location.file,
+                "source_line": match.evidence.location.line,
+                "confidence": _public_confidence(match.confidence),
+                "multiple_driver": bool(
+                    multiple.intersection(match.covered_signal.bits)
+                ),
+            }
+        )
+    if result.unresolved_bits:
+        unresolved = SignalSelection(
+            instance_path=result.signal.instance_path,
+            symbol=result.signal.symbol,
+            bits=result.unresolved_bits,
+        )
+        segments.append(
+            {
+                "target_path": unresolved.path(include_bits=True),
+                "source_kind": "unresolved",
+                "source_path": None,
+                "terminal_path": None,
+                "constant_value": None,
+                "driver_kind": None,
+                "source_file": None,
+                "source_line": None,
+                "confidence": "partial",
+                "multiple_driver": False,
+            }
+        )
+    return segments
 
 
 def _path_confidence(result: ConnectivityPathQueryResult) -> str | None:
@@ -294,9 +357,14 @@ class SourceGraphConnectivityBackend:
         )
         confidence = _aggregate_confidence(matches)
         if query.status is QueryStatus.FOUND:
-            driver_status = "resolved"
-            stopped_at = None
-            unsupported_reason = None
+            if query.unresolved_bits:
+                driver_status = "partial"
+                stopped_at = "source_graph_bit_provenance_incomplete"
+                unsupported_reason = "source_graph_bit_provenance_incomplete"
+            else:
+                driver_status = "resolved"
+                stopped_at = None
+                unsupported_reason = None
         elif query.status is QueryStatus.NOT_CONNECTED:
             driver_status = "not_connected"
             confidence = "exact"
@@ -307,6 +375,30 @@ class SourceGraphConnectivityBackend:
             stopped_at = "source_graph_query_inconclusive"
             unsupported_reason = "source_graph_query_inconclusive"
 
+        match_kinds = {match.kind for match in matches}
+        if query.multi_driver_bits:
+            driver_kind = "multiple"
+        elif EdgeKind.CONSTANT_DRIVER in match_kinds and len(match_kinds) > 1:
+            driver_kind = "composite_port_binding"
+        elif match_kinds == {EdgeKind.CONSTANT_DRIVER}:
+            driver_kind = "constant"
+        else:
+            driver_kind = head.kind.value if head is not None else None
+        upstream_signals = sorted(
+            {
+                dependency.source.path()
+                for match in matches
+                for dependency in match.dependencies
+            }
+        )
+        bit_provenance = _driver_bit_provenance(query) if matches else None
+        if driver_kind == "constant" and head is not None:
+            expression_summary = f"constant {_constant_text(head.constant_bits)}"
+        elif driver_kind == "composite_port_binding":
+            expression_summary = "segmented port binding"
+        else:
+            expression_summary = None
+
         result: dict[str, Any] = {
             "signal_path": query.signal.path(),
             "wave_path": wave_path,
@@ -316,19 +408,19 @@ class SourceGraphConnectivityBackend:
             ),
             "resolved_instance_path": instance_path,
             "driver_status": driver_status,
-            "driver_kind": head.kind.value if head is not None else None,
+            "driver_kind": driver_kind,
             "source_file": (head.evidence.location.file if head is not None else None),
             "source_line": (head.evidence.location.line if head is not None else None),
             "source_info_origin": "source_graph" if head is not None else None,
-            # Connectivity IR intentionally retains dependencies and guards,
-            # not source expression text.  Do not synthesize an expression.
-            "expression_summary": None,
-            "upstream_signals": (
-                [dependency.source.path() for dependency in head.dependencies]
-                if head is not None
-                else []
-            ),
+            # Constants are IR facts; arbitrary source expression text remains
+            # intentionally absent.
+            "expression_summary": expression_summary,
+            "upstream_signals": upstream_signals,
             "instance_port_connections": None,
+            "bit_provenance": bit_provenance,
+            "resolved_bit_count": len(query.resolved_bits),
+            "unresolved_bit_count": len(query.unresolved_bits),
+            "multi_driver_bit_count": len(query.multi_driver_bits),
             "confidence": confidence,
             "unsupported_reason": unsupported_reason,
             "stopped_at": stopped_at,
@@ -348,7 +440,11 @@ class SourceGraphConnectivityBackend:
                     "source_file": match.evidence.location.file,
                     "source_line": match.evidence.location.line,
                     "source_info_origin": "source_graph",
-                    "expression_summary": None,
+                    "expression_summary": (
+                        f"constant {_constant_text(match.constant_bits)}"
+                        if match.kind is EdgeKind.CONSTANT_DRIVER
+                        else None
+                    ),
                     "upstream_signals": [
                         dependency.source.path() for dependency in match.dependencies
                     ],

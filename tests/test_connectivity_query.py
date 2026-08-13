@@ -5,7 +5,9 @@ import pytest
 from src import cancellation
 from src.connectivity_ir import (
     AssignmentFact,
+    BindingSourceKind,
     BindingStyle,
+    BitMapping,
     BitRange,
     BoundaryKind,
     ConnectivityIR,
@@ -17,6 +19,9 @@ from src.connectivity_ir import (
     DependencyFact,
     EdgeKind,
     InstanceDecl,
+    PortBinding,
+    PortDecl,
+    PortDirection,
     SignalDecl,
     SignalSelection,
     SourceEvidence,
@@ -108,6 +113,119 @@ def _build_scalar_path_ir(
     )
 
 
+def _build_segmented_binding_ir(
+    *,
+    unresolved_prefix: bool = False,
+    duplicate_payload_driver: bool = False,
+) -> ConnectivityIR:
+    location = SourceLocation(file="tests/segmented_binding.sv", line=1)
+    payload_bits = BitRange(23, 0)
+    data_bits = BitRange(31, 0)
+    assignments = [
+        AssignmentFact(
+            assignment_id="top:assign:payload",
+            kind=EdgeKind.CONTINUOUS_ASSIGN,
+            target=SignalSelection.template("payload", payload_bits),
+            dependencies=(
+                DependencyFact(
+                    source=SignalSelection.template("seed", payload_bits),
+                    target=SignalSelection.template("payload", payload_bits),
+                ),
+            ),
+            boundary=BoundaryKind.COMBINATIONAL,
+            evidence=SourceEvidence(
+                construct="continuous_assignment",
+                location=replace(location, line=5),
+                frontend="segmented_test",
+            ),
+        )
+    ]
+    if duplicate_payload_driver:
+        assignments.append(
+            replace(
+                assignments[0],
+                assignment_id="top:assign:payload_duplicate",
+                evidence=replace(
+                    assignments[0].evidence,
+                    location=replace(location, line=6),
+                ),
+            )
+        )
+    top_definition = DefinitionTemplate(
+        definition_id="top",
+        name="top",
+        kind=DefinitionKind.MODULE,
+        location=location,
+        signals=(
+            SignalDecl("seed", SymbolKind.NET, payload_bits, location),
+            SignalDecl("payload", SymbolKind.NET, payload_bits, location),
+        ),
+        assignments=tuple(assignments),
+    )
+    leaf_definition = DefinitionTemplate(
+        definition_id="leaf",
+        name="leaf",
+        kind=DefinitionKind.MODULE,
+        location=replace(location, line=10),
+        ports=(
+            PortDecl(
+                "data_i",
+                PortDirection.INPUT,
+                data_bits,
+                0,
+                replace(location, line=11),
+            ),
+        ),
+    )
+    target_prefix = SignalSelection("data_i", tuple(range(31, 23, -1)), "top.u")
+    prefix = BitMapping(
+        source=None,
+        target=target_prefix,
+        source_kind=(
+            BindingSourceKind.UNRESOLVED
+            if unresolved_prefix
+            else BindingSourceKind.CONSTANT
+        ),
+        constant_bits=() if unresolved_prefix else ("0",) * 8,
+        unresolved_reason="dynamic_prefix" if unresolved_prefix else None,
+    )
+    binding = PortBinding(
+        binding_id="top.u:0:data_i",
+        instance_path="top.u",
+        port_name="data_i",
+        direction=PortDirection.INPUT,
+        style=BindingStyle.NAMED,
+        mappings=(
+            prefix,
+            BitMapping(
+                source=SignalSelection("payload", payload_bits.indices, "top"),
+                target=SignalSelection("data_i", payload_bits.indices, "top.u"),
+            ),
+        ),
+        evidence=SourceEvidence(
+            construct="named_port_binding",
+            location=replace(location, line=20),
+            frontend="segmented_test",
+        ),
+    )
+    return ConnectivityIR(
+        frontend_name="segmented_test",
+        frontend_version="1",
+        definitions=(top_definition, leaf_definition),
+        instances=(
+            InstanceDecl("top", "top", "top", None, location),
+            InstanceDecl("top.u", "u", "leaf", "top", replace(location, line=20)),
+        ),
+        bindings=(binding,),
+        coverage=CoverageReport(
+            status=CoverageStatus.COMPLETE,
+            files_total=1,
+            files_projected=1,
+        ),
+        top_instances=("top",),
+    )
+
+
 def test_deep_driver_crosses_seven_positional_bindings_to_always_ff():
     result = ConnectivityQueryEngine(build_deep_ir()).query_driver(DEEP_OUTPUT)
 
@@ -150,6 +268,85 @@ def test_deep_depth_limit_is_inconclusive_not_false_not_connected():
     assert result.coverage_status is CoverageStatus.INCONCLUSIVE
     assert result.matches == ()
     assert [gap.code for gap in result.unresolved_boundaries] == ["query_depth_limit"]
+
+
+def test_segmented_driver_resolves_constant_and_dynamic_bits_independently():
+    engine = ConnectivityQueryEngine(_build_segmented_binding_ir())
+
+    full = engine.query_driver("top.u.data_i[31:0]")
+    crossing = engine.query_driver("top.u.data_i[27:20]")
+
+    assert full.status is QueryStatus.FOUND
+    assert full.coverage_status is CoverageStatus.COMPLETE
+    assert full.resolved_bits == tuple(range(31, -1, -1))
+    assert full.unresolved_bits == ()
+    assert full.constant_bits == tuple(range(31, 23, -1))
+    assert {match.kind for match in full.matches} == {
+        EdgeKind.CONSTANT_DRIVER,
+        EdgeKind.CONTINUOUS_ASSIGN,
+    }
+    constant = next(
+        match for match in full.matches if match.kind is EdgeKind.CONSTANT_DRIVER
+    )
+    dynamic = next(
+        match for match in full.matches if match.kind is EdgeKind.CONTINUOUS_ASSIGN
+    )
+    assert constant.covered_signal.bits == tuple(range(31, 23, -1))
+    assert constant.constant_bits == ("0",) * 8
+    assert dynamic.covered_signal.bits == tuple(range(23, -1, -1))
+
+    assert crossing.resolved_bits == tuple(range(27, 19, -1))
+    assert crossing.constant_bits == (27, 26, 25, 24)
+    assert [match.covered_signal.bits for match in crossing.matches] == [
+        (23, 22, 21, 20),
+        (27, 26, 25, 24),
+    ]
+
+
+def test_segmented_driver_keeps_unresolved_and_multi_driver_bits_honest():
+    partial = ConnectivityQueryEngine(
+        _build_segmented_binding_ir(unresolved_prefix=True)
+    ).query_driver("top.u.data_i")
+    multiple = ConnectivityQueryEngine(
+        _build_segmented_binding_ir(duplicate_payload_driver=True)
+    ).query_driver("top.u.data_i")
+
+    assert partial.status is QueryStatus.FOUND
+    assert partial.coverage_status is CoverageStatus.INCONCLUSIVE
+    assert partial.resolved_bits == tuple(range(23, -1, -1))
+    assert partial.unresolved_bits == tuple(range(31, 23, -1))
+    assert {gap.code for gap in partial.unresolved_boundaries} == {
+        "driver_bits_unresolved",
+        "port_segment_unresolved",
+    }
+
+    assert multiple.unresolved_bits == ()
+    assert multiple.multi_driver_bits == tuple(range(23, -1, -1))
+    assert (
+        len(
+            [
+                match
+                for match in multiple.matches
+                if match.kind is EdgeKind.CONTINUOUS_ASSIGN
+            ]
+        )
+        == 2
+    )
+
+
+def test_dynamic_query_frontier_excludes_terminal_constant_segment():
+    ir = _build_segmented_binding_ir()
+    top = ir.definitions[0]
+    without_payload_driver = replace(top, assignments=())
+    result = ConnectivityQueryEngine(
+        replace(ir, definitions=(without_payload_driver, *ir.definitions[1:]))
+    ).query_driver("top.u.data_i")
+
+    assert result.constant_bits == tuple(range(31, 23, -1))
+    assert result.unresolved_bits == tuple(range(23, -1, -1))
+    assert [
+        (item.signal.path(), item.query_target.bits) for item in result.frontiers
+    ] == [("top.payload", tuple(range(23, -1, -1)))]
 
 
 def test_hand_interface_driver_resolves_producer_always_comb_and_concat_map():

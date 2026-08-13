@@ -11,7 +11,25 @@ from config import SourceGraphExecutionConfig
 import server
 from src import operation_metrics
 from src.cancellation import OperationCancelled
-from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
+from src.connectivity_ir import (
+    BitMapping,
+    BitRange,
+    BindingStyle,
+    CoverageGap,
+    CoverageReport,
+    CoverageStatus,
+    DefinitionKind,
+    DefinitionTemplate,
+    InstanceDecl,
+    PortBinding,
+    PortDecl,
+    PortDirection,
+    SignalDecl,
+    SignalSelection,
+    SourceEvidence,
+    SourceLocation,
+    SymbolKind,
+)
 import src.connectivity_backend as connectivity_backend
 from src.source_graph_contract import SourceGraphScopeReceipt
 from src.source_graph_backend import SourceGraphConnectivityBackend
@@ -24,6 +42,7 @@ from src.source_graph_runtime import (
     WorkerResourceMetrics,
 )
 from tests.connectivity_ir_fixtures import build_hand_ir
+from tests.test_connectivity_query import _build_segmented_binding_ir
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +110,41 @@ def _install_source_context(tmp_path) -> tuple[str, str]:
     return str(compile_log), source
 
 
+def _install_frontier_context(tmp_path) -> str:
+    source = tmp_path / "frontier_scope.sv"
+    source.write_text("module top; endmodule\n", encoding="utf-8")
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun\n", encoding="utf-8")
+    compile_result = {
+        "simulator": "xcelium",
+        "compile_cwd": str(tmp_path),
+        "compile_command": f"xrun {source} -top top",
+        "top_modules": ["top"],
+        "files": {
+            "user": [
+                {"path": str(source), "type": "module", "category": "rtl"},
+            ],
+            "filtered_count": 0,
+        },
+        "include_tree": {},
+        "filelist_tree": {},
+        "interfaces": [],
+        "parse_warnings": [],
+    }
+    hierarchy = {
+        "compile_result": compile_result,
+        "component_tree": {
+            "top": {
+                "u": {"module": "leaf", "children": {}},
+                "u_source": {"module": "producer", "children": {}},
+            }
+        },
+    }
+    handle = server.compute_handle(str(compile_log), "xcelium")
+    server._handle_store.register(handle, hierarchy)
+    return str(compile_log)
+
+
 def _production_ir(*, coverage: CoverageReport | None = None):
     ir = replace(
         build_hand_ir(),
@@ -98,6 +152,134 @@ def _production_ir(*, coverage: CoverageReport | None = None):
         frontend_version="11.0.0",
     )
     return replace(ir, coverage=coverage) if coverage is not None else ir
+
+
+def _frontier_ir_pair():
+    original = _build_segmented_binding_ir()
+    scope_gap = CoverageGap(
+        code="hierarchy_projection_scoped",
+        message="projection is bounded to the requested hierarchy",
+        impact=CoverageStatus.INCONCLUSIVE,
+        constructs=("hierarchy_scope",),
+        scopes=("*",),
+    )
+    coverage = CoverageReport(
+        status=CoverageStatus.INCONCLUSIVE,
+        files_total=1,
+        files_projected=1,
+        gaps=(scope_gap,),
+    )
+    template = original.definitions[0].assignments[0]
+    top = replace(original.definitions[0], assignments=())
+    leaf_location = replace(original.definitions[1].location, line=15)
+    leaf = replace(
+        original.definitions[1],
+        signals=(SignalDecl("sink", SymbolKind.NET, BitRange(31, 0), leaf_location),),
+        assignments=(
+            replace(
+                template,
+                assignment_id="leaf:assign:sink",
+                target=SignalSelection.template("sink", BitRange(31, 0)),
+                dependencies=(
+                    replace(
+                        template.dependencies[0],
+                        source=SignalSelection.template("data_i", BitRange(31, 0)),
+                        target=SignalSelection.template("sink", BitRange(31, 0)),
+                    ),
+                ),
+                evidence=replace(
+                    template.evidence,
+                    location=leaf_location,
+                ),
+            ),
+        ),
+    )
+    base = replace(
+        original,
+        frontend_name=SLANG_FRONTEND_NAME,
+        frontend_version="11.0.0",
+        definitions=(top, leaf),
+        coverage=coverage,
+    )
+    root = replace(
+        base,
+        definitions=(top,),
+        instances=(base.instances[0],),
+        bindings=(),
+    )
+    location = SourceLocation(file="tests/frontier_scope.sv", line=30)
+    payload_range = BitRange(23, 0)
+    producer = DefinitionTemplate(
+        definition_id="producer",
+        name="producer",
+        kind=DefinitionKind.MODULE,
+        location=location,
+        ports=(
+            PortDecl(
+                "data_o",
+                PortDirection.OUTPUT,
+                payload_range,
+                0,
+                location,
+            ),
+        ),
+        signals=(SignalDecl("seed", SymbolKind.NET, payload_range, location),),
+        assignments=(
+            replace(
+                template,
+                assignment_id="producer:assign:data_o",
+                target=SignalSelection.template("data_o", payload_range),
+                dependencies=(
+                    replace(
+                        template.dependencies[0],
+                        source=SignalSelection.template("seed", payload_range),
+                        target=SignalSelection.template("data_o", payload_range),
+                    ),
+                ),
+                evidence=SourceEvidence(
+                    construct="continuous_assignment",
+                    location=replace(location, line=35),
+                    frontend="frontier_test",
+                ),
+            ),
+        ),
+    )
+    producer_instance = InstanceDecl(
+        "top.u_source",
+        "u_source",
+        "producer",
+        "top",
+        location,
+    )
+    output_binding = PortBinding(
+        binding_id="top.u_source:0:data_o",
+        instance_path="top.u_source",
+        port_name="data_o",
+        direction=PortDirection.OUTPUT,
+        style=BindingStyle.NAMED,
+        mappings=(
+            BitMapping(
+                source=SignalSelection("payload", payload_range.indices, "top"),
+                target=SignalSelection(
+                    "data_o",
+                    payload_range.indices,
+                    "top.u_source",
+                ),
+            ),
+        ),
+        evidence=SourceEvidence(
+            construct="named_port_binding",
+            location=replace(location, line=40),
+            frontend="frontier_test",
+        ),
+    )
+    expanded = replace(
+        base,
+        definitions=(*base.definitions, producer),
+        instances=(*base.instances, producer_instance),
+        bindings=(*base.bindings, output_binding),
+    )
+    return root, base, expanded
 
 
 class ReadyWorker:
@@ -146,6 +328,34 @@ class ReadyWorker:
                 rss_peak_kib=140,
                 rss_end_kib=110,
             ),
+        )
+
+
+class FrontierWorker:
+    def __init__(self) -> None:
+        self.root, self.base, self.expanded = _frontier_ir_pair()
+        self.calls = 0
+
+    async def run(self, request, *, timeout_seconds, cancel_event):
+        del timeout_seconds, cancel_event
+        self.calls += 1
+        artifact_scope = getattr(request.scope, "projection_instance_paths", None)
+        if artifact_scope is None:
+            artifact_scope = request.artifact_identity.scope.projection_instance_paths
+        if "top.u_source" in artifact_scope:
+            ir = self.expanded
+        elif "top.u" in artifact_scope:
+            ir = self.base
+        else:
+            ir = self.root
+        return WorkerBuildResult.ready(
+            ir,
+            SourceGraphScopeReceipt(
+                scope=request.scope,
+                coverage_status=ir.coverage.status,
+                gap_codes=tuple(gap.code for gap in ir.coverage.gaps),
+            ),
+            metrics=WorkerResourceMetrics(wall_time_ms=1.0, cpu_time_ms=0.5),
         )
 
 
@@ -558,6 +768,71 @@ async def test_warm_public_request_reuses_compile_snapshot_and_ir(
 
 
 @pytest.mark.anyio
+async def test_single_endpoint_driver_expands_only_dynamic_sibling_frontier(
+    monkeypatch, tmp_path
+):
+    compile_log = _install_frontier_context(tmp_path)
+    worker = FrontierWorker()
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+    args = _driver_args(compile_log, "top.u.data_i[31:0]")
+    args["top_hint"] = "top"
+
+    result = await server._dispatch("explain_signal_driver", args)
+
+    assert result.backend == "source_graph"
+    assert result.driver_status == "resolved"
+    assert result.driver_kind == "composite_port_binding"
+    assert result.resolved_bit_count == 32
+    assert result.unresolved_bit_count == 0
+    assert {item.source_kind for item in result.bit_provenance} == {
+        "constant",
+        "signal",
+    }
+    assert worker.calls == 2
+    assert static.driver_calls == 0
+    receipt = result.backend_status.source_graph
+    assert receipt.artifact_attempt_count == 2
+    assert receipt.scope_expansion_count == 1
+    assert receipt.single_artifact_provenance is True
+    assert [item.reason for item in result.backend_status.attempted_backends] == [
+        "npi_kdb_unavailable",
+        "source_graph_scope_expansion",
+        None,
+    ]
+
+
+@pytest.mark.anyio
+async def test_single_endpoint_load_expands_to_sibling_consumer(monkeypatch, tmp_path):
+    compile_log = _install_frontier_context(tmp_path)
+    worker = FrontierWorker()
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+    args = _load_args(compile_log)
+    args["signal_path"] = "top.payload[23:0]"
+    args["top_hint"] = "top"
+
+    result = await server._dispatch("find_signal_loads", args)
+
+    assert result.backend == "source_graph"
+    assert [load.load_path for load in result.loads] == ["top.u.sink"]
+    assert worker.calls == 2
+    assert static.load_calls == 0
+    receipt = result.backend_status.source_graph
+    assert receipt.artifact_attempt_count == 2
+    assert receipt.scope_expansion_count == 1
+    assert receipt.single_artifact_provenance is True
+
+
+@pytest.mark.anyio
 async def test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact(
     monkeypatch, tmp_path
 ):
@@ -735,6 +1010,26 @@ async def test_npi_cancellation_never_continues_to_source_graph_or_static(
         npi_backend=CancelledNpiBackend(),
         with_kdb=True,
     )
+
+    with pytest.raises(asyncio.CancelledError):
+        await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
+async def test_source_graph_prepare_cancellation_never_falls_back(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+
+    class CancelledRuntime:
+        async def prepare(self, request, *, timeout_seconds):
+            del request, timeout_seconds
+            raise OperationCancelled("cancelled")
+
+    _patch_common(monkeypatch, runtime=CancelledRuntime(), static=static)
 
     with pytest.raises(asyncio.CancelledError):
         await server._dispatch("explain_signal_driver", _driver_args(compile_log))

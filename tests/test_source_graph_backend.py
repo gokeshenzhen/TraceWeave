@@ -28,6 +28,7 @@ from src.source_graph_contract import (
 )
 from src.source_graph_runtime import SourceGraphCacheEntry
 from tests.connectivity_ir_fixtures import build_hand_ir
+from tests.test_connectivity_query import _build_segmented_binding_ir
 
 
 def _entry(ir=None) -> SourceGraphCacheEntry:
@@ -100,6 +101,40 @@ def test_driver_mapping_uses_only_ir_source_facts():
     assert result["expression_summary"] is None
     assert {hop["backend"] for hop in result["driver_chain"]} == {"source_graph"}
     assert result["_source_graph_query_receipt"]["status"] == "found"
+
+
+def test_segmented_driver_mapping_reports_composite_bit_provenance():
+    result = SourceGraphConnectivityBackend(
+        _entry(_build_segmented_binding_ir())
+    ).find_driver(
+        signal_path="top.u.data_i[27:20]",
+        wave_path="wave.fsdb",
+        compile_log="compile.log",
+        recursive=True,
+        max_depth=8,
+    )
+
+    assert result["driver_status"] == "resolved"
+    assert result["driver_kind"] == "composite_port_binding"
+    assert result["resolved_bit_count"] == 8
+    assert result["unresolved_bit_count"] == 0
+    assert result["multi_driver_bit_count"] == 0
+    assert [item["target_path"] for item in result["bit_provenance"]] == [
+        "top.u.data_i[23:20]",
+        "top.u.data_i[27:24]",
+    ]
+    constant = next(
+        item for item in result["bit_provenance"] if item["source_kind"] == "constant"
+    )
+    dynamic = next(
+        item for item in result["bit_provenance"] if item["source_kind"] == "signal"
+    )
+    assert constant["constant_value"] == "4'b0000"
+    assert dynamic["source_path"] == "top.payload[23:20]"
+    receipt = result["_source_graph_query_receipt"]
+    assert receipt["queried_bit_count"] == 8
+    assert receipt["resolved_bit_count"] == 8
+    assert receipt["expansion_frontiers"] == []
 
 
 def test_load_mapping_preserves_terminal_assignment_evidence():

@@ -657,6 +657,21 @@ class DriverLoadCrossCheck(SchemaModel):
     note: str | None = None
 
 
+class DriverBitProvenanceSegment(SchemaModel):
+    """Per-bit-range source provenance for a segmented driver result."""
+
+    target_path: str
+    source_kind: Literal["signal", "constant", "unresolved"]
+    source_path: str | None = None
+    terminal_path: str | None = None
+    constant_value: str | None = None
+    driver_kind: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+    confidence: Literal["exact", "conditional", "partial"]
+    multiple_driver: bool = False
+
+
 class ExplainDriverResult(SchemaModel):
     signal_path: str
     wave_path: str
@@ -671,6 +686,10 @@ class ExplainDriverResult(SchemaModel):
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
+    bit_provenance: list[DriverBitProvenanceSegment] | None = None
+    resolved_bit_count: int | None = None
+    unresolved_bit_count: int | None = None
+    multi_driver_bit_count: int | None = None
     confidence: str | None = None
     unsupported_reason: str | None = None
     stopped_at: str | None = None
@@ -878,6 +897,11 @@ class SourceGraphBackendReceipt(SchemaModel):
     inconclusive_negative_count: int = 0
     traversed_binding_edges: int = 0
     max_depth: int | None = None
+    queried_bit_count: int = 0
+    resolved_bit_count: int = 0
+    unresolved_bit_count: int = 0
+    constant_bit_count: int = 0
+    multi_driver_bit_count: int = 0
     path_edge_count: int = 0
     traversed_edge_count: int = 0
     visited_state_count: int = 0

@@ -50,7 +50,8 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.0"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.1"
+DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -233,6 +234,7 @@ class SourceGraphAdapterReceipt:
             raise ValueError("ready adapter receipt must not carry a blocker")
         if self.scope_kind not in {
             "single_endpoint",
+            "single_endpoint_expanded",
             "dual_endpoint_path",
             "multi_endpoint_trace",
         }:
@@ -642,8 +644,7 @@ def _translate_tokens(
             index += 2 if index + 1 < len(tokens) else 1
             continue
         if any(
-            token.startswith(f"{option}=")
-            for option in _NATIVE_TOOLCHAIN_VALUE_OPTIONS
+            token.startswith(f"{option}=") for option in _NATIVE_TOOLCHAIN_VALUE_OPTIONS
         ) or token.startswith(("-Wl,", "-Xlinker=")):
             _mark_native_toolchain_exclusion(state)
             index += 1
@@ -1413,6 +1414,206 @@ def build_source_graph_plan(
         status=AdapterStatus.READY,
         request=request,
         receipt=receipt,
+    )
+
+
+def _direct_hierarchy_children(
+    *,
+    hierarchy_result: Mapping[str, Any],
+    top: str,
+    instance_path: str,
+) -> tuple[str, ...] | None:
+    component_tree = hierarchy_result.get("component_tree")
+    if not isinstance(component_tree, Mapping):
+        return None
+    children = component_tree.get(top)
+    if not isinstance(children, Mapping):
+        return None
+    if instance_path != top:
+        parts = instance_path.split(".")
+        if not parts or parts[0] != top:
+            return None
+        for name in parts[1:]:
+            node = children.get(name)
+            if not isinstance(node, Mapping):
+                return None
+            nested = node.get("children")
+            children = nested if isinstance(nested, Mapping) else {}
+    candidates: list[str] = []
+    for name, node in children.items():
+        check_cancelled()
+        if not isinstance(name, str) or not name or not isinstance(node, Mapping):
+            continue
+        candidate = f"{instance_path}.{name}"
+        proved = resolve_source_graph_hierarchy_ancestors(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            signal_path=f"{candidate}.__traceweave_scope__",
+        )
+        if proved is not None and proved[-1] == candidate:
+            candidates.append(candidate)
+    return tuple(sorted(set(candidates)))
+
+
+def build_source_graph_frontier_plan(
+    *,
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+    hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
+    operation: QueryOperation | str,
+    signal_path: str,
+    frontier_signal_paths: Sequence[str],
+    top_hint: str | None,
+    max_hops: int,
+    frontend_version: str,
+    recursive: bool = False,
+    include_expr: bool = True,
+    kind_filter: Sequence[str] = (),
+    max_instances: int = DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT,
+) -> SourceGraphBuildPlan:
+    """Expand one single-endpoint artifact at proved dynamic frontiers.
+
+    Each frontier is a signal segment produced by the first query, never a
+    constant segment. Only direct children of its proved containing instance
+    are admitted. This supports sibling producer / consumer discovery without
+    a full-design walk or a name-based source guess.
+    """
+
+    if (
+        not isinstance(max_instances, int)
+        or isinstance(max_instances, bool)
+        or max_instances < 1
+    ):
+        return _blocked_plan(
+            code="frontier_instance_limit_invalid", stage="target_scope"
+        )
+    base = build_source_graph_plan(
+        compile_log=compile_log,
+        compile_result=compile_result,
+        hierarchy_result=hierarchy_result,
+        hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
+        operation=operation,
+        signal_path=signal_path,
+        top_hint=top_hint,
+        max_hops=max_hops,
+        frontend_version=frontend_version,
+        recursive=recursive,
+        include_expr=include_expr,
+        kind_filter=kind_filter,
+    )
+    if base.status is AdapterStatus.BLOCKED:
+        return base
+    assert base.request is not None
+    request = base.request
+    top = request.scope.top
+    normalized_frontiers = tuple(
+        dict.fromkeys(
+            str(path).strip() for path in frontier_signal_paths if str(path).strip()
+        )
+    )
+    if not normalized_frontiers:
+        return _blocked_plan(
+            code="frontier_signals_unavailable",
+            stage="target_scope",
+            manifest=request.identity.compile_inputs,
+            gaps=base.receipt.gap_codes,
+            exclusions=base.receipt.objective_exclusions,
+        )
+
+    parent_chains: list[tuple[str, ...]] = []
+    candidate_paths: set[str] = set()
+    for frontier in normalized_frontiers:
+        check_cancelled()
+        ancestors = resolve_source_graph_hierarchy_ancestors(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            signal_path=frontier,
+        )
+        if ancestors is None:
+            return _blocked_plan(
+                code="frontier_hierarchy_scope_unresolved",
+                stage="target_scope",
+                manifest=request.identity.compile_inputs,
+                gaps=(*base.receipt.gap_codes, "frontier_hierarchy_scope_unresolved"),
+                exclusions=base.receipt.objective_exclusions,
+            )
+        parent_chains.append(ancestors)
+        children = _direct_hierarchy_children(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            instance_path=ancestors[-1],
+        )
+        if children is None:
+            return _blocked_plan(
+                code="frontier_children_unavailable",
+                stage="target_scope",
+                manifest=request.identity.compile_inputs,
+                gaps=base.receipt.gap_codes,
+                exclusions=base.receipt.objective_exclusions,
+            )
+        candidate_paths.update(children)
+        if len(candidate_paths) > max_instances:
+            return _blocked_plan(
+                code="frontier_instance_limit",
+                stage="target_scope",
+                manifest=request.identity.compile_inputs,
+                gaps=(*base.receipt.gap_codes, "frontier_instance_limit"),
+                exclusions=base.receipt.objective_exclusions,
+            )
+
+    chains: list[tuple[str, ...]] = [request.scope.hierarchy_ancestors, *parent_chains]
+    for candidate in sorted(candidate_paths):
+        check_cancelled()
+        ancestors = resolve_source_graph_hierarchy_ancestors(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            signal_path=f"{candidate}.__traceweave_scope__",
+        )
+        if ancestors is not None:
+            chains.append(ancestors)
+    unique_chains = tuple(dict.fromkeys(chains))
+    ancestor_union = tuple(
+        sorted(
+            set().union(*(set(chain) for chain in unique_chains)),
+            key=lambda path: (path.count("."), path),
+        )
+    )
+    lca = _trace_scope_lca(unique_chains)
+    boundary = CoverageBoundary(
+        mode=BoundaryMode.EXPLICIT,
+        instance_paths=ancestor_union,
+        objective_exclusions=request.scope.coverage_boundary.objective_exclusions,
+    )
+    base_artifact = request.artifact_identity
+    artifact_scope = SourceGraphArtifactScope(
+        design=base_artifact.scope.design,
+        top=top,
+        hierarchy_snapshot_sha256=base_artifact.scope.hierarchy_snapshot_sha256,
+        proved_ancestor_chains=unique_chains,
+        proved_lcas=(lca,),
+        projection_instance_paths=ancestor_union,
+        coverage_boundary=boundary,
+        capabilities=base_artifact.scope.capabilities,
+    )
+    artifact = replace(base_artifact, scope=artifact_scope)
+    expanded_request = replace(request, artifact=artifact)
+    artifact_key = compute_source_graph_artifact_key(artifact)
+    query_key = compute_source_graph_query_key(expanded_request.query_identity)
+    return SourceGraphBuildPlan(
+        status=AdapterStatus.READY,
+        request=expanded_request,
+        receipt=replace(
+            base.receipt,
+            ancestor_count=len(ancestor_union),
+            requested_cone_instance_count=len(ancestor_union),
+            coverage_boundary_instance_count=len(ancestor_union),
+            scope_kind="single_endpoint_expanded",
+            lca_depth=lca.count("."),
+            cross_request_reusable=artifact_key.cross_request_reusable,
+            artifact_fingerprint_sha256=artifact_key.digest,
+            query_fingerprint_sha256=query_key.digest,
+        ),
     )
 
 

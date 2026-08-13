@@ -234,6 +234,8 @@ class SourceGraphExecutionConfig:
     disk_cache_root: Path = TRACEWEAVE_CACHE_ROOT
     disk_cache_max_entries: int = 8
     disk_cache_max_bytes: int = 512 * 1024 * 1024
+    frontier_max_instances: int = 128
+    frontier_max_rounds: int = 4
 
     @property
     def valid(self) -> bool:
@@ -265,6 +267,12 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
     ).strip()
     raw_disk_bytes = os.environ.get(
         "TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", str(512 * 1024 * 1024)
+    ).strip()
+    raw_frontier_instances = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "128"
+    ).strip()
+    raw_frontier_rounds = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", "4"
     ).strip()
 
     try:
@@ -305,6 +313,23 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         if disk_cache_enabled:
             error_code = "source_graph_disk_cache_config_invalid"
 
+    try:
+        frontier_max_instances = int(raw_frontier_instances)
+        frontier_max_rounds = int(raw_frontier_rounds)
+    except ValueError:
+        frontier_max_instances = 128
+        frontier_max_rounds = 4
+        error_code = "source_graph_frontier_config_invalid"
+    if (
+        frontier_max_instances < 1
+        or frontier_max_instances > 4096
+        or frontier_max_rounds < 1
+        or frontier_max_rounds > 16
+    ):
+        frontier_max_instances = 128
+        frontier_max_rounds = 4
+        error_code = "source_graph_frontier_config_invalid"
+
     return SourceGraphExecutionConfig(
         enabled=enabled,
         python_bin=python_bin or sys.executable,
@@ -315,6 +340,8 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         disk_cache_root=disk_cache_root,
         disk_cache_max_entries=disk_cache_max_entries,
         disk_cache_max_bytes=disk_cache_max_bytes,
+        frontier_max_instances=frontier_max_instances,
+        frontier_max_rounds=frontier_max_rounds,
     )
 
 
