@@ -19,6 +19,7 @@ from src.verdi_npi_backend import (
     _scope_inst_of,
     _is_genuine_runtime_driver,
     _norm_raw,
+    _simflow_dbdir,
     driver_is_load_alias,
 )
 
@@ -26,6 +27,36 @@ from src.verdi_npi_backend import (
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kdb_path", "expected"),
+    [
+        (
+            "/tmp/run/simv.daidir/kdb.elab++",
+            "/tmp/run/simv.daidir",
+        ),
+        (
+            "/tmp/run/simv.daidir/kdb.elab++/",
+            "/tmp/run/simv.daidir",
+        ),
+        ("kdb.elab++", "."),
+    ],
+)
+def test_simflow_dbdir_uses_parent_of_elaborated_kdb(kdb_path, expected):
+    assert _simflow_dbdir(kdb_path) == expected
+
+
+@pytest.mark.parametrize(
+    "db_path",
+    [
+        "/tmp/run/simv.daidir",
+        "/tmp/run/AN.DB/work.lib++",
+        "/tmp/run/simv.daidir/",
+    ],
+)
+def test_simflow_dbdir_preserves_other_database_paths(db_path):
+    assert _simflow_dbdir(db_path) == db_path
 
 
 def test_scope_from_synthesized_strips_at_first_colon():
@@ -283,7 +314,70 @@ def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):
     )
     backend.find_loads(signal_path="top_tb.x", compile_log=log, simulator="vcs")
     backend.find_loads(signal_path="top_tb.x", compile_log=log, simulator="vcs")
-    assert len(npisys.load_calls) == 1, "second call should hit the cache"
+    original_kdb = str(tmp_path / "simv.daidir" / "kdb.elab++")
+    assert npisys.load_calls == [
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "simv.daidir"),
+            "-top",
+            "top_tb",
+        ]
+    ], "second call should hit the original-KDB cache identity"
+    assert backend._loaded_kdb == original_kdb
+    assert backend._loaded_top == "top_tb"
+
+
+def test_backend_normalizes_new_and_restored_kdb_dbdirs(monkeypatch, tmp_path):
+    npisys = _MockNpisys()
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, npisys=npisys)
+    old_kdb = str(tmp_path / "old" / "simv.daidir" / "kdb.elab++")
+    new_kdb = str(tmp_path / "new" / "simv.daidir" / "kdb.elab++")
+
+    assert backend._ensure_loaded(old_kdb, "old_top") is True
+
+    return_codes = iter((0, 1))
+
+    def sequenced_load_design(argv):
+        npisys.load_calls.append(list(argv))
+        return next(return_codes)
+
+    monkeypatch.setattr(npisys, "load_design", sequenced_load_design)
+    assert backend._ensure_loaded(new_kdb, "new_top") is False
+
+    assert npisys.load_calls == [
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "old" / "simv.daidir"),
+            "-top",
+            "old_top",
+        ],
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "new" / "simv.daidir"),
+            "-top",
+            "new_top",
+        ],
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "old" / "simv.daidir"),
+            "-top",
+            "old_top",
+        ],
+    ]
+    assert backend._loaded_kdb == old_kdb
+    assert backend._loaded_top == "old_top"
+
+    # The restored design remains keyed by the original artifact path.
+    assert backend._ensure_loaded(old_kdb, "old_top") is True
+    assert len(npisys.load_calls) == 3
 
 
 def test_backend_no_kdb_falls_back(monkeypatch, tmp_path):

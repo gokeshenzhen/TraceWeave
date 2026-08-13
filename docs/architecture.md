@@ -308,7 +308,11 @@ Verification
 - `src/verdi_npi_backend.py` lazily imports `pynpi` from `$VERDI_HOME` (zero
   hardcoded prefixes), holds a single design across calls keyed on
   `kdb_path`, and re-issues `npisys.load_design` to switch cases within one
-  session. Synthesized PinHdl paths (`scope:Construct#Op:line:line:Cell.Port`)
+  session. At the native boundary, an artifact path ending in `kdb.elab++`
+  is converted to its containing simulation database directory for
+  `-simflow -dbdir` (required by Verdi 2020); the original artifact path stays
+  the cache identity. Synthesized PinHdl paths
+  (`scope:Construct#Op:line:line:Cell.Port`)
   are normalized to FSDB-visible scopes; raw form is preserved in `expr` for
   diagnostics. NPI's `find_path` wraps `sig_to_sig_conn_list` and remains the
   highest-priority implementation for the `trace_signal_path` MCP tool; the
@@ -507,7 +511,7 @@ Cache layout under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`:
 
 | File / dir | Purpose |
 |---|---|
-| `kdb.elab++/` | Elaborated KDB. NPI's `-simflow -dbdir` target. |
+| `kdb.elab++/` | Elaborated KDB artifact. NPI receives the containing cache directory as its `-simflow -dbdir`; this artifact path remains the probe/cache identity. |
 | `work.lib++/` | vericom source-lib output. |
 | `build.sh` | Runnable reproducer; written every build. Lets users see/run the exact vericom+elabcom commands TraceWeave invoked. |
 | `vericom.log` | stdout+stderr of vericom phase. |

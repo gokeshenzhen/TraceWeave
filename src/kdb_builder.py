@@ -17,12 +17,15 @@ project-specific filenames, paths, or defines are baked in.
 
 Output layout under ``<cache_root>/kdb/<hash>/``:
 
-    kdb.elab++/        — what NPI consumes (-simflow -dbdir)
+    kdb.elab++/        — elaborated KDB artifact discovered by the probe
     work.lib++/        — vericom output
     build.sh           — runnable reproducer (regenerated every build)
     vericom.log        — captured stdout/stderr
     elabcom.log        — captured stdout/stderr
     state.json         — inputs, status, timestamps
+
+The NPI loader passes this directory's parent as ``-simflow -dbdir``; the
+artifact path itself remains the cache/probe identity.
 
 On rebuild the directory is replaced atomically (build in tmp dir, rename
 on success) so a stale cache never coexists with a partial new build.

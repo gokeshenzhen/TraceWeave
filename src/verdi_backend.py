@@ -149,9 +149,10 @@ def _probe_vcs_kdb(case_dir: str | None) -> tuple[str | None, str]:
 
 def _probe_vericom_kdb(case_dir: str | None) -> tuple[str | None, str]:
     """Prefer an *elaborated* KDB (``kdb.elab++``) over source-only
-    ``*.lib++``. NPI's ``-simflow -dbdir`` needs the elaborated DB to
-    answer driver/load queries; passing a plain ``work.lib++`` loads
-    without error but every ``get_net`` resolves to None.
+    ``*.lib++``. NPI needs the elaborated DB to answer driver/load queries;
+    passing a plain ``work.lib++`` loads without error but every ``get_net``
+    resolves to None.  The probe reports the artifact path; the NPI loader
+    converts a trailing ``kdb.elab++`` to its containing simflow ``-dbdir``.
     """
     if case_dir is None:
         return None, "none"

@@ -43,6 +43,27 @@ _NPI_INITIALIZED_IDS: set[int] = set()
 _BANNER_SILENCER_INSTALLED = False
 
 
+def _simflow_dbdir(kdb_path: str) -> str:
+    """Return the database root expected by ``-simflow -dbdir``.
+
+    Probing deliberately identifies the elaborated artifact itself.  For a
+    VCS two-step database, that artifact is
+    ``<run>/simv.daidir/kdb.elab++``; NPI simflow expects the containing
+    ``simv.daidir``.  Verdi 2020 otherwise
+    searches for a nested ``kdb.elab++/kdb.elab++``.  Newer releases may
+    accept both forms, but the containing directory is compatible with both.
+
+    Other database layouts (for example ``*.lib++``) retain the path supplied
+    by the probe.  The caller also keeps ``kdb_path`` unchanged as its cache
+    identity; this helper is only for the native command-line argument.
+    """
+
+    normalized = os.path.normpath(kdb_path)
+    if os.path.basename(normalized) == "kdb.elab++":
+        return os.path.dirname(normalized) or os.curdir
+    return kdb_path
+
+
 def _install_shutdown_banner_silencer() -> None:
     """Hook Python's atexit so Verdi's C-level atexit cannot leak its
     license banner onto fd=1 / fd=2 at process shutdown.
@@ -535,6 +556,7 @@ class VerdiNpiBackend:
             self._npi_modules = modules
 
         npisys, _ = self._npi_modules
+        dbdir = _simflow_dbdir(kdb_path)
         try:
             npisys_id = id(npisys)
             with _silence_native_stdio():
@@ -553,7 +575,7 @@ class VerdiNpiBackend:
                 old_kdb, old_top = self._loaded_kdb, self._loaded_top
                 rc = npisys.load_design([
                     "traceweave_npi",
-                    "-simflow", "-dbdir", kdb_path,
+                    "-simflow", "-dbdir", dbdir,
                     "-top", top,
                 ])
                 if rc != 1:
@@ -562,7 +584,7 @@ class VerdiNpiBackend:
                     if old_kdb and old_top:
                         npisys.load_design([
                             "traceweave_npi",
-                            "-simflow", "-dbdir", old_kdb,
+                            "-simflow", "-dbdir", _simflow_dbdir(old_kdb),
                             "-top", old_top,
                         ])
                     return False
