@@ -500,6 +500,7 @@ class SlangConnectivityProjector:
 
     def _collect_focused_hierarchy(self, root: Any) -> None:
         selected: dict[str, Any] = {}
+        unresolved_requested: set[str] = set()
         for requested in sorted(set(self.options.focus_instance_paths)):
             parts = requested.split(".")
             resolved_requested = False
@@ -507,11 +508,7 @@ class SlangConnectivityProjector:
                 candidate = ".".join(parts)
                 try:
                     symbol = root.lookupName(candidate)
-                except Exception as exc:
-                    if candidate == requested:
-                        raise SlangProjectionError(
-                            f"focused instance path cannot be resolved: {requested}"
-                        ) from exc
+                except Exception:
                     parts.pop()
                     continue
                 if _kind_name(symbol) == "Instance":
@@ -520,9 +517,22 @@ class SlangConnectivityProjector:
                         resolved_requested = True
                 parts.pop()
             if not resolved_requested:
-                raise SlangProjectionError(
-                    f"focused path is not an elaborated instance: {requested}"
+                unresolved_requested.add(requested)
+                self._gaps.add(
+                    code="focused_instance_not_elaborated",
+                    message=(
+                        "a compile-hierarchy focus candidate is absent from the "
+                        "selected elaborated specialization"
+                    ),
+                    impact=CoverageStatus.INCONCLUSIVE,
+                    constructs=("hierarchy_scope", "conditional_instance"),
+                    scopes=(requested,),
                 )
+
+        if not selected:
+            raise SlangProjectionError(
+                "focused projection contains no elaborated instances"
+            )
 
         selected_paths = set(selected)
         for path, symbol in sorted(selected.items()):
@@ -565,11 +575,18 @@ class SlangConnectivityProjector:
             self.options.assignment_instance_paths or self.options.focus_instance_paths
         )
         missing_assignment_paths = assignment_paths - selected_paths
-        if missing_assignment_paths:
-            raise SlangProjectionError(
-                "assignment projection paths were not selected: "
-                + ", ".join(sorted(missing_assignment_paths))
+        for path in sorted(missing_assignment_paths - unresolved_requested):
+            self._gaps.add(
+                code="focused_instance_not_elaborated",
+                message=(
+                    "an assignment focus candidate is absent from the selected "
+                    "elaborated specialization"
+                ),
+                impact=CoverageStatus.INCONCLUSIVE,
+                constructs=("hierarchy_scope", "conditional_instance"),
+                scopes=(path,),
             )
+        assignment_paths &= selected_paths
         self._assignment_definition_ids = {
             self._record_by_path[path].definition_id for path in assignment_paths
         }
@@ -2296,10 +2313,11 @@ def _selected_bits(
     context_symbol: Any | None = None,
 ) -> tuple[int, ...]:
     kind = _kind_name(expression)
+    base_set = set(base_bits)
     if kind == "ElementSelect":
         selector = getattr(expression, "selector", None)
         index = _constant_int(selector, context_symbol)
-        return (index,) if index in set(base_bits) else ()
+        return (index,) if index in base_set else ()
     if kind != "RangeSelect":
         return ()
     left = _constant_int(expression.left, context_symbol)
@@ -2308,14 +2326,37 @@ def _selected_bits(
         return ()
     selection_kind = str(expression.selectionKind.name)
     if selection_kind == "Simple":
-        return BitRange(left, right).indices
+        # Slang can retain syntax from an inactive parameterized generate
+        # branch.  An unsigned expression such as ``Offset-2`` may therefore
+        # elaborate to 32'hffff_ffff even when the selected specialization has
+        # a one-bit declaration.  Validate against that declaration before
+        # materializing a Python range; otherwise one malformed / inactive
+        # select can allocate billions of indices and stall a large-SoC
+        # projection.
+        span = abs(left - right) + 1
+        if left not in base_set or right not in base_set or span > len(base_bits):
+            return ()
+        step = -1 if left > right else 1
+        selected = tuple(range(left, right + step, step))
+        return selected if all(bit in base_set for bit in selected) else ()
     if selection_kind == "IndexedUp":
-        selected = set(range(left, left + right))
+        width = right
+        last = left + width - 1
     elif selection_kind == "IndexedDown":
-        selected = set(range(left - right + 1, left + 1))
+        width = right
+        last = left - width + 1
     else:
         return ()
-    return tuple(bit for bit in base_bits if bit in selected)
+    if (
+        width < 1
+        or width > len(base_bits)
+        or left not in base_set
+        or last not in base_set
+    ):
+        return ()
+    low, high = sorted((left, last))
+    selected = tuple(bit for bit in base_bits if low <= bit <= high)
+    return selected if len(selected) == width else ()
 
 
 def _selected_packed_member_bits(

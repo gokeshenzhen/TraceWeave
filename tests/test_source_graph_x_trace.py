@@ -265,6 +265,21 @@ def test_artifact_guard_defers_dotted_suffix_but_blocks_different_top():
     assert other_top.value.code == "source_graph_trace_target_top_mismatch"
 
 
+def test_artifact_guard_expands_direct_children_for_unresolved_frontier():
+    guard = SourceGraphTraceArtifactGuard(
+        artifact_scope=_artifact_scope(("tb", "tb.dut")),
+        hierarchy_result=_branch_hierarchy(),
+    )
+
+    with pytest.raises(SourceGraphTraceScopeExpansion) as caught:
+        guard.require_frontier_children(("tb.dut.bus[31:0]",))
+
+    assert caught.value.signal_paths == (
+        "tb.dut.left.__traceweave_scope__",
+        "tb.dut.right.__traceweave_scope__",
+    )
+
+
 class _PreparedBackend:
     def __init__(self, response: dict):
         self.response = response
@@ -334,6 +349,34 @@ def test_trace_backend_preserves_partial_positive_and_query_identity():
     assert receipt["positive_query_count"] == 1
     assert len(receipt["query_fingerprints_sha256"][0]) == 64
     assert "tb.dut.left.q" not in str(receipt)
+
+
+def test_trace_backend_expands_children_for_inconclusive_parent_frontier():
+    response = _driver_response(status="inconclusive", coverage="inconclusive")
+    response["_source_graph_query_receipt"]["expansion_frontiers"] = [
+        "tb.dut.bus[31:0]"
+    ]
+    backend = SourceGraphTraceConnectivityBackend(
+        backend=_PreparedBackend(response),
+        artifact_scope=_artifact_scope(("tb", "tb.dut")),
+        hierarchy_result=_branch_hierarchy(),
+        artifact_fingerprint_sha256="b" * 64,
+    )
+
+    with pytest.raises(SourceGraphTraceScopeExpansion) as caught:
+        backend.find_driver(
+            "tb.dut.bus[31:0]",
+            "fixture.vcd",
+            "compile.log",
+            recursive=True,
+            max_depth=8,
+        )
+
+    assert caught.value.signal_paths == (
+        "tb.dut.left.__traceweave_scope__",
+        "tb.dut.right.__traceweave_scope__",
+    )
+    assert backend.ledger.to_dict()["query_count"] == 1
 
 
 def test_trace_backend_accepts_namespaced_frontend_diagnostic_gap():

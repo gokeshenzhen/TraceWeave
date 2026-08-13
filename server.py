@@ -3401,6 +3401,23 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                                 )
                             )
                             break
+                        if (
+                            len(scope_targets) + len(new_targets)
+                            > config.frontier_max_instances
+                        ):
+                            source_graph_reason = "source_graph_frontier_instance_limit"
+                            source_graph_receipt["blocker"] = {
+                                "code": "frontier_instance_limit",
+                                "stage": "target_scope",
+                            }
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "blocked",
+                                    reason=source_graph_reason,
+                                )
+                            )
+                            break
                         scope_targets.extend(new_targets)
                         scope_expansion_count += 1
                         restart_reasons.append("source_graph_scope_expansion")
@@ -4595,14 +4612,15 @@ async def list_tools():
             description=(
                 "When a signal shows X/Z at a target time, trace its propagation "
                 "chain through upstream driver logic. Uses the selected connectivity "
-                "backend (local/LSF NPI when available, otherwise Static); if NPI "
-                "internally falls back, the whole trace is restarted with Static so "
-                "one returned chain never mixes backend provenance. Connectivity "
-                "queries run outside waveform locks. backend_status reports selected "
-                "versus actual backend; trace_restarted reports a whole-trace retry. "
-                "NPI testbench-driven/cross-check evidence is preserved on the node. "
-                "If the trace reaches instance port connections, the tool lists them "
-                "and stops there."
+                "route (trusted local/LSF NPI, bounded Source Graph, then Static). "
+                "A Source Graph trace may expand to bounded direct-child frontiers "
+                "when an unresolved parent net can be driven by a child output. Any "
+                "backend or artifact change discards the partial chain and restarts "
+                "from the original signal, so one returned chain never mixes "
+                "provenance. Connectivity queries run outside waveform locks. "
+                "backend_status reports selected versus actual backend; "
+                "trace_restarted reports a whole-trace retry. NPI testbench-driven/"
+                "cross-check evidence is preserved on the node."
             ),
             inputSchema={
                 "type": "object",

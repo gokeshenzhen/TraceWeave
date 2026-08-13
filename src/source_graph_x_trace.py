@@ -15,7 +15,10 @@ import time
 from typing import Any
 
 from .cancellation import check_cancelled
-from .source_graph_adapter import resolve_source_graph_hierarchy_ancestors
+from .source_graph_adapter import (
+    resolve_source_graph_direct_children,
+    resolve_source_graph_hierarchy_ancestors,
+)
 from .source_graph_contract import (
     BoundaryMode,
     ConnectivityTarget,
@@ -141,6 +144,50 @@ class SourceGraphTraceArtifactGuard:
             )
             if relation not in {ScopeRelation.EXACT, ScopeRelation.SUPERSET}:
                 uncovered.append(signal_path)
+        if uncovered:
+            raise SourceGraphTraceScopeExpansion(uncovered)
+
+    def require_frontier_children(self, signal_paths: Sequence[str]) -> None:
+        """Request a bounded rebuild when an unresolved net may have child drivers."""
+
+        check_cancelled()
+        uncovered: list[str] = []
+        for raw_path in signal_paths:
+            check_cancelled()
+            signal_path = str(raw_path).strip()
+            ancestors = resolve_source_graph_hierarchy_ancestors(
+                hierarchy_result=self._hierarchy_result,
+                top=self._scope.top,
+                signal_path=signal_path,
+            )
+            if ancestors is None:
+                raise SourceGraphTraceFallbackRequired(
+                    "source_graph_trace_hierarchy_scope_unresolved"
+                )
+            children = resolve_source_graph_direct_children(
+                hierarchy_result=self._hierarchy_result,
+                top=self._scope.top,
+                instance_path=ancestors[-1],
+            )
+            if children is None:
+                raise SourceGraphTraceFallbackRequired(
+                    "source_graph_trace_frontier_children_unavailable"
+                )
+            for child in children:
+                child_ancestors = resolve_source_graph_hierarchy_ancestors(
+                    hierarchy_result=self._hierarchy_result,
+                    top=self._scope.top,
+                    signal_path=f"{child}.__traceweave_scope__",
+                )
+                if child_ancestors is None:
+                    continue
+                requested = _requested_driver_scope(self._scope, child_ancestors)
+                relation = compare_source_graph_artifact_scopes(
+                    self._scope,
+                    requested,
+                )
+                if relation not in {ScopeRelation.EXACT, ScopeRelation.SUPERSET}:
+                    uncovered.append(f"{child}.__traceweave_scope__")
         if uncovered:
             raise SourceGraphTraceScopeExpansion(uncovered)
 
@@ -331,6 +378,14 @@ class SourceGraphTraceConnectivityBackend:
                 "source_graph_trace_incomplete_negative"
             )
         else:
+            frontiers = query_receipt.get("expansion_frontiers", ())
+            if (
+                isinstance(frontiers, Sequence)
+                and not isinstance(frontiers, (str, bytes))
+                and frontiers
+                and all(isinstance(item, str) for item in frontiers)
+            ):
+                self._guard.require_frontier_children(frontiers)
             raise SourceGraphTraceFallbackRequired(
                 "source_graph_trace_query_inconclusive"
             )

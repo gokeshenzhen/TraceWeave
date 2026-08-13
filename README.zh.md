@@ -416,6 +416,20 @@ NPI attempt 记为 `status="skipped"`、`reason="npi_skipped_by_policy"`。取�
 不会悄悄改变路由，而是保持 `auto` 并报告固定的
 `connectivity_route_config_invalid`。
 
+在大型参数化 SoC 中，bounded frontend 允许 compile hierarchy 中的候选实例被当前
+generate specialization 消除：它会记录 inconclusive 的
+`focused_instance_not_elaborated` coverage gap，并继续投影真实 elaborated 的实例。packed
+select 会先与声明范围核对再展开，因此 inactive 分支中的 unsigned 参数下溢不会在 Python
+侧构造巨大的 range。X-trace 对父级 net 的查询若为 inconclusive，可以把该父级的直接子实例
+作为 bounded frontier；TraceWeave 会按精确 ancestor union 重建 artifact，并从原始 X 信号
+重新开始。扩展仍受 `TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES` 限制；超过上限会诚实
+fallback，不会枚举整个设计。
+
+driver 恢复依据逐 bit mapping，而不是“整条总线必须精确重合”的启发式。例如
+`.instr_rdata_i({8'h0, instr_rdata_core})` 会分别报告常量驱动的高 8 bit 和信号驱动的低
+24 bit。partial coverage 下已经证明的正向分段仍可使用；只有 complete artifact 才能断言
+未覆盖分段没有 driver。
+
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：
 

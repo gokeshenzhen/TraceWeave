@@ -1420,7 +1420,7 @@ def build_source_graph_plan(
     )
 
 
-def _direct_hierarchy_children(
+def resolve_source_graph_direct_children(
     *,
     hierarchy_result: Mapping[str, Any],
     top: str,
@@ -1542,7 +1542,7 @@ def build_source_graph_frontier_plan(
                 exclusions=base.receipt.objective_exclusions,
             )
         parent_chains.append(ancestors)
-        children = _direct_hierarchy_children(
+        children = resolve_source_graph_direct_children(
             hierarchy_result=hierarchy_result,
             top=top,
             instance_path=ancestors[-1],

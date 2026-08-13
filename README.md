@@ -458,6 +458,24 @@ Static route. Invalid values preserve `auto` and surface the fixed
 `connectivity_route_config_invalid` receipt instead of silently changing the
 route.
 
+On large parameterized SoCs, the bounded frontend tolerates compile-hierarchy
+candidates removed by the selected generate specialization: it records an
+inconclusive `focused_instance_not_elaborated` coverage gap and continues with
+the instances that really elaborated. Packed selects are checked against the
+declared range before expansion, so an unsigned parameter underflow in an
+inactive branch cannot materialize an enormous host-language range. During
+X-trace, an inconclusive parent-net query may request that parent's direct
+children as a bounded frontier; TraceWeave rebuilds the exact ancestor union
+and restarts at the original X-bearing signal. The expansion remains capped by
+`TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES`, and exceeding the cap falls
+back honestly rather than enumerating the design.
+
+Driver resolution is bit-mapping based, not an exact-whole-bus heuristic. For
+example, a binding such as `.instr_rdata_i({8'h0, instr_rdata_core})` can report
+the constant-driven upper byte and the 24-bit signal-driven lower segment
+separately. Positive segments remain usable under partial coverage; only a
+complete artifact can prove an uncovered segment has no driver.
+
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
 

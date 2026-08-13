@@ -534,6 +534,48 @@ async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
 
 
 @pytest.mark.anyio
+async def test_trace_scope_expansion_respects_frontier_instance_cap(
+    monkeypatch, tmp_path
+):
+    compile_log, wave = _install_context(tmp_path)
+    worker = ReadyWorker(ir=_deep_ir())
+    runtime = SourceGraphRuntime(worker)
+    static = TraceStaticBackend()
+    _patch_route(monkeypatch, runtime=runtime, static=static)
+    monkeypatch.setattr(
+        server,
+        "get_source_graph_execution_config",
+        lambda: replace(_source_config(), frontier_max_instances=1),
+    )
+
+    result = await server._dispatch(
+        "trace_x_source",
+        _trace_args(
+            compile_log,
+            wave,
+            signal_path="uart_deep_x_tb.apb_prdata",
+        ),
+    )
+
+    assert result.backend_status.actual_backend == "static"
+    assert result.backend_status.fallback_reason == (
+        "source_graph_frontier_instance_limit"
+    )
+    assert result.backend_status.whole_trace_restart_reasons == [
+        "source_graph_to_static"
+    ]
+    receipt = result.backend_status.source_graph
+    assert receipt.blocker.code == "frontier_instance_limit"
+    assert receipt.artifact_attempt_count == 1
+    assert receipt.scope_expansion_count == 0
+    assert worker.calls == 1
+    assert static.calls == [
+        "uart_deep_x_tb.apb_prdata",
+        f"{_leaf_path()}.inject_x",
+    ]
+
+
+@pytest.mark.anyio
 async def test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts(
     monkeypatch, tmp_path
 ):

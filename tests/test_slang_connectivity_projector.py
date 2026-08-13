@@ -26,11 +26,37 @@ from src.slang_connectivity_projector import (
     _BindingOperand,
     _map_concat_to_target,
     _parameterization,
+    _selected_bits,
     normalize_source_path,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeSVInt:
+    def __init__(self, value: int, *, width: int = 32, signed: bool = False):
+        self._value = value & ((1 << width) - 1)
+        self.bitWidth = width
+        self.isSigned = signed
+
+    def __getitem__(self, index: int) -> int:
+        return (self._value >> index) & 1
+
+
+def _constant_expression(value: int, *, width: int = 32, signed: bool = False):
+    return SimpleNamespace(
+        constant=SimpleNamespace(value=_FakeSVInt(value, width=width, signed=signed))
+    )
+
+
+def _range_expression(left: int, right: int, *, kind: str = "Simple"):
+    return SimpleNamespace(
+        kind=SimpleNamespace(name="RangeSelect"),
+        left=_constant_expression(left),
+        right=_constant_expression(right),
+        selectionKind=SimpleNamespace(name=kind),
+    )
 
 
 def test_projector_import_does_not_import_optional_pyslang():
@@ -50,6 +76,25 @@ def test_projector_import_does_not_import_optional_pyslang():
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_selected_bits_bounds_parameter_underflow_before_materializing_range():
+    base_bits = (0,)
+
+    # Mirrors an inactive ``if (Offset > 1)`` generate branch when the active
+    # specialization has unsigned Offset=1: Offset-2 becomes 32'hffff_ffff.
+    underflow = _range_expression((1 << 32) - 1, 0)
+    assert _selected_bits(underflow, base_bits) == ()
+
+    oversized_indexed = _range_expression(0, (1 << 32) - 1, kind="IndexedUp")
+    assert _selected_bits(oversized_indexed, base_bits) == ()
+
+    descending = _range_expression(6, 3)
+    assert _selected_bits(descending, tuple(range(7, -1, -1))) == (6, 5, 4, 3)
+    ascending = _range_expression(2, 4)
+    assert _selected_bits(ascending, tuple(range(8))) == (2, 3, 4)
+    indexed = _range_expression(2, 3, kind="IndexedUp")
+    assert _selected_bits(indexed, tuple(range(7, -1, -1))) == (4, 3, 2)
 
 
 def test_projection_options_validate_diagnostic_receipt_and_focused_scope():
@@ -340,6 +385,48 @@ endmodule
     )
     assert path.status is PathQueryStatus.FOUND
     assert [edge.exact_bit_mapping for edge in path.path] == [True, True]
+
+
+def test_focused_projection_skips_inactive_compile_hierarchy_candidates():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic data_i); endmodule
+module top;
+  logic data;
+  if (0) begin : g_inactive
+    leaf u_leaf(.data_i(data));
+  end
+  leaf u_live(.data_i(data));
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+        options=ProjectionOptions(
+            focus_instance_paths=(
+                "top",
+                "top.g_inactive.u_leaf",
+                "top.u_live",
+            ),
+            assignment_instance_paths=(
+                "top",
+                "top.g_inactive.u_leaf",
+                "top.u_live",
+            ),
+        ),
+    ).project(compilation.getRoot())
+
+    assert {item.path for item in projection.ir.instances} == {"top", "top.u_live"}
+    gap = next(
+        item
+        for item in projection.ir.coverage.gaps
+        if item.code == "focused_instance_not_elaborated"
+    )
+    assert gap.scopes == ("top.g_inactive.u_leaf",)
+    assert projection.ir.coverage.status is CoverageStatus.INCONCLUSIVE
 
 
 def test_source_paths_normalize_against_projection_root(tmp_path: Path, monkeypatch):

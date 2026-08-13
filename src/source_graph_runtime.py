@@ -302,6 +302,13 @@ async def _terminate_process_group(
             await process.wait()
 
 
+async def _wait_for_atomic_response(path: Path) -> None:
+    """Wait until the worker's atomic response rename becomes observable."""
+
+    while not path.is_file():
+        await asyncio.sleep(0.05)
+
+
 class IsolatedSourceGraphProcessRunner:
     """Launch one frontend build in a fresh child interpreter."""
 
@@ -404,10 +411,14 @@ class IsolatedSourceGraphProcessRunner:
 
             wait_task = asyncio.create_task(process.wait())
             cancel_task = asyncio.create_task(cancel_event.wait())
+            response_task = asyncio.create_task(
+                _wait_for_atomic_response(response_path)
+            )
+            response_completed_before_exit = False
             try:
                 try:
                     done, _ = await asyncio.wait(
-                        {wait_task, cancel_task},
+                        {wait_task, cancel_task, response_task},
                         timeout=timeout_seconds,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
@@ -437,7 +448,41 @@ class IsolatedSourceGraphProcessRunner:
                             cancel_to_exit_ms=cancel_to_exit_ms,
                         ),
                     )
-                if wait_task not in done:
+                response_ready = response_task in done or response_path.is_file()
+                if response_ready and wait_task not in done:
+                    # The worker publishes only after projection, serialization,
+                    # fingerprinting, and fsync, using an atomic rename.  Treat
+                    # that file as a second completion signal.  On very large
+                    # Slang builds the interpreter can finish publishing while
+                    # its asyncio child-exit notification is delayed; waiting
+                    # solely on process.wait() would misreport a successful
+                    # build as a timeout.  Give normal interpreter shutdown a
+                    # short grace period, keep cancellation authoritative, then
+                    # reap a lingering process group before decoding.
+                    grace_done, _ = await asyncio.wait(
+                        {wait_task, cancel_task},
+                        timeout=1.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task in grace_done and cancel_event.is_set():
+                        cancel_started = time.perf_counter()
+                        await _terminate_process_group(process)
+                        cancel_to_exit_ms = (
+                            time.perf_counter() - cancel_started
+                        ) * 1000
+                        return WorkerBuildResult.failed(
+                            PrepareStatus.CANCELLED,
+                            code="request_cancelled",
+                            stage="worker_process",
+                            metrics=WorkerResourceMetrics(
+                                wall_time_ms=(time.perf_counter() - started) * 1000,
+                                cancel_to_exit_ms=cancel_to_exit_ms,
+                            ),
+                        )
+                    if wait_task not in grace_done:
+                        await _terminate_process_group(process)
+                        response_completed_before_exit = True
+                elif wait_task not in done:
                     cancel_started = time.perf_counter()
                     await _terminate_process_group(process)
                     cancel_to_exit_ms = (time.perf_counter() - cancel_started) * 1000
@@ -451,10 +496,15 @@ class IsolatedSourceGraphProcessRunner:
                         ),
                     )
             finally:
-                for task in (wait_task, cancel_task):
+                for task in (wait_task, cancel_task, response_task):
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(wait_task, cancel_task, return_exceptions=True)
+                await asyncio.gather(
+                    wait_task,
+                    cancel_task,
+                    response_task,
+                    return_exceptions=True,
+                )
 
             elapsed_ms = (time.perf_counter() - started) * 1000
             if process.returncode != 0 and not response_path.is_file():
@@ -482,7 +532,11 @@ class IsolatedSourceGraphProcessRunner:
                     message=f"{type(exc).__name__}: {exc}",
                     metrics=WorkerResourceMetrics(wall_time_ms=elapsed_ms),
                 )
-            if process.returncode != 0 and result.status is PrepareStatus.READY:
+            if (
+                process.returncode != 0
+                and result.status is PrepareStatus.READY
+                and not response_completed_before_exit
+            ):
                 return WorkerBuildResult.failed(
                     PrepareStatus.INVALID_RESPONSE,
                     code="worker_exit_status_invalid",

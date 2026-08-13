@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import replace
 import hashlib
 import json
@@ -21,6 +22,7 @@ from src.source_graph_contract import (
     RequestedCone,
     SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     SourceGraphArtifactIdentity,
+    SourceGraphArtifactScopeReceipt,
     SourceGraphArtifactScope,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
@@ -775,6 +777,69 @@ async def test_isolated_process_timeout_reaps_worker_and_cleans_temp_state(
     assert result.blocker.code == "worker_timeout"
     assert result.metrics.cancel_to_exit_ms is not None
     assert result.fallback_used is False
+    assert list(staging.iterdir()) == []
+
+
+@pytest.mark.anyio
+async def test_atomic_ready_response_terminates_lingering_worker_without_timeout(
+    tmp_path,
+):
+    request = _request()
+    ready = _ready_result(request)
+    assert ready.ir_json_bytes is not None
+    assert ready.ir_fingerprint_sha256 is not None
+    response_payload = {
+        "protocol_version": SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+        "status": PrepareStatus.READY.value,
+        "ir_json_base64": base64.b64encode(ready.ir_json_bytes).decode("ascii"),
+        "ir_fingerprint_sha256": ready.ir_fingerprint_sha256,
+        "scope_receipt": SourceGraphArtifactScopeReceipt(
+            scope=request.artifact_identity.scope,
+            coverage_status=ready.scope_receipt.coverage_status,
+        ).to_dict(),
+        "metrics": ready.metrics.to_dict(),
+        "fallback_used": False,
+    }
+    ready_path = tmp_path / "ready.json"
+    ready_path.write_text(json.dumps(response_payload), encoding="utf-8")
+    script = tmp_path / "linger_worker.py"
+    script.write_text(
+        "\n".join(
+            (
+                "import argparse",
+                "import os",
+                "from pathlib import Path",
+                "import time",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--request')",
+                "parser.add_argument('--response', required=True)",
+                "args = parser.parse_args()",
+                f"source = Path({str(ready_path)!r})",
+                "target = Path(args.response)",
+                "temporary = target.with_suffix('.complete')",
+                "temporary.write_bytes(source.read_bytes())",
+                "os.replace(temporary, target)",
+                "time.sleep(10)",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    runner = IsolatedSourceGraphProcessRunner(
+        worker_script=script,
+        working_directory=tmp_path,
+        staging_directory=staging,
+    )
+
+    result = await runner.run(
+        request, timeout_seconds=3.0, cancel_event=asyncio.Event()
+    )
+
+    assert result.status is PrepareStatus.READY
+    assert result.ir_json_bytes == ready.ir_json_bytes
+    assert result.metrics.wall_time_ms < 3000
     assert list(staging.iterdir()) == []
 
 
