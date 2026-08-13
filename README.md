@@ -476,6 +476,29 @@ the constant-driven upper byte and the 24-bit signal-driven lower segment
 separately. Positive segments remain usable under partial coverage; only a
 complete artifact can prove an uncovered segment has no driver.
 
+Source Graph results expose this distinction explicitly in the additive
+`claim_semantics` receipt. The existing `confidence` field is unchanged and
+remains the conservative combination of positive evidence and global artifact
+coverage. Consumers should interpret the new fields independently:
+
+- `positive_fact_confidence`: confidence in the returned positive source fact;
+- `target_bit_coverage`: whether the requested driver/load bits were all resolved;
+- `global_coverage_status`: coverage of the bounded artifact, including unrelated
+  unsupported constructs;
+- `exhaustive_search`: whether the operation searched its supported space
+  exhaustively (a positive path returns the first proved path and is not exhaustive);
+- `exclusive_driver_proved`: whether every requested driver bit has an exhaustive,
+  non-overlapping driver set;
+- `negative_claim_allowed`: whether “no driver/load/path exists” is a sound claim.
+
+For example, a large SoC driver result may retain legacy `confidence="partial"`
+and `coverage_status="inconclusive"` while reporting
+`positive_fact_confidence="exact"` and `target_bit_coverage="complete"`. The
+returned bit-mapped driver is then usable, but the caller must not call it the
+only possible driver unless `exclusive_driver_proved=true`, and must not turn an
+empty result into a negative conclusion unless `negative_claim_allowed=true`.
+`trace_x_source` preserves the same receipt on each Source Graph chain node.
+
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
 

@@ -1577,6 +1577,9 @@ def _merge_source_graph_query_receipt(
     ):
         if field in query:
             receipt[field] = query[field]
+    claim_semantics = query.get("claim_semantics")
+    if isinstance(claim_semantics, dict):
+        receipt["claim_semantics"] = dict(claim_semantics)
     receipt["coverage_status"] = query.get("coverage_status")
     receipt["coverage_gap_codes"] = sorted(
         {
@@ -4443,9 +4446,12 @@ async def list_tools():
                 "instance-specific; dotted packed struct/union members are mapped from their "
                 "field-local indices onto exact root-aggregate bits. "
                 "backend_status records the selected/attempted/actual backends, fixed fallback "
-                "reason, Source Graph coverage and cache/build receipt. A Source Graph positive "
-                "under partial/inconclusive coverage remains partial; only complete coverage can "
-                "establish not_connected. Each driver_chain hop carries source_info_origin "
+                "reason, Source Graph coverage and cache/build receipt. The legacy confidence "
+                "field remains coverage-combined and conservative. For Source Graph results, "
+                "claim_semantics separates positive_fact_confidence and target_bit_coverage "
+                "from global_coverage_status; require exclusive_driver_proved before calling a "
+                "returned driver unique, and negative_claim_allowed before claiming no driver. "
+                "Each driver_chain hop carries source_info_origin "
                 "('compile_log', 'npi', or 'source_graph') "
                 "so consumers can tell which provenance produced its file:line. "
                 "driver_status='testbench_driven' (with cross_check.conflict=true) means NPI "
@@ -4492,7 +4498,10 @@ async def list_tools():
                 "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
                 "on-demand Source Graph; Legacy Static remains the final fallback "
                 "(shallow_only). backend_status preserves the complete attempt chain and Source "
-                "Graph coverage/build receipt. A complete Source Graph not_connected is distinct "
+                "Graph coverage/build receipt. claim_semantics separates confidence in returned "
+                "positive load facts from whole-artifact coverage; exhaustive_search is required "
+                "before treating the list as all loads, and negative_claim_allowed is required "
+                "before claiming there are none. A complete Source Graph not_connected is distinct "
                 "from an inconclusive no-match, which falls through to Static. Each load "
                 "query normalizes trailing numeric selects for Legacy Static matching, while "
                 "Source Graph validates the selected bits against the declaration. Each load "
@@ -4542,8 +4551,10 @@ async def list_tools():
                 "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
                 "bounded, dual-endpoint Source Graph before Legacy Static. "
                 "Source Graph follows only projected IR facts across bindings and "
-                "supported combinational dependencies. A no-path result is exact "
-                "only with complete coverage; an inconclusive result falls through "
+                "supported combinational dependencies. claim_semantics reports confidence in a "
+                "proved positive path independently from global coverage; a found path is not an "
+                "exhaustive enumeration. A no-path result is exact only when "
+                "negative_claim_allowed=true; an inconclusive result falls through "
                 "to unsupported_reason='static_backend_no_path_api'. This is "
                 "connectivity, NOT temporal driver direction — use "
                 "explain_signal_driver for driver semantics."
@@ -4619,8 +4630,10 @@ async def list_tools():
                 "from the original signal, so one returned chain never mixes "
                 "provenance. Connectivity queries run outside waveform locks. "
                 "backend_status reports selected versus actual backend; "
-                "trace_restarted reports a whole-trace retry. NPI testbench-driven/"
-                "cross-check evidence is preserved on the node."
+                "trace_restarted reports a whole-trace retry. Source Graph chain nodes preserve "
+                "claim_semantics, so an exact positive edge can be used without implying global "
+                "coverage or exclusive drive. NPI testbench-driven/cross-check evidence is "
+                "preserved on the node."
             ),
             inputSchema={
                 "type": "object",

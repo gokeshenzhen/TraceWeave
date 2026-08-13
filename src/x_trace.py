@@ -277,6 +277,7 @@ def _build_chain_node(
         "driver_kind": driver.get("driver_kind"),
         "driver_expression": driver.get("expression_summary"),
         "driver_confidence": driver.get("confidence"),
+        "claim_semantics": driver.get("claim_semantics"),
         "unsupported_reason": driver.get("unsupported_reason"),
     }
     if driver.get("instance_port_connections"):

@@ -254,6 +254,14 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
                 "query_status": "found",
                 "query_confidence": "partial",
                 "query_match_count": 1,
+                "claim_semantics": {
+                    "positive_fact_confidence": "exact",
+                    "target_bit_coverage": "complete",
+                    "global_coverage_status": "partial",
+                    "exhaustive_search": False,
+                    "exclusive_driver_proved": False,
+                    "negative_claim_allowed": False,
+                },
                 "build_key_sha256": "b" * 64,
                 "artifact_fingerprint_sha256": "b" * 64,
                 "selected_artifact_fingerprint_sha256": "d" * 64,
@@ -286,6 +294,8 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.connectivity_route == "source_graph"
     assert status.attempted_backends[0].status == "skipped"
     assert status.source_graph.query_confidence == "partial"
+    assert status.source_graph.claim_semantics.positive_fact_confidence == "exact"
+    assert status.source_graph.claim_semantics.exhaustive_search is False
     assert status.source_graph.coverage_files_total == 785
     assert status.source_graph.coverage_files_projected == 4
     assert status.source_graph.coverage_diagnostic_count == 29416
@@ -366,6 +376,14 @@ def test_trace_signal_path_validates_additive_source_graph_path_evidence():
             "hops": 1,
             "expand_assigns": True,
             "backend": "source_graph",
+            "claim_semantics": {
+                "positive_fact_confidence": "exact",
+                "target_bit_coverage": "not_applicable",
+                "global_coverage_status": "partial",
+                "exhaustive_search": False,
+                "exclusive_driver_proved": None,
+                "negative_claim_allowed": False,
+            },
             "path": [
                 {
                     "index": 0,
@@ -397,6 +415,14 @@ def test_trace_signal_path_validates_additive_source_graph_path_evidence():
                     "adapter_status": "ready",
                     "query_status": "found",
                     "query_confidence": "partial",
+                    "claim_semantics": {
+                        "positive_fact_confidence": "exact",
+                        "target_bit_coverage": "not_applicable",
+                        "global_coverage_status": "partial",
+                        "exhaustive_search": False,
+                        "exclusive_driver_proved": None,
+                        "negative_claim_allowed": False,
+                    },
                     "path_edge_count": 1,
                     "traversed_edge_count": 3,
                     "visited_state_count": 4,
@@ -412,7 +438,9 @@ def test_trace_signal_path_validates_additive_source_graph_path_evidence():
     assert result.backend == "source_graph"
     assert result.path[1].edge_kind == "continuous_assign"
     assert result.path[1].exact_bit_mapping is True
+    assert result.claim_semantics.positive_fact_confidence == "exact"
     assert result.backend_status.source_graph.path_edge_count == 1
+    assert result.backend_status.source_graph.claim_semantics == result.claim_semantics
     assert result.backend_status.source_graph.traversal_limit == 4096
 
 

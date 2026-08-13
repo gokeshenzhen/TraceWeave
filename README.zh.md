@@ -430,6 +430,24 @@ driver 恢复依据逐 bit mapping，而不是“整条总线必须精确重合�
 24 bit。partial coverage 下已经证明的正向分段仍可使用；只有 complete artifact 才能断言
 未覆盖分段没有 driver。
 
+Source Graph 通过新增的 `claim_semantics` 回执显式区分这些语义。既有 `confidence` 字段保持
+兼容，仍是“正向证据 × 全局 artifact coverage”的保守合成值；调用方应分别读取：
+
+- `positive_fact_confidence`：已经返回的正向 source fact 本身有多可靠；
+- `target_bit_coverage`：请求的 driver/load bits 是否全部得到解析；
+- `global_coverage_status`：bounded artifact 的全局覆盖，包括与本目标无关的 unsupported construct；
+- `exhaustive_search`：本次操作是否穷尽了受支持搜索空间（正向 path 只返回第一条已证明路径，
+  因而不是穷尽枚举）；
+- `exclusive_driver_proved`：每个请求 bit 的 driver 集合是否已穷尽且不存在重叠多驱动；
+- `negative_claim_allowed`：能否可靠地说“不存在 driver/load/path”。
+
+因此，大型 SoC 结果可以仍显示旧字段 `confidence="partial"`、
+`coverage_status="inconclusive"`，同时给出 `positive_fact_confidence="exact"` 和
+`target_bit_coverage="complete"`。这表示返回的逐 bit driver 可以使用，但只有
+`exclusive_driver_proved=true` 才能称它为唯一 driver；空结果也只有在
+`negative_claim_allowed=true` 时才能解释为“不存在”。`trace_x_source` 会把同一回执保留在
+每个 Source Graph chain node 上。
+
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：
 

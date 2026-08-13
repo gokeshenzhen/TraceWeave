@@ -1109,6 +1109,13 @@ async def test_partial_positive_stays_partial_and_does_not_fall_back(
     assert result.confidence == "partial"
     assert result.backend_status.source_graph.coverage_status == "partial"
     assert result.backend_status.source_graph.query_confidence == "partial"
+    assert result.claim_semantics.positive_fact_confidence == "exact"
+    assert result.claim_semantics.target_bit_coverage == "complete"
+    assert result.claim_semantics.global_coverage_status == "partial"
+    assert result.claim_semantics.exhaustive_search is False
+    assert result.claim_semantics.exclusive_driver_proved is False
+    assert result.claim_semantics.negative_claim_allowed is False
+    assert result.backend_status.source_graph.claim_semantics == result.claim_semantics
     assert "protected_payload" in (
         result.backend_status.source_graph.coverage_gap_codes
     )
@@ -1133,6 +1140,8 @@ async def test_complete_not_connected_and_inconclusive_no_match_are_distinct(
     assert complete.driver_status == "not_connected"
     assert complete.confidence == "exact"
     assert complete.backend_status.source_graph.query_status == "not_connected"
+    assert complete.claim_semantics.exhaustive_search is True
+    assert complete.claim_semantics.negative_claim_allowed is True
     assert complete_static.driver_calls == 0
 
     gap = CoverageGap(
@@ -1841,6 +1850,12 @@ async def test_path_source_graph_partial_positive_remains_usable(monkeypatch, tm
     assert result.backend_status.source_graph.query_status == "found"
     assert result.backend_status.source_graph.coverage_status == "partial"
     assert result.backend_status.source_graph.query_confidence == "partial"
+    assert result.claim_semantics.positive_fact_confidence == "exact"
+    assert result.claim_semantics.target_bit_coverage == "not_applicable"
+    assert result.claim_semantics.global_coverage_status == "partial"
+    assert result.claim_semantics.exhaustive_search is False
+    assert result.claim_semantics.negative_claim_allowed is False
+    assert result.backend_status.source_graph.claim_semantics == result.claim_semantics
     assert static.path_calls == 0
 
 

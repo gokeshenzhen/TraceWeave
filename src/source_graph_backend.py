@@ -53,11 +53,71 @@ def _aggregate_confidence(matches: tuple[QueryMatch, ...]) -> str | None:
     return None
 
 
+def _aggregate_positive_fact_confidence(
+    matches: tuple[QueryMatch, ...],
+) -> str | None:
+    values = {match.positive_fact_confidence or match.confidence for match in matches}
+    if QueryConfidence.PARTIAL in values:
+        return "partial"
+    if QueryConfidence.CONDITIONAL in values:
+        return "conditional"
+    if QueryConfidence.EXACT_SOURCE in values:
+        return "exact"
+    return None
+
+
+def _target_bit_coverage(result: ConnectivityQueryResult) -> str:
+    if not result.resolved_bits:
+        return "none"
+    if result.unresolved_bits:
+        return "partial"
+    return "complete"
+
+
+def _query_claim_semantics(result: ConnectivityQueryResult) -> dict[str, Any]:
+    # QueryStatus/CoverageStatus already account for unresolved boundaries and
+    # depth limits. ``frontiers`` is also populated for a complete negative so
+    # a later bounded artifact may choose to expand; it is not itself evidence
+    # that the current query was non-exhaustive.
+    search_exhaustive = result.coverage_status is CoverageStatus.COMPLETE
+    positive_found = result.status is QueryStatus.FOUND and bool(result.matches)
+    exclusive_driver_proved: bool | None = None
+    if result.operation == "driver" and positive_found:
+        # True means every requested bit has an exhaustive driver set and no
+        # bit has overlapping drivers. Non-overlapping bit segments may still
+        # have different drivers.
+        exclusive_driver_proved = bool(
+            search_exhaustive
+            and not result.unresolved_bits
+            and not result.multi_driver_bits
+            and len(result.resolved_bits) == result.signal.width
+        )
+    negative_claim_allowed = bool(
+        result.status is QueryStatus.NOT_CONNECTED and search_exhaustive
+    )
+    return {
+        "positive_fact_confidence": (
+            _aggregate_positive_fact_confidence(result.matches)
+            if positive_found
+            else None
+        ),
+        "target_bit_coverage": _target_bit_coverage(result),
+        "global_coverage_status": result.coverage_status.value,
+        "exhaustive_search": search_exhaustive,
+        "exclusive_driver_proved": exclusive_driver_proved,
+        "negative_claim_allowed": negative_claim_allowed,
+    }
+
+
 def _gap_codes(result: ConnectivityQueryResult) -> list[str]:
     return sorted({gap.code for gap in result.unresolved_boundaries})
 
 
-def _query_receipt(result: ConnectivityQueryResult) -> dict[str, Any]:
+def _query_receipt(
+    result: ConnectivityQueryResult,
+    *,
+    claim_semantics: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "status": result.status.value,
         "coverage_status": result.coverage_status.value,
@@ -71,6 +131,7 @@ def _query_receipt(result: ConnectivityQueryResult) -> dict[str, Any]:
         "unresolved_bit_count": len(result.unresolved_bits),
         "constant_bit_count": len(result.constant_bits),
         "multi_driver_bit_count": len(result.multi_driver_bits),
+        "claim_semantics": claim_semantics,
         # Internal orchestration input. The server removes this before merging
         # the privacy-safe public receipt or recording telemetry.
         "expansion_frontiers": [
@@ -152,7 +213,47 @@ def _path_confidence(result: ConnectivityPathQueryResult) -> str | None:
     return "exact"
 
 
-def _path_query_receipt(result: ConnectivityPathQueryResult) -> dict[str, Any]:
+def _path_positive_fact_confidence(
+    result: ConnectivityPathQueryResult,
+) -> str | None:
+    if result.status is not PathQueryStatus.FOUND:
+        return None
+    if any(not edge.exact_bit_mapping for edge in result.path):
+        return "partial"
+    resolutions = {edge.evidence.resolution for edge in result.path}
+    if ResolutionKind.UNRESOLVED in resolutions:
+        return "partial"
+    if ResolutionKind.CONDITIONAL in resolutions:
+        return "conditional"
+    return "exact"
+
+
+def _path_claim_semantics(
+    result: ConnectivityPathQueryResult,
+) -> dict[str, Any]:
+    negative_claim_allowed = bool(
+        result.status is PathQueryStatus.NOT_CONNECTED
+        and result.coverage_status is CoverageStatus.COMPLETE
+        and not result.traversal_truncated
+        and not result.output_truncated
+    )
+    return {
+        "positive_fact_confidence": _path_positive_fact_confidence(result),
+        "target_bit_coverage": "not_applicable",
+        "global_coverage_status": result.coverage_status.value,
+        # Positive path search returns the first proved path. It is exhaustive
+        # only for a complete, non-truncated negative result.
+        "exhaustive_search": negative_claim_allowed,
+        "exclusive_driver_proved": None,
+        "negative_claim_allowed": negative_claim_allowed,
+    }
+
+
+def _path_query_receipt(
+    result: ConnectivityPathQueryResult,
+    *,
+    claim_semantics: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "status": result.status.value,
         "coverage_status": result.coverage_status.value,
@@ -170,6 +271,7 @@ def _path_query_receipt(result: ConnectivityPathQueryResult) -> dict[str, Any]:
         "output_truncated": result.output_truncated,
         "endpoint_alias_equivalent": result.endpoint_alias_equivalent,
         "expand_assigns": result.expand_assigns,
+        "claim_semantics": claim_semantics,
     }
 
 
@@ -202,13 +304,18 @@ class SourceGraphConnectivityBackend:
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
+        claim_semantics = _query_claim_semantics(query)
         result = self._map_driver(
             query,
             wave_path=wave_path,
             recursive=recursive,
             requested_signal_path=signal_path,
+            claim_semantics=claim_semantics,
         )
-        result["_source_graph_query_receipt"] = _query_receipt(query)
+        result["_source_graph_query_receipt"] = _query_receipt(
+            query,
+            claim_semantics=claim_semantics,
+        )
         return result
 
     def find_loads(
@@ -232,12 +339,17 @@ class SourceGraphConnectivityBackend:
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
+        claim_semantics = _query_claim_semantics(query)
         result = self._map_loads(
             query,
             include_expr=include_expr,
             requested_signal_path=signal_path,
+            claim_semantics=claim_semantics,
         )
-        result["_source_graph_query_receipt"] = _query_receipt(query)
+        result["_source_graph_query_receipt"] = _query_receipt(
+            query,
+            claim_semantics=claim_semantics,
+        )
         return result
 
     def find_path(
@@ -256,8 +368,12 @@ class SourceGraphConnectivityBackend:
             to_signal,
             expand_assigns=expand_assigns,
         )
-        result = self._map_path(query)
-        result["_source_graph_query_receipt"] = _path_query_receipt(query)
+        claim_semantics = _path_claim_semantics(query)
+        result = self._map_path(query, claim_semantics=claim_semantics)
+        result["_source_graph_query_receipt"] = _path_query_receipt(
+            query,
+            claim_semantics=claim_semantics,
+        )
         return result
 
     def _definition_name(self, instance_path: str) -> str | None:
@@ -311,7 +427,12 @@ class SourceGraphConnectivityBackend:
             PathQueryStatus.TRUNCATED: "source_graph_path_truncated",
         }[status]
 
-    def _map_path(self, query: ConnectivityPathQueryResult) -> dict[str, Any]:
+    def _map_path(
+        self,
+        query: ConnectivityPathQueryResult,
+        *,
+        claim_semantics: dict[str, Any],
+    ) -> dict[str, Any]:
         found = query.status is PathQueryStatus.FOUND
         public_path: list[dict[str, Any]] = []
         if found and query.from_endpoint is not None:
@@ -364,6 +485,7 @@ class SourceGraphConnectivityBackend:
             "expand_assigns": query.expand_assigns,
             "unsupported_reason": self._path_unsupported_reason(query.status),
             "backend": "source_graph",
+            "claim_semantics": claim_semantics,
         }
 
     def _map_driver(
@@ -373,6 +495,7 @@ class SourceGraphConnectivityBackend:
         wave_path: str,
         recursive: bool,
         requested_signal_path: str,
+        claim_semantics: dict[str, Any],
     ) -> dict[str, Any]:
         matches = query.matches
         head = matches[0] if matches else None
@@ -455,6 +578,7 @@ class SourceGraphConnectivityBackend:
             "driver_chain": None,
             "chain_summary": None,
             "backend": "source_graph",
+            "claim_semantics": claim_semantics,
         }
         if matches and (recursive or len(matches) > 1):
             result["driver_chain"] = [
@@ -492,6 +616,7 @@ class SourceGraphConnectivityBackend:
         *,
         include_expr: bool,
         requested_signal_path: str,
+        claim_semantics: dict[str, Any],
     ) -> dict[str, Any]:
         del include_expr
         loads = [
@@ -538,4 +663,5 @@ class SourceGraphConnectivityBackend:
             ),
             "stopped_at": stopped_at,
             "unsupported_reason": unsupported_reason,
+            "claim_semantics": claim_semantics,
         }

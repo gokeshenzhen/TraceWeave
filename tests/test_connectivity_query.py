@@ -515,6 +515,7 @@ def test_global_partial_gap_downgrades_positive_match_confidence():
     assert result.status is QueryStatus.FOUND
     assert result.coverage_status is CoverageStatus.PARTIAL
     assert result.matches[0].confidence is QueryConfidence.PARTIAL
+    assert result.matches[0].positive_fact_confidence is QueryConfidence.EXACT_SOURCE
 
 
 def test_path_same_signal_and_overlapping_slice_are_alias_equivalent():

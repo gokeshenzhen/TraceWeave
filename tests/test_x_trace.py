@@ -93,7 +93,9 @@ async def test_trace_x_source_stops_at_instance_ports():
     )
 
     assert result["trace_status"] == "instance_ports_listed"
-    assert result["propagation_chain"][0]["trace_stop_reason"] == "instance_ports_listed"
+    assert (
+        result["propagation_chain"][0]["trace_stop_reason"] == "instance_ports_listed"
+    )
     assert "bit-range continuity" in result["analysis_guide"]["step2"]
 
 
@@ -183,7 +185,9 @@ async def test_trace_x_source_missing_signal_returns_explicit_status():
     )
 
     assert result["trace_status"] == "signal_not_in_waveform"
-    assert result["propagation_chain"][0]["trace_stop_reason"] == "signal_not_in_waveform"
+    assert (
+        result["propagation_chain"][0]["trace_stop_reason"] == "signal_not_in_waveform"
+    )
 
 
 @pytest.mark.anyio
@@ -299,6 +303,14 @@ async def test_trace_x_source_marks_resolved_driver_without_upstream_as_partial(
             "source_line": 18,
             "expression_summary": "NPI register driver",
             "confidence": "exact",
+            "claim_semantics": {
+                "positive_fact_confidence": "exact",
+                "target_bit_coverage": "complete",
+                "global_coverage_status": "inconclusive",
+                "exhaustive_search": False,
+                "exclusive_driver_proved": False,
+                "negative_claim_allowed": False,
+            },
             "upstream_signals": [],
         },
     )
@@ -306,4 +318,5 @@ async def test_trace_x_source_marks_resolved_driver_without_upstream_as_partial(
     node = result["propagation_chain"][0]
     assert result["trace_status"] == "traced_partial_chain"
     assert node["trace_stop_reason"] == "no_upstream_candidates"
+    assert node["claim_semantics"]["positive_fact_confidence"] == "exact"
     assert "did not expose" in result["analysis_guide"]["step1"]

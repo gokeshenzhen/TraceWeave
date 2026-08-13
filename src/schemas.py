@@ -672,6 +672,23 @@ class DriverBitProvenanceSegment(SchemaModel):
     multiple_driver: bool = False
 
 
+class SourceGraphClaimSemanticsReceipt(SchemaModel):
+    """Orthogonal meaning of a Source Graph query result.
+
+    The historical ``confidence`` remains the conservative combination of
+    positive source evidence and whole-artifact coverage.  These fields let a
+    caller accept a proved positive fact without mistaking it for an exhaustive
+    search, an exclusive-driver proof, or permission to make a negative claim.
+    """
+
+    positive_fact_confidence: Literal["exact", "conditional", "partial"] | None = None
+    target_bit_coverage: Literal["complete", "partial", "none", "not_applicable"]
+    global_coverage_status: Literal["complete", "partial", "inconclusive"]
+    exhaustive_search: bool
+    exclusive_driver_proved: bool | None = None
+    negative_claim_allowed: bool
+
+
 class ExplainDriverResult(SchemaModel):
     signal_path: str
     wave_path: str
@@ -691,6 +708,7 @@ class ExplainDriverResult(SchemaModel):
     unresolved_bit_count: int | None = None
     multi_driver_bit_count: int | None = None
     confidence: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     unsupported_reason: str | None = None
     stopped_at: str | None = None
     recursive: bool = False
@@ -902,6 +920,7 @@ class SourceGraphBackendReceipt(SchemaModel):
     unresolved_bit_count: int = 0
     constant_bit_count: int = 0
     multi_driver_bit_count: int = 0
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     path_edge_count: int = 0
     traversed_edge_count: int = 0
     visited_state_count: int = 0
@@ -1069,6 +1088,7 @@ class FindSignalLoadsResult(SchemaModel):
     completeness: Literal["exact", "approximate", "shallow_only"] = "shallow_only"
     stopped_at: str | None = None
     unsupported_reason: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
@@ -1125,6 +1145,7 @@ class TraceSignalPathResult(SchemaModel):
         ]
         | None
     ) = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     backend: Literal["static", "verdi_npi", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
@@ -1141,6 +1162,7 @@ class TraceChainNode(SchemaModel):
     driver_kind: str | None = None
     driver_expression: str | None = None
     driver_confidence: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     unsupported_reason: str | None = None
     cross_check: DriverLoadCrossCheck | None = None
     instance_port_connections: list[dict[str, Any]] | None = None

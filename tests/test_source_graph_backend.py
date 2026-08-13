@@ -140,6 +140,15 @@ def test_segmented_driver_mapping_reports_composite_bit_provenance():
     assert receipt["queried_bit_count"] == 8
     assert receipt["resolved_bit_count"] == 8
     assert receipt["expansion_frontiers"] == []
+    assert result["claim_semantics"] == {
+        "positive_fact_confidence": "exact",
+        "target_bit_coverage": "complete",
+        "global_coverage_status": "complete",
+        "exhaustive_search": True,
+        "exclusive_driver_proved": True,
+        "negative_claim_allowed": False,
+    }
+    assert receipt["claim_semantics"] == result["claim_semantics"]
 
 
 def test_driver_reports_signal_not_declared_as_a_fixed_query_blocker():
@@ -187,7 +196,9 @@ def test_packed_member_query_preserves_requested_public_spelling():
         else definition
         for definition in ir.definitions
     )
-    backend = SourceGraphConnectivityBackend(_entry(replace(ir, definitions=definitions)))
+    backend = SourceGraphConnectivityBackend(
+        _entry(replace(ir, definitions=definitions))
+    )
 
     result = backend.find_driver(
         signal_path="sg_top.lane_data.low[7:0]",
@@ -215,6 +226,14 @@ def test_load_mapping_preserves_terminal_assignment_evidence():
     assert {item["backend"] for item in result["loads"]} == {"source_graph"}
     assert all(item["expr"] is None for item in result["loads"])
     assert result["completeness"] == "exact"
+    assert result["claim_semantics"] == {
+        "positive_fact_confidence": "conditional",
+        "target_bit_coverage": "complete",
+        "global_coverage_status": "complete",
+        "exhaustive_search": True,
+        "exclusive_driver_proved": None,
+        "negative_claim_allowed": False,
+    }
 
 
 def test_conditional_and_partial_confidence_mapping_is_explicit():
@@ -250,6 +269,45 @@ def test_conditional_and_partial_confidence_mapping_is_explicit():
     assert result["confidence"] == "conditional"
 
 
+def test_positive_fact_confidence_is_independent_from_global_coverage():
+    gap = CoverageGap(
+        code="protected_payload",
+        message="protected payload is unavailable outside the proved path",
+        impact=CoverageStatus.INCONCLUSIVE,
+        constructs=("protected",),
+        scopes=("*",),
+    )
+    ir = replace(
+        build_hand_ir(),
+        coverage=CoverageReport(
+            status=CoverageStatus.INCONCLUSIVE,
+            files_total=2,
+            files_projected=1,
+            gaps=(gap,),
+            diagnostic_count=1,
+            blocking_diagnostic_count=1,
+        ),
+    )
+
+    result = SourceGraphConnectivityBackend(_entry(ir)).find_driver(
+        signal_path="sg_top.bus.valid",
+        wave_path="wave.fsdb",
+        compile_log="compile.log",
+        max_depth=8,
+    )
+
+    assert result["driver_status"] == "resolved"
+    assert result["confidence"] == "partial"
+    assert result["claim_semantics"] == {
+        "positive_fact_confidence": "exact",
+        "target_bit_coverage": "complete",
+        "global_coverage_status": "inconclusive",
+        "exhaustive_search": False,
+        "exclusive_driver_proved": False,
+        "negative_claim_allowed": False,
+    }
+
+
 def test_complete_negative_maps_to_not_connected_without_source_guessing():
     result = SourceGraphConnectivityBackend(_entry()).find_driver(
         signal_path="sg_top.runtime_force",
@@ -263,6 +321,14 @@ def test_complete_negative_maps_to_not_connected_without_source_guessing():
     assert result["source_file"] is None
     assert result["unsupported_reason"] is None
     assert result["_source_graph_query_receipt"]["status"] == "not_connected"
+    assert result["claim_semantics"] == {
+        "positive_fact_confidence": None,
+        "target_bit_coverage": "none",
+        "global_coverage_status": "complete",
+        "exhaustive_search": True,
+        "exclusive_driver_proved": None,
+        "negative_claim_allowed": True,
+    }
 
 
 def test_path_mapping_returns_only_ir_endpoints_and_edge_evidence():
@@ -289,6 +355,14 @@ def test_path_mapping_returns_only_ir_endpoints_and_edge_evidence():
     assert receipt["status"] == "found"
     assert receipt["coverage_status"] == "complete"
     assert receipt["path_edge_count"] == 5
+    assert result["claim_semantics"] == {
+        "positive_fact_confidence": "exact",
+        "target_bit_coverage": "not_applicable",
+        "global_coverage_status": "complete",
+        "exhaustive_search": False,
+        "exclusive_driver_proved": None,
+        "negative_claim_allowed": False,
+    }
 
 
 def test_path_expand_assigns_changes_evidence_visibility_not_connectivity():
@@ -345,10 +419,14 @@ def test_path_complete_negative_and_partial_positive_map_distinctly():
     assert complete["found"] is False
     assert complete["unsupported_reason"] == "not_connected"
     assert complete["_source_graph_query_receipt"]["coverage_status"] == "complete"
+    assert complete["claim_semantics"]["exhaustive_search"] is True
+    assert complete["claim_semantics"]["negative_claim_allowed"] is True
     assert partial["found"] is True
     assert partial["unsupported_reason"] is None
     assert partial["_source_graph_query_receipt"]["coverage_status"] == "partial"
     assert partial["_source_graph_query_receipt"]["confidence"] == "partial"
+    assert partial["claim_semantics"]["positive_fact_confidence"] == "exact"
+    assert partial["claim_semantics"]["exhaustive_search"] is False
 
 
 def test_path_inconclusive_negative_preserves_gap_in_query_receipt():

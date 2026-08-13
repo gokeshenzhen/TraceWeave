@@ -126,6 +126,10 @@ class QueryMatch:
     traversal: tuple[TraversalHop, ...]
     confidence: QueryConfidence
     constant_bits: tuple[str, ...] = ()
+    # ``confidence`` retains the historical coverage-combined value. When a
+    # positive match is downgraded because the surrounding artifact is
+    # incomplete, preserve the source-evidence strength independently.
+    positive_fact_confidence: QueryConfidence | None = None
 
 
 @dataclass(frozen=True)
@@ -1477,6 +1481,7 @@ def _with_confidence(match: QueryMatch, confidence: QueryConfidence) -> QueryMat
         traversal=match.traversal,
         confidence=confidence,
         constant_bits=match.constant_bits,
+        positive_fact_confidence=(match.positive_fact_confidence or match.confidence),
     )
 
 
