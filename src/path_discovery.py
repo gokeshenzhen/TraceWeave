@@ -42,8 +42,13 @@ _COMPILE_KEYWORDS = (
     "vhdlan",
 )
 _CASE_PREFIXES = ("work_", "sim_", "case_")
-_DEFAULT_LOG_PHASE_SCAN_LINES = 50
-_EXTENDED_LOG_PHASE_SCAN_LINES = 300
+# Phase discovery is intentionally bounded because get_sim_paths may inspect
+# several candidate logs.  A byte budget is stable in the presence of the very
+# long wrapper command lines emitted by DVSim/FuseSoC, unlike a line budget.
+# Small logs are read in full; larger logs contribute equally sized head/tail
+# windows so a generated preamble cannot hide VCS parsing output and a late
+# ``Top Level Modules:`` section can still establish elaboration.
+_LOG_PHASE_SCAN_BUDGET_BYTES = 1024 * 1024
 
 
 def discover_sim_paths(
@@ -649,27 +654,43 @@ def _search_files(dirs: list[Path], patterns: list[str], max_depth: int) -> list
 
 
 def _detect_log_phase(log_path: Path) -> str:
-    return _scan_log_phase(log_path, _DEFAULT_LOG_PHASE_SCAN_LINES)
+    return _scan_log_phase(log_path)
 
 
-def _scan_log_phase(log_path: Path, max_lines: int) -> str:
+def _scan_log_phase(log_path: Path) -> str:
+    samples: list[bytes] = []
     try:
-        with log_path.open("r", errors="replace") as handle:
-            sample = "".join(line.lower() for _, line in zip(range(max_lines), handle))
+        with log_path.open("rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            if size <= _LOG_PHASE_SCAN_BUDGET_BYTES:
+                samples.append(handle.read(_LOG_PHASE_SCAN_BUDGET_BYTES))
+            else:
+                window_bytes = _LOG_PHASE_SCAN_BUDGET_BYTES // 2
+                samples.append(handle.read(window_bytes))
+                handle.seek(max(0, size - window_bytes))
+                samples.append(handle.read(window_bytes))
     except OSError:
         return "unknown"
-    if any(keyword in sample for keyword in _ELABORATE_KEYWORDS):
+
+    lowered_samples = [sample.lower() for sample in samples]
+    if any(
+        keyword.encode("ascii") in sample
+        for keyword in _ELABORATE_KEYWORDS
+        for sample in lowered_samples
+    ):
         return "elaborate"
-    if any(keyword in sample for keyword in _COMPILE_KEYWORDS):
+    if any(
+        keyword.encode("ascii") in sample
+        for keyword in _COMPILE_KEYWORDS
+        for sample in lowered_samples
+    ):
         return "compile"
     return "unknown"
 
 
 def _detect_mixed_compile_log_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     path = Path(entry["path"])
-    phase = _scan_log_phase(path, _DEFAULT_LOG_PHASE_SCAN_LINES)
-    if phase == "unknown":
-        phase = _scan_log_phase(path, _EXTENDED_LOG_PHASE_SCAN_LINES)
+    phase = _detect_log_phase(path)
     if phase not in {"compile", "elaborate"}:
         return None
     mixed_entry = dict(entry)

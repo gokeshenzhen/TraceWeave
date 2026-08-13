@@ -753,6 +753,50 @@ class TestLogPhaseDetection:
 
             assert result["compile_logs"][0]["phase"] == "compile"
 
+    def test_explicit_vcs_build_log_detects_elaboration_after_long_preamble(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            case_dir = root / "case0"
+            build_log = root / "build.log"
+            _write(case_dir / "run.log", "Chronologic VCS\n")
+            _write(case_dir / "waves.fsdb", "1" * 2048)
+            preamble = "".join(
+                f"INFO: generated build setup entry {index}\n" for index in range(500)
+            )
+            _write(
+                build_log,
+                "[Executing]\n"
+                + preamble
+                + "Parsing design file 'rtl/top.sv'\nTop Level Modules:\n  tb\n",
+            )
+
+            result = discover_sim_paths(
+                str(root),
+                sim_log=str(case_dir / "run.log"),
+                wave_file=str(case_dir / "waves.fsdb"),
+                compile_log=str(build_log),
+            )
+
+            assert result["compile_logs"][0]["phase"] == "elaborate"
+            assert not any(
+                "No elaborate-phase log found" in hint for hint in result["hints"]
+            )
+
+    def test_elaboration_in_tail_outranks_compile_marker_in_head(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_root = Path(tmpdir) / "work"
+            compile_log = work_root / "elab.log"
+            long_middle = "generated setup output\n" * 60_000
+            _write(
+                compile_log,
+                "vlogan\n" + long_middle + "Top Level Modules:\n  tb\n",
+            )
+
+            result = discover_sim_paths(str(work_root))
+
+            assert compile_log.stat().st_size > 1024 * 1024
+            assert result["compile_logs"][0]["phase"] == "elaborate"
+
 
 class TestMixedLogDetection:
     def test_case_dir_reuses_vcs_mixed_log_as_compile_log(self):
