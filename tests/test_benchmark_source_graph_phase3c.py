@@ -57,7 +57,7 @@ def test_historical_baseline_guard_rejects_phase3b_tampering(tmp_path, monkeypat
         benchmark._read_historical_baselines()
 
 
-def test_route_isolation_changes_only_x_trace_orchestration_and_keeps_wave_locks():
+def test_historical_phase3c_guard_detects_authorized_public_route_evolution():
     receipt = benchmark._route_isolation_receipt()
 
     assert receipt["accepted_head"] == benchmark.ACCEPTED_TRACKED_HEAD
@@ -66,7 +66,22 @@ def test_route_isolation_changes_only_x_trace_orchestration_and_keeps_wave_locks
         "source_graph",
         "legacy_static",
     ]
-    assert receipt["production_base_ordering_changed"] is False
+    assert receipt["base_route_stage_order"] == {
+        "_route_public_connectivity": [
+            "trusted_npi",
+            "source_graph",
+            "legacy_static",
+        ],
+        "_route_public_signal_path": [
+            "trusted_npi",
+            "source_graph",
+            "legacy_static",
+        ],
+    }
+    # Phase 3C froze the whole public-connectivity function body. A later,
+    # explicitly authorized Source Graph frontier enhancement changes that
+    # body while preserving backend order and the waveform locking model.
+    assert receipt["production_base_ordering_changed"] is True
     assert receipt["trace_x_source_route_changed"] is True
     assert receipt["waveform_locking_model_changed"] is False
     assert receipt["phase3b_reuse_behavior_affected_tools"] == [
@@ -75,8 +90,8 @@ def test_route_isolation_changes_only_x_trace_orchestration_and_keeps_wave_locks
         "trace_signal_path",
     ]
     assert receipt["phase3c_new_process_memory_consumer"] == "trace_x_source"
-    for name in ("_route_public_connectivity", "_route_public_signal_path"):
-        assert receipt["functions"][name]["changed"] is False
+    assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
+    assert receipt["functions"]["_route_public_signal_path"]["changed"] is False
     for name in ("_run_in_wave_thread", "_wave_locks_for"):
         assert receipt["functions"][name]["changed"] is False
 
@@ -89,9 +104,11 @@ async def test_fake_phase3c_gate_covers_trace_routing_reuse_and_cleanup():
     assert result["benchmark"] == "source_graph_connectivity_phase3c"
     assessment = result["assessment"]
     assert assessment["decision"] == (
-        "phase3c_trace_x_source_graph_integration_gate_passed"
+        "phase3c_no_go_keep_auditing_trace_x_source_integration"
     )
-    assert assessment["phase3c_trace_x_source_graph_integration_gate_passed"]
+    assert not assessment["phase3c_trace_x_source_graph_integration_gate_passed"]
+    assert not assessment["architecture_gate_passed"]
+    assert result["route_isolation"]["production_base_ordering_changed"] is True
     assert assessment["trace_x_source_route_changed"] is True
     assert assessment["production_base_ordering_changed"] is False
     assert assessment["waveform_locking_model_changed"] is False
@@ -217,7 +234,12 @@ def test_cli_writes_atomic_phase3c_result(tmp_path):
         timeout=30,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    # This historical gate correctly returns no-go after the later authorized
+    # public-connectivity route enhancement; it must still emit atomic evidence.
+    assert completed.returncode == 1, completed.stderr
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["assessment"]["phase3c_trace_x_source_graph_integration_gate_passed"]
+    assert not payload["assessment"][
+        "phase3c_trace_x_source_graph_integration_gate_passed"
+    ]
+    assert payload["route_isolation"]["production_base_ordering_changed"] is True
     assert list(tmp_path.glob(".phase3c.json.*.tmp")) == []
