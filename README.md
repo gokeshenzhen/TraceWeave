@@ -103,7 +103,7 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend protocol + select_backend
     ├── verdi_backend.py          # KDB / license probe + kdb_hint generator
     ├── verdi_npi_backend.py      # NPI-backed driver/load/path resolution
-    ├── npi_lsf.py                # Optional LSF transport + exact worker protocol
+    ├── npi_lsf.py                # Optional LSF transport + NPI-only worker protocol
     ├── npi_worker.py             # Compute-node NPI worker entry point
     ├── kdb_builder.py            # Auto-build Verdi KDB (vericom + elabcom) for Xcelium flows
     ├── structural_scanner.py
@@ -315,7 +315,7 @@ the setup above, then restart or reconnect the MCP server:
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["LSF_QUEUE", "TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
 
 [mcp_servers.TraceWeave.env]
 # Keep the existing EDA environment entries here.
@@ -358,6 +358,12 @@ explicit connectivity operation and report `backend_status`. A successful LSF
 NPI call has `execution_mode="lsf"`, `scheduler_status="completed"`,
 `worker_status="completed"`, and `actual_backend="verdi_npi"`. Otherwise inspect
 `fallback_reason`; a Static fallback is not an exact NPI result.
+
+An error-marked KDB may still complete the worker successfully. In that case
+`actual_backend="verdi_npi"` is paired with `kdb_degraded=true`; read the NPI
+attempt's `coverage_status="partial"` and the `kdb_error_count` /
+`kdb_error_log` diagnostics rather than treating scheduler completion alone as
+proof of complete elaboration.
 
 Optional settings:
 
@@ -649,7 +655,36 @@ returned prefix. Narrow the time window for a complete targeted check.
 
 `explain_signal_driver`, `find_signal_loads`, `trace_signal_path`, and `trace_x_source` automatically engage a Verdi NPI backend when a KDB is detected. A trustworthy NPI result wins; otherwise TraceWeave tries the bounded on-demand Source Graph before recomputing the whole result or trace with Legacy Static. Static still has no honest `sig_to_sig_conn_list` equivalent, so an inconclusive Source Graph path ends as structured unsupported rather than an approximation. X-trace backend/artifact changes always restart from the original signal. NPI remains the deepest path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains beyond the Source Graph's explicitly projected scope. In **local NPI execution mode**, a detected KDB also lets `build_tb_hierarchy` overlay each component-tree node's `source_file` / `source_line` with NPI's elaborated `file:line`. The initial LSF scope deliberately does not submit an implicit batch job from `build_tb_hierarchy`, so in LSF mode that hierarchy source information remains compile-log-derived. Affected hops in `find_driver` / `find_loads` results carry `source_info_origin: "npi"` or `"source_graph"`, while Static remains compile-log-derived; Source Graph path hops likewise carry only IR-backed scope/source/edge evidence. The result envelope carries a `backend_status` block with the selected/attempted/actual backend, ordered fallback chain, Source Graph coverage/build receipt, KDB flow, and per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
 
-A `kdb.elab++` carrying Verdi's `.hasElabcomError` marker is not selected as an NPI oracle. `backend_status.kdb_validation_status` reports `elaboration_error`, and the route proceeds directly to Source Graph until a clean elaborated KDB is rebuilt.
+A `kdb.elab++` carrying Verdi's `.hasElabcomError` marker is selected as a
+degraded NPI candidate when no clean elaborated KDB is available. Error count is
+not a threshold: TraceWeave accepts only `load_design` return code `0`, a
+non-empty `get_top_inst_list()`, and the requested top when its name is
+inspectable. Other return codes, an empty/mismatched top list, a corrupt KDB,
+or a license/import failure still fall through normally.
+
+Degraded mode trusts positive evidence, not exhaustive negative claims. A
+resolved driver, non-empty load list, or found path can return from NPI; the
+attempt reports `coverage_status="partial"`, and load-list completeness is
+`approximate` even though each returned hop may still have exact NPI
+confidence. An unresolved driver, empty load list, `testbench_driven` claim, or
+not-found/not-connected path continues through Source Graph and then Legacy
+Static. `trace_x_source` discards its entire partial NPI chain and restarts from
+the original signal on the first such inconclusive lookup. Public status keeps
+the artifact fact `kdb_validation_status="elaboration_error"` and, after a
+successful partial load, adds `kdb_degraded=true`, `kdb_error_count`, and
+`kdb_error_log`. Local hierarchy source overlays from such a KDB are reported
+as `source_info_overlay="npi_partial"`.
+
+This behavior is default-on. To restore the previous clean-KDB-only gate, set
+the following before starting the MCP server, then restart or reconnect it:
+
+```bash
+export TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB=0
+```
+
+The first implementation supports already-existing user/project degraded
+KDBs. `build_kdb` still treats a non-zero `elabcom` exit as a failed build and
+does not publish that failed artifact into the normal cache.
 
 For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` — the hint surfaces the exact command. For Xcelium flows there is no native KDB; `get_diagnostic_snapshot` will list `build_kdb` in `missing_steps` so the LLM agent can produce one on demand. Set `TRACEWEAVE_AUTO_KDB=0` to opt out of the auto-build suggestion.
 

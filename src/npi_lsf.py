@@ -2,7 +2,7 @@
 
 The public connectivity API stays synchronous and unchanged. In ``lsf`` mode
 the server runs this module in a cancellable worker thread; this transport then
-submits one short-lived, exact-only NPI worker through ``bsub -K``. Scheduler
+submits one short-lived, NPI-only worker through ``bsub -K``. Scheduler
 and worker diagnostics are reduced to fixed labels before they leave this
 module. Queue names, hostnames, paths, command lines, and native output never
 enter MCP status or telemetry.
@@ -28,7 +28,11 @@ from . import schemas
 from .cancellation import OperationCancelled, check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
-from .verdi_backend import probe_verdi_backend
+from .verdi_backend import (
+    kdb_has_elaboration_errors,
+    probe_verdi_backend,
+    read_kdb_elab_error_metadata,
+)
 
 
 _LOG = logging.getLogger(__name__)
@@ -83,6 +87,7 @@ class WorkerSuccess(_ProtocolModel):
     protocol_version: Literal["1.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["ok"] = "ok"
     result: dict[str, Any]
+    kdb_load_quality: Literal["clean", "degraded"] | None = None
 
 
 class WorkerUnavailable(_ProtocolModel):
@@ -116,6 +121,7 @@ class LsfExecutionResult:
     scheduler_status: Literal["completed", "failed", "timed_out"]
     worker_status: Literal["completed", "npi_unavailable", "failed"]
     fallback_reason: str | None = None
+    kdb_load_quality: Literal["clean", "degraded"] | None = None
 
 
 class LsfNpiTransport:
@@ -245,6 +251,7 @@ class LsfNpiTransport:
                 result=result,
                 scheduler_status="completed",
                 worker_status="completed",
+                kdb_load_quality=response.kdb_load_quality,
             )
         if isinstance(response, WorkerUnavailable):
             return LsfExecutionResult(
@@ -302,7 +309,7 @@ class LsfNpiTransport:
 
 
 class LsfConnectivityBackend:
-    """Connectivity backend that delegates exact NPI work to an LSF worker."""
+    """Connectivity backend that delegates NPI work to an LSF worker."""
 
     name = "verdi_npi"
     uses_external_worker = True
@@ -317,6 +324,15 @@ class LsfConnectivityBackend:
         self._config = config
         self._fallback = fallback or StaticConnectivityBackend()
         self._transport = transport or LsfNpiTransport(config)
+        self._last_kdb_status: dict[str, Any] | None = None
+
+    @property
+    def kdb_status(self) -> dict[str, Any] | None:
+        return (
+            dict(self._last_kdb_status)
+            if self._last_kdb_status is not None
+            else None
+        )
 
     def find_driver(
         self,
@@ -329,6 +345,7 @@ class LsfConnectivityBackend:
         max_depth: int = 10,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_kdb_status = None
         target, setup_reason = self._resolve_target(compile_log, simulator, top_hint)
         if target is None:
             return self._fallback_driver(
@@ -351,7 +368,12 @@ class LsfConnectivityBackend:
         if outcome.result is not None:
             result = dict(outcome.result)
             result["wave_path"] = wave_path
-            _attach_execution_receipt(result, self.execution_mode, outcome)
+            self._last_kdb_status = _attach_execution_receipt(
+                result,
+                self.execution_mode,
+                outcome,
+                kdb_path=target[0],
+            )
             return result
         return self._fallback_driver(
             signal_path,
@@ -376,6 +398,7 @@ class LsfConnectivityBackend:
         kind_filter: list[str] | None = None,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_kdb_status = None
         target, setup_reason = self._resolve_target(compile_log, simulator, top_hint)
         if target is None:
             return self._fallback_loads(
@@ -398,7 +421,12 @@ class LsfConnectivityBackend:
         outcome = self._transport.execute(request)
         if outcome.result is not None:
             result = dict(outcome.result)
-            _attach_execution_receipt(result, self.execution_mode, outcome)
+            self._last_kdb_status = _attach_execution_receipt(
+                result,
+                self.execution_mode,
+                outcome,
+                kdb_path=target[0],
+            )
             return result
         return self._fallback_loads(
             signal_path,
@@ -422,6 +450,7 @@ class LsfConnectivityBackend:
         expand_assigns: bool = False,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_kdb_status = None
         target, setup_reason = self._resolve_target(compile_log, simulator, top_hint)
         if target is None:
             return self._fallback_path(
@@ -440,7 +469,12 @@ class LsfConnectivityBackend:
         outcome = self._transport.execute(request)
         if outcome.result is not None:
             result = dict(outcome.result)
-            _attach_execution_receipt(result, self.execution_mode, outcome)
+            self._last_kdb_status = _attach_execution_receipt(
+                result,
+                self.execution_mode,
+                outcome,
+                kdb_path=target[0],
+            )
             return result
         return self._fallback_path(
             from_signal,
@@ -556,7 +590,7 @@ def execute_worker_request(
     *,
     backend: Any | None = None,
 ) -> NpiWorkerResponse:
-    """Execute one request through the exact NPI core, never Static fallback."""
+    """Execute one request through the NPI core, never Static fallback."""
 
     if backend is None:
         from .verdi_npi_backend import VerdiNpiBackend  # noqa: PLC0415
@@ -594,14 +628,17 @@ def execute_worker_request(
     payload = _validate_operation_result(request, result)
     if payload is None:
         return WorkerError(error_code="result_invalid", stage="result")
-    return WorkerSuccess(result=payload)
+    load_quality = getattr(backend, "kdb_load_quality", "clean")
+    if load_quality not in {"clean", "degraded"}:
+        load_quality = "clean"
+    return WorkerSuccess(result=payload, kdb_load_quality=load_quality)
 
 
 def _validate_operation_result(
     request: NpiWorkerRequest,
     result: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Validate and normalize an exact result on both protocol boundaries."""
+    """Validate and normalize an NPI-only result on both protocol boundaries."""
 
     try:
         if isinstance(request, FindDriverWorkerRequest):
@@ -610,10 +647,12 @@ def _validate_operation_result(
                 return None
         elif isinstance(request, FindLoadsWorkerRequest):
             validated = schemas.FindSignalLoadsResult.model_validate(result)
-            if validated.completeness != "exact":
+            if validated.backend != "verdi_npi":
                 return None
         else:
             validated = schemas.TraceSignalPathResult.model_validate(result)
+            if validated.backend != "verdi_npi":
+                return None
     except (ValidationError, TypeError, ValueError):
         return None
     return validated.model_dump(
@@ -707,11 +746,27 @@ def _attach_execution_receipt(
     result: dict[str, Any],
     mode: str,
     outcome: LsfExecutionResult,
-) -> None:
+    *,
+    kdb_path: str,
+) -> dict[str, Any]:
     result[NPI_EXECUTION_STATUS_KEY] = {
         "execution_mode": mode,
         "scheduler_status": outcome.scheduler_status,
         "worker_status": outcome.worker_status,
+    }
+    load_quality = outcome.kdb_load_quality
+    if load_quality is None:
+        load_quality = (
+            "degraded" if kdb_has_elaboration_errors(kdb_path) else "clean"
+        )
+    error_count: int | None = None
+    error_log: str | None = None
+    if load_quality == "degraded":
+        error_count, error_log = read_kdb_elab_error_metadata(kdb_path)
+    return {
+        "load_quality": load_quality,
+        "error_count": error_count,
+        "error_log": error_log,
     }
 
 

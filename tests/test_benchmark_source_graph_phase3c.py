@@ -78,9 +78,10 @@ def test_historical_phase3c_guard_detects_authorized_public_route_evolution():
             "legacy_static",
         ],
     }
-    # Phase 3C froze the whole public-connectivity function body. A later,
-    # explicitly authorized Source Graph frontier enhancement changes that
-    # body while preserving backend order and the waveform locking model.
+    # Phase 3C froze the whole public-connectivity function body. Later,
+    # explicitly authorized Source Graph frontier and degraded-KDB routing
+    # changes evolve those bodies while preserving backend order and the
+    # waveform locking model.
     assert receipt["production_base_ordering_changed"] is True
     assert receipt["trace_x_source_route_changed"] is True
     assert receipt["waveform_locking_model_changed"] is False
@@ -91,7 +92,7 @@ def test_historical_phase3c_guard_detects_authorized_public_route_evolution():
     ]
     assert receipt["phase3c_new_process_memory_consumer"] == "trace_x_source"
     assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
-    assert receipt["functions"]["_route_public_signal_path"]["changed"] is False
+    assert receipt["functions"]["_route_public_signal_path"]["changed"] is True
     for name in ("_run_in_wave_thread", "_wave_locks_for"):
         assert receipt["functions"][name]["changed"] is False
 

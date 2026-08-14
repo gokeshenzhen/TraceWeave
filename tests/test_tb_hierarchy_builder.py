@@ -381,6 +381,55 @@ Top Level Modules:
         finally:
             tmp.cleanup()
 
+    def test_degraded_npi_annotation_is_reported_as_partial(self, monkeypatch):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            top_path = root / "top_tb.sv"
+            _write(
+                top_path,
+                "module dut; endmodule\nmodule top_tb; dut dut_i(); endmodule\n",
+            )
+            log = root / "comp.log"
+            log.write_text(
+                f"Parsing design file '{top_path}'\nTop Level Modules:\n       top_tb\n"
+            )
+            monkeypatch.setattr(
+                "src.verdi_backend.probe_verdi_backend",
+                lambda compile_result, compile_log_path=None: {
+                    "kdb_flow": "vcs_two_step",
+                    "kdb_path": "/fake/kdb",
+                    "kdb_validation_status": "elaboration_error",
+                },
+            )
+
+            class _DegradedNpiBackend:
+                name = "verdi_npi"
+                kdb_load_quality = "degraded"
+
+                def collect_instance_src_map(self, compile_log, simulator):
+                    return {"top_tb.dut_i": ("/partial/dut.sv", 23)}
+
+            monkeypatch.setattr(
+                "src.connectivity_backend.select_backend",
+                lambda status: _DegradedNpiBackend(),
+            )
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                compile_log_path=str(log),
+            )
+
+            node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+            assert node["source_file"] == "/partial/dut.sv"
+            assert node["source_info_origin"] == "npi"
+            assert hierarchy["project"]["source_info_overlay"] == "npi_partial"
+            assert hierarchy["project"]["source_info_overlay_reason"] == (
+                "npi_degraded_kdb"
+            )
+        finally:
+            tmp.cleanup()
+
     def test_explicit_source_graph_route_skips_npi_annotation(self, monkeypatch):
         """A pure Source Graph run must not probe or construct NPI during its
         hierarchy prerequisite, even when the compile log has a usable KDB."""

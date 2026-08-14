@@ -485,6 +485,82 @@ async def test_npi_internal_fallback_discards_partial_chain_and_restarts_source_
 
 
 @pytest.mark.anyio
+async def test_degraded_npi_incomplete_driver_discards_chain_and_restarts(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, wave = _install_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker(ir=_deep_ir()))
+    static = TraceStaticBackend()
+    npi_calls: list[str] = []
+
+    class DegradedNpi:
+        name = "verdi_npi"
+        execution_mode = "local"
+        uses_external_worker = False
+        kdb_status = {
+            "load_quality": "degraded",
+            "error_count": 8,
+            "error_log": "/private/kdb/elabcomLog/compiler.log",
+        }
+
+        def find_driver(self, **kwargs):
+            signal_path = kwargs["signal_path"]
+            npi_calls.append(signal_path)
+            if signal_path.endswith("data_q"):
+                return {
+                    "signal_path": signal_path,
+                    "wave_path": kwargs["wave_path"],
+                    "driver_status": "resolved",
+                    "driver_kind": "assign",
+                    "source_file": "degraded_partial_must_be_discarded.sv",
+                    "source_line": 9,
+                    "expression_summary": "positive degraded NPI edge",
+                    "upstream_signals": [f"{_leaf_path()}.inject_x"],
+                    "backend": "verdi_npi",
+                }
+            return {
+                "signal_path": signal_path,
+                "wave_path": kwargs["wave_path"],
+                "driver_status": "unsupported",
+                "unsupported_reason": "signal_path_unresolved_in_npi",
+                "upstream_signals": [],
+                "backend": "verdi_npi",
+            }
+
+    _patch_route(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=DegradedNpi(),
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+
+    assert npi_calls == [
+        f"{_leaf_path()}.data_q",
+        f"{_leaf_path()}.inject_x",
+    ]
+    assert result.backend_status.actual_backend == "source_graph"
+    assert result.backend_status.kdb_degraded is True
+    assert result.backend_status.kdb_error_count == 8
+    assert result.backend_status.fallback_reason == (
+        "npi_degraded_result_inconclusive"
+    )
+    assert result.backend_status.whole_trace_restart_reasons == [
+        "npi_degraded_inconclusive"
+    ]
+    assert result.backend_status.attempted_backends[0].coverage_status == "partial"
+    assert result.trace_restarted is True
+    assert all(
+        node.source_file != "degraded_partial_must_be_discarded.sv"
+        for node in result.propagation_chain
+    )
+    assert static.calls == []
+
+
+@pytest.mark.anyio
 async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
     monkeypatch, tmp_path
 ):

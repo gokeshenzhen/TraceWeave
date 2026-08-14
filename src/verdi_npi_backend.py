@@ -26,9 +26,14 @@ import sys
 import tempfile
 from typing import Any
 
+from config import NPI_ALLOW_DEGRADED_KDB
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
-from .verdi_backend import probe_verdi_backend
+from .verdi_backend import (
+    kdb_has_elaboration_errors,
+    probe_verdi_backend,
+    read_kdb_elab_error_metadata,
+)
 
 
 _LOG = logging.getLogger(__name__)
@@ -274,6 +279,10 @@ class VerdiNpiBackend:
         self._state: str = "uninit"  # uninit | ready | failed
         self._loaded_kdb: str | None = None
         self._loaded_top: str | None = None
+        self._loaded_degraded = False
+        self._degraded_error_count: int | None = None
+        self._degraded_error_log: str | None = None
+        self._last_query_kdb_status: dict[str, Any] | None = None
         self._npi_modules: tuple[Any, Any] | None = None  # (npisys, netlist)
 
     # ── public API matching ConnectivityBackend ────────────────────────
@@ -289,6 +298,7 @@ class VerdiNpiBackend:
         max_depth: int = 10,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -309,6 +319,7 @@ class VerdiNpiBackend:
                 )
                 result.setdefault("_npi_fallback_reason", "npi_load_failed")
                 return result
+            self._record_query_kdb_status()
             return self._npi_find_driver(
                 signal_path, wave_path, top, recursive=recursive,
             )
@@ -333,6 +344,7 @@ class VerdiNpiBackend:
         kind_filter: list[str] | None = None,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -347,6 +359,7 @@ class VerdiNpiBackend:
                     signal_path, compile_log, top_hint, max_depth,
                     include_expr, kind_filter, simulator, "npi_load_failed"
                 )
+            self._record_query_kdb_status()
             return self._npi_find_loads(
                 signal_path, compile_result, kdb_path, top,
                 include_expr, kind_filter,
@@ -368,6 +381,7 @@ class VerdiNpiBackend:
         expand_assigns: bool = False,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -382,6 +396,7 @@ class VerdiNpiBackend:
                     from_signal, to_signal, expand_assigns,
                     reason="npi_load_failed",
                 )
+            self._record_query_kdb_status()
             return self._npi_find_path(
                 from_signal, to_signal, expand_assigns=expand_assigns,
             )
@@ -428,6 +443,7 @@ class VerdiNpiBackend:
             "path": [],
             "expand_assigns": expand_assigns,
             "unsupported_reason": None,
+            "backend": "verdi_npi",
         }
 
         from_hdl = self._resolve_net(netlist, from_signal)
@@ -503,6 +519,10 @@ class VerdiNpiBackend:
             "source_file": file_val,
             "source_line": line_val,
             "is_endpoint": is_endpoint,
+            "source_info_origin": (
+                "npi" if (file_val is not None or line_val is not None) else None
+            ),
+            "backend": "verdi_npi",
         }
 
     def collect_instance_src_map(
@@ -555,7 +575,7 @@ class VerdiNpiBackend:
                 return False
             self._npi_modules = modules
 
-        npisys, _ = self._npi_modules
+        npisys, netlist = self._npi_modules
         dbdir = _simflow_dbdir(kdb_path)
         try:
             npisys_id = id(npisys)
@@ -572,30 +592,130 @@ class VerdiNpiBackend:
                     # fd-redirect runs before Verdi's banner write.
                     _install_shutdown_banner_silencer()
 
+                old_state = self._state
                 old_kdb, old_top = self._loaded_kdb, self._loaded_top
+                old_degraded = self._loaded_degraded
+                old_error_count = self._degraded_error_count
+                old_error_log = self._degraded_error_log
                 rc = npisys.load_design([
                     "traceweave_npi",
                     "-simflow", "-dbdir", dbdir,
                     "-top", top,
                 ])
-                if rc != 1:
+                degraded = (
+                    rc == 0
+                    and NPI_ALLOW_DEGRADED_KDB
+                    and kdb_has_elaboration_errors(kdb_path)
+                    and self._netlist_usable(netlist, top)
+                )
+                if rc != 1 and not degraded:
                     # Failed load wipes the previously loaded case in NPI.
                     # Best-effort restore so subsequent calls can still hit cache.
                     if old_kdb and old_top:
-                        npisys.load_design([
+                        restore_rc = npisys.load_design([
                             "traceweave_npi",
                             "-simflow", "-dbdir", _simflow_dbdir(old_kdb),
                             "-top", old_top,
                         ])
+                        restored = restore_rc == 1 or (
+                            restore_rc == 0
+                            and old_degraded
+                            and self._netlist_usable(netlist, old_top)
+                        )
+                        if restored:
+                            self._state = old_state
+                            self._loaded_kdb = old_kdb
+                            self._loaded_top = old_top
+                            self._loaded_degraded = old_degraded
+                            self._degraded_error_count = old_error_count
+                            self._degraded_error_log = old_error_log
+                        else:
+                            self._clear_loaded_state(failed=True)
                     return False
             self._state = "ready"
             self._loaded_kdb = kdb_path
             self._loaded_top = top
+            self._loaded_degraded = degraded
+            if degraded:
+                (
+                    self._degraded_error_count,
+                    self._degraded_error_log,
+                ) = read_kdb_elab_error_metadata(kdb_path)
+            else:
+                self._degraded_error_count = None
+                self._degraded_error_log = None
             return True
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("npisys.load_design crashed: %s", exc)
-            self._state = "failed"
+            self._clear_loaded_state(failed=True)
             return False
+
+    def _netlist_usable(self, netlist: Any, top: str) -> bool:
+        """Require a non-empty netlist and the requested top when inspectable."""
+
+        if not hasattr(netlist, "get_top_inst_list"):
+            return False
+        try:
+            with _silence_native_stdio():
+                top_list = netlist.get_top_inst_list() or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("degraded KDB top-instance self-check failed: %s", exc)
+            return False
+        if not top_list:
+            return False
+
+        names: set[str] = set()
+        for inst in top_list:
+            if isinstance(inst, str):
+                names.add(inst)
+                continue
+            for accessor in ("full_name", "name", "def_name"):
+                member = getattr(inst, accessor, None)
+                if member is None:
+                    continue
+                try:
+                    value = member() if callable(member) else member
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(value, str) and value:
+                    names.add(value)
+        if not names:
+            return True
+        normalized_top = top.split("(@", 1)[0]
+        return any(
+            name.split("(@", 1)[0] == normalized_top
+            or name.endswith(f".{normalized_top}")
+            or name.endswith(f"/{normalized_top}")
+            for name in names
+        )
+
+    def _clear_loaded_state(self, *, failed: bool) -> None:
+        self._state = "failed" if failed else "uninit"
+        self._loaded_kdb = None
+        self._loaded_top = None
+        self._loaded_degraded = False
+        self._degraded_error_count = None
+        self._degraded_error_log = None
+        self._last_query_kdb_status = None
+
+    @property
+    def kdb_load_quality(self) -> str:
+        return "degraded" if self._loaded_degraded else "clean"
+
+    @property
+    def kdb_status(self) -> dict[str, Any] | None:
+        return (
+            dict(self._last_query_kdb_status)
+            if self._last_query_kdb_status is not None
+            else None
+        )
+
+    def _record_query_kdb_status(self) -> None:
+        self._last_query_kdb_status = {
+            "load_quality": self.kdb_load_quality,
+            "error_count": self._degraded_error_count,
+            "error_log": self._degraded_error_log,
+        }
 
     # ── querying ──────────────────────────────────────────────────────
 
@@ -618,9 +738,12 @@ class VerdiNpiBackend:
             "resolved_module": top,
             "resolved_instance_path": instance_path,
             "loads": [],
-            "completeness": "exact",
+            "completeness": (
+                "approximate" if self._loaded_degraded else "exact"
+            ),
             "stopped_at": None,
             "unsupported_reason": None,
+            "backend": "verdi_npi",
         }
         if net is None:
             result["stopped_at"] = "signal_path_unresolved_in_npi"

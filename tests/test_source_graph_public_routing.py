@@ -465,8 +465,9 @@ class FakeNpiBackend:
     execution_mode = "local"
     uses_external_worker = False
 
-    def __init__(self, result: dict) -> None:
+    def __init__(self, result: dict, *, kdb_status: dict | None = None) -> None:
         self.result = result
+        self.kdb_status = kdb_status
         self.calls = 0
 
     def find_driver(self, **kwargs):
@@ -647,6 +648,144 @@ async def test_npi_load_success_skips_source_graph_and_static(monkeypatch, tmp_p
 
 
 @pytest.mark.anyio
+async def test_degraded_npi_positive_loads_are_used_with_partial_receipt(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "resolved_rtl_name": "data[7:0]",
+            "resolved_module": "sg_bus",
+            "resolved_instance_path": "sg_top.bus",
+            "loads": [
+                {
+                    "load_path": "sg_top.u_consumer",
+                    "kind": "module_input",
+                    "backend": "verdi_npi",
+                    "confidence": "exact",
+                }
+            ],
+            "completeness": "approximate",
+            "stopped_at": None,
+            "unsupported_reason": None,
+            "backend": "verdi_npi",
+        },
+        kdb_status={
+            "load_quality": "degraded",
+            "error_count": 8,
+            "error_log": "/private/kdb.elab++/elabcomLog/compiler.log",
+        },
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=None,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+
+    assert result.backend == "verdi_npi"
+    assert result.completeness == "approximate"
+    assert result.loads[0].confidence == "exact"
+    status = result.backend_status
+    assert status.actual_backend == "verdi_npi"
+    assert status.kdb_degraded is True
+    assert status.kdb_error_count == 8
+    assert status.parser_match == "approximate"
+    assert status.attempted_backends[0].coverage_status == "partial"
+    assert static.load_calls == 0
+
+
+@pytest.mark.anyio
+async def test_degraded_npi_empty_loads_are_inconclusive_and_route_onward(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "resolved_rtl_name": "data[7:0]",
+            "resolved_module": "sg_bus",
+            "resolved_instance_path": "sg_top.bus",
+            "loads": [],
+            "completeness": "approximate",
+            "stopped_at": "no_npi_loads",
+            "unsupported_reason": None,
+            "backend": "verdi_npi",
+        },
+        kdb_status={"load_quality": "degraded", "error_count": 8},
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+
+    assert result.backend == "source_graph"
+    assert result.backend_status.kdb_degraded is True
+    npi_attempt = result.backend_status.attempted_backends[0]
+    assert npi_attempt.status == "inconclusive"
+    assert npi_attempt.reason == "npi_degraded_result_inconclusive"
+    assert npi_attempt.coverage_status == "partial"
+    assert result.backend_status.fallback_reason == (
+        "npi_degraded_result_inconclusive"
+    )
+    assert static.load_calls == 0
+
+
+@pytest.mark.anyio
+async def test_degraded_npi_testbench_driver_claim_routes_onward(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "resolved_rtl_name": "lane_data",
+            "resolved_module": "sg_top",
+            "resolved_instance_path": "sg_top",
+            "driver_status": "testbench_driven",
+            "driver_kind": None,
+            "upstream_signals": [],
+            "confidence": None,
+            "recursive": True,
+            "backend": "verdi_npi",
+        },
+        kdb_status={"load_quality": "degraded", "error_count": 8},
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log),
+    )
+
+    assert result.backend == "source_graph"
+    npi_attempt = result.backend_status.attempted_backends[0]
+    assert npi_attempt.status == "inconclusive"
+    assert npi_attempt.coverage_status == "partial"
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("operation", ["driver", "loads", "path"])
 async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
     monkeypatch, tmp_path, operation
@@ -691,6 +830,46 @@ async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
     ]
     assert npi.calls == 0
     assert static.driver_calls + static.load_calls + static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_degraded_kdb_escape_hatch_reason_survives_source_graph_route(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    monkeypatch.setattr(
+        server,
+        "_safe_probe_backend",
+        lambda *args: {
+            "simulator": "xcelium",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": None,
+            "kdb_flow": "none",
+            "kdb_validation_status": "elaboration_error",
+            "kdb_error_count": 8,
+            "kdb_hint": None,
+            "_npi_selection_reason": "npi_degraded_kdb_disabled",
+        },
+    )
+
+    result = await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log),
+    )
+
+    assert result.backend == "source_graph"
+    assert result.backend_status.fallback_reason == "npi_degraded_kdb_disabled"
+    assert result.backend_status.kdb_validation_status == "elaboration_error"
+    assert result.backend_status.kdb_error_count == 8
+    assert result.backend_status.kdb_degraded is False
+    assert result.backend_status.attempted_backends[0].reason == (
+        "npi_degraded_kdb_disabled"
+    )
 
 
 @pytest.mark.anyio
@@ -1717,6 +1896,90 @@ async def test_path_npi_authoritative_results_skip_source_graph_and_static(
         "verdi_npi"
     ]
     assert npi.calls == 1
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_degraded_npi_found_path_is_positive_partial_evidence(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "found": True,
+            "hops": 1,
+            "path": [
+                {
+                    "index": 0,
+                    "net_path": "sg_top.u_producer.seed[7:0]",
+                    "is_endpoint": True,
+                    "backend": "verdi_npi",
+                },
+                {
+                    "index": 1,
+                    "net_path": "sg_top.bus.data[15:8]",
+                    "is_endpoint": True,
+                    "backend": "verdi_npi",
+                },
+            ],
+            "unsupported_reason": None,
+            "backend": "verdi_npi",
+        },
+        kdb_status={"load_quality": "degraded", "error_count": 8},
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=None,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.found is True
+    assert result.backend == "verdi_npi"
+    assert result.backend_status.kdb_degraded is True
+    assert result.backend_status.attempted_backends[0].coverage_status == "partial"
+    assert static.path_calls == 0
+
+
+@pytest.mark.anyio
+async def test_degraded_npi_negative_path_routes_to_source_graph(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "found": False,
+            "hops": 0,
+            "path": [],
+            "unsupported_reason": "not_connected",
+            "backend": "verdi_npi",
+        },
+        kdb_status={"load_quality": "degraded", "error_count": 8},
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+
+    assert result.found is True
+    assert result.backend == "source_graph"
+    npi_attempt = result.backend_status.attempted_backends[0]
+    assert npi_attempt.status == "inconclusive"
+    assert npi_attempt.reason == "npi_degraded_result_inconclusive"
+    assert npi_attempt.coverage_status == "partial"
     assert static.path_calls == 0
 
 

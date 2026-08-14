@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Internal exact-only Verdi NPI worker used by the LSF transport."""
+"""Internal NPI-only Verdi worker used by the LSF transport."""
 
 from __future__ import annotations
 

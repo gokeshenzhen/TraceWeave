@@ -96,7 +96,7 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend 协议 + select_backend
     ├── verdi_backend.py          # KDB / license 探测 + kdb_hint 生成
     ├── verdi_npi_backend.py      # NPI 后端实现的 driver/load/path 解析
-    ├── npi_lsf.py                # 可选 LSF transport + exact worker 协议
+    ├── npi_lsf.py                # 可选 LSF transport + NPI-only worker 协议
     ├── npi_worker.py             # 执行节点 NPI worker 入口
     ├── kdb_builder.py            # 为 Xcelium 流程自动构建 Verdi KDB
     ├── structural_scanner.py
@@ -293,7 +293,7 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["LSF_QUEUE", "TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
 
 [mcp_servers.TraceWeave.env]
 # 其他已有 EDA 环境变量继续保留在这里。
@@ -320,7 +320,7 @@ Claude Code 用户可把下面两个固定值合并进已有 TraceWeave server �
 JSON 中也是字面值,不要在这个静态 map 里写 `"$LSF_QUEUE"`。
 
 开启后，只有 `explain_signal_driver`、`find_signal_loads`、
-`trace_signal_path` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
+`trace_signal_path`、`trace_x_source` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
 读取、结构扫描、KDB 探测与 Static 分析仍在本地执行。worker 失败或超时后，
 driver/load/path 查询先尝试本地 Source Graph，若有 blocker 或结论不充分再回退 Legacy
 Static；Static 仍没有 path API，因此最终 path fallback 会明确返回 unsupported。路由通过固定的 `backend_status` 状态字段说明原因，
@@ -331,6 +331,11 @@ Static；Static 仍没有 path API，因此最终 path fallback 会明确返回 
 `scheduler_status="completed"`、`worker_status="completed"` 与
 `actual_backend="verdi_npi"`。否则应检查 `fallback_reason`;Static fallback
 不是 exact NPI 结果。
+
+带 elaboration error 标记的 KDB 也可能成功完成 worker。此时
+`actual_backend="verdi_npi"` 会同时带有 `kdb_degraded=true`；应结合 NPI
+attempt 的 `coverage_status="partial"` 以及 `kdb_error_count` /
+`kdb_error_log` 判断，不能只凭 scheduler completed 推断 elaboration 完整。
 
 可选配置:
 
@@ -588,7 +593,33 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 
 当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。可信 NPI 结果保持最高优先级；否则 TraceWeave 会先尝试 bounded on-demand Source Graph，再由 Legacy Static 整体重算 fallback 结果或 trace。Static 没有诚实的 `sig_to_sig_conn_list` 等价实现，因此 inconclusive Source Graph path 最终会返回结构化 unsupported，而不会给出近似结论。X-trace 在 backend 或 artifact 改变时始终从原始 signal 重跑。NPI 仍是更深的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越 Source Graph 明确投影范围之外的实例端口边界、interface 位置绑定与 assign 链。在 **local NPI execution mode** 下,检测到 KDB 时 `build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 或 `"source_graph"`，Static 则保持 compile-log-derived；Source Graph path hop 同样只携带 IR 支持的 scope/source/edge evidence。结果信封里的 `backend_status` 会给出 selected/attempted/actual backend、有序 fallback 链、Source Graph coverage/build 回执、KDB 流程与按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 
-带有 Verdi `.hasElabcomError` 标记的 `kdb.elab++` 不会被选作 NPI oracle。此时 `backend_status.kdb_validation_status` 为 `elaboration_error`，路由会直接进入 Source Graph，直到重新生成无 elaboration error 的 KDB。
+带有 Verdi `.hasElabcomError` 标记的 `kdb.elab++` 在没有 clean elaborated
+KDB 时会作为 degraded NPI candidate。error 数量不是阈值：TraceWeave 只在
+`load_design` 返回 `0`、`get_top_inst_list()` 非空，并且可检查时能看到请求的
+top 的情况下接受 partial netlist。其他返回码、空或 top 不匹配的 netlist、损坏
+KDB、license/import 失败仍按正常 fallback 处理。
+
+degraded 模式只信正向证据，不信穷尽性的负结论。找到明确 driver、非空 loads
+或 found path 时可以返回 NPI；attempt 会标记 `coverage_status="partial"`，loads
+整体 completeness 为 `approximate`，即使每个已返回 hop 仍可保持 exact NPI
+confidence。driver 未解析、空 loads、`testbench_driven` 判断以及
+not-found/not-connected path 会继续进入 Source Graph，再到 Legacy Static。
+`trace_x_source` 遇到第一处这类 inconclusive lookup 时会丢弃整条 partial NPI
+chain，并从原始 signal 重跑。公共状态保留
+`kdb_validation_status="elaboration_error"` 这一 artifact 事实；实际成功加载
+partial netlist 后再增加 `kdb_degraded=true`、`kdb_error_count` 和
+`kdb_error_log`。本地 hierarchy 使用这种 KDB 做出的 source overlay 会报告
+`source_info_overlay="npi_partial"`。
+
+该行为默认开启。若要恢复只接受 clean KDB 的旧策略，请在启动 MCP server 前设置
+下列变量，然后重启或重新连接：
+
+```bash
+export TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB=0
+```
+
+第一阶段只支持用户/项目中已经存在的 degraded KDB。`build_kdb` 仍把非零
+`elabcom` exit 视为构建失败，不会把该失败产物发布进正常 cache。
 
 对 VCS 流程,获取 KDB 的最低成本方式是用 `-kdb=only` 重编 —— hint 会给出完整命令。对 Xcelium 流程没有原生 KDB;`get_diagnostic_snapshot` 会把 `build_kdb` 列在 `missing_steps` 中,LLM agent 可以按需触发。设置 `TRACEWEAVE_AUTO_KDB=0` 可关闭自动构建提示。
 

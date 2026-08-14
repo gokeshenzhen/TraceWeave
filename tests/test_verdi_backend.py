@@ -32,21 +32,69 @@ def test_vcs_two_step_kdb_detected(tmp_path):
     assert status["kdb_validation_status"] == "usable"
 
 
-def test_vcs_kdb_with_elaboration_error_marker_is_rejected(tmp_path):
+def test_vcs_kdb_with_elaboration_error_marker_is_selected_degraded(tmp_path):
     case_dir = tmp_path
     kdb = case_dir / "simv.daidir" / "kdb.elab++"
     kdb.mkdir(parents=True)
     (kdb / ".hasElabcomError").write_text("elabcomLog/compiler.log\n")
+    error_log = kdb / "elabcomLog" / "compiler.log"
+    error_log.parent.mkdir()
+    error_log.write_text("*Error* missing view\nTotal   8 error(s), 0 warning(s)\n")
     log = case_dir / "comp.log"
     log.write_text("Command: vcs -kdb top.sv\n")
 
     cr = _make_compile_result("vcs", compile_command="vcs -kdb top.sv")
     status = probe_verdi_backend(cr, str(log))
 
-    assert status["kdb_flow"] == "none"
-    assert status["kdb_path"] is None
+    assert status["kdb_flow"] == "vcs_two_step"
+    assert status["kdb_path"] == str(kdb)
     assert status["kdb_validation_status"] == "elaboration_error"
-    assert "elaboration-error marker" in status["kdb_hint"]
+    assert status["kdb_error_count"] == 8
+    assert status["kdb_error_log"] == str(error_log)
+    assert "degraded partial-netlist" in status["kdb_hint"]
+
+
+def test_vcs_degraded_kdb_escape_hatch_restores_rejection(
+    tmp_path,
+    monkeypatch,
+):
+    import config
+
+    monkeypatch.setattr(config, "NPI_ALLOW_DEGRADED_KDB", False)
+    kdb = tmp_path / "simv.daidir" / "kdb.elab++"
+    kdb.mkdir(parents=True)
+    (kdb / ".hasElabcomError").write_text("missing.log\n")
+    log = tmp_path / "comp.log"
+    log.write_text("Command: vcs -kdb top.sv\n")
+
+    status = probe_verdi_backend(
+        _make_compile_result("vcs", compile_command="vcs -kdb top.sv"),
+        str(log),
+    )
+
+    assert status["kdb_path"] is None
+    assert status["kdb_flow"] == "none"
+    assert status["kdb_validation_status"] == "elaboration_error"
+    assert status["_npi_selection_reason"] == "npi_degraded_kdb_disabled"
+
+
+def test_vcs_clean_three_step_kdb_is_preferred_over_degraded_two_step(tmp_path):
+    degraded = tmp_path / "simv.daidir" / "kdb.elab++"
+    degraded.mkdir(parents=True)
+    (degraded / ".hasElabcomError").write_text("missing.log\n")
+    work = tmp_path / "AN.DB"
+    work.mkdir()
+    clean = work / "work.lib++"
+    clean.mkdir()
+    (tmp_path / "synopsys_sim.setup").write_text("WORK : ./AN.DB\n")
+    log = tmp_path / "comp.log"
+    log.write_text("Command: vcs -kdb top.sv\n")
+
+    status = probe_verdi_backend(_make_compile_result("vcs"), str(log))
+
+    assert status["kdb_path"] == str(clean)
+    assert status["kdb_flow"] == "vcs_three_step"
+    assert status["kdb_validation_status"] == "usable"
 
 
 def test_vcs_three_step_kdb_via_synopsys_setup(tmp_path):

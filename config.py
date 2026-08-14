@@ -147,6 +147,15 @@ def _env_flag(name: str, default: bool) -> bool:
 
 AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
 
+# A Verdi elaborated KDB can retain a useful partial netlist even when
+# elabcom recorded errors (for example unresolved VHDL or encrypted cells).
+# Keep that capability enabled by default; callers still require a successful
+# NPI load plus a non-empty/top-matching netlist self-check before trusting it.
+NPI_ALLOW_DEGRADED_KDB = _env_flag(
+    "TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB",
+    True,
+)
+
 
 # Cache root for TraceWeave-managed artifacts (generated KDBs, build
 # scripts, build logs). Honour XDG_CACHE_HOME / TRACEWEAVE_CACHE_DIR

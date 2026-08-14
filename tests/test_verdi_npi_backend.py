@@ -1,6 +1,5 @@
 import os
 import sys
-import types
 
 import pytest
 
@@ -171,14 +170,21 @@ class _MockNet:
 
 
 class _MockNetlist:
-    def __init__(self, net_map):
+    def __init__(self, net_map, *, tops=None, top_exc=None):
         self._net_map = net_map
+        self._tops = list(tops or [])
+        self._top_exc = top_exc
 
     def get_net(self, name):
         return self._net_map.get(name)
 
     def get_actual_net(self, name):
         return self._net_map.get(name)
+
+    def get_top_inst_list(self):
+        if self._top_exc is not None:
+            raise self._top_exc
+        return list(self._tops)
 
 
 class _MockNpisys:
@@ -235,6 +241,77 @@ def test_backend_falls_back_when_load_design_fails(monkeypatch, tmp_path):
     r = backend.find_loads(signal_path="top_tb.x", compile_log=log, simulator="vcs")
     assert r["completeness"] == "shallow_only"
     assert npisys.load_calls, "load_design should have been attempted"
+
+
+def test_backend_accepts_rc_zero_when_partial_netlist_matches_top(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    kdb = tmp_path / "simv.daidir" / "kdb.elab++"
+    marker_log = kdb / "elabcomLog" / "compiler.log"
+    marker_log.parent.mkdir()
+    marker_log.write_text("Total   8 error(s), 0 warning(s)\n")
+    (kdb / ".hasElabcomError").write_text("elabcomLog/compiler.log\n")
+    npisys = _MockNpisys(load_rc=0)
+    net = _MockNet(loads=[_MockPin("top_tb.u_sink.clk")])
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=npisys,
+        netlist_obj=_MockNetlist({"top_tb.clk": net}, tops=["top_tb"]),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.clk",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["backend"] == "verdi_npi"
+    assert result["completeness"] == "approximate"
+    assert result["loads"]
+    assert backend.kdb_status == {
+        "load_quality": "degraded",
+        "error_count": 8,
+        "error_log": str(marker_log),
+    }
+
+
+@pytest.mark.parametrize(
+    "netlist_obj",
+    [
+        _MockNetlist({}, tops=[]),
+        _MockNetlist({}, tops=["different_top"]),
+        _MockNetlist({}, top_exc=RuntimeError("broken netlist")),
+    ],
+)
+def test_backend_rejects_rc_zero_without_requested_usable_top(
+    monkeypatch,
+    tmp_path,
+    netlist_obj,
+):
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=_MockNpisys(load_rc=0),
+        netlist_obj=netlist_obj,
+    )
+
+    assert backend._ensure_loaded("/case/simv.daidir/kdb.elab++", "top_tb") is False
+    assert backend._loaded_kdb is None
+
+
+def test_backend_degraded_escape_hatch_rejects_rc_zero(monkeypatch):
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.NPI_ALLOW_DEGRADED_KDB",
+        False,
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=_MockNpisys(load_rc=0),
+        netlist_obj=_MockNetlist({}, tops=["top_tb"]),
+    )
+
+    assert backend._ensure_loaded("/case/simv.daidir/kdb.elab++", "top_tb") is False
 
 
 def test_backend_returns_exact_loads_via_npi(monkeypatch, tmp_path):

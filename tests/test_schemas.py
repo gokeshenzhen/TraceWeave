@@ -200,6 +200,23 @@ def test_backend_status_accepts_optional_lsf_receipt():
     assert status.scheduler_status == "failed"
 
 
+def test_backend_status_accepts_degraded_kdb_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "vcs",
+            "backend": "verdi_npi",
+            "actual_backend": "verdi_npi",
+            "kdb_validation_status": "elaboration_error",
+            "kdb_degraded": True,
+            "kdb_error_count": 8,
+            "kdb_error_log": "/case/kdb.elab++/elabcomLog/compiler.log",
+        }
+    )
+
+    assert status.kdb_degraded is True
+    assert status.kdb_error_count == 8
+
+
 def test_backend_status_keeps_legacy_payload_backward_compatible():
     status = BackendStatus.model_validate(
         {

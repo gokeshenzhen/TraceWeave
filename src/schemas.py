@@ -1059,6 +1059,12 @@ class BackendStatus(SchemaModel):
         "elaboration_error",
         "unavailable",
     ] = "unavailable"
+    # ``kdb_validation_status`` describes the artifact on disk.  This flag is
+    # stronger: it becomes true only after NPI actually loaded that partial
+    # netlist and passed the top-instance self-check.
+    kdb_degraded: bool = False
+    kdb_error_count: int | None = Field(default=None, ge=0)
+    kdb_error_log: str | None = None
     kdb_hint: str | None = None
 
 

@@ -1089,6 +1089,8 @@ async def _call_connectivity_backend(backend, fn: Callable):
 
 _NPI_FALLBACK_REASONS = {
     "kdb_or_top_missing",
+    "npi_degraded_kdb_disabled",
+    "npi_degraded_result_inconclusive",
     "npi_load_failed",
     "npi_lsf_npi_unavailable",
     "npi_lsf_timeout",
@@ -1155,7 +1157,12 @@ def _single_backend_provenance(
     return all(item == expected for item in explicit)
 
 
-def _npi_result_usable(result: dict, operation: str) -> bool:
+def _npi_result_usable(
+    result: dict,
+    operation: str,
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
     if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
         return False
     if not _single_backend_provenance(
@@ -1164,12 +1171,48 @@ def _npi_result_usable(result: dict, operation: str) -> bool:
         expected="verdi_npi",
     ):
         return False
+    degraded = _npi_kdb_degraded(kdb_status=kdb_status)
     if operation == "driver":
+        if degraded:
+            return result.get("driver_status") == "resolved"
         return result.get("driver_status") in {"resolved", "testbench_driven"}
+    if degraded:
+        # A returned load is positive evidence.  An empty list is an exhaustive
+        # negative claim, which a partial elaboration cannot support.
+        return bool(result.get("loads")) and result.get("completeness") in {
+            "exact",
+            "approximate",
+        }
     return result.get("completeness") == "exact" and result.get("stopped_at") in {
         None,
         "no_npi_loads",
     }
+
+
+def _npi_kdb_status(
+    backend: object | None,
+) -> dict | None:
+    receipt = getattr(backend, "kdb_status", None)
+    if not isinstance(receipt, dict):
+        return None
+    quality = receipt.get("load_quality")
+    if quality not in {"clean", "degraded"}:
+        return None
+    clean: dict[str, object] = {"load_quality": quality}
+    error_count = receipt.get("error_count")
+    if isinstance(error_count, int) and error_count >= 0:
+        clean["error_count"] = error_count
+    error_log = receipt.get("error_log")
+    if isinstance(error_log, str) and error_log:
+        clean["error_log"] = error_log
+    return clean
+
+
+def _npi_kdb_degraded(
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
+    return kdb_status is not None and kdb_status.get("load_quality") == "degraded"
 
 
 def _backend_attempt(
@@ -1600,6 +1643,7 @@ def _finalize_public_connectivity_status(
     npi_backend,
     npi_execution: dict | None,
     source_graph_receipt: dict | None,
+    npi_kdb_status: dict | None = None,
 ) -> dict:
     if (
         backend_status.get("connectivity_route") == "source_graph"
@@ -1626,6 +1670,7 @@ def _finalize_public_connectivity_status(
             fallback_reason = _NPI_SKIPPED_BY_POLICY
 
     status = dict(backend_status)
+    status.pop("_npi_selection_reason", None)
     status["backend"] = selected_backend
     status["selected_backend"] = selected_backend
     # The singular field names the preferred backend whose failure/blocker
@@ -1663,7 +1708,16 @@ def _finalize_public_connectivity_status(
         and getattr(npi_backend, "execution_mode", None) == "local"
     ):
         status["execution_mode"] = "local"
-    if actual_backend == "verdi_npi":
+    if npi_kdb_status is not None:
+        degraded = npi_kdb_status.get("load_quality") == "degraded"
+        status["kdb_degraded"] = degraded
+        if degraded:
+            status["kdb_validation_status"] = "elaboration_error"
+            if "error_count" in npi_kdb_status:
+                status["kdb_error_count"] = npi_kdb_status["error_count"]
+            if "error_log" in npi_kdb_status:
+                status["kdb_error_log"] = npi_kdb_status["error_log"]
+    if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
         status["parser_match"] = "exact"
     return status
 
@@ -1863,7 +1917,9 @@ async def _route_public_connectivity(
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
     npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
     fallback_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
 
     if npi_selected:
         try:
@@ -1886,11 +1942,26 @@ async def _route_public_connectivity(
                 )
             )
         if npi_result is not None:
+            npi_kdb_status = _npi_kdb_status(npi_backend)
             execution = npi_result.get("_npi_execution_status")
             if isinstance(execution, dict):
                 npi_execution = dict(execution)
-            if _npi_result_usable(npi_result, operation):
-                attempts.append(_backend_attempt("verdi_npi", "success"))
+            if _npi_result_usable(
+                npi_result,
+                operation,
+                kdb_status=npi_kdb_status,
+            ):
+                attempts.append(
+                    _backend_attempt(
+                        "verdi_npi",
+                        "success",
+                        coverage_status=(
+                            "partial"
+                            if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                            else None
+                        ),
+                    )
+                )
                 clean = _strip_connectivity_internal_receipts(npi_result)
                 clean["backend"] = "verdi_npi"
                 status = _finalize_public_connectivity_status(
@@ -1902,19 +1973,31 @@ async def _route_public_connectivity(
                     npi_backend=npi_backend,
                     npi_execution=npi_execution,
                     source_graph_receipt=None,
+                    npi_kdb_status=npi_kdb_status,
                 )
                 return clean, status
             raw_reason = npi_result.get("_npi_fallback_reason")
-            fallback_reason = _sanitize_npi_fallback_reason(raw_reason)
+            fallback_reason = (
+                "npi_degraded_result_inconclusive"
+                if _npi_kdb_degraded(kdb_status=npi_kdb_status) and not raw_reason
+                else _sanitize_npi_fallback_reason(raw_reason)
+            )
             attempts.append(
                 _backend_attempt(
                     "verdi_npi",
                     "failed" if raw_reason else "inconclusive",
                     reason=fallback_reason,
+                    coverage_status=(
+                        "partial"
+                        if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                        else None
+                    ),
                 )
             )
     else:
-        fallback_reason = npi_selection_reason or "npi_kdb_unavailable"
+        fallback_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
@@ -2321,6 +2404,7 @@ async def _route_public_connectivity(
                                 npi_backend=(npi_backend if npi_selected else None),
                                 npi_execution=npi_execution,
                                 source_graph_receipt=source_graph_receipt,
+                                npi_kdb_status=npi_kdb_status,
                             )
                             return clean, status
 
@@ -2397,6 +2481,7 @@ async def _route_public_connectivity(
         npi_backend=npi_backend if npi_selected else None,
         npi_execution=npi_execution,
         source_graph_receipt=source_graph_receipt,
+        npi_kdb_status=npi_kdb_status,
     )
     return clean, status
 
@@ -2415,13 +2500,21 @@ def _single_path_backend_provenance(result: dict, *, expected: str) -> bool:
     return all(item == expected for item in explicit)
 
 
-def _npi_path_result_usable(result: dict) -> bool:
+def _npi_path_result_usable(
+    result: dict,
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
     if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
         return False
     if not _single_path_backend_provenance(result, expected="verdi_npi"):
         return False
     if result.get("found") is True:
         return result.get("unsupported_reason") is None and bool(result.get("path"))
+    if _npi_kdb_degraded(kdb_status=kdb_status):
+        # A partial netlist can prove that a path exists, but it cannot prove
+        # that no path exists through a unit omitted by elaboration.
+        return False
     return result.get("unsupported_reason") in {
         "from_not_found",
         "to_not_found",
@@ -2489,7 +2582,9 @@ async def _route_public_signal_path(
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
     npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
     fallback_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
 
     if npi_selected:
         try:
@@ -2511,11 +2606,25 @@ async def _route_public_signal_path(
                 )
             )
         if npi_result is not None:
+            npi_kdb_status = _npi_kdb_status(npi_backend)
             execution = npi_result.get("_npi_execution_status")
             if isinstance(execution, dict):
                 npi_execution = dict(execution)
-            if _npi_path_result_usable(npi_result):
-                attempts.append(_backend_attempt("verdi_npi", "success"))
+            if _npi_path_result_usable(
+                npi_result,
+                kdb_status=npi_kdb_status,
+            ):
+                attempts.append(
+                    _backend_attempt(
+                        "verdi_npi",
+                        "success",
+                        coverage_status=(
+                            "partial"
+                            if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                            else None
+                        ),
+                    )
+                )
                 clean = _strip_connectivity_internal_receipts(npi_result)
                 clean["backend"] = "verdi_npi"
                 status = _finalize_public_connectivity_status(
@@ -2527,13 +2636,19 @@ async def _route_public_signal_path(
                     npi_backend=npi_backend,
                     npi_execution=npi_execution,
                     source_graph_receipt=None,
+                    npi_kdb_status=npi_kdb_status,
                 )
                 return clean, status
             raw_reason = npi_result.get("_npi_fallback_reason")
             fallback_reason = (
                 "npi_query_failed"
                 if npi_result.get("_npi_call_error")
-                else _sanitize_npi_fallback_reason(raw_reason)
+                else (
+                    "npi_degraded_result_inconclusive"
+                    if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                    and not raw_reason
+                    else _sanitize_npi_fallback_reason(raw_reason)
+                )
             )
             attempts.append(
                 _backend_attempt(
@@ -2542,10 +2657,17 @@ async def _route_public_signal_path(
                     if raw_reason or npi_result.get("_npi_call_error")
                     else "inconclusive",
                     reason=fallback_reason,
+                    coverage_status=(
+                        "partial"
+                        if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                        else None
+                    ),
                 )
             )
     else:
-        fallback_reason = npi_selection_reason or "npi_kdb_unavailable"
+        fallback_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
@@ -2835,6 +2957,7 @@ async def _route_public_signal_path(
                                     npi_backend=(npi_backend if npi_selected else None),
                                     npi_execution=npi_execution,
                                     source_graph_receipt=source_graph_receipt,
+                                    npi_kdb_status=npi_kdb_status,
                                 )
                                 return clean, status
                             attempts.append(
@@ -2875,6 +2998,7 @@ async def _route_public_signal_path(
         npi_backend=npi_backend if npi_selected else None,
         npi_execution=npi_execution,
         source_graph_receipt=source_graph_receipt,
+        npi_kdb_status=npi_kdb_status,
     )
     return clean, status
 
@@ -2893,10 +3017,12 @@ class _TraceBackendFallback(RuntimeError):
         self,
         reason: str,
         execution_status: dict | None = None,
+        kdb_status: dict | None = None,
     ):
         super().__init__(reason)
         self.reason = reason
         self.execution_status = dict(execution_status or {})
+        self.kdb_status = dict(kdb_status or {})
 
 
 async def _run_trace_x_attempt(
@@ -2920,6 +3046,7 @@ async def _run_trace_x_attempt(
     """
 
     execution_status: dict = {}
+    kdb_status: dict | None = None
 
     async def _value_lookup(path: str, at_ps: int) -> dict:
         def _work():
@@ -2943,6 +3070,8 @@ async def _run_trace_x_attempt(
         return await _run_in_wave_thread(wave_path, _work)
 
     async def _driver_lookup(path: str) -> dict:
+        nonlocal kdb_status
+
         def _query_backend():
             return backend.find_driver(
                 signal_path=path,
@@ -2975,6 +3104,9 @@ async def _run_trace_x_attempt(
         execution = raw.get("_npi_execution_status")
         if isinstance(execution, dict):
             execution_status.update(execution)
+        current_kdb_status = _npi_kdb_status(backend)
+        if current_kdb_status is not None:
+            kdb_status = current_kdb_status
 
         fallback_reason = raw.get("_npi_fallback_reason")
         fallback_deferred = raw.get("_connectivity_fallback_deferred") is True
@@ -2989,12 +3121,28 @@ async def _run_trace_x_attempt(
                 if isinstance(hop, dict) and hop.get("backend") is not None
             )
         mixed_provenance = any(item != "verdi_npi" for item in explicit_backends)
+        degraded_inconclusive = (
+            abort_on_backend_fallback
+            and _npi_kdb_degraded(kdb_status=current_kdb_status)
+            and raw.get("driver_status") != "resolved"
+        )
         if abort_on_backend_fallback and (
-            fallback_reason or fallback_deferred or mixed_provenance
+            fallback_reason
+            or fallback_deferred
+            or mixed_provenance
+            or degraded_inconclusive
         ):
             raise _TraceBackendFallback(
-                str(fallback_reason or "npi_result_not_usable"),
+                str(
+                    fallback_reason
+                    or (
+                        "npi_degraded_result_inconclusive"
+                        if degraded_inconclusive
+                        else "npi_result_not_usable"
+                    )
+                ),
                 execution_status,
+                kdb_status,
             )
 
         # Internal routing receipts belong on the trace envelope, not on one
@@ -3023,6 +3171,8 @@ async def _run_trace_x_attempt(
     result = await attempt if inspect.isawaitable(attempt) else attempt
     if not isinstance(result, dict):
         raise TypeError("trace_x_source must return a mapping")
+    if kdb_status is not None:
+        execution_status["_trace_npi_kdb_status"] = kdb_status
     return result, execution_status
 
 
@@ -3064,7 +3214,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     attempts: list[dict] = []
     restart_reasons: list[str] = []
     npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
     npi_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
 
     def _finalize_trace(
         result: dict,
@@ -3082,6 +3234,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             npi_backend=npi_backend if npi_selected else None,
             npi_execution=npi_execution,
             source_graph_receipt=source_graph_receipt,
+            npi_kdb_status=npi_kdb_status,
         )
         configured_mode = getattr(npi_backend, "execution_mode", None)
         if finalized.get("execution_mode") is None and configured_mode in {
@@ -3117,16 +3270,47 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         except _TraceBackendFallback as exc:
             npi_reason = _sanitize_npi_fallback_reason(exc.reason)
             npi_execution = dict(exc.execution_status) or None
-            attempts.append(_backend_attempt("verdi_npi", "failed", reason=npi_reason))
-            restart_reasons.append("npi_internal_fallback")
+            npi_kdb_status = dict(exc.kdb_status) or None
+            degraded = (
+                npi_kdb_status is not None
+                and npi_kdb_status.get("load_quality") == "degraded"
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "inconclusive" if degraded else "failed",
+                    reason=npi_reason,
+                    coverage_status="partial" if degraded else None,
+                )
+            )
+            restart_reasons.append(
+                "npi_degraded_inconclusive"
+                if degraded
+                else "npi_internal_fallback"
+            )
         except Exception:  # noqa: BLE001
             npi_reason = "npi_query_failed"
             attempts.append(_backend_attempt("verdi_npi", "failed", reason=npi_reason))
             restart_reasons.append("npi_query_failed")
         else:
+            loaded_kdb_status = execution_status.pop(
+                "_trace_npi_kdb_status",
+                None,
+            )
             if execution_status:
                 npi_execution = execution_status
-            attempts.append(_backend_attempt("verdi_npi", "success"))
+            npi_kdb_status = loaded_kdb_status
+            degraded = (
+                npi_kdb_status is not None
+                and npi_kdb_status.get("load_quality") == "degraded"
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "success",
+                    coverage_status="partial" if degraded else None,
+                )
+            )
             return _finalize_trace(
                 result,
                 actual_backend="verdi_npi",
@@ -3134,7 +3318,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                 source_graph_receipt=None,
             )
     else:
-        npi_reason = npi_selection_reason or "npi_kdb_unavailable"
+        npi_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
@@ -3608,6 +3794,7 @@ def _finalize_connectivity_backend_status(
     """Merge internal backend receipts into the public, validated status."""
 
     status = dict(backend_status)
+    status.pop("_npi_selection_reason", None)
     status["backend"] = backend.name
     fallback_reason = result.get("_npi_fallback_reason")
     actual_backend = "static" if fallback_reason else backend.name
@@ -3621,7 +3808,17 @@ def _finalize_connectivity_backend_status(
                 status[key] = execution[key]
     elif getattr(backend, "execution_mode", None) == "local":
         status["execution_mode"] = "local"
-    if actual_backend == "verdi_npi":
+    kdb_status = _npi_kdb_status(backend)
+    if kdb_status is not None:
+        degraded = kdb_status.get("load_quality") == "degraded"
+        status["kdb_degraded"] = degraded
+        if degraded:
+            status["kdb_validation_status"] = "elaboration_error"
+            if "error_count" in kdb_status:
+                status["kdb_error_count"] = kdb_status["error_count"]
+            if "error_log" in kdb_status:
+                status["kdb_error_log"] = kdb_status["error_log"]
+    if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
         status["parser_match"] = "exact"
     result.pop("_npi_fallback_reason", None)
     return status, actual_backend

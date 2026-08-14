@@ -130,7 +130,10 @@ Verification
   retains its existing synchronous execution model, while LSF keeps
   using its existing worker path. If NPI internally falls back on any driver
   lookup, the partial chain is discarded and the whole trace restarts with a
-  bounded Source Graph artifact. Every Source Graph node in one attempt is
+  bounded Source Graph artifact. The same whole-trace restart occurs when a
+  degraded KDB returns an unresolved/non-positive driver result: a partial
+  elaboration can prove a returned edge but cannot prove that no omitted edge
+  exists. Every Source Graph node in one attempt is
   supported by that single proved artifact. A newly discovered target outside
   its projection expands only the exact hierarchy ancestor union and restarts
   from the original signal; the smaller artifact's chain is discarded. An
@@ -281,13 +284,13 @@ Verification
   generic scheduler queue variable. Without a KDB it returns the static
   source-regex backend directly. Both NPI execution
   policies wrap Static at the parent: local NPI failures degrade in-process,
-  while an LSF worker returns exact NPI or a fixed failure receipt and the
+  while an LSF worker returns NPI-only results or a fixed failure receipt and the
   login-node parent performs the fallback. `find_path` is NPI-only: Static returns
   `unsupported_reason="static_backend_no_path_api"` rather than approximating
   with regex, since `sig_to_sig_conn_list` walks the elaborated netlist
   across assigns / interfaces / generates that source-regex cannot follow
   reliably.
-- `src/npi_lsf.py` owns the versioned, exact-only worker protocol and the
+- `src/npi_lsf.py` owns the versioned, NPI-only worker protocol and the
   optional `bsub -K` transport. It writes one private request under a
   shared staging root, submits an identity-free random job name, validates the
   response against the existing operation schema, and exposes only fixed
@@ -297,14 +300,19 @@ Verification
   `server._run_in_cancellable_thread`; cancellation or timeout performs a
   bounded `bkill -J` followed by termination of the local `bsub` waiter.
   `src/npi_worker.py` invokes the local NPI core directly and never Static, so
-  a compute-node license/load failure cannot be mistaken for an exact answer.
+  a compute-node license/load failure cannot be mistaken for an NPI answer.
+  Its success envelope also carries only the clean/degraded load quality; the
+  parent reads bounded error metadata from the shared KDB and keeps it outside
+  the operation-result schema.
   The hierarchy source overlay remains local/optional in the initial scope and
   does not implicitly submit a batch job.
 - `src/verdi_backend.py` is a pure-detection probe: it locates KDB at
   `simv.daidir/kdb.elab++` (VCS two-step) or via `synopsys_sim.setup` work-lib
   mappings (three-step / vericom standalone) and emits a per-simulator
   `kdb_hint` (e.g. the exact `vcs -kdb=only` command for a VCS user, the
-  `vericom -kdb` command for an Xcelium user) when KDB is missing.
+  `vericom -kdb` command for an Xcelium user) when KDB is missing. Clean
+  elaborated candidates win; otherwise an error-marked `kdb.elab++` remains a
+  degraded candidate by default, with bounded error-count/log diagnostics.
 - `src/verdi_npi_backend.py` lazily imports `pynpi` from `$VERDI_HOME` (zero
   hardcoded prefixes), holds a single design across calls keyed on
   `kdb_path`, and re-issues `npisys.load_design` to switch cases within one
@@ -322,6 +330,12 @@ Verification
   nodes; `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
   `source_info_origin` field (`"compile_log"` vs `"npi"`) so consumers can
   tell which provenance produced each `file:line`.
+  `load_design == 1` establishes a clean load. `load_design == 0` is accepted
+  only for an error-marked artifact when degraded mode is enabled and a
+  non-empty, requested-top-matching top-instance self-check passes. No error
+  count threshold is used. Degraded query routing is positive-only: resolved
+  drivers, non-empty loads, and found paths are usable partial evidence;
+  unresolved/empty/negative results continue to Source Graph and Static.
 - `src/structural_scanner.py` and `src/x_trace.py` are first-class extended
   analysis capabilities and should not be treated as optional side scripts.
 - `src/schemas.py` and `src/problem_hints.py` are support layers for structured
@@ -404,30 +418,33 @@ The legacy full-fat payload remains accessible behind
 `TRACEWEAVE_LEGACY_HIERARCHY_PAYLOAD=1` as a one-release migration safety
 net, validated against `BuildTbHierarchyResultLegacy`.
 
-## Connectivity Backend Cooperation (NPI vs Static)
+## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
-NPI is the **deep / accurate** path; Static is the **cheap fallback** that
-runs when NPI cannot be loaded. Once NPI is loaded, queries stay in NPI even
-when the result is `unsupported` — the backend tag in the response always
-reflects who actually answered.
+NPI is the deepest path, Source Graph is the bounded semantic fallback, and
+Static is the final source-regex fallback. A clean KDB can support both
+positive and negative NPI conclusions. A degraded KDB supports positive facts
+only; an incomplete or negative answer advances the route.
 
 ```text
 select_backend(probe_status)
 ├── KDB present + execution=local → VerdiNpiBackend(fallback=Static)
 ├── KDB present + execution=lsf   → LsfConnectivityBackend(parent fallback=Static)
-└── KDB absent   → Static directly  (don't start NPI just to burn a license)
+└── KDB absent/disabled            → public router starts at Source Graph
 
 LsfConnectivityBackend.find_driver / find_loads / find_path
-├── invalid config / missing KDB or top → local Static fallback, no submission
-├── bsub timeout/failure/bad response   → local Static fallback + fixed receipt
-├── worker reports npi_unavailable      → local Static fallback + fixed receipt
-└── exact worker result                 → validate existing result schema
+├── invalid config / missing KDB or top → deferred fallback, no submission
+├── bsub timeout/failure/bad response   → deferred fallback + fixed receipt
+├── worker reports npi_unavailable      → deferred fallback + fixed receipt
+└── NPI-only worker result              → validate operation schema + load quality
 
 VerdiNpiBackend.find_driver / find_loads / find_path
-├── parse_compile_log fails / no kdb_path / no top   → fall back to Static
-├── _ensure_loaded fails (pynpi import, npisys.init, load_design rc != 1)
-│                                                    → fall back to Static
-├── top-level exception                              → fall back to Static
+├── parse_compile_log fails / no kdb_path / no top   → injected fallback
+├── _ensure_loaded clean success (load_design rc == 1)
+├── _ensure_loaded degraded success
+│   └── rc == 0 + error marker + enabled policy + non-empty/top-matching netlist
+├── _ensure_loaded fails (import/init, other rc, failed self-check)
+│                                                    → injected fallback
+├── top-level exception                              → injected fallback
 └── _npi_find_driver  (NPI happy path; backend="verdi_npi" in every branch)
     ├── net resolve fails             → backend="verdi_npi", stopped_at="signal_path_unresolved_in_npi"
     ├── driver_list raises            → backend="verdi_npi", stopped_at="npi_driver_list_failed"
@@ -442,11 +459,26 @@ VerdiNpiBackend.find_driver / find_loads / find_path
     └── normal driver                 → single-hop format
 ```
 
+The injected fallback is Source-Graph-deferred in the production server and
+Static for direct/library callers that do not supply one.
+
+Public route after an NPI query:
+
+```text
+clean NPI usable result                         → return NPI
+degraded resolved driver / non-empty loads /
+degraded found path                            → return NPI, coverage=partial
+degraded incomplete or negative result         → Source Graph → Static
+NPI load/query/worker failure                   → Source Graph → Static
+```
+
 **Key properties:**
 
-- Static appears in answers only when NPI could not be loaded at all (KDB
-  missing, license unavailable, pynpi import failure). Inside the NPI happy
-  path Static is never consulted.
+- Payload facts always come from exactly one backend. NPI and Source Graph
+  attempts survive only as identity-safe receipts when a later backend wins.
+- `TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB=0` restores the clean-KDB-only admission
+  policy. The probe retains `kdb_validation_status="elaboration_error"` and a
+  fixed `npi_degraded_kdb_disabled` routing reason.
 - The "boundary-only" detection upgrades dead-end results (where
   `driver_list` returns the queried net's own hierarchy port — i.e. no
   synthesized cell tag, no `:` in the name) to a `fan_in_reg_list` walk,
@@ -507,6 +539,11 @@ build_kdb(compile_log)
                       existing cache_dir untouched)
 ```
 
+Degraded-KDB consumption does not change this producer contract: the first
+implementation can consume an already-existing error-marked project/user KDB,
+but `build_kdb` still quarantines non-zero `elabcom` builds and does not publish
+them as normal cache entries.
+
 Cache layout under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`:
 
 | File / dir | Purpose |
@@ -521,9 +558,10 @@ Cache layout under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`:
 The probe picks up these cached KDBs automatically (`kdb_flow:
 "traceweave_cached"`), so the same find_driver / find_loads call that
 falls back to Static today starts answering through NPI after one
-`build_kdb` invocation. User-managed KDBs (`simv.daidir/kdb.elab++` or
-`vericom`-built `*.lib++` in the user's work dir) still win the probe
-order — TraceWeave's cache is the fallback, never the override.
+`build_kdb` invocation. A clean user-managed KDB
+(`simv.daidir/kdb.elab++` or `vericom`-built `*.lib++`) wins. When the local
+candidate is degraded and the exact TraceWeave cache contains a clean KDB, the
+clean cached artifact wins; otherwise the degraded local artifact is retained.
 
 Cross-environment generality:
 

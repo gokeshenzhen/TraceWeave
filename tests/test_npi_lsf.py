@@ -43,6 +43,7 @@ _NPI_ENV_VARS = (
     "TRACEWEAVE_NPI_LSF_STAGING_DIR",
     "TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON",
     "TRACEWEAVE_NPI_WORKER",
+    "TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB",
 )
 
 
@@ -68,8 +69,9 @@ def _lsf_config(tmp_path: Path, **overrides) -> NpiExecutionConfig:
 
 
 class _ExactBackend:
-    def __init__(self, *, load_ok=True):
+    def __init__(self, *, load_ok=True, load_quality="clean"):
         self.load_ok = load_ok
+        self.kdb_load_quality = load_quality
 
     def _ensure_loaded(self, kdb_path, top):
         return self.load_ok
@@ -103,6 +105,7 @@ class _ExactBackend:
             "completeness": "exact",
             "stopped_at": "no_npi_loads",
             "unsupported_reason": None,
+            "backend": "verdi_npi",
         }
 
     def _npi_find_path(self, from_signal, to_signal, *, expand_assigns):
@@ -114,6 +117,7 @@ class _ExactBackend:
             "path": [],
             "expand_assigns": expand_assigns,
             "unsupported_reason": "not_connected",
+            "backend": "verdi_npi",
         }
 
 
@@ -296,6 +300,23 @@ def test_worker_reports_npi_unavailable_without_static_answer():
     )
     assert isinstance(response, WorkerUnavailable)
     assert response.error_code == "npi_load_failed"
+
+
+def test_worker_reports_degraded_load_quality_and_keeps_npi_provenance():
+    request = FindLoadsWorkerRequest(
+        kdb_path="/shared/kdb.elab++",
+        top="top_tb",
+        signal_path="top_tb.dut.q",
+    )
+
+    response = execute_worker_request(
+        request,
+        backend=_ExactBackend(load_quality="degraded"),
+    )
+
+    assert isinstance(response, WorkerSuccess)
+    assert response.kdb_load_quality == "degraded"
+    assert response.result["backend"] == "verdi_npi"
 
 
 def test_worker_protocol_rejects_malformed_request():
@@ -675,6 +696,51 @@ def test_lsf_backend_returns_exact_driver_and_receipt(tmp_path):
         "worker_status": "completed",
     }
     assert isinstance(transport.requests[0], FindDriverWorkerRequest)
+
+
+def test_lsf_backend_records_degraded_kdb_status_from_worker(tmp_path):
+    compile_log = _make_compile_log(tmp_path)
+    kdb = tmp_path / "simv.daidir" / "kdb.elab++"
+    error_log = kdb / "elabcomLog" / "compiler.log"
+    error_log.parent.mkdir()
+    error_log.write_text("Total   8 error(s), 0 warning(s)\n")
+    (kdb / ".hasElabcomError").write_text("elabcomLog/compiler.log\n")
+    transport = _FakeTransport(
+        LsfExecutionResult(
+            result={
+                "signal_path": "top_tb.q",
+                "resolved_rtl_name": "q",
+                "resolved_module": "top_tb",
+                "loads": [
+                    {
+                        "load_path": "top_tb.u_sink",
+                        "kind": "module_input",
+                        "backend": "verdi_npi",
+                        "confidence": "exact",
+                    }
+                ],
+                "completeness": "approximate",
+                "backend": "verdi_npi",
+            },
+            scheduler_status="completed",
+            worker_status="completed",
+            kdb_load_quality="degraded",
+        )
+    )
+    backend = LsfConnectivityBackend(
+        _lsf_config(tmp_path),
+        fallback=_FakeFallback(),
+        transport=transport,
+    )
+
+    result = backend.find_loads("top_tb.q", compile_log, simulator="vcs")
+
+    assert result["backend"] == "verdi_npi"
+    assert backend.kdb_status == {
+        "load_quality": "degraded",
+        "error_count": 8,
+        "error_log": str(error_log),
+    }
 
 
 def test_lsf_backend_worker_failure_falls_back_with_fixed_reason(tmp_path):

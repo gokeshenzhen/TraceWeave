@@ -429,6 +429,7 @@ def _npi_annotate_component_tree(
         return "compile_log", None
     if not inst_map:
         return "compile_log", None
+    degraded_overlay = getattr(backend, "kdb_load_quality", "clean") == "degraded"
 
     # component_tree shape: {top: {inst_name: node, ...}} where each node
     # may contain "children": {inst_name: node, ...}. Top-module key is
@@ -437,6 +438,8 @@ def _npi_annotate_component_tree(
     if isinstance(children, dict):
         annotated_count = _overlay_npi_on_subtree(children, top_module, inst_map)
         if annotated_count:
+            if degraded_overlay:
+                return "npi_partial", "npi_degraded_kdb"
             return "npi", None
     return "compile_log", None
 
