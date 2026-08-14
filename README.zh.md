@@ -293,7 +293,7 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = ["LSF_QUEUE", "TRACEWEAVE_NPI_LSF_QUEUE"]
 
 [mcp_servers.TraceWeave.env]
 # 其他已有 EDA 环境变量继续保留在这里。

@@ -315,7 +315,7 @@ the setup above, then restart or reconnect the MCP server:
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = ["LSF_QUEUE", "TRACEWEAVE_NPI_LSF_QUEUE"]
 
 [mcp_servers.TraceWeave.env]
 # Keep the existing EDA environment entries here.
