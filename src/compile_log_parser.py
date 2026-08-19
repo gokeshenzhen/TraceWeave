@@ -9,6 +9,8 @@ import re
 import shlex
 from pathlib import Path
 
+from .filelist_tokenizer import tokenize_filelist
+
 
 EDA_LIB_PREFIXES = [
     "/tools/synopsys/",
@@ -549,13 +551,11 @@ def _expand_vcs_filelist(
         warnings.append(f"VCS filelist unreadable: {filelist_path}: {exc}")
         return
 
-    # Backslash continuation is syntax, not shell execution. Ignore full-line
-    # // comments before shlex handles # comments and quoted paths.
-    logical_text = text.replace("\\\r\n", " ").replace("\\\n", " ")
-    logical_text = "\n".join(
-        line for line in logical_text.splitlines() if not line.lstrip().startswith("//")
-    )
-    tokens = _tokenize_vcs_text(logical_text, f"VCS filelist {filelist_path}", warnings)
+    try:
+        tokens = tokenize_filelist(text)
+    except ValueError as exc:
+        warnings.append(f"VCS filelist {filelist_path} tokenization failed: {exc}")
+        return
     state["active"].add(filelist_path)
     state["visited"].add(filelist_path)
     try:

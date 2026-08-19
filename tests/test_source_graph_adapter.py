@@ -269,6 +269,46 @@ def test_dash_options_with_hdl_suffix_values_are_not_misfiled_as_sources(tmp_pat
     assert manifest.complete is True
 
 
+def test_filelist_c_style_comments_are_ignored_without_corrupting_quotes(tmp_path):
+    source = tmp_path / "top.sv"
+    live_library = tmp_path / "live_mem.v"
+    old_line_library = tmp_path / "old_line_mem.v"
+    old_block_library = tmp_path / "old_block_mem.v"
+    for path in (source, live_library, old_line_library, old_block_library):
+        _write(path, "module placeholder; endmodule\n")
+    _write(
+        tmp_path / "design.f",
+        "// -v old_line_mem.v\n"
+        "/* retired library:\n"
+        "-v old_block_mem.v\n"
+        "+define+OLD_PATH=/retired/model.v\n"
+        "*/\n"
+        "+define+DOC_URL='http://intranet/spec'\n"
+        "+define+TEXT='a/*literal*/b'\n"
+        "-v live_mem.v \\\n"
+        "top.sv // active top\n",
+    )
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun -f design.f -top tb",
+        sources=(source,),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(source.resolve()),)
+    live_option = manifest.ordered_options.index("-v")
+    assert manifest.ordered_options[live_option + 1] == str(live_library.resolve())
+    assert "+define+DOC_URL=http://intranet/spec" in manifest.ordered_options
+    assert "+define+TEXT=a/*literal*/b" in manifest.ordered_options
+    assert not any("old_line_mem" in item for item in manifest.ordered_options)
+    assert not any("old_block_mem" in item for item in manifest.ordered_options)
+    assert not any("OLD_PATH" in item for item in manifest.ordered_options)
+    assert manifest.complete is True
+
+
 def test_frontier_plan_admits_only_proved_direct_sibling_scope(tmp_path):
     source = tmp_path / "top.sv"
     _write(

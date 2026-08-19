@@ -28,6 +28,7 @@ import threading
 from typing import Any
 
 from .cancellation import check_cancelled
+from .filelist_tokenizer import tokenize_filelist
 from .slang_connectivity_projector import SLANG_FRONTEND_NAME
 from .source_graph_contract import (
     BoundaryMode,
@@ -50,7 +51,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.3"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.4"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
@@ -467,7 +468,7 @@ def _translate_filelist(
         return
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-        tokens = shlex.split(text, comments=True, posix=True)
+        tokens = tokenize_filelist(text)
     except (OSError, ValueError):
         state.inputs_complete = False
         state.gap_codes.add("filelist_parse_failed")

@@ -319,6 +319,40 @@ file: {root / "tb" / "top_tb.sv"}
             "nested.f": [],
         }
 
+    def test_vcs_incremental_filelist_ignores_c_style_comments(self, tmp_path):
+        live_library = tmp_path / "live_mem.v"
+        top = tmp_path / "top.sv"
+        old_line_library = tmp_path / "old_line_mem.v"
+        old_block_library = tmp_path / "old_block_mem.v"
+        for path in (live_library, top, old_line_library, old_block_library):
+            _write(path, "module placeholder; endmodule\n")
+        _write(
+            tmp_path / "design.f",
+            "// -v old_line_mem.v\n"
+            "/* retired library:\n"
+            "-v old_block_mem.v\n"
+            "*/\n"
+            "+define+DOC_URL='http://intranet/spec'\n"
+            "+define+TEXT='a/*literal*/b'\n"
+            "-v live_mem.v \\\n"
+            "top.sv // active top\n",
+        )
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            "Command: vcs -F design.f -top top\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(live_library.resolve()),
+            str(top.resolve()),
+        ]
+        assert result["parse_warnings"] == []
+
     def test_vcs_incremental_filelist_cycle_is_bounded(self, tmp_path):
         rtl = tmp_path / "rtl" / "dut.sv"
         _write(rtl, "module dut; endmodule\n")
