@@ -96,8 +96,8 @@ TraceWeave/
     ├── connectivity_backend.py   # ConnectivityBackend 协议 + select_backend
     ├── verdi_backend.py          # KDB / license 探测 + kdb_hint 生成
     ├── verdi_npi_backend.py      # NPI 后端实现的 driver/load/path 解析
-    ├── npi_lsf.py                # 可选 LSF transport + NPI-only worker 协议
-    ├── npi_worker.py             # 执行节点 NPI worker 入口
+    ├── npi_lsf.py                # 可选 LSF transport + Verdi/NPI worker 协议
+    ├── npi_worker.py             # 执行节点 Verdi/NPI worker 入口
     ├── kdb_builder.py            # 为 Xcelium 流程自动构建 Verdi KDB
     ├── structural_scanner.py
     ├── x_trace.py
@@ -319,11 +319,14 @@ Claude Code 用户可把下面两个固定值合并进已有 TraceWeave server �
 
 JSON 中也是字面值,不要在这个静态 map 里写 `"$LSF_QUEUE"`。
 
-开启后，只有 `explain_signal_driver`、`find_signal_loads`、
-`trace_signal_path`、`trace_x_source` 会提交短生命周期的 `bsub -K` worker；日志解析、波形
-读取、结构扫描、KDB 探测与 Static 分析仍在本地执行。worker 失败或超时后，
-driver/load/path 查询先尝试本地 Source Graph，若有 blocker 或结论不充分再回退 Legacy
-Static；Static 仍没有 path API，因此最终 path fallback 会明确返回 unsupported。路由通过固定的 `backend_status` 状态字段说明原因，
+开启后，`explain_signal_driver`、`find_signal_loads`、
+`trace_signal_path`、`trace_x_source`，以及每个 `build_kdb` cache miss 或强制
+rebuild，都会提交短生命周期的 `bsub -K` worker。精确 KDB cache hit、日志解析、
+波形读取、结构扫描、KDB 探测与 Static 分析仍在本地执行，因为它们不会启动需要
+license 的 Verdi 可执行程序。connectivity worker 失败或超时后，driver/load/path
+查询先尝试本地 Source Graph，若有 blocker 或结论不充分再回退 Legacy Static；
+KDB build worker 失败时则**不会**偷偷回退到本地 `vericom`/`elabcom`，而是返回固定
+失败回执。Static 仍没有 path API，因此最终 path fallback 会明确返回 unsupported。路由通过固定的 `backend_status` 状态字段说明原因，
 不会返回队列、主机、命令或 license 细节。
 
 重启或重新连接 MCP server 后,让 AI agent 运行一次显式 connectivity 操作并
@@ -331,6 +334,12 @@ Static；Static 仍没有 path API，因此最终 path fallback 会明确返回 
 `scheduler_status="completed"`、`worker_status="completed"` 与
 `actual_backend="verdi_npi"`。否则应检查 `fallback_reason`;Static fallback
 不是 exact NPI 结果。
+
+对于 Xcelium 的 KDB cache miss，`build_kdb` 会在顶层返回同样的
+`execution_mode` / `scheduler_status` / `worker_status` / `fallback_reason`
+字段。远端构建成功时是 `execution_mode="lsf"` 且两个 status 都为
+`"completed"`；cache hit 时两个 status 都为 `"not_started"`，表示没有启动
+需要 license 的进程。
 
 带 elaboration error 标记的 KDB 也可能成功完成 worker。此时
 `actual_backend="verdi_npi"` 会同时带有 `kdb_degraded=true`；应结合 NPI
@@ -341,6 +350,7 @@ attempt 的 `coverage_status="partial"` 以及 `kdb_error_count` /
 
 ```bash
 export TRACEWEAVE_NPI_LSF_TIMEOUT=120
+export TRACEWEAVE_NPI_LSF_KDB_TIMEOUT=1260
 export TRACEWEAVE_NPI_LSF_BSUB=/path/to/bsub
 export TRACEWEAVE_NPI_LSF_BKILL=/path/to/bkill
 export TRACEWEAVE_NPI_LSF_PYTHON=/path/to/python3.11
@@ -348,9 +358,13 @@ export TRACEWEAVE_NPI_LSF_STAGING_DIR=/shared/private/traceweave-npi
 export TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON='["-R", "select[...]"]'
 ```
 
-KDB、TraceWeave 安装目录与 staging 目录必须在提交节点和执行节点上以相同
-绝对路径可见。staging 默认位于 TraceWeave cache root 下；cache 非共享时必须
-显式设置。额外调度参数采用受限的 option/value JSON argv，而不是 shell 文本。
+compile log、所有 source/include 输入、TraceWeave 安装目录、staging 目录与
+`TRACEWEAVE_CACHE_DIR`（包括生成的 KDB）必须在提交节点和执行节点上以相同绝对路径
+可见。远端成功后，parent 会验证返回的 KDB 路径确实可见；否则返回
+`npi_lsf_artifact_unavailable`。staging 默认位于 TraceWeave cache root 下；cache
+非共享时必须显式设置。`TRACEWEAVE_NPI_LSF_TIMEOUT` 控制较短的 connectivity job；
+`TRACEWEAVE_NPI_LSF_KDB_TIMEOUT` 单独限制排队等待加两段 KDB 构建的总时间（默认
+1260 秒）。额外调度参数采用受限的 option/value JSON argv，而不是 shell 文本。
 
 ### 按需 Source Graph
 
@@ -589,7 +603,7 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 - `find_signal_loads`:列出信号的消费者(fanout)—— 模块输入端口、RHS 使用、always 块敏感列表
 - `trace_signal_path`:查找两个信号之间的结构连通路径。可信 NPI 证据优先；否则 bounded dual-endpoint Source Graph 只沿受支持的 IR binding 与组合依赖查询。只有 complete coverage 才能确定 `not_connected`；inconclusive 负结果最终返回 `unsupported_reason="static_backend_no_path_api"`。返回的是连通性，**不是**时序意义上的 driver 方向 —— driver 语义请用 `explain_signal_driver`。
 - `trace_x_source`:按 `可信 NPI -> 单个 bounded Source Graph artifact -> 整条 Static 重算` 向上游追溯 X/Z。wave lock 只覆盖波形读取；任何 backend 切换或已证明的 scope 扩展都会丢弃部分链并从原始 signal 重跑，因此返回链不会混合 backend 或 artifact provenance。`backend_status` 会报告有序尝试、重启原因、Source Graph fingerprint/coverage 与选中/实际 backend；`trace_restarted=true` 明确表示发生了整条 trace 重试。NPI 的 `testbench_driven`、源码行号和 driver-vs-load 交叉校验证据会保留在终止 trace 节点上。
-- `build_kdb`:从已解析的编译日志自动构建 Verdi KDB(vericom + elabcom)。当仿真器是 Xcelium(xrun)且 NPI 后端报告无 KDB 时使用。输出缓存到 `TRACEWEAVE_CACHE_DIR`(默认 `~/.cache/traceweave/kdb/<hash>/`);缓存命中则跳过 Verdi 重跑。KDB 旁边会写出一个可运行的 `build.sh` 便于检查或手动复现。需要 `VERDI_HOME` 中含有 `bin/vericom` 与 `bin/elabcom`。
+- `build_kdb`:从已解析的编译日志自动构建 Verdi KDB(vericom + elabcom)。当仿真器是 Xcelium(xrun)且 NPI 后端报告无 KDB 时使用。输出缓存到 `TRACEWEAVE_CACHE_DIR`(默认 `~/.cache/traceweave/kdb/<hash>/`);缓存命中则跳过 Verdi 重跑。设置 `TRACEWEAVE_NPI_EXECUTION=lsf` 后，每个 cache miss/强制 rebuild 都在 LSF 上执行，且失败时不会静默回退到本地 license 构建。KDB 旁边会写出一个可运行的 `build.sh` 便于检查或手动复现。需要 `VERDI_HOME` 中含有 `bin/vericom` 与 `bin/elabcom`。
 
 当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。可信 NPI 结果保持最高优先级；否则 TraceWeave 会先尝试 bounded on-demand Source Graph，再由 Legacy Static 整体重算 fallback 结果或 trace。Static 没有诚实的 `sig_to_sig_conn_list` 等价实现，因此 inconclusive Source Graph path 最终会返回结构化 unsupported，而不会给出近似结论。X-trace 在 backend 或 artifact 改变时始终从原始 signal 重跑。NPI 仍是更深的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越 Source Graph 明确投影范围之外的实例端口边界、interface 位置绑定与 assign 链。在 **local NPI execution mode** 下,检测到 KDB 时 `build_tb_hierarchy` 还会把 component-tree 每个节点的 `source_file` / `source_line` 覆盖为 NPI 给出的 elaborated `file:line`。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 或 `"source_graph"`，Static 则保持 compile-log-derived；Source Graph path hop 同样只携带 IR 支持的 scope/source/edge evidence。结果信封里的 `backend_status` 会给出 selected/attempted/actual backend、有序 fallback 链、Source Graph coverage/build 回执、KDB 流程与按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 

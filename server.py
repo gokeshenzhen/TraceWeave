@@ -4788,8 +4788,10 @@ async def list_tools():
                 "Use this when the simulator is Xcelium (xrun) and the NPI backend reports no KDB, "
                 "or to force-refresh a stale cached KDB. Output is cached under TRACEWEAVE_CACHE_DIR "
                 "(default ~/.cache/traceweave/kdb/<hash>/); cache hits reuse the previous KDB without "
-                "re-invoking Verdi. A runnable build.sh is written next to the KDB for inspection or "
-                "reproduction. Requires VERDI_HOME with bin/vericom and bin/elabcom."
+                "re-invoking Verdi. When TRACEWEAVE_NPI_EXECUTION=lsf, every cache-miss/rebuild runs "
+                "on the configured LSF queue and never falls back to a local licensed build. A runnable "
+                "build.sh is written next to the KDB for inspection or reproduction. Requires VERDI_HOME "
+                "with bin/vericom and bin/elabcom."
             ),
             inputSchema={
                 "type": "object",
@@ -6320,15 +6322,34 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "build_kdb":
         from src.kdb_builder import build_kdb as _build_kdb
+        from config import get_npi_execution_config
 
         simulator = _resolve_session_simulator(args)
         compile_log = args["compile_log"]
         cr = parse_compile_log(compile_log, simulator)
-        result = _build_kdb(
-            cr,
-            top_hint=args.get("top_hint"),
-            force_rebuild=bool(args.get("force_rebuild", False)),
-        )
+        execution = get_npi_execution_config()
+        if execution.mode == "local" and execution.valid:
+            result = _build_kdb(
+                cr,
+                top_hint=args.get("top_hint"),
+                force_rebuild=bool(args.get("force_rebuild", False)),
+            )
+            result["execution_mode"] = "local"
+            result["scheduler_status"] = "not_started"
+            result["worker_status"] = "not_started"
+        else:
+            from src.npi_lsf import build_kdb_over_lsf
+
+            result = await _run_in_cancellable_thread(
+                lambda: build_kdb_over_lsf(
+                    cr,
+                    compile_log=compile_log,
+                    simulator=simulator,
+                    top_hint=args.get("top_hint"),
+                    force_rebuild=bool(args.get("force_rebuild", False)),
+                    config=execution,
+                )
+            )
         # If the build succeeded (or cache-hit), wipe the verdi probe
         # cache so the next get_sim_paths / find_driver call picks up
         # the new KDB path.

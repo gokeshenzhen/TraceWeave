@@ -15,6 +15,7 @@ from config import NpiExecutionConfig, get_npi_execution_config
 from src import cancellation, schemas
 from src.cancellation import OperationCancelled
 from src.npi_lsf import (
+    BuildKdbWorkerRequest,
     FindDriverWorkerRequest,
     FindLoadsWorkerRequest,
     FindPathWorkerRequest,
@@ -26,6 +27,7 @@ from src.npi_lsf import (
     WorkerSuccess,
     WorkerUnavailable,
     _read_worker_response,
+    build_kdb_over_lsf,
     execute_worker_request,
     parse_worker_request_bytes,
     write_worker_response,
@@ -40,6 +42,7 @@ _NPI_ENV_VARS = (
     "TRACEWEAVE_NPI_LSF_BKILL",
     "TRACEWEAVE_NPI_LSF_PYTHON",
     "TRACEWEAVE_NPI_LSF_TIMEOUT",
+    "TRACEWEAVE_NPI_LSF_KDB_TIMEOUT",
     "TRACEWEAVE_NPI_LSF_STAGING_DIR",
     "TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON",
     "TRACEWEAVE_NPI_WORKER",
@@ -191,6 +194,7 @@ def test_npi_execution_config_accepts_valid_lsf(monkeypatch, tmp_path):
     monkeypatch.setenv("TRACEWEAVE_NPI_EXECUTION", "lsf")
     monkeypatch.setenv("TRACEWEAVE_NPI_LSF_QUEUE", "verdi_q")
     monkeypatch.setenv("TRACEWEAVE_NPI_LSF_TIMEOUT", "300")
+    monkeypatch.setenv("TRACEWEAVE_NPI_LSF_KDB_TIMEOUT", "1800")
     monkeypatch.setenv("TRACEWEAVE_NPI_LSF_STAGING_DIR", str(tmp_path))
     monkeypatch.setenv(
         "TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON",
@@ -203,6 +207,7 @@ def test_npi_execution_config_accepts_valid_lsf(monkeypatch, tmp_path):
     assert config.mode == "lsf"
     assert config.queue == "verdi_q"
     assert config.timeout_sec == 300
+    assert config.kdb_timeout_sec == 1800
     assert config.extra_args == ("-R", "select[mem>8000]")
 
 
@@ -228,6 +233,7 @@ def test_npi_execution_config_ignores_generic_lsf_queue(
         ("TRACEWEAVE_NPI_EXECUTION", "unknown"),
         ("TRACEWEAVE_NPI_LSF_QUEUE", "bad queue"),
         ("TRACEWEAVE_NPI_LSF_TIMEOUT", "NaN"),
+        ("TRACEWEAVE_NPI_LSF_KDB_TIMEOUT", "NaN"),
         ("TRACEWEAVE_NPI_LSF_PYTHON", "-V"),
         ("TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON", '["-q", "other"]'),
         ("TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON", '["echo", "unexpected"]'),
@@ -317,6 +323,277 @@ def test_worker_reports_degraded_load_quality_and_keeps_npi_provenance():
     assert isinstance(response, WorkerSuccess)
     assert response.kdb_load_quality == "degraded"
     assert response.result["backend"] == "verdi_npi"
+
+
+def test_worker_executes_kdb_build_without_constructing_npi_backend(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun top.sv\n", encoding="utf-8")
+    compile_result = {"simulator": "xcelium"}
+    monkeypatch.setattr(
+        "src.npi_lsf.parse_compile_log",
+        lambda path, simulator: compile_result,
+    )
+    calls = []
+
+    def fake_build(received, **kwargs):
+        calls.append((received, kwargs))
+        return {
+            "status": "rebuilt",
+            "kdb_path": str(tmp_path / "cache" / "kdb.elab++"),
+            "cache_dir": str(tmp_path / "cache"),
+            "build_script_path": str(tmp_path / "cache" / "build.sh"),
+            "vericom_log": str(tmp_path / "cache" / "vericom.log"),
+            "elabcom_log": str(tmp_path / "cache" / "elabcom.log"),
+            "top": "tb_top",
+            "hash": "abc123",
+            "rebuilt": True,
+        }
+
+    monkeypatch.setattr("src.kdb_builder.build_kdb", fake_build)
+    request = BuildKdbWorkerRequest(
+        compile_log=str(compile_log),
+        simulator="xcelium",
+        cache_root=str(tmp_path / "cache"),
+        top_hint="tb_top",
+        phase_timeout_sec=600,
+    )
+
+    response = execute_worker_request(request, backend=object())
+
+    assert isinstance(response, WorkerSuccess)
+    assert response.result["status"] == "rebuilt"
+    assert calls[0][0] is compile_result
+    assert calls[0][1]["cache_root"] == str(tmp_path / "cache")
+    assert calls[0][1]["timeout_sec"] == 600
+
+
+def test_worker_sanitizes_kdb_native_failure_text(monkeypatch, tmp_path):
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun top.sv\n", encoding="utf-8")
+    monkeypatch.setattr("src.npi_lsf.parse_compile_log", lambda *args: {})
+    monkeypatch.setattr(
+        "src.kdb_builder.build_kdb",
+        lambda *args, **kwargs: {
+            "status": "failed",
+            "phase": "vericom",
+            "reason": "native license server and private host text",
+            "returncode": 2,
+            "cache_dir": str(tmp_path / "failed"),
+            "build_script_path": str(tmp_path / "failed" / "build.sh"),
+            "kdb_path": None,
+            "rebuilt": False,
+        },
+    )
+    request = BuildKdbWorkerRequest(
+        compile_log=str(compile_log),
+        simulator="xcelium",
+        cache_root=str(tmp_path / "cache"),
+        phase_timeout_sec=600,
+    )
+
+    response = execute_worker_request(request)
+
+    assert isinstance(response, WorkerSuccess)
+    assert response.result["reason"] == "KDB build failed during vericom."
+    assert "license server" not in json.dumps(response.result)
+
+
+def _kdb_compile_result(tmp_path: Path) -> dict:
+    rtl = tmp_path / "top.sv"
+    rtl.write_text("module tb_top; endmodule\n", encoding="utf-8")
+    return {
+        "simulator": "xcelium",
+        "top_modules": ["tb_top"],
+        "files": {"user": [{"path": str(rtl)}]},
+        "compile_command": f"xrun -sv {rtl}",
+    }
+
+
+def test_lsf_kdb_build_submits_cache_miss_and_reports_execution(
+    monkeypatch,
+    tmp_path,
+):
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr("src.npi_lsf.TRACEWEAVE_CACHE_ROOT", cache_root)
+    kdb_path = cache_root / "kdb" / "remote" / "kdb.elab++"
+    kdb_path.mkdir(parents=True)
+    transport = _FakeTransport(
+        LsfExecutionResult(
+            result={
+                "status": "rebuilt",
+                "kdb_path": str(kdb_path),
+                "cache_dir": str(kdb_path.parent),
+                "build_script_path": str(kdb_path.parent / "build.sh"),
+                "rebuilt": True,
+            },
+            scheduler_status="completed",
+            worker_status="completed",
+        )
+    )
+
+    result = build_kdb_over_lsf(
+        _kdb_compile_result(tmp_path),
+        compile_log=str(tmp_path / "compile.log"),
+        simulator="xcelium",
+        force_rebuild=True,
+        config=_lsf_config(tmp_path),
+        transport=transport,
+    )
+
+    assert result["status"] == "rebuilt"
+    assert result["execution_mode"] == "lsf"
+    assert result["scheduler_status"] == "completed"
+    assert result["worker_status"] == "completed"
+    assert len(transport.requests) == 1
+    assert isinstance(transport.requests[0], BuildKdbWorkerRequest)
+    assert transport.requests[0].cache_root == str(cache_root)
+
+
+def test_lsf_kdb_build_reuses_shared_cache_without_submission(
+    monkeypatch,
+    tmp_path,
+):
+    from src.kdb_builder import _extract_build_inputs
+
+    compile_result = _kdb_compile_result(tmp_path)
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr("src.npi_lsf.TRACEWEAVE_CACHE_ROOT", cache_root)
+    inputs = _extract_build_inputs(compile_result, top_hint=None)
+    cache_dir = cache_root / "kdb" / inputs["hash"]
+    (cache_dir / "kdb.elab++").mkdir(parents=True)
+    (cache_dir / "state.json").write_text(
+        json.dumps({"status": "ok"}),
+        encoding="utf-8",
+    )
+
+    class NeverTransport:
+        def execute(self, request):
+            raise AssertionError("an exact cache hit must not submit an LSF job")
+
+    result = build_kdb_over_lsf(
+        compile_result,
+        compile_log=str(tmp_path / "compile.log"),
+        simulator="xcelium",
+        config=_lsf_config(tmp_path),
+        transport=NeverTransport(),
+    )
+
+    assert result["status"] == "cached"
+    assert result["execution_mode"] == "lsf"
+    assert result["scheduler_status"] == "not_started"
+    assert result["worker_status"] == "not_started"
+
+
+def test_lsf_kdb_build_never_falls_back_local_on_invalid_config(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "src.npi_lsf.TRACEWEAVE_CACHE_ROOT",
+        tmp_path / "cache",
+    )
+    invalid = _lsf_config(
+        tmp_path,
+        error_code="npi_execution_config_invalid",
+    )
+
+    class NeverTransport:
+        def execute(self, request):
+            raise AssertionError("invalid config must not submit")
+
+    result = build_kdb_over_lsf(
+        _kdb_compile_result(tmp_path),
+        compile_log=str(tmp_path / "compile.log"),
+        simulator="xcelium",
+        force_rebuild=True,
+        config=invalid,
+        transport=NeverTransport(),
+    )
+
+    assert result["status"] == "failed"
+    assert result["phase"] == "lsf"
+    assert result["fallback_reason"] == "npi_lsf_config_invalid"
+    assert result["scheduler_status"] == "not_started"
+
+
+def test_lsf_kdb_build_rejects_compute_local_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "src.npi_lsf.TRACEWEAVE_CACHE_ROOT",
+        tmp_path / "cache",
+    )
+    transport = _FakeTransport(
+        LsfExecutionResult(
+            result={
+                "status": "rebuilt",
+                "kdb_path": str(tmp_path / "compute-only" / "kdb.elab++"),
+                "cache_dir": str(tmp_path / "compute-only"),
+                "build_script_path": str(tmp_path / "compute-only" / "build.sh"),
+                "rebuilt": True,
+            },
+            scheduler_status="completed",
+            worker_status="completed",
+        )
+    )
+
+    result = build_kdb_over_lsf(
+        _kdb_compile_result(tmp_path),
+        compile_log=str(tmp_path / "compile.log"),
+        simulator="xcelium",
+        force_rebuild=True,
+        config=_lsf_config(tmp_path),
+        transport=transport,
+    )
+
+    assert result["status"] == "failed"
+    assert result["fallback_reason"] == "npi_lsf_artifact_unavailable"
+    assert result["scheduler_status"] == "completed"
+
+
+def test_lsf_kdb_build_preserves_remote_build_failure_without_local_fallback(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "src.npi_lsf.TRACEWEAVE_CACHE_ROOT",
+        tmp_path / "cache",
+    )
+    transport = _FakeTransport(
+        LsfExecutionResult(
+            result={
+                "status": "failed",
+                "phase": "elabcom",
+                "reason": "KDB build failed during elabcom.",
+                "returncode": 2,
+                "cache_dir": str(tmp_path / "failed"),
+                "build_script_path": str(tmp_path / "failed" / "build.sh"),
+                "kdb_path": None,
+                "rebuilt": False,
+            },
+            scheduler_status="completed",
+            worker_status="completed",
+        )
+    )
+
+    result = build_kdb_over_lsf(
+        _kdb_compile_result(tmp_path),
+        compile_log=str(tmp_path / "compile.log"),
+        simulator="xcelium",
+        force_rebuild=True,
+        config=_lsf_config(tmp_path),
+        transport=transport,
+    )
+
+    assert result["status"] == "failed"
+    assert result["phase"] == "elabcom"
+    assert result["fallback_reason"] == "npi_lsf_kdb_build_failed"
+    assert result["scheduler_status"] == "completed"
+    assert result["worker_status"] == "completed"
 
 
 def test_worker_protocol_rejects_malformed_request():

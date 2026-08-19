@@ -10,12 +10,12 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import server
+from config import NpiExecutionConfig
 from src import kdb_builder
 from src.kdb_builder import (
     _write_build_script,
@@ -294,6 +294,26 @@ def test_build_kdb_cache_hit(tmp_path, monkeypatch):
     assert second["kdb_path"] == first["kdb_path"]
 
 
+def test_build_kdb_cache_hit_needs_no_local_verdi_install(tmp_path, monkeypatch):
+    verdi_home = _fake_verdi_layout(tmp_path)
+    cr = _make_cr(tmp_path)
+    cache = tmp_path / "cache"
+    _install_fake_run(monkeypatch, kdb_after_elabcom=True)
+    first = build_kdb(cr, cache_root=cache, verdi_home=verdi_home)
+    assert first["status"] == "rebuilt"
+
+    monkeypatch.delenv("VERDI_HOME", raising=False)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("cache reuse must not invoke a local Verdi executable")
+
+    monkeypatch.setattr(kdb_builder.subprocess, "run", explode)
+    second = build_kdb(cr, cache_root=cache, verdi_home=None)
+
+    assert second["status"] == "cached"
+    assert second["kdb_path"] == first["kdb_path"]
+
+
 def test_build_kdb_force_rebuild(tmp_path, monkeypatch):
     verdi_home = _fake_verdi_layout(tmp_path)
     cr = _make_cr(tmp_path)
@@ -364,3 +384,108 @@ def test_build_kdb_inputs_with_uvm_emit_ntb_opts(tmp_path, monkeypatch):
     elabcom_call = next(c for c in calls if c[0].endswith("elabcom"))
     # elabcom warns on -ntb_opts; we deliberately do not pass it.
     assert "-ntb_opts" not in elabcom_call
+
+
+@pytest.mark.anyio
+async def test_server_routes_kdb_build_to_lsf_without_local_verdi(
+    tmp_path,
+    monkeypatch,
+):
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun top.sv\n", encoding="utf-8")
+    compile_result = _make_cr(tmp_path)
+    config = NpiExecutionConfig(
+        mode="lsf",
+        queue="licensed_q",
+        bsub_bin="bsub",
+        bkill_bin="bkill",
+        python_bin="python3.11",
+        timeout_sec=120,
+        staging_dir=tmp_path / "staging",
+    )
+    monkeypatch.setattr(server, "parse_compile_log", lambda *args: compile_result)
+    monkeypatch.setattr(
+        "config.get_npi_execution_config",
+        lambda: config,
+    )
+
+    def local_build_must_not_run(*args, **kwargs):
+        raise AssertionError("LSF mode must not invoke local build_kdb")
+
+    monkeypatch.setattr("src.kdb_builder.build_kdb", local_build_must_not_run)
+    calls = []
+
+    def fake_lsf_build(received, **kwargs):
+        calls.append((received, kwargs))
+        return {
+            "status": "rebuilt",
+            "kdb_path": str(tmp_path / "cache" / "kdb.elab++"),
+            "cache_dir": str(tmp_path / "cache"),
+            "build_script_path": str(tmp_path / "cache" / "build.sh"),
+            "rebuilt": True,
+            "execution_mode": "lsf",
+            "scheduler_status": "completed",
+            "worker_status": "completed",
+        }
+
+    monkeypatch.setattr("src.npi_lsf.build_kdb_over_lsf", fake_lsf_build)
+
+    result = await server._dispatch(
+        "build_kdb",
+        {
+            "compile_log": str(compile_log),
+            "simulator": "xcelium",
+        },
+    )
+
+    assert result["execution_mode"] == "lsf"
+    assert result["scheduler_status"] == "completed"
+    assert calls[0][0] is compile_result
+    assert calls[0][1]["config"] is config
+
+
+@pytest.mark.anyio
+async def test_server_keeps_default_kdb_build_local(tmp_path, monkeypatch):
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun top.sv\n", encoding="utf-8")
+    compile_result = _make_cr(tmp_path)
+    local = NpiExecutionConfig(
+        mode="local",
+        queue=None,
+        bsub_bin="bsub",
+        bkill_bin="bkill",
+        python_bin="python3.11",
+        timeout_sec=120,
+        staging_dir=tmp_path / "staging",
+    )
+    monkeypatch.setattr(server, "parse_compile_log", lambda *args: compile_result)
+    monkeypatch.setattr("config.get_npi_execution_config", lambda: local)
+    calls = []
+
+    def fake_local_build(received, **kwargs):
+        calls.append((received, kwargs))
+        return {
+            "status": "failed",
+            "phase": "precheck",
+            "reason": "test",
+            "returncode": None,
+            "cache_dir": None,
+            "build_script_path": None,
+            "kdb_path": None,
+            "rebuilt": False,
+        }
+
+    monkeypatch.setattr("src.kdb_builder.build_kdb", fake_local_build)
+
+    result = await server._dispatch(
+        "build_kdb",
+        {
+            "compile_log": str(compile_log),
+            "simulator": "xcelium",
+        },
+    )
+
+    assert calls[0][0] is compile_result
+    assert result["execution_mode"] == "local"
+    assert result["scheduler_status"] == "not_started"
+    assert result["worker_status"] == "not_started"

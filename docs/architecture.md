@@ -290,8 +290,10 @@ Verification
   with regex, since `sig_to_sig_conn_list` walks the elaborated netlist
   across assigns / interfaces / generates that source-regex cannot follow
   reliably.
-- `src/npi_lsf.py` owns the versioned, NPI-only worker protocol and the
-  optional `bsub -K` transport. It writes one private request under a
+- `src/npi_lsf.py` owns the versioned Verdi/NPI worker protocol and the
+  optional `bsub -K` transport. It covers both explicit NPI connectivity
+  queries and `build_kdb` cache misses/forced rebuilds. It writes one private
+  request under a
   shared staging root, submits an identity-free random job name, validates the
   response against the existing operation schema, and exposes only fixed
   execution labels. Remote stdout/stderr is fixed to `/dev/null` so LSF does
@@ -299,9 +301,12 @@ Verification
   only in the private request directory. The synchronous scheduler wait runs in
   `server._run_in_cancellable_thread`; cancellation or timeout performs a
   bounded `bkill -J` followed by termination of the local `bsub` waiter.
-  `src/npi_worker.py` invokes the local NPI core directly and never Static, so
-  a compute-node license/load failure cannot be mistaken for an NPI answer.
-  Its success envelope also carries only the clean/degraded load quality; the
+  `src/npi_worker.py` invokes either the local NPI core directly (never Static)
+  or the exact `vericom` + `elabcom` KDB builder. A compute-node failure cannot
+  be mistaken for a successful answer, and a failed KDB job never falls back to
+  a login-node licensed build. Exact KDB cache hits remain parent-side
+  filesystem reads and submit no job. The NPI success envelope also carries
+  only the clean/degraded load quality; the
   parent reads bounded error metadata from the shared KDB and keeps it outside
   the operation-result schema.
   The hierarchy source overlay remains local/optional in the initial scope and
@@ -437,6 +442,14 @@ LsfConnectivityBackend.find_driver / find_loads / find_path
 ├── worker reports npi_unavailable      → deferred fallback + fixed receipt
 └── NPI-only worker result              → validate operation schema + load quality
 
+build_kdb with execution=lsf
+├── exact shared-cache hit               → local read, no submission/license
+├── invalid config                       → fixed failure, no local build
+├── bsub timeout/failure/bad response    → fixed failure, no local build
+├── worker build failure                 → preserve build phase/result receipt
+├── success but parent cannot see KDB    → npi_lsf_artifact_unavailable
+└── shared KDB visible                   → publish completed execution receipt
+
 VerdiNpiBackend.find_driver / find_loads / find_path
 ├── parse_compile_log fails / no kdb_path / no top   → injected fallback
 ├── _ensure_loaded clean success (load_design rc == 1)
@@ -518,7 +531,10 @@ When the active simulator is Xcelium and the KDB probe finds nothing,
 the diagnostic snapshot lists `build_kdb` in `missing_steps`. Calling
 `build_kdb(compile_log=...)` runs vericom + elabcom against the file
 list, defines, and include paths parsed out of the compile log, and
-caches the resulting KDB under a project-agnostic cache root.
+caches the resulting KDB under a project-agnostic cache root. Local execution
+remains the default. With `TRACEWEAVE_NPI_EXECUTION=lsf`, every cache miss or
+forced rebuild runs in the same LSF policy used by NPI queries; no failure path
+silently starts a licensed local build.
 
 ```text
 build_kdb(compile_log)
@@ -527,7 +543,11 @@ build_kdb(compile_log)
 │                 + sorted(incdirs) + uvm_bit)
 ├── cache_dir = $TRACEWEAVE_CACHE_DIR/kdb/<hash>/
 ├── if cache_dir/state.json says ok → return cached, no Verdi spawn
-└── else build in $TRACEWEAVE_CACHE_DIR/kdb/.tmp-<hash>-<pid>/
+├── execution=lsf → submit versioned private worker request via bsub -K
+│   ├── worker builds under the same absolute cache path
+│   └── parent verifies returned kdb_path is visible
+└── execution=local, or inside LSF worker
+    → build in $TRACEWEAVE_CACHE_DIR/kdb/.tmp-<hash>-<pid>/
     ├── write build.sh (regenerated every rebuild; runnable standalone)
     ├── vericom -sv -kdb [-ntb_opts uvm] [+define+...] [+incdir+...]
     │           <files in compile order> -top <top>
@@ -578,6 +598,10 @@ Cross-environment generality:
 - `VERDI_HOME` provides tool paths; no hardcoded install prefixes.
 - Cache root honours `TRACEWEAVE_CACHE_DIR`, then `XDG_CACHE_HOME`,
   then `~/.cache/traceweave/`.
+- In LSF mode the compile log, source/include inputs, TraceWeave checkout,
+  staging root, and cache root must be shared at identical absolute paths.
+  `TRACEWEAVE_NPI_LSF_KDB_TIMEOUT` separately bounds queue wait plus both KDB
+  phases so the shorter connectivity timeout does not terminate normal builds.
 
 `AUTO_KDB_BUILD` defaults to True. Set `TRACEWEAVE_AUTO_KDB=0` (or
 `false`/`no`/`off`) to disable the snapshot suggestion. The

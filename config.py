@@ -392,7 +392,7 @@ _NPI_LSF_ALLOWED_EXTRA_FLAGS = {
 
 @dataclass(frozen=True)
 class NpiExecutionConfig:
-    """Validated, identity-private NPI execution configuration.
+    """Validated, identity-private Verdi/NPI execution configuration.
 
     ``error_code`` is always a fixed label. It deliberately never embeds the
     queue, executable, staging path, or malformed environment value so callers
@@ -408,6 +408,9 @@ class NpiExecutionConfig:
     staging_dir: Path
     extra_args: tuple[str, ...] = ()
     error_code: str | None = None
+    # KDB generation runs two potentially long Verdi phases.  Keep its
+    # scheduler deadline separate from the short connectivity-query deadline.
+    kdb_timeout_sec: int = max(120, (2 * KDB_BUILD_TIMEOUT_SEC) + 60)
 
     @property
     def valid(self) -> bool:
@@ -419,7 +422,8 @@ def get_npi_execution_config() -> NpiExecutionConfig:
 
     Supported modes:
       - ``local`` (default): preserve the existing in-process NPI behavior.
-      - ``lsf``: submit only explicit NPI connectivity operations via ``bsub``.
+      - ``lsf``: submit licensed Verdi/NPI operations, including KDB builds,
+        via ``bsub``.
 
     The worker guard always resolves to local. The LSF worker currently invokes
     the exact local NPI core directly, but the guard is defense in depth against
@@ -474,6 +478,18 @@ def get_npi_execution_config() -> NpiExecutionConfig:
     if timeout_sec < 1 or timeout_sec > 86_400:
         return _invalid_npi_config("lsf", default_staging)
 
+    default_kdb_timeout = max(120, (2 * KDB_BUILD_TIMEOUT_SEC) + 60)
+    raw_kdb_timeout = os.environ.get(
+        "TRACEWEAVE_NPI_LSF_KDB_TIMEOUT",
+        str(default_kdb_timeout),
+    ).strip()
+    try:
+        kdb_timeout_sec = int(raw_kdb_timeout)
+    except ValueError:
+        return _invalid_npi_config("lsf", default_staging)
+    if kdb_timeout_sec < 1 or kdb_timeout_sec > 86_400:
+        return _invalid_npi_config("lsf", default_staging)
+
     raw_staging = os.environ.get("TRACEWEAVE_NPI_LSF_STAGING_DIR", "").strip()
     staging_dir = Path(raw_staging).expanduser() if raw_staging else default_staging
     if not staging_dir.is_absolute():
@@ -492,6 +508,7 @@ def get_npi_execution_config() -> NpiExecutionConfig:
         timeout_sec=timeout_sec,
         staging_dir=staging_dir,
         extra_args=extra_args,
+        kdb_timeout_sec=kdb_timeout_sec,
     )
 
 
