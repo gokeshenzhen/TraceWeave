@@ -213,6 +213,62 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert receipt["cross_request_reusable"] is True
 
 
+def test_plusargs_with_hdl_suffix_values_are_not_misfiled_as_sources(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command=(
+            "xrun +define+ROM_CODE_MEM=/some/where/ROM_CODE.v "
+            "+define+MODEL_SV=/lib/model.sv "
+            "+define+DPI_MODEL=/lib/model.so +libext+.v+.sv "
+            "top.sv -top tb"
+        ),
+        sources=(source,),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(source.resolve()),)
+    assert "+define+ROM_CODE_MEM=/some/where/ROM_CODE.v" in (
+        manifest.ordered_options
+    )
+    assert "+define+MODEL_SV=/lib/model.sv" in manifest.ordered_options
+    assert "+define+DPI_MODEL=/lib/model.so" in manifest.ordered_options
+    assert "+libext+.v+.sv" in manifest.ordered_options
+    assert not any("+define+" in item for item in manifest.ordered_inputs)
+    assert "native_runtime_input_excluded" not in plan.receipt.gap_codes
+    assert manifest.complete is True
+
+
+def test_dash_options_with_hdl_suffix_values_are_not_misfiled_as_sources(tmp_path):
+    source = tmp_path / "top.sv"
+    library = tmp_path / "lib" / "cells.v"
+    _write(source, "module tb; logic q; endmodule\n")
+    _write(library, "module cells; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command=(
+            "xrun -DMODEL_SV=/lib/model.sv -vlib/cells.v "
+            "-xprop=config/mode.v top.sv -top tb"
+        ),
+        sources=(source,),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(source.resolve()),)
+    assert "-DMODEL_SV=/lib/model.sv" in manifest.ordered_options
+    library_option = manifest.ordered_options.index("-v")
+    assert manifest.ordered_options[library_option + 1] == str(library.resolve())
+    assert not any(item.startswith("-") for item in manifest.ordered_inputs)
+    assert manifest.complete is True
+
+
 def test_frontier_plan_admits_only_proved_direct_sibling_scope(tmp_path):
     source = tmp_path / "top.sv"
     _write(

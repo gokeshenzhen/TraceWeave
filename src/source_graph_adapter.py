@@ -50,7 +50,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.2"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.3"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
@@ -515,11 +515,15 @@ def _translate_tokens(
         token = tokens[index]
         suffix = Path(token).suffix.lower()
 
-        if suffix in _HDL_SUFFIXES:
+        # Simulator switches can carry values that look like source paths
+        # (for example ``+define+ROM=/images/boot.v``, ``-DMODEL=foo.sv``,
+        # or ``-v/lib/cells.v``).  Only a bare operand can be classified by
+        # suffix; a leading ``+`` or ``-`` keeps the token in option dispatch.
+        if not token.startswith(("+", "-")) and suffix in _HDL_SUFFIXES:
             _append_source(state, token, base)
             index += 1
             continue
-        if suffix in _NATIVE_SUFFIXES:
+        if not token.startswith(("+", "-")) and suffix in _NATIVE_SUFFIXES:
             state.objective_exclusions.add("dpi_runtime")
             state.gap_codes.add("native_runtime_input_excluded")
             index += 1
