@@ -232,9 +232,7 @@ def test_plusargs_with_hdl_suffix_values_are_not_misfiled_as_sources(tmp_path):
     assert plan.request is not None
     manifest = plan.request.identity.compile_inputs
     assert manifest.ordered_inputs == (str(source.resolve()),)
-    assert "+define+ROM_CODE_MEM=/some/where/ROM_CODE.v" in (
-        manifest.ordered_options
-    )
+    assert "+define+ROM_CODE_MEM=/some/where/ROM_CODE.v" in (manifest.ordered_options)
     assert "+define+MODEL_SV=/lib/model.sv" in manifest.ordered_options
     assert "+define+DPI_MODEL=/lib/model.so" in manifest.ordered_options
     assert "+libext+.v+.sv" in manifest.ordered_options
@@ -421,6 +419,296 @@ def test_native_xrun_replay_avoids_filelist_echo_duplication_and_resolves_uvmhom
         "dpi_runtime",
         "uvm_dynamic_connectivity",
     } <= set(plan.receipt.objective_exclusions)
+
+
+def test_vcs_uniquely_infers_nested_filelist_environment_and_validates_order(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "project"
+    outer = project / "lists" / "outer.f"
+    nested = project / "lists" / "nested.f"
+    package = project / "rtl" / "pkg.sv"
+    core = project / "rtl" / "core.sv"
+    top = project / "tb" / "top.sv"
+    for path, text in (
+        (package, "package design_pkg; endpackage\n"),
+        (core, "module core; endmodule\n"),
+        (top, "module tb; core u_core(); endmodule\n"),
+    ):
+        _write(path, text)
+    _write(
+        outer,
+        "$TW_PROJECT_ROOT/rtl/pkg.sv\n-f $TW_PROJECT_ROOT/lists/nested.f\n",
+    )
+    _write(
+        nested,
+        "$TW_RTL_ROOT/core.sv\n$TW_PROJECT_ROOT/tb/top.sv\n",
+    )
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "Chronologic VCS simulator\n"
+        f"Command: vcs -f {outer} -top tb\n"
+        f"Parsing design file '{package}'\n"
+        f"Parsing design file '{core}'\n"
+        f"Parsing design file '{top}'\n",
+    )
+    monkeypatch.setenv("TW_PROJECT_ROOT", str(tmp_path / "stale_project"))
+    monkeypatch.setenv("TW_RTL_ROOT", str(tmp_path / "stale_rtl"))
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    plan = _plan(tmp_path, compile_result, signal_path="tb.u_core.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (
+        str(package.resolve()),
+        str(core.resolve()),
+        str(top.resolve()),
+    )
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "compile_environment_inferred_from_log" in plan.receipt.gap_codes
+    assert "compile_environment_unresolved" not in plan.receipt.gap_codes
+    assert "compile_inputs_recovered_from_simulator_log" not in plan.receipt.gap_codes
+    assert "compile_log_parse_warning" not in plan.receipt.gap_codes
+
+
+def test_vcs_infers_environment_root_from_top_level_filelist_path(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "project"
+    package = project / "rtl" / "pkg.sv"
+    top = project / "rtl" / "top.sv"
+    filelist = project / "design.f"
+    _write(package, "package design_pkg; endpackage\n")
+    _write(top, "module tb; endmodule\n")
+    _write(
+        filelist,
+        "$TW_RTL_PATH/rtl/pkg.sv\n$TW_RTL_PATH/rtl/top.sv\n",
+    )
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "Chronologic VCS simulator\n"
+        "Command: vcs -f $TW_RTL_PATH/design.f -top tb\n"
+        f"Parsing design file '{package}'\n"
+        f"Parsing design file '{top}'\n",
+    )
+    monkeypatch.delenv("TW_RTL_PATH", raising=False)
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(package.resolve()), str(top.resolve()))
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "compile_environment_inferred_from_log" in plan.receipt.gap_codes
+    assert "compile_inputs_recovered_from_simulator_log" not in plan.receipt.gap_codes
+
+
+def test_vcs_ambiguous_root_ignores_stale_ambient_filelist_and_uses_log_order(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "project"
+    actual = project / "rtl" / "top.sv"
+    wrong = project / "rtl" / "wrong.sv"
+    outer_filelist = project / "design.f"
+    nested_filelist = project / "rtl" / "design.f"
+    _write(actual, "module tb; endmodule\n")
+    _write(wrong, "module wrong; endmodule\n")
+    _write(outer_filelist, f"{actual}\n")
+    _write(nested_filelist, f"{wrong}\n")
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "Chronologic VCS simulator\n"
+        "Command: vcs -f $TW_RTL_PATH/design.f -top tb\n"
+        f"Parsing design file '{actual}'\n",
+    )
+    monkeypatch.setenv("TW_RTL_PATH", str(project / "rtl"))
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(actual.resolve()),)
+    assert str(wrong.resolve()) not in manifest.ordered_inputs
+    assert manifest.complete is False
+    assert plan.receipt.cross_request_reusable is False
+    assert "compile_inputs_recovered_from_simulator_log" in plan.receipt.gap_codes
+    assert "compile_log_source_reconciliation_gap" in plan.receipt.gap_codes
+
+
+def test_vcs_ambiguous_filelist_root_falls_back_to_direct_units_not_files_user(
+    monkeypatch, tmp_path
+):
+    core = tmp_path / "rtl" / "core.sv"
+    independent = tmp_path / "tb" / "top.sv"
+    include = tmp_path / "include" / "defs.svh"
+    for path, text in (
+        (core, 'module core; `include "defs.svh" endmodule\n'),
+        (independent, "module tb; core u_core(); endmodule\n"),
+        (include, "`define WIDTH 8\n"),
+    ):
+        _write(path, text)
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "Chronologic VCS simulator\n"
+        f"Command: vcs -f $TW_CFG_ROOT/design.f {independent} -top tb\n"
+        f"Parsing design file '{core}'\n"
+        f"Parsing included file '{include}'.\n"
+        f"Back to file '{core}'.\n"
+        f"Parsing design file '{independent}'\n",
+    )
+    monkeypatch.delenv("TW_CFG_ROOT", raising=False)
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    assert len(compile_result["files"]["user"]) == 3
+    plan = _plan(tmp_path, compile_result, signal_path="tb.u_core.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(core.resolve()), str(independent.resolve()))
+    assert str(include.resolve()) not in manifest.ordered_inputs
+    assert manifest.inputs_complete is False
+    assert manifest.options_complete is False
+    assert plan.receipt.cross_request_reusable is False
+    assert "compile_environment_unresolved" in plan.receipt.gap_codes
+    assert "compile_inputs_recovered_from_simulator_log" in plan.receipt.gap_codes
+    assert "compile_include_dirs_recovered_from_log" in plan.receipt.gap_codes
+    assert "compile_input_order_recovered_approximately" not in plan.receipt.gap_codes
+
+
+def test_native_xrun_expanded_evidence_uses_file_records_to_remove_duplicates(
+    monkeypatch, tmp_path
+):
+    package = tmp_path / "rtl" / "pkg.sv"
+    dut = tmp_path / "rtl" / "dut.sv"
+    outer = tmp_path / "outer.f"
+    nested = tmp_path / "nested.f"
+    include_dir = tmp_path / "include"
+    for path, text in (
+        (package, "package design_pkg; endpackage\n"),
+        (dut, "module tb; endmodule\n"),
+        (outer, "$TW_MISSING_ROOT/not_replayed.sv\n"),
+        (nested, "$TW_MISSING_ROOT/not_replayed_either.sv\n"),
+    ):
+        _write(path, text)
+    include_dir.mkdir()
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "xrun\n"
+        "\t-sv\n"
+        f"\t{package}\n"
+        f"\t-f {outer}\n"
+        f"\t\t+incdir+{include_dir}\n"
+        f"\t\t{package}\n"
+        f"\t\t-f {nested}\n"
+        f"\t\t\t{dut}\n"
+        "\t+define+FEATURE=1\n"
+        "\t-verbose\n"
+        "\t-top tb\n"
+        f"\t-log {log}\n"
+        f"file: {package}\n"
+        "\tpackage worklib.design_pkg:sv\n"
+        f"file: {dut}\n"
+        "\tmodule worklib.tb:sv\n",
+    )
+    monkeypatch.delenv("TW_MISSING_ROOT", raising=False)
+
+    compile_result = parse_compile_log(str(log), "xcelium")
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(package.resolve()), str(dut.resolve()))
+    assert manifest.ordered_options.count("+define+FEATURE=1") == 1
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "compile_environment_unresolved" not in plan.receipt.gap_codes
+    assert "compile_log_source_reconciliation_gap" not in plan.receipt.gap_codes
+
+
+def test_opentitan_shaped_vcs_log_keeps_project_filelist_order_and_excludes_recorders(
+    monkeypatch, tmp_path
+):
+    work = tmp_path / "fusesoc-work"
+    z_pkg = work / "src" / "z_pkg.sv"
+    a_core = work / "src" / "a_core.sv"
+    top = work / "src" / "tb.sv"
+    include = work / "src" / "defs.svh"
+    filelist = work / "design.scr"
+    tool_uvm = tmp_path / "tool" / "uvm-1.2"
+    uvm_pkg = tool_uvm / "uvm_pkg.sv"
+    vcs_recorder = tool_uvm / "vcs" / "uvm_custom_install_vcs_recorder.sv"
+    verdi_recorder = tool_uvm / "verdi" / "uvm_custom_install_verdi_recorder.sv"
+    monkeypatch.setattr(
+        "src.compile_log_parser.EDA_LIB_PREFIXES",
+        [str(tmp_path / "tool")],
+    )
+    for path, text in (
+        (z_pkg, "package z_pkg; endpackage\n"),
+        (a_core, 'module a_core; `include "defs.svh" endmodule\n'),
+        (top, "module tb; a_core u_core(); endmodule\n"),
+        (include, "`define WIDTH 8\n"),
+        (uvm_pkg, "package uvm_pkg; endpackage\n"),
+        (vcs_recorder, "module vcs_recorder; endmodule\n"),
+        (verdi_recorder, "module verdi_recorder; endmodule\n"),
+    ):
+        _write(path, text)
+    _write(filelist, "src/z_pkg.sv\nsrc/a_core.sv\nsrc/tb.sv\n")
+    log = tmp_path / "default" / "build.log"
+    _write(
+        log,
+        "[make]: build\n"
+        f"cd {work} && vcs -ntb_opts uvm-1.2 -f design.scr -top tb\n"
+        "Chronologic VCS simulator\n"
+        f"Parsing design file '{uvm_pkg}'\n"
+        f"Parsing design file '{vcs_recorder}'\n"
+        f"Parsing design file '{verdi_recorder}'\n"
+        f"Parsing design file '{verdi_recorder}'\n"
+        "Parsing design file 'src/z_pkg.sv'\n"
+        "Parsing included file 'src/defs.svh'.\n"
+        "Back to file 'src/z_pkg.sv'.\n"
+        "Parsing design file 'src/a_core.sv'\n"
+        "Parsing design file 'src/tb.sv'\n",
+    )
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    manifest, gaps, _ = source_graph_adapter._build_compile_manifest(
+        str(log), compile_result
+    )
+
+    assert len(compile_result["files"]["user"]) == 4
+    assert manifest.ordered_inputs == (
+        str(uvm_pkg.resolve()),
+        str(z_pkg.resolve()),
+        str(a_core.resolve()),
+        str(top.resolve()),
+    )
+    assert str(vcs_recorder.resolve()) not in manifest.ordered_inputs
+    assert str(verdi_recorder.resolve()) not in manifest.ordered_inputs
+    uvm_include_index = manifest.ordered_options.index(str(tool_uvm.resolve()))
+    assert manifest.ordered_options[uvm_include_index - 1] == "-I"
+    assert manifest.complete is True
+    assert "compile_log_source_reconciliation_gap" not in gaps
+    assert "simulator_instrumentation_excluded" in gaps
+    roles = [
+        item["role"]
+        for item in compile_result["compile_evidence"]["ordered_compilation_units"]
+    ]
+    assert roles[:4] == [
+        "simulator_library",
+        "simulator_instrumentation",
+        "simulator_instrumentation",
+        "simulator_instrumentation",
+    ]
 
 
 def test_content_fingerprint_changes_when_an_input_changes(tmp_path):

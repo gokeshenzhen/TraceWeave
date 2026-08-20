@@ -117,6 +117,108 @@ file: {root / "tb" / "top_tb.sv"}
         finally:
             tmp.cleanup()
 
+    def test_vcs_compile_evidence_separates_units_includes_and_tool_roles(
+        self, tmp_path
+    ):
+        first = tmp_path / "rtl" / "z_pkg.sv"
+        second = tmp_path / "rtl" / "a_top.sv"
+        include = tmp_path / "include" / "defs.svh"
+        for path, text in (
+            (first, "package z_pkg; endpackage\n"),
+            (second, "module a_top; endmodule\n"),
+            (include, "`define WIDTH 8\n"),
+        ):
+            _write(path, text)
+        uvm_pkg = "/tools/synopsys/vcs/etc/uvm-1.2/uvm_pkg.sv"
+        recorder = (
+            "/tools/synopsys/vcs/etc/uvm-1.2/vcs/uvm_custom_install_vcs_recorder.sv"
+        )
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs {first} {second} -top a_top\n"
+            f"Parsing design file '{uvm_pkg}'\n"
+            f"Parsing design file '{recorder}'\n"
+            f"Parsing design file '{first}'\n"
+            f"Parsing included file '{include}'.\n"
+            f"Back to file '{first}'.\n"
+            f"Parsing design file '{second}'\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+        evidence = result["compile_evidence"]
+
+        assert evidence["unit_order_source"] == "simulator_log"
+        assert [item["path"] for item in evidence["ordered_compilation_units"]] == [
+            str(Path(uvm_pkg).resolve()),
+            str(Path(recorder).resolve()),
+            str(first.resolve()),
+            str(second.resolve()),
+        ]
+        assert [item["role"] for item in evidence["ordered_compilation_units"]] == [
+            "simulator_library",
+            "simulator_instrumentation",
+            "project",
+            "project",
+        ]
+        assert evidence["ordered_includes"] == [
+            {"parent": str(first.resolve()), "path": str(include.resolve())}
+        ]
+        assert str(include.resolve()) not in {
+            item["path"] for item in evidence["ordered_compilation_units"]
+        }
+
+    def test_xcelium_compile_evidence_flattens_nested_filelists_without_refeed(
+        self, tmp_path
+    ):
+        outer = tmp_path / "lists" / "outer.f"
+        nested = tmp_path / "lists" / "nested.f"
+        z_pkg = tmp_path / "rtl" / "z_pkg.sv"
+        a_top = tmp_path / "rtl" / "a_top.sv"
+        include_dir = tmp_path / "include"
+        for path, text in (
+            (outer, "unused after xrun expansion\n"),
+            (nested, "unused after xrun expansion\n"),
+            (z_pkg, "package z_pkg; endpackage\n"),
+            (a_top, "module a_top; endmodule\n"),
+        ):
+            _write(path, text)
+        include_dir.mkdir()
+        log = tmp_path / "elab.log"
+        _write(
+            log,
+            "xrun\n"
+            "\t-sv\n"
+            f"\t-f {outer}\n"
+            f"\t\t+incdir+{include_dir}\n"
+            f"\t\t{z_pkg}\n"
+            f"\t\t-f {nested}\n"
+            f"\t\t\t{a_top}\n"
+            "\t-top a_top\n"
+            f"file: {z_pkg}\n"
+            "\tpackage worklib.z_pkg:sv\n"
+            f"file: {a_top}\n"
+            "\tmodule worklib.a_top:sv\n",
+        )
+
+        result = parse_compile_log(str(log), "xcelium")
+        evidence = result["compile_evidence"]
+
+        assert evidence["unit_order_source"] == "simulator_log"
+        assert [item["path"] for item in evidence["ordered_compilation_units"]] == [
+            str(z_pkg.resolve()),
+            str(a_top.resolve()),
+        ]
+        assert " -f " not in f" {evidence['expanded_replay_command']} "
+        assert f"+incdir+{include_dir}" in evidence["expanded_replay_command"]
+        assert [item["path"] for item in evidence["filelists"]] == [
+            str(outer.resolve()),
+            str(nested.resolve()),
+        ]
+        assert evidence["filelists"][1]["parent"] == str(outer.resolve())
+        assert evidence["filelists"][1]["depth"] == 2
+
     def test_xcelium_command_stops_before_unindented_log_output(self, tmp_path):
         source = tmp_path / "top_tb.sv"
         _write(source, "module top_tb; endmodule\n")
@@ -191,8 +293,7 @@ file: {root / "tb" / "top_tb.sv"}
         _write(include, "localparam int CommonValue = 1;\n")
         _write(
             filelist,
-            "+incdir+src/includes\n"
-            "src/dut.sv\n",
+            "+incdir+src/includes\nsrc/dut.sv\n",
         )
         log = tmp_path / "default" / "build.log"
         _write(

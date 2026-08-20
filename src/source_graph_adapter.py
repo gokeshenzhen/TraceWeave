@@ -14,7 +14,7 @@ scope is a structured blocker rather than an implicit full-design scan.
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -51,7 +51,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.4"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.5"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
@@ -59,6 +59,8 @@ _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _FIXED_LABEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MAX_FILELIST_DEPTH = 64
 _MAX_FILELIST_TOKENS = 1_000_000
+_MAX_ENV_INFERENCE_FILELISTS = 256
+_MAX_ENV_INFERENCE_ROUNDS = 64
 _MANIFEST_CACHE_MAX_ENTRIES = 8
 
 _BASE_OPTIONS = {
@@ -319,6 +321,8 @@ class _TranslationState:
     support_files: set[Path] = field(default_factory=set)
     active_filelists: set[Path] = field(default_factory=set)
     visited_filelists: set[Path] = field(default_factory=set)
+    env_overrides: dict[str, str] = field(default_factory=dict)
+    inferred_env_names: set[str] = field(default_factory=set)
     gap_codes: set[str] = field(default_factory=set)
     objective_exclusions: set[str] = field(default_factory=set)
     inputs_complete: bool = True
@@ -348,8 +352,30 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _env_ref_name(match: re.Match[str]) -> str:
+    rendered = match.group(0)
+    return rendered[2:-1] if rendered.startswith("${") else rendered[1:]
+
+
+def _expand_with_environment(value: str, overrides: Mapping[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = _env_ref_name(match)
+        if name in overrides:
+            return overrides[name]
+        return os.environ.get(name, match.group(0))
+
+    return _ENV_REF_RE.sub(replace, os.path.expanduser(value))
+
+
+def _expand_with_overrides_only(value: str, overrides: Mapping[str, str]) -> str:
+    return _ENV_REF_RE.sub(
+        lambda match: overrides.get(_env_ref_name(match), match.group(0)),
+        os.path.expanduser(value),
+    )
+
+
 def _expand_token(value: str, state: _TranslationState) -> str | None:
-    expanded = os.path.expandvars(os.path.expanduser(value))
+    expanded = _expand_with_environment(value, state.env_overrides)
     if _ENV_REF_RE.search(expanded):
         state.gap_codes.add("compile_environment_unresolved")
         state.inputs_complete = False
@@ -595,12 +621,23 @@ def _translate_tokens(
             state.options.extend((token, tokens[index + 1]))
             index += 2
             continue
+        if token in _IGNORED_FLAGS or token.startswith(_IGNORED_OPTION_PREFIXES):
+            index += 1
+            continue
         if token in {"-y", "-v"} and index + 1 < len(tokens):
             _append_path_option(state, token, tokens[index + 1], base)
             index += 2
             continue
-        if token.startswith(("-I", "-y", "-v")) and len(token) > 2:
+        if token.startswith(("-I", "-y")) and len(token) > 2:
             _append_path_option(state, token[:2], token[2:], base)
+            index += 1
+            continue
+        if (
+            token.startswith("-v")
+            and len(token) > 2
+            and Path(token[2:]).suffix.lower() in _HDL_SUFFIXES
+        ):
+            _append_path_option(state, "-v", token[2:], base)
             index += 1
             continue
         if token.startswith(("-D", "-U")) and len(token) > 2:
@@ -634,6 +671,12 @@ def _translate_tokens(
                 state.objective_exclusions.add("uvm_dynamic_connectivity")
             index += 2
             continue
+        if token in _IGNORED_VALUE_OPTIONS:
+            index += 2 if index + 1 < len(tokens) else 1
+            continue
+        if any(token.startswith(f"{option}=") for option in _IGNORED_VALUE_OPTIONS):
+            index += 1
+            continue
         if token == "-L" and index + 1 < len(tokens):
             _mark_native_toolchain_exclusion(state)
             index += 2
@@ -654,21 +697,92 @@ def _translate_tokens(
             _mark_native_toolchain_exclusion(state)
             index += 1
             continue
-        if token in _IGNORED_VALUE_OPTIONS:
-            index += 2 if index + 1 < len(tokens) else 1
-            continue
-        if any(token.startswith(f"{option}=") for option in _IGNORED_VALUE_OPTIONS):
-            index += 1
-            continue
-        if token in _IGNORED_FLAGS or token.startswith(_IGNORED_OPTION_PREFIXES):
-            index += 1
-            continue
         if token in {"&&", ";", "|"}:
             _mark_unclassified(state)
             index += 1
             continue
         _mark_unclassified(state)
         index += 1
+
+
+def _compile_evidence(
+    compile_result: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    evidence = compile_result.get("compile_evidence")
+    if not isinstance(evidence, Mapping):
+        return None
+    if evidence.get("schema_version") != 1:
+        return None
+    return evidence
+
+
+def _compilation_unit_records(
+    compile_result: Mapping[str, Any],
+    *,
+    require_simulator_log: bool = False,
+) -> list[Mapping[str, Any]]:
+    evidence = _compile_evidence(compile_result)
+    if evidence is None:
+        return []
+    if require_simulator_log and evidence.get("unit_order_source") != "simulator_log":
+        return []
+    raw = evidence.get("ordered_compilation_units")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return []
+    return [item for item in raw if isinstance(item, Mapping) and item.get("path")]
+
+
+def _recorded_compilation_unit_paths(
+    compile_result: Mapping[str, Any],
+    *,
+    roles: set[str] | None = None,
+    require_simulator_log: bool = False,
+) -> list[str]:
+    result: list[str] = []
+    for item in _compilation_unit_records(
+        compile_result, require_simulator_log=require_simulator_log
+    ):
+        role = str(item.get("role") or "project")
+        if roles is not None and role not in roles:
+            continue
+        result.append(str(Path(str(item["path"])).resolve(strict=False)))
+    return result
+
+
+def _simulator_recorded_inputs(
+    compile_result: Mapping[str, Any],
+) -> tuple[list[str], bool]:
+    records = _compilation_unit_records(compile_result, require_simulator_log=True)
+    paths: list[str] = []
+    instrumentation_excluded = False
+    for item in records:
+        role = str(item.get("role") or "project")
+        if role == "simulator_instrumentation":
+            instrumentation_excluded = True
+            continue
+        paths.append(str(Path(str(item["path"])).resolve(strict=False)))
+    return paths, instrumentation_excluded
+
+
+def _compile_evidence_support_paths(
+    compile_result: Mapping[str, Any],
+) -> set[Path]:
+    evidence = _compile_evidence(compile_result)
+    if evidence is None:
+        return set()
+    raw = evidence.get("filelists")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return set()
+    result: set[Path] = set()
+    for item in raw:
+        if not isinstance(item, Mapping) or not item.get("path"):
+            continue
+        rendered = str(item["path"])
+        raw_path = str(item.get("raw_path") or "")
+        if _ENV_REF_RE.search(rendered) or _ENV_REF_RE.search(raw_path):
+            continue
+        result.add(Path(rendered).resolve(strict=False))
+    return result
 
 
 def _reported_source_paths(compile_result: Mapping[str, Any]) -> list[str]:
@@ -701,18 +815,425 @@ def _include_support_paths(compile_result: Mapping[str, Any]) -> set[Path]:
     return result
 
 
-def _included_child_paths(compile_result: Mapping[str, Any]) -> set[Path]:
+def _ordered_included_child_paths(
+    compile_result: Mapping[str, Any],
+) -> tuple[Path, ...]:
+    evidence = _compile_evidence(compile_result)
+    ordered: list[Path] = []
+    if evidence is not None:
+        raw = evidence.get("ordered_includes")
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+            for item in raw:
+                if not isinstance(item, Mapping) or not item.get("path"):
+                    continue
+                ordered.append(Path(str(item["path"])).resolve(strict=False))
+    if ordered:
+        return tuple(dict.fromkeys(ordered))
+
     tree = compile_result.get("include_tree")
     if not isinstance(tree, Mapping):
-        return set()
-    result: set[Path] = set()
+        return ()
     for children in tree.values():
         if not isinstance(children, Sequence) or isinstance(children, (str, bytes)):
             continue
-        result.update(
+        ordered.extend(
             Path(str(child)).resolve(strict=False) for child in children if child
         )
-    return result
+    return tuple(dict.fromkeys(ordered))
+
+
+def _included_child_paths(compile_result: Mapping[str, Any]) -> set[Path]:
+    return set(_ordered_included_child_paths(compile_result))
+
+
+def _evidence_anchor_paths(compile_result: Mapping[str, Any]) -> tuple[Path, ...]:
+    anchors: list[Path] = []
+    for item in _compilation_unit_records(compile_result):
+        anchors.append(Path(str(item["path"])).resolve(strict=False))
+        if item.get("reported_path"):
+            anchors.append(Path(str(item["reported_path"])).absolute())
+
+    evidence = _compile_evidence(compile_result)
+    if evidence is not None:
+        includes = evidence.get("ordered_includes")
+        if isinstance(includes, Sequence) and not isinstance(includes, (str, bytes)):
+            for item in includes:
+                if not isinstance(item, Mapping):
+                    continue
+                for key in ("parent", "path"):
+                    if item.get(key):
+                        path = Path(str(item[key])).resolve(strict=False)
+                        anchors.extend((path, path.parent))
+        filelists = evidence.get("filelists")
+        if isinstance(filelists, Sequence) and not isinstance(filelists, (str, bytes)):
+            for item in filelists:
+                if not isinstance(item, Mapping) or not item.get("path"):
+                    continue
+                rendered = str(item["path"])
+                raw_path = str(item.get("raw_path") or "")
+                if not _ENV_REF_RE.search(rendered) and not _ENV_REF_RE.search(
+                    raw_path
+                ):
+                    anchors.append(Path(rendered).resolve(strict=False))
+    return tuple(dict.fromkeys(anchors))
+
+
+def _iter_path_expressions(tokens: Sequence[str]):
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"-f", "-F"}:
+            index += 2
+            continue
+        if token in {"-incdir", "-I", "-v", "-y"}:
+            if index + 1 < len(tokens):
+                yield tokens[index + 1]
+            index += 2
+            continue
+        if token.startswith("+incdir+"):
+            yield from (item for item in token[len("+incdir+") :].split("+") if item)
+            index += 1
+            continue
+        if token.startswith(("-I", "-v", "-y")) and len(token) > 2:
+            yield token[2:]
+            index += 1
+            continue
+        if not token.startswith(("+", "-")) and _ENV_REF_RE.search(token):
+            yield token
+        index += 1
+
+
+def _iter_filelist_references(tokens: Sequence[str]):
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"-f", "-F"} and index + 1 < len(tokens):
+            yield token, tokens[index + 1]
+            index += 2
+            continue
+        index += 1
+
+
+def _candidate_environment_values(
+    expression: str,
+    *,
+    base: Path,
+    anchors: Sequence[Path],
+) -> tuple[str, set[str]] | None:
+    matches = list(_ENV_REF_RE.finditer(expression))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    name = _env_ref_name(match)
+    prefix = expression[: match.start()]
+    suffix = expression[match.end() :]
+    if _ENV_REF_RE.search(prefix) or _ENV_REF_RE.search(suffix):
+        return None
+    if not prefix and not suffix:
+        return None
+
+    candidates: set[str] = set()
+    for anchor in anchors:
+        rendered = str(anchor)
+        if prefix and not rendered.startswith(prefix):
+            continue
+        if suffix and not rendered.endswith(suffix):
+            continue
+        end = len(rendered) - len(suffix) if suffix else len(rendered)
+        candidate = rendered[len(prefix) : end]
+        if not candidate or _ENV_REF_RE.search(candidate):
+            continue
+        expanded = prefix + candidate + suffix
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = base / path
+        if path.absolute() == anchor.absolute() or path.resolve(
+            strict=False
+        ) == anchor.resolve(strict=False):
+            candidates.add(candidate)
+    return (name, candidates) if candidates else None
+
+
+def _candidate_filelist_root_values(
+    expression: str,
+    *,
+    base: Path,
+    anchors: Sequence[Path],
+) -> tuple[str, set[str]] | None:
+    """Find a unique root candidate for ``$ROOT/path/to/file.f``.
+
+    A VCS log does not normally print the expanded ``-f`` path.  It does print
+    the files compiled from that command file, so their bounded ancestor set is
+    the only local search space needed for the common project-root convention.
+    Candidates are accepted only when the exact substituted command file
+    exists; the later compilation-unit order check still validates its
+    contents before the binding can make a manifest reusable.
+    """
+
+    matches = list(_ENV_REF_RE.finditer(expression))
+    if len(matches) != 1 or matches[0].start() != 0:
+        return None
+    match = matches[0]
+    suffix = expression[match.end() :]
+    if not suffix or _ENV_REF_RE.search(suffix):
+        return None
+
+    roots: set[Path] = set()
+    for index, anchor in enumerate(anchors):
+        if index % 256 == 0:
+            check_cancelled()
+        absolute = anchor.absolute()
+        start = absolute if absolute.is_dir() else absolute.parent
+        roots.add(start)
+        roots.update(start.parents)
+
+    candidates: set[str] = set()
+    for index, root in enumerate(sorted(roots, key=lambda item: str(item))):
+        if index % 256 == 0:
+            check_cancelled()
+        value = str(root)
+        rendered = value + suffix
+        path = Path(rendered)
+        if not path.is_absolute():
+            path = base / path
+        if path.is_file():
+            candidates.add(value)
+    return (_env_ref_name(match), candidates) if candidates else None
+
+
+def _infer_compile_environment(
+    command: str,
+    *,
+    command_dir: Path,
+    compile_result: Mapping[str, Any],
+) -> tuple[dict[str, str], set[str]]:
+    """Infer only uniquely constrained path variables from local log facts.
+
+    No filesystem search, glob, subprocess, or environment mutation is used.
+    Starting from the recorded command, newly resolved command files are read
+    iteratively; every accepted binding is the sole value consistent with all
+    path expressions that matched simulator-reported absolute paths.
+    """
+
+    anchors = _evidence_anchor_paths(compile_result)
+    if not anchors:
+        return {}, set()
+    try:
+        command_tokens = shlex.split(command, comments=True, posix=True)
+    except ValueError:
+        return {}, set()
+
+    documents: list[tuple[list[str], Path]] = [(command_tokens, command_dir)]
+    visited_filelists: set[Path] = set()
+    bindings: dict[str, str] = {}
+    inferred_names: set[str] = set()
+    token_count = len(command_tokens)
+
+    for _round in range(_MAX_ENV_INFERENCE_ROUNDS):
+        constraints: dict[str, list[set[str]]] = {}
+        pending_filelists: list[tuple[str, str, Path]] = []
+        for tokens, base in documents:
+            check_cancelled()
+            for mode, raw_path in _iter_filelist_references(tokens):
+                rendered = _expand_with_overrides_only(raw_path, bindings)
+                candidate = _candidate_environment_values(
+                    rendered,
+                    base=base,
+                    anchors=anchors,
+                ) or _candidate_filelist_root_values(
+                    rendered,
+                    base=base,
+                    anchors=anchors,
+                )
+                if candidate is not None:
+                    name, values = candidate
+                    if name not in bindings:
+                        constraints.setdefault(name, []).append(values)
+                pending_filelists.append((mode, raw_path, base))
+            for expression in _iter_path_expressions(tokens):
+                # Keep a process-environment value visible as a constraint
+                # until the log proves it. An MCP server can inherit a stale
+                # variable from another project; a unique simulator-recorded
+                # binding must override that value locally rather than trust
+                # ambient state by accident.
+                rendered = _expand_with_overrides_only(expression, bindings)
+                candidate = _candidate_environment_values(
+                    rendered,
+                    base=base,
+                    anchors=anchors,
+                )
+                if candidate is None:
+                    continue
+                name, values = candidate
+                if name not in bindings:
+                    constraints.setdefault(name, []).append(values)
+
+        changed = False
+        for name, candidate_sets in constraints.items():
+            common = set.intersection(*candidate_sets)
+            if len(common) != 1:
+                continue
+            value = next(iter(common))
+            if bindings.get(name) == value:
+                continue
+            bindings[name] = value
+            inferred_names.add(name)
+            changed = True
+
+        for mode, raw_path, base in pending_filelists:
+            rendered = _expand_with_environment(raw_path, bindings)
+            if _ENV_REF_RE.search(rendered):
+                continue
+            path = Path(rendered)
+            if not path.is_absolute():
+                path = base / path
+            path = path.resolve(strict=False)
+            if path in visited_filelists or not path.is_file():
+                continue
+            if len(visited_filelists) >= _MAX_ENV_INFERENCE_FILELISTS:
+                break
+            try:
+                tokens = tokenize_filelist(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+            except (OSError, ValueError):
+                continue
+            if token_count + len(tokens) > _MAX_FILELIST_TOKENS:
+                break
+            token_count += len(tokens)
+            visited_filelists.add(path)
+            token_base = command_dir if mode == "-f" else path.parent
+            documents.append((tokens, token_base))
+            changed = True
+
+        if not changed:
+            break
+    return bindings, inferred_names
+
+
+def _configured_include_dirs(state: _TranslationState) -> set[str]:
+    existing: set[str] = set()
+    index = 0
+    while index < len(state.options):
+        token = state.options[index]
+        if token == "-I" and index + 1 < len(state.options):
+            existing.add(str(Path(state.options[index + 1]).resolve(strict=False)))
+            index += 2
+            continue
+        if token.startswith("+incdir+"):
+            existing.update(
+                str(Path(item).resolve(strict=False))
+                for item in token[len("+incdir+") :].split("+")
+                if item
+            )
+        index += 1
+    return existing
+
+
+def _append_include_dirs(
+    state: _TranslationState,
+    directories: Sequence[Path],
+    *,
+    after_base_options: bool = False,
+) -> bool:
+    existing = _configured_include_dirs(state)
+    additions: list[str] = []
+    for path in directories:
+        directory = str(path.resolve(strict=False))
+        if directory in existing or not path.is_dir():
+            continue
+        additions.extend(("-I", directory))
+        existing.add(directory)
+    if not additions:
+        return False
+    if after_base_options:
+        index = len(_BASE_OPTIONS.get(state.simulator, ()))
+        state.options[index:index] = additions
+    else:
+        state.options.extend(additions)
+    return True
+
+
+def _append_log_recovered_include_dirs(
+    state: _TranslationState,
+    compile_result: Mapping[str, Any],
+) -> None:
+    directories = [
+        child.parent for child in _ordered_included_child_paths(compile_result)
+    ]
+    if _append_include_dirs(state, tuple(dict.fromkeys(directories))):
+        state.options_complete = False
+        state.gap_codes.add("compile_include_dirs_recovered_from_log")
+
+
+def _append_recorded_simulator_library_context(
+    state: _TranslationState,
+    compile_result: Mapping[str, Any],
+) -> None:
+    library_paths = _recorded_compilation_unit_paths(
+        compile_result,
+        roles={"simulator_library"},
+        require_simulator_log=True,
+    )
+    state.simulator_library_inputs.update(library_paths)
+    _append_include_dirs(
+        state,
+        tuple(
+            dict.fromkeys(
+                Path(path).parent
+                for path in library_paths
+                if _is_uvm_language_input(path)
+            )
+        ),
+        after_base_options=True,
+    )
+
+
+def _is_environment_recovery_warning(value: str) -> bool:
+    return value.startswith(
+        (
+            "VCS environment-dependent source unavailable:",
+            "VCS environment-dependent filelist unavailable:",
+        )
+    ) or (
+        "$" in value
+        and value.startswith(("VCS source missing:", "VCS filelist missing:"))
+    )
+
+
+def _is_uvm_language_input(path: str) -> bool:
+    return Path(path).name.lower() in {"uvm.sv", "uvm_pkg.sv", "cdns_uvm_pkg.sv"}
+
+
+def _canonicalize_expanded_xcelium_inputs(
+    state: _TranslationState,
+    compile_result: Mapping[str, Any],
+) -> None:
+    observed, instrumentation_excluded = _simulator_recorded_inputs(compile_result)
+    if not observed:
+        return
+    counts = Counter(observed)
+    consumed: Counter[str] = Counter()
+    translated_observed: list[str] = []
+    extras: list[str] = []
+    observed_set = set(observed)
+    for path in state.inputs:
+        if path in observed_set and consumed[path] < counts[path]:
+            translated_observed.append(path)
+            consumed[path] += 1
+            continue
+        if (
+            (path in state.simulator_library_inputs or _is_uvm_language_input(path))
+            and path not in observed_set
+            and path not in extras
+        ):
+            extras.append(path)
+    if translated_observed != observed:
+        state.inputs_complete = False
+        state.gap_codes.add("compile_log_source_reconciliation_gap")
+    state.inputs = [*extras, *observed]
+    if instrumentation_excluded:
+        state.gap_codes.add("simulator_instrumentation_excluded")
 
 
 def _extract_xcelium_uvm_library(
@@ -930,6 +1451,7 @@ def _manifest_snapshot_key(
         "user_files": user_records,
         "include_tree": compile_result.get("include_tree") or {},
         "filelist_tree": compile_result.get("filelist_tree") or {},
+        "compile_evidence": compile_result.get("compile_evidence") or {},
         "parse_warnings": list(compile_result.get("parse_warnings") or ()),
     }
     try:
@@ -974,11 +1496,42 @@ def _build_compile_manifest(
     command_dir = Path(str(raw_cwd)).resolve(strict=False)
     state = _TranslationState(simulator=simulator, command_dir=command_dir)
     state.options.extend(_BASE_OPTIONS.get(simulator, ()))
-    command = str(
+    replay_command = str(
         compile_result.get("compile_replay_command")
         or compile_result.get("compile_command")
         or ""
     )
+    evidence = _compile_evidence(compile_result)
+    expanded_command = (
+        str(evidence.get("expanded_replay_command") or "")
+        if simulator == "xcelium" and evidence is not None
+        else ""
+    )
+    command = expanded_command or replay_command
+    parse_warnings = compile_result.get("parse_warnings")
+    warning_items = (
+        [str(item) for item in parse_warnings]
+        if isinstance(parse_warnings, Sequence)
+        and not isinstance(parse_warnings, (str, bytes))
+        else []
+    )
+
+    if (
+        replay_command
+        and not expanded_command
+        and (
+            _ENV_REF_RE.search(replay_command)
+            or any(_is_environment_recovery_warning(item) for item in warning_items)
+        )
+    ):
+        bindings, inferred_names = _infer_compile_environment(
+            replay_command,
+            command_dir=command_dir,
+            compile_result=compile_result,
+        )
+        state.env_overrides.update(bindings)
+        state.inferred_env_names.update(inferred_names)
+
     if not command:
         state.options_complete = False
         state.gap_codes.add("compile_command_missing")
@@ -1010,28 +1563,106 @@ def _build_compile_manifest(
                 skip_executable=True,
             )
 
-    reported = _reported_source_paths(compile_result)
-    if not state.inputs and reported:
-        state.inputs.extend(reported)
+    if expanded_command:
+        _canonicalize_expanded_xcelium_inputs(state, compile_result)
+
+    recorded_inputs, instrumentation_excluded = _simulator_recorded_inputs(
+        compile_result
+    )
+    recorded_project = _recorded_compilation_unit_paths(
+        compile_result,
+        roles={"project"},
+        require_simulator_log=True,
+    )
+    recorded_simulator_libraries = _recorded_compilation_unit_paths(
+        compile_result,
+        roles={"simulator_library"},
+        require_simulator_log=True,
+    )
+    recorded_instrumentation = _recorded_compilation_unit_paths(
+        compile_result,
+        roles={"simulator_instrumentation"},
+        require_simulator_log=True,
+    )
+    recorded_nonproject = {
+        *recorded_simulator_libraries,
+        *recorded_instrumentation,
+    }
+    recorded_project_set = set(recorded_project)
+    translated_project = [
+        path
+        for path in state.inputs
+        if path not in recorded_nonproject
+        and path not in state.simulator_library_inputs
+        and not (_is_uvm_language_input(path) and path not in recorded_project_set)
+    ]
+    project_sequence_matches = bool(recorded_project) and (
+        translated_project == recorded_project
+    )
+
+    env_unresolved = "compile_environment_unresolved" in state.gap_codes
+    inference_failed_validation = bool(state.inferred_env_names) and not (
+        project_sequence_matches or not recorded_project
+    )
+    if state.inferred_env_names and not inference_failed_validation:
+        state.gap_codes.add("compile_environment_inferred_from_log")
+
+    recorded_input_set = set(recorded_inputs)
+    unrecorded_simulator_libraries = [
+        path
+        for path in state.inputs
+        if path in state.simulator_library_inputs and path not in recorded_input_set
+    ]
+    reconciliation_failed = bool(recorded_project) and not project_sequence_matches
+    if recorded_inputs and (
+        env_unresolved or reconciliation_failed or not state.inputs
+    ):
+        state.inputs = [*unrecorded_simulator_libraries, *recorded_inputs]
         state.inputs_complete = False
-        state.gap_codes.add("compile_input_order_recovered_approximately")
-    elif reported:
-        include_paths = {str(path) for path in _included_child_paths(compile_result)}
-        reported_direct = set(reported) - include_paths
-        translated = set(state.inputs) - state.simulator_library_inputs
-        if reported_direct and reported_direct != translated:
-            state.inputs_complete = False
+        state.options_complete = False
+        state.gap_codes.add("compile_inputs_recovered_from_simulator_log")
+        if inference_failed_validation:
+            state.gap_codes.add("compile_environment_inference_unverified")
+        if reconciliation_failed:
             state.gap_codes.add("compile_log_source_reconciliation_gap")
+        _append_log_recovered_include_dirs(state, compile_result)
+    elif recorded_project:
+        # Once normal replay proves the project sequence, retain the complete
+        # simulator order as the source of truth. This restores injected
+        # language units such as uvm_pkg.sv while excluding recorder sources.
+        state.inputs = [*unrecorded_simulator_libraries, *recorded_inputs]
+    elif not recorded_project:
+        # Backward compatibility for caller-constructed compile_result values
+        # that predate compile_evidence. This remains approximate and is never
+        # used when a simulator-recorded compilation-unit sequence exists.
+        reported = _reported_source_paths(compile_result)
+        if not state.inputs and reported:
+            state.inputs.extend(reported)
+            state.inputs_complete = False
+            state.gap_codes.add("compile_input_order_recovered_approximately")
+        elif reported:
+            include_paths = {
+                str(path) for path in _included_child_paths(compile_result)
+            }
+            reported_direct = set(reported) - include_paths
+            translated = set(state.inputs) - state.simulator_library_inputs
+            if reported_direct and reported_direct != translated:
+                state.inputs_complete = False
+                state.gap_codes.add("compile_log_source_reconciliation_gap")
+
+    _append_recorded_simulator_library_context(state, compile_result)
+    if instrumentation_excluded:
+        state.gap_codes.add("simulator_instrumentation_excluded")
     if not state.inputs:
         state.inputs_complete = False
         state.gap_codes.add("compile_inputs_empty")
 
-    parse_warnings = compile_result.get("parse_warnings")
-    if (
-        isinstance(parse_warnings, Sequence)
-        and not isinstance(parse_warnings, (str, bytes))
-        and parse_warnings
-    ):
+    material_warnings = warning_items
+    if state.inferred_env_names and not env_unresolved and project_sequence_matches:
+        material_warnings = [
+            item for item in warning_items if not _is_environment_recovery_warning(item)
+        ]
+    if material_warnings:
         state.inputs_complete = False
         state.options_complete = False
         state.gap_codes.add("compile_log_parse_warning")
@@ -1046,6 +1677,10 @@ def _build_compile_manifest(
         state.objective_exclusions.add("bind_semantics")
 
     state.support_files.update(_include_support_paths(compile_result))
+    state.support_files.update(_compile_evidence_support_paths(compile_result))
+    state.support_files.difference_update(
+        Path(path) for path in recorded_instrumentation
+    )
     before_content = _content_stat_key(
         inputs=state.inputs,
         support_files=state.support_files,

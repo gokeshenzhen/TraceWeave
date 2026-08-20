@@ -45,9 +45,11 @@ _XCE_SHELL_COMMAND_RE = re.compile(
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
 _SNAPSHOT_RE = re.compile(r"(?:^|\s)-snapshot\s+(\w+)")
 _SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
+_ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
 _SIMULATOR_DETECT_MAX_LINES = 1_000
+_COMPILE_EVIDENCE_SCHEMA_VERSION = 1
 _VCS_FLAGS_WITH_VALUE = frozenset(
     {
         "-assert",
@@ -99,6 +101,15 @@ def _normalize_path(path: str, parent: str | None = None) -> str:
     return os.path.normpath(os.path.realpath(path))
 
 
+def _normalize_reported_path(path: str, parent: str | None = None) -> str:
+    """Normalize a concrete log spelling without erasing symlink evidence."""
+
+    path = os.path.expandvars(path.strip().strip("'\"").rstrip("."))
+    if parent and not os.path.isabs(path):
+        path = os.path.join(parent, path)
+    return os.path.normpath(os.path.abspath(path))
+
+
 def _is_eda_lib(path: str) -> bool:
     normalized = path.replace("\\", "/")
     for prefix in EDA_LIB_PREFIXES:
@@ -106,6 +117,40 @@ def _is_eda_lib(path: str) -> bool:
         if normalized.startswith(expanded):
             return True
     return False
+
+
+def _compilation_unit_role(path: str) -> str:
+    """Classify a simulator-reported unit without hiding it from evidence.
+
+    ``files.user`` intentionally filters installed EDA libraries for hierarchy
+    browsing.  Source replay needs a different distinction: language-visible
+    packages such as ``uvm_pkg.sv`` can be required by a frontend, while VCS /
+    Verdi recorder installers are simulator instrumentation and must not be
+    treated as project HDL merely because the compile log reports them.
+    """
+
+    name = os.path.basename(path).lower()
+    if "uvm_custom_install" in name and "record" in name:
+        return "simulator_instrumentation"
+    if not _is_eda_lib(path):
+        return "project"
+    return "simulator_library"
+
+
+def _compilation_unit_record(
+    path: str,
+    file_info: dict[str, dict],
+    *,
+    reported_path: str | None = None,
+) -> dict:
+    result = {
+        "path": path,
+        "type": file_info.get(path, {}).get("type", "unknown"),
+        "role": _compilation_unit_role(path),
+    }
+    if reported_path and reported_path != path:
+        result["reported_path"] = reported_path
+    return result
 
 
 def _categorize(path: str) -> str:
@@ -167,8 +212,9 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     incdirs = _extract_vcs_incdirs(command_tokens, command_dir)
     filelist_tree = _direct_vcs_filelist_tree(command_tokens, command_dir)
     recovered_files: dict[str, dict] = {}
+    recovered_filelists: list[dict] = []
     if command_tokens:
-        recovered_files, recovered_tree, recovered_incdirs = (
+        recovered_files, recovered_tree, recovered_incdirs, recovered_filelists = (
             _recover_vcs_command_files(
                 command_tokens,
                 command_dir,
@@ -183,6 +229,9 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     file_info: dict[str, dict] = {}
     interfaces: set[str] = set()
     reported_top_modules: list[str] = []
+    ordered_design_paths: list[str] = []
+    ordered_reported_paths: list[str] = []
+    ordered_includes: list[dict[str, str]] = []
     stack: list[str] = []
     in_top_section = False
 
@@ -199,8 +248,13 @@ def parse_vcs_compile_log(log_path: str) -> dict:
 
         match = _VCS_FILE_RE.search(line)
         if match:
-            path = _normalize_path(match.group(1), command_dir)
+            raw_path = match.group(1)
+            path = _normalize_path(raw_path, command_dir)
             stack = [path]
+            ordered_design_paths.append(path)
+            ordered_reported_paths.append(
+                _normalize_reported_path(raw_path, command_dir)
+            )
             file_info.setdefault(path, {"type": "module"})
             continue
 
@@ -222,6 +276,7 @@ def parse_vcs_compile_log(log_path: str) -> dict:
             include_tree.setdefault(parent, [])
             if child not in include_tree[parent]:
                 include_tree[parent].append(child)
+            ordered_includes.append({"parent": parent, "path": child})
             file_info.setdefault(child, {"type": "unknown"})
             stack.append(child)
             continue
@@ -253,6 +308,15 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     user, filtered_count = _collect_user_files(
         file_info, preserve_order=used_command_fallback
     )
+    if ordered_design_paths:
+        evidence_paths = ordered_design_paths
+        unit_order_source = "simulator_log"
+    elif used_command_fallback and recovered_files:
+        evidence_paths = list(recovered_files)
+        unit_order_source = "command_recovery"
+    else:
+        evidence_paths = []
+        unit_order_source = "unavailable"
     return {
         "simulator": "vcs",
         # Adapter-facing provenance: relative command/filelist and parser-output
@@ -271,6 +335,25 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         "interfaces": sorted(interfaces),
         "compile_command": compile_command,
         "parse_warnings": parse_warnings,
+        "compile_evidence": {
+            "schema_version": _COMPILE_EVIDENCE_SCHEMA_VERSION,
+            "unit_order_source": unit_order_source,
+            "ordered_compilation_units": [
+                _compilation_unit_record(
+                    path,
+                    file_info,
+                    reported_path=(
+                        ordered_reported_paths[index]
+                        if unit_order_source == "simulator_log"
+                        else None
+                    ),
+                )
+                for index, path in enumerate(evidence_paths)
+            ],
+            "ordered_includes": ordered_includes,
+            "filelists": recovered_filelists,
+            "expanded_replay_command": None,
+        },
     }
 
 
@@ -411,7 +494,7 @@ def _recover_vcs_command_files(
     tokens: list[str],
     command_dir: str,
     warnings: list[str],
-) -> tuple[dict[str, dict], dict[str, list[str]], list[str]]:
+) -> tuple[dict[str, dict], dict[str, list[str]], list[str], list[dict]]:
     """Recover sources from a no-op VCS command and its filelists.
 
     This is deliberately a tokenizer plus bounded local-file reader. It never
@@ -426,6 +509,7 @@ def _recover_vcs_command_files(
         "token_count": 0,
         "token_limit_reported": False,
         "incdirs": [],
+        "filelists": [],
     }
     _scan_vcs_tokens(
         tokens,
@@ -438,7 +522,7 @@ def _recover_vcs_command_files(
         parent_filelist=None,
         depth=0,
     )
-    return file_info, filelist_tree, state["incdirs"]
+    return file_info, filelist_tree, state["incdirs"], state["filelists"]
 
 
 def _scan_vcs_tokens(
@@ -486,6 +570,8 @@ def _scan_vcs_tokens(
             )
             _expand_vcs_filelist(
                 filelist_path,
+                raw_path=raw_filelist,
+                mode=token,
                 entries_base=entries_base,
                 command_dir=command_dir,
                 file_info=file_info,
@@ -517,6 +603,8 @@ def _scan_vcs_tokens(
 def _expand_vcs_filelist(
     filelist_path: str,
     *,
+    raw_path: str,
+    mode: str,
     entries_base: str,
     command_dir: str,
     file_info: dict[str, dict],
@@ -529,9 +617,19 @@ def _expand_vcs_filelist(
     name = os.path.basename(filelist_path)
     filelist_tree.setdefault(name, [])
     if parent_filelist is not None:
-        children = filelist_tree.setdefault(parent_filelist, [])
+        children = filelist_tree.setdefault(os.path.basename(parent_filelist), [])
         if name not in children:
             children.append(name)
+
+    state["filelists"].append(
+        {
+            "path": filelist_path,
+            "raw_path": raw_path,
+            "parent": parent_filelist,
+            "depth": depth,
+            "mode": mode,
+        }
+    )
 
     if filelist_path in state["active"]:
         warnings.append(f"VCS filelist cycle ignored: {filelist_path}")
@@ -542,7 +640,13 @@ def _expand_vcs_filelist(
         warnings.append(f"VCS filelist depth limit exceeded: {filelist_path}")
         return
     if not os.path.isfile(filelist_path):
-        warnings.append(f"VCS filelist missing: {filelist_path}")
+        if _ENV_REF_RE.search(raw_path):
+            warnings.append(
+                "VCS environment-dependent filelist unavailable: "
+                f"{raw_path} -> {filelist_path}"
+            )
+        else:
+            warnings.append(f"VCS filelist missing: {filelist_path}")
         return
 
     try:
@@ -567,7 +671,7 @@ def _expand_vcs_filelist(
             filelist_tree=filelist_tree,
             warnings=warnings,
             state=state,
-            parent_filelist=name,
+            parent_filelist=filelist_path,
             depth=depth,
         )
     finally:
@@ -584,7 +688,12 @@ def _add_vcs_source(
         return
     path = _normalize_path(raw_path, source_base)
     if not os.path.isfile(path):
-        warnings.append(f"VCS source missing: {path}")
+        if _ENV_REF_RE.search(raw_path):
+            warnings.append(
+                f"VCS environment-dependent source unavailable: {raw_path} -> {path}"
+            )
+        else:
+            warnings.append(f"VCS source missing: {path}")
         return
     file_info.setdefault(path, {"type": "unknown"})
 
@@ -597,6 +706,9 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
     compile_command, replay_command, command_dir = _extract_xcelium_invocation(
         lines, log_dir
     )
+    expanded_replay_command, evidence_filelists = _extract_xcelium_expanded_evidence(
+        lines, command_dir
+    )
     file_info: dict[str, dict] = {}
     include_tree: dict[str, list[str]] = {}
     filelist_tree: dict[str, list[str]] = {}
@@ -605,6 +717,9 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
     command_started = False
     current_file: str | None = None
     filelist_stack: list[tuple[int, str]] = []
+    expanded_source_paths: list[str] = []
+    ordered_unit_paths: list[str] = []
+    ordered_reported_paths: list[str] = []
 
     if compile_command:
         for top_match in _TOP_RE.finditer(compile_command):
@@ -658,11 +773,17 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         if any(stripped.endswith(ext) for ext in (".sv", ".svh", ".v", ".vh")):
             path = _normalize_path(stripped, command_dir)
             file_info.setdefault(path, {"type": "unknown"})
+            expanded_source_paths.append(path)
 
     for line in lines:
         match = _XCE_FILE_RE.match(line)
         if match:
-            current_file = _normalize_path(match.group(1), command_dir)
+            raw_path = match.group(1)
+            current_file = _normalize_path(raw_path, command_dir)
+            ordered_unit_paths.append(current_file)
+            ordered_reported_paths.append(
+                _normalize_reported_path(raw_path, command_dir)
+            )
             file_info.setdefault(current_file, {"type": "unknown"})
             continue
         match = _XCE_ENTITY_RE.match(line)
@@ -673,6 +794,15 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
                 interfaces.add(entity_name)
 
     user, filtered_count = _collect_user_files(file_info)
+    if ordered_unit_paths:
+        evidence_paths = ordered_unit_paths
+        unit_order_source = "simulator_log"
+    elif expanded_source_paths:
+        evidence_paths = expanded_source_paths
+        unit_order_source = "expanded_invocation"
+    else:
+        evidence_paths = []
+        unit_order_source = "unavailable"
     return {
         "simulator": "xcelium",
         # Preserve the cwd recovered by _extract_xcelium_invocation so an
@@ -693,6 +823,25 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         # deeper, echoed lines so an on-demand frontend does not expand the
         # same command file twice.
         "compile_replay_command": replay_command,
+        "compile_evidence": {
+            "schema_version": _COMPILE_EVIDENCE_SCHEMA_VERSION,
+            "unit_order_source": unit_order_source,
+            "ordered_compilation_units": [
+                _compilation_unit_record(
+                    path,
+                    file_info,
+                    reported_path=(
+                        ordered_reported_paths[index]
+                        if unit_order_source == "simulator_log"
+                        else None
+                    ),
+                )
+                for index, path in enumerate(evidence_paths)
+            ],
+            "ordered_includes": [],
+            "filelists": evidence_filelists,
+            "expanded_replay_command": expanded_replay_command,
+        },
     }
 
 
@@ -756,6 +905,75 @@ def _extract_xcelium_replay_command(lines: list[str]) -> str | None:
             i += 1
         return " ".join(parts) if len(parts) > 1 else "xrun"
     return None
+
+
+def _extract_xcelium_expanded_evidence(
+    lines: list[str], command_dir: str
+) -> tuple[str | None, list[dict]]:
+    """Flatten a native xrun argument tree after removing ``-f`` markers.
+
+    The nested contents are already the simulator's concrete expansion of each
+    command file.  Keeping those contents recovers options even when the MCP
+    process lacks the original environment, while dropping every ``-f`` pair
+    prevents a second expansion.  Filelist paths remain separate support-file
+    evidence with full parent/depth provenance.
+    """
+
+    for idx, line in enumerate(lines):
+        if line.strip() != "xrun":
+            continue
+        flattened = ["xrun"]
+        filelists: list[dict] = []
+        stack: list[tuple[int, str]] = []
+        i = idx + 1
+        while i < len(lines):
+            rendered = lines[i].rstrip("\n")
+            stripped = rendered.strip()
+            if not stripped or rendered == rendered.lstrip(" \t"):
+                break
+            indent = len(rendered) - len(rendered.lstrip(" \t"))
+            while stack and stack[-1][0] >= indent:
+                stack.pop()
+            try:
+                tokens = shlex.split(stripped.rstrip(" \\"), posix=True)
+            except ValueError:
+                return None, []
+            retained: list[str] = []
+            token_index = 0
+            while token_index < len(tokens):
+                token = tokens[token_index]
+                if token in {"-f", "-F"} and token_index + 1 < len(tokens):
+                    raw_path = tokens[token_index + 1]
+                    if os.path.isabs(raw_path):
+                        path = _normalize_path(raw_path)
+                    else:
+                        path_base = (
+                            os.path.dirname(stack[-1][1])
+                            if token == "-F" and stack
+                            else command_dir
+                        )
+                        path = _normalize_path(raw_path, path_base)
+                    parent = stack[-1][1] if stack else None
+                    filelists.append(
+                        {
+                            "path": path,
+                            "raw_path": raw_path,
+                            "parent": parent,
+                            "depth": len(stack) + 1,
+                            "mode": token,
+                        }
+                    )
+                    stack.append((indent, path))
+                    token_index += 2
+                    continue
+                retained.append(token)
+                token_index += 1
+            flattened.extend(retained)
+            i += 1
+        if len(flattened) == 1:
+            return "xrun", filelists
+        return shlex.join(flattened), filelists
+    return None, []
 
 
 def _extract_xcelium_command(lines: list[str]) -> str | None:
