@@ -197,6 +197,21 @@ class TestVertexFunctionSchemaCompatibility:
         assert "candidate_previous_logs" in parse_tool.description
         assert "compile/elaboration" in parse_tool.description
 
+    async def test_build_hierarchy_schema_accepts_ordered_supplementary_logs(self):
+        tools = await server.list_tools()
+        hierarchy_tool = next(
+            tool for tool in tools if tool.name == "build_tb_hierarchy"
+        )
+
+        supplementary = hierarchy_tool.inputSchema["properties"][
+            "supplementary_compile_logs"
+        ]
+        assert supplementary["type"] == "array"
+        assert supplementary["items"] == {"type": "string"}
+        assert "supplementary_compile_logs" not in hierarchy_tool.inputSchema[
+            "required"
+        ]
+
 
 @pytest.mark.anyio
 class TestStructuralScannerToolContract:
@@ -294,6 +309,64 @@ class TestStructuralScannerToolContract:
 
             assert result["required_next_call"] is None
             assert result["suggested_next"] is None
+
+    async def test_build_tb_hierarchy_merges_split_compile_and_elaboration_logs(
+        self, tmp_path
+    ):
+        source = tmp_path / "tb.sv"
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        source.write_text("module tb; logic q; endmodule\n", encoding="utf-8")
+        compile_log.write_text(
+            "Chronologic VCS simulator\n"
+            f"Command: vlogan {source}\n"
+            f"Parsing design file '{source}'\n",
+            encoding="utf-8",
+        )
+        elaborate_log.write_text(
+            "Chronologic VCS simulator\n"
+            "Command: vcs -top tb\n"
+            "Top Level Modules:\n"
+            "       tb\n",
+            encoding="utf-8",
+        )
+
+        result = await server._dispatch(
+            "build_tb_hierarchy",
+            {
+                "compile_log": str(compile_log),
+                "supplementary_compile_logs": [str(elaborate_log)],
+                "simulator": "vcs",
+            },
+        )
+
+        expected_handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        assert result.hierarchy_handle == expected_handle
+        assert result.hierarchy_handle != server.compute_handle(
+            str(compile_log), "vcs"
+        )
+        assert result.project["top_module"] == "tb"
+        assert result.project["compile_context"] == {
+            "status": "complete",
+            "log_count": 2,
+            "supplementary_log_count": 1,
+            "phase_roles": ["compile", "elaborate"],
+            "conflicts": [],
+        }
+        context, snapshot = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert context is not None
+        assert context["compile_result"]["top_modules"] == ["tb"]
+        assert snapshot == server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
 
 
 class TestSweepRetryRouting:

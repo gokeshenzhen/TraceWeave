@@ -7,6 +7,7 @@ from compile and elaborate logs.
 import os
 import re
 import shlex
+from copy import deepcopy
 from pathlib import Path
 
 from .filelist_tokenizer import tokenize_filelist
@@ -44,7 +45,7 @@ _XCE_SHELL_COMMAND_RE = re.compile(
 )
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
 _SNAPSHOT_RE = re.compile(r"(?:^|\s)-snapshot\s+(\w+)")
-_SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh")
+_SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl")
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
@@ -549,7 +550,7 @@ def _scan_vcs_tokens(
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if index == 0 and Path(token).name in {"vcs", "vlogan"}:
+        if index == 0 and Path(token).name in {"vcs", "vlogan", "vhdlan"}:
             index += 1
             continue
         if token.startswith("+incdir+"):
@@ -770,7 +771,7 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         if stripped.startswith("-") or stripped.startswith("+"):
             continue
 
-        if any(stripped.endswith(ext) for ext in (".sv", ".svh", ".v", ".vh")):
+        if stripped.lower().endswith(_SOURCE_SUFFIXES):
             path = _normalize_path(stripped, command_dir)
             file_info.setdefault(path, {"type": "unknown"})
             expanded_source_paths.append(path)
@@ -1002,6 +1003,350 @@ def _extract_xcelium_command(lines: list[str]) -> str | None:
                 i += 1
             return " ".join(parts) if len(parts) > 1 else "xrun"
     return None
+
+
+def _merge_phase_role(result: dict) -> str:
+    evidence = result.get("compile_evidence")
+    units = (
+        evidence.get("ordered_compilation_units", [])
+        if isinstance(evidence, dict)
+        else []
+    )
+    files = result.get("files")
+    user_files = files.get("user", []) if isinstance(files, dict) else []
+    has_sources = bool(units or user_files)
+    has_tops = bool(result.get("primary_top") or result.get("top_modules"))
+    if has_sources and has_tops:
+        return "compile_elaborate"
+    if has_sources:
+        return "compile"
+    if has_tops:
+        return "elaborate"
+    return "unknown"
+
+
+def _merge_phase_language(result: dict) -> str:
+    """Classify a source phase for frontend replay without guessing semantics."""
+
+    command = str(
+        result.get("compile_replay_command")
+        or result.get("compile_command")
+        or ""
+    )
+    try:
+        tokens = shlex.split(command, comments=True, posix=True)
+    except ValueError:
+        tokens = []
+    executable = Path(tokens[0]).name.lower() if tokens else ""
+    if executable == "vhdlan":
+        return "vhdl"
+    if executable == "vlogan":
+        return "verilog_systemverilog"
+
+    evidence = result.get("compile_evidence")
+    units = (
+        evidence.get("ordered_compilation_units", [])
+        if isinstance(evidence, dict)
+        else []
+    )
+    suffixes = {
+        Path(str(item.get("path") or "")).suffix.lower()
+        for item in units
+        if isinstance(item, dict) and item.get("path")
+    }
+    has_vhdl = bool(suffixes & {".vhd", ".vhdl"})
+    has_verilog = bool(suffixes & {".v", ".sv", ".vh", ".svh"})
+    if has_vhdl and has_verilog:
+        return "mixed"
+    if has_vhdl:
+        return "vhdl"
+    if has_verilog:
+        return "verilog_systemverilog"
+    return "unknown"
+
+
+def _merge_log_record(path: str, *, role: str, simulator: str) -> dict:
+    canonical = str(Path(path).resolve(strict=False))
+    try:
+        stat_result = Path(canonical).stat()
+    except OSError:
+        size = None
+        mtime_ns = None
+    else:
+        size = stat_result.st_size
+        mtime_ns = stat_result.st_mtime_ns
+    return {
+        "path": canonical,
+        "role": role,
+        "simulator": simulator,
+        "size": size,
+        "mtime_ns": mtime_ns,
+    }
+
+
+def _stable_merge_file_entries(results: list[dict]) -> tuple[list[dict], int]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+    filtered_count = 0
+    for result in results:
+        files = result.get("files")
+        if not isinstance(files, dict):
+            continue
+        try:
+            filtered_count += int(files.get("filtered_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        user = files.get("user")
+        if not isinstance(user, list):
+            continue
+        for item in user:
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            key = str(Path(str(item["path"])).resolve(strict=False))
+            if key in seen:
+                continue
+            seen.add(key)
+            copied = deepcopy(item)
+            copied["path"] = key
+            merged.append(copied)
+    return merged, filtered_count
+
+
+def _stable_merge_mapping_lists(results: list[dict], field: str) -> dict:
+    merged: dict[str, list] = {}
+    for result in results:
+        raw = result.get(field)
+        if not isinstance(raw, dict):
+            continue
+        for key, value in raw.items():
+            destination = merged.setdefault(str(key), [])
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if item not in destination:
+                    destination.append(deepcopy(item))
+    return merged
+
+
+def merge_compile_results(
+    primary: dict,
+    supplements: list[dict],
+    *,
+    primary_log: str,
+    supplementary_logs: list[str],
+) -> dict:
+    """Merge complementary compile/elaboration parse results conservatively.
+
+    Compilation-unit order is never deduplicated: repeated units and repeated
+    filelist expansion can have language semantics. Browsing-oriented
+    ``files.user`` entries are deduplicated independently by canonical path.
+    Semantic conflicts remain in a fixed-label merge receipt and deliberately
+    remove the elaboration top instead of guessing one.
+    """
+
+    if len(supplements) != len(supplementary_logs):
+        raise ValueError("supplementary compile result/path count mismatch")
+
+    results = [deepcopy(primary), *(deepcopy(item) for item in supplements)]
+    paths = [primary_log, *supplementary_logs]
+    canonical_paths = [str(Path(path).resolve(strict=False)) for path in paths]
+    conflicts: set[str] = set()
+    duplicate_indexes = {
+        index
+        for index, path in enumerate(canonical_paths)
+        if path in canonical_paths[:index]
+    }
+    if duplicate_indexes:
+        conflicts.add("duplicate_compile_log")
+
+    primary_simulator = str(primary.get("simulator") or "unknown").lower()
+    eligible: list[tuple[int, dict]] = []
+    roles: list[str] = []
+    for index, result in enumerate(results):
+        role = _merge_phase_role(result)
+        roles.append(role)
+        simulator = str(result.get("simulator") or "unknown").lower()
+        if index in duplicate_indexes:
+            continue
+        if simulator != primary_simulator:
+            conflicts.add("simulator_mismatch")
+            continue
+        eligible.append((index, result))
+
+    top_candidates: list[tuple[str, list[str], int]] = []
+    for index, result in eligible:
+        tops = [str(item) for item in result.get("top_modules", []) if item]
+        primary_top = str(result.get("primary_top") or "")
+        selected = primary_top or (tops[0] if tops else "")
+        if selected:
+            ordered = [selected, *(item for item in tops if item != selected)]
+            top_candidates.append((selected, ordered, index))
+    selected_top_names = {item[0] for item in top_candidates}
+    if len(selected_top_names) > 1:
+        conflicts.add("conflicting_elaboration_tops")
+        primary_top = None
+        top_modules: list[str] = []
+    elif top_candidates:
+        primary_top = top_candidates[0][0]
+        top_modules = list(
+            dict.fromkeys(
+                item
+                for _, ordered_tops, _ in top_candidates
+                for item in ordered_tops
+            )
+        )
+    else:
+        primary_top = None
+        top_modules = []
+
+    eligible_results = [item for _, item in eligible]
+    user_files, filtered_count = _stable_merge_file_entries(eligible_results)
+    ordered_units: list[dict] = []
+    ordered_includes: list[dict] = []
+    filelists: list[dict] = []
+    source_phases: list[dict] = []
+    source_order_complete = True
+    for index, result in eligible:
+        evidence = result.get("compile_evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        units = evidence.get("ordered_compilation_units")
+        units = units if isinstance(units, list) else []
+        has_sources = bool(units) or _merge_phase_role(result) in {
+            "compile",
+            "compile_elaborate",
+        }
+        if has_sources:
+            unit_order_source = str(
+                evidence.get("unit_order_source") or "unavailable"
+            )
+            source_order_complete &= unit_order_source == "simulator_log"
+            source_phases.append(
+                {
+                    "source_log_index": index,
+                    "role": roles[index],
+                    "language": _merge_phase_language(result),
+                    "compile_cwd": str(result.get("compile_cwd") or ""),
+                    "compile_command": result.get("compile_command"),
+                    "compile_replay_command": result.get("compile_replay_command"),
+                    "expanded_replay_command": evidence.get(
+                        "expanded_replay_command"
+                    ),
+                    "unit_order_source": unit_order_source,
+                }
+            )
+        for record in units:
+            if not isinstance(record, dict):
+                continue
+            copied = deepcopy(record)
+            copied["source_log_index"] = index
+            ordered_units.append(copied)
+        for field, destination in (
+            ("ordered_includes", ordered_includes),
+            ("filelists", filelists),
+        ):
+            raw = evidence.get(field)
+            if not isinstance(raw, list):
+                continue
+            for record in raw:
+                if not isinstance(record, dict):
+                    continue
+                copied = deepcopy(record)
+                copied["source_log_index"] = index
+                destination.append(copied)
+
+    command_source = next(
+        (
+            result
+            for _, result in eligible
+            if _merge_phase_role(result) in {"compile", "compile_elaborate"}
+            and (
+                result.get("compile_replay_command")
+                or result.get("compile_command")
+            )
+        ),
+        eligible[0][1] if eligible else primary,
+    )
+    warnings: list[str] = []
+    warning_records: list[dict] = []
+    for source_log_index, result in eligible:
+        raw_warnings = result.get("parse_warnings")
+        if not isinstance(raw_warnings, list):
+            continue
+        for warning in raw_warnings:
+            rendered = str(warning)
+            if rendered not in warnings:
+                warnings.append(rendered)
+            record = {
+                "source_log_index": source_log_index,
+                "message": rendered,
+            }
+            if record not in warning_records:
+                warning_records.append(record)
+    if not source_order_complete and source_phases:
+        warnings.append("compile_result_merge_source_order_incomplete")
+    if conflicts:
+        warnings.append("compile_result_merge_conflict")
+
+    merged = deepcopy(primary)
+    merged.update(
+        {
+            "simulator": primary_simulator,
+            "compile_cwd": command_source.get("compile_cwd")
+            or primary.get("compile_cwd"),
+            "primary_top": primary_top,
+            "top_modules": top_modules,
+            "reported_top_modules": list(top_modules),
+            "files": {"user": user_files, "filtered_count": filtered_count},
+            "include_tree": _stable_merge_mapping_lists(
+                eligible_results, "include_tree"
+            ),
+            "filelist_tree": _stable_merge_mapping_lists(
+                eligible_results, "filelist_tree"
+            ),
+            "interfaces": list(
+                dict.fromkeys(
+                    str(item)
+                    for result in eligible_results
+                    for item in result.get("interfaces", [])
+                    if item
+                )
+            ),
+            "compile_command": command_source.get("compile_command"),
+            "compile_replay_command": command_source.get(
+                "compile_replay_command"
+            ),
+            "parse_warnings": warnings,
+            "compile_evidence": {
+                "schema_version": _COMPILE_EVIDENCE_SCHEMA_VERSION,
+                "unit_order_source": (
+                    "simulator_log"
+                    if source_phases and source_order_complete
+                    else "merged_incomplete"
+                ),
+                "ordered_compilation_units": ordered_units,
+                "ordered_includes": ordered_includes,
+                "filelists": filelists,
+                "expanded_replay_command": (
+                    source_phases[0].get("expanded_replay_command")
+                    if len(source_phases) == 1
+                    else None
+                ),
+                "source_logs": [
+                    _merge_log_record(
+                        path,
+                        role=roles[index],
+                        simulator=str(results[index].get("simulator") or "unknown"),
+                    )
+                    for index, path in enumerate(paths)
+                ],
+                "source_phases": source_phases,
+                "parse_warning_records": warning_records,
+                "merge_status": "conflict" if conflicts else "complete",
+                "merge_conflicts": sorted(conflicts),
+            },
+        }
+    )
+    return merged
 
 
 def parse_compile_log(log_path: str, simulator: str = "auto") -> dict:

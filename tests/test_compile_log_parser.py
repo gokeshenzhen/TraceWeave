@@ -5,7 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.compile_log_parser import detect_simulator, parse_compile_log
+from src.compile_log_parser import (
+    detect_simulator,
+    merge_compile_results,
+    parse_compile_log,
+)
 
 
 def _write(path: Path, text: str):
@@ -88,6 +92,200 @@ Top Level Modules:
         finally:
             tmp.cleanup()
 
+    def test_merge_split_compile_and_elaboration_results_preserves_phase_order(
+        self, tmp_path
+    ):
+        first = tmp_path / "first.sv"
+        repeated = tmp_path / "repeated.sv"
+        for path in (first, repeated):
+            _write(path, "module m; endmodule\n")
+        compile_log = tmp_path / "comp.log"
+        elab_log = tmp_path / "elab.log"
+        _write(compile_log, "compile\n")
+        _write(elab_log, "elaborate\n")
+        compile_result = {
+            "simulator": "vcs",
+            "compile_cwd": str(tmp_path),
+            "primary_top": None,
+            "top_modules": [],
+            "files": {
+                "user": [
+                    {"path": str(first), "type": "module", "category": "rtl"},
+                    {
+                        "path": str(repeated),
+                        "type": "module",
+                        "category": "rtl",
+                    },
+                ],
+                "filtered_count": 0,
+            },
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "compile_command": f"vlogan {first} {repeated} {repeated}",
+            "parse_warnings": ["compile warning"],
+            "compile_evidence": {
+                "schema_version": 1,
+                "unit_order_source": "simulator_log",
+                "ordered_compilation_units": [
+                    {"path": str(first), "type": "module", "role": "project"},
+                    {
+                        "path": str(repeated),
+                        "type": "module",
+                        "role": "project",
+                    },
+                    {
+                        "path": str(repeated),
+                        "type": "module",
+                        "role": "project",
+                    },
+                ],
+                "ordered_includes": [],
+                "filelists": [],
+                "expanded_replay_command": None,
+            },
+        }
+        elaborate_result = {
+            "simulator": "vcs",
+            "compile_cwd": str(tmp_path),
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "files": {"user": [], "filtered_count": 0},
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "compile_command": "vcs -top tb_top",
+            "parse_warnings": [],
+            "compile_evidence": {
+                "schema_version": 1,
+                "unit_order_source": "unavailable",
+                "ordered_compilation_units": [],
+                "ordered_includes": [],
+                "filelists": [],
+                "expanded_replay_command": None,
+            },
+        }
+
+        merged = merge_compile_results(
+            compile_result,
+            [elaborate_result],
+            primary_log=str(compile_log),
+            supplementary_logs=[str(elab_log)],
+        )
+
+        assert merged["top_modules"] == ["tb_top"]
+        assert merged["primary_top"] == "tb_top"
+        assert merged["compile_command"] == compile_result["compile_command"]
+        evidence = merged["compile_evidence"]
+        assert evidence["merge_status"] == "complete"
+        assert [item["role"] for item in evidence["source_logs"]] == [
+            "compile",
+            "elaborate",
+        ]
+        assert [
+            item["path"] for item in evidence["ordered_compilation_units"]
+        ] == [str(first), str(repeated), str(repeated)]
+        assert len(evidence["source_phases"]) == 1
+        assert evidence["source_phases"][0]["language"] == (
+            "verilog_systemverilog"
+        )
+        assert evidence["parse_warning_records"] == [
+            {"source_log_index": 0, "message": "compile warning"}
+        ]
+
+    def test_merge_compile_results_reports_conflicting_tops_without_guessing(
+        self, tmp_path
+    ):
+        primary_log = tmp_path / "primary.log"
+        supplement_log = tmp_path / "supplement.log"
+        _write(primary_log, "primary\n")
+        _write(supplement_log, "supplement\n")
+        base = {
+            "simulator": "vcs",
+            "compile_cwd": str(tmp_path),
+            "files": {"user": [], "filtered_count": 0},
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "compile_command": None,
+            "parse_warnings": [],
+            "compile_evidence": {
+                "schema_version": 1,
+                "unit_order_source": "unavailable",
+                "ordered_compilation_units": [],
+                "ordered_includes": [],
+                "filelists": [],
+                "expanded_replay_command": None,
+            },
+        }
+
+        merged = merge_compile_results(
+            {**base, "primary_top": "top_a", "top_modules": ["top_a"]},
+            [{**base, "primary_top": "top_b", "top_modules": ["top_b"]}],
+            primary_log=str(primary_log),
+            supplementary_logs=[str(supplement_log)],
+        )
+
+        assert merged["primary_top"] is None
+        assert merged["top_modules"] == []
+        assert merged["compile_evidence"]["merge_status"] == "conflict"
+        assert merged["compile_evidence"]["merge_conflicts"] == [
+            "conflicting_elaboration_tops"
+        ]
+        assert "compile_result_merge_conflict" in merged["parse_warnings"]
+
+    def test_merge_compile_results_rejects_duplicate_log_identity(self, tmp_path):
+        primary_log = tmp_path / "compile.log"
+        _write(primary_log, "compile\n")
+        result = {
+            "simulator": "vcs",
+            "top_modules": [],
+            "files": {"user": [], "filtered_count": 0},
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "parse_warnings": [],
+        }
+
+        merged = merge_compile_results(
+            result,
+            [result],
+            primary_log=str(primary_log),
+            supplementary_logs=[str(primary_log)],
+        )
+
+        assert merged["compile_evidence"]["merge_status"] == "conflict"
+        assert merged["compile_evidence"]["merge_conflicts"] == [
+            "duplicate_compile_log"
+        ]
+
+    def test_merge_compile_results_rejects_mismatched_simulator(self, tmp_path):
+        primary_log = tmp_path / "vcs.log"
+        supplement_log = tmp_path / "xcelium.log"
+        _write(primary_log, "Chronologic VCS\n")
+        _write(supplement_log, "xrun\n")
+        base = {
+            "top_modules": [],
+            "files": {"user": [], "filtered_count": 0},
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "parse_warnings": [],
+        }
+
+        merged = merge_compile_results(
+            {**base, "simulator": "vcs"},
+            [{**base, "simulator": "xcelium"}],
+            primary_log=str(primary_log),
+            supplementary_logs=[str(supplement_log)],
+        )
+
+        assert merged["simulator"] == "vcs"
+        assert merged["compile_evidence"]["merge_status"] == "conflict"
+        assert merged["compile_evidence"]["merge_conflicts"] == [
+            "simulator_mismatch"
+        ]
+
     def test_parse_xcelium_compile_log(self):
         tmp, root = _make_demo_tree()
         try:
@@ -116,6 +314,31 @@ file: {root / "tb" / "top_tb.sv"}
             )
         finally:
             tmp.cleanup()
+
+    def test_xcelium_expanded_invocation_keeps_vhdl_source(self, tmp_path):
+        sv = tmp_path / "top.sv"
+        vhdl = tmp_path / "leaf.vhd"
+        log = tmp_path / "xrun.log"
+        _write(sv, "module tb; endmodule\n")
+        _write(vhdl, "entity leaf is end entity;\n")
+        _write(
+            log,
+            "xrun\n"
+            f"  {sv}\n"
+            f"  {vhdl}\n"
+            "  -top tb\n\n",
+        )
+
+        result = parse_compile_log(str(log), "xcelium")
+
+        assert {item["path"] for item in result["files"]["user"]} == {
+            str(sv.resolve()),
+            str(vhdl.resolve()),
+        }
+        assert [
+            item["path"]
+            for item in result["compile_evidence"]["ordered_compilation_units"]
+        ] == [str(sv.resolve()), str(vhdl.resolve())]
 
     def test_vcs_compile_evidence_separates_units_includes_and_tool_roles(
         self, tmp_path

@@ -181,6 +181,14 @@ Verification
   boundary. Re-running the compile and `build_tb_hierarchy` invalidates it.
   The initial scan compares all input metadata before and after hashing and
   refuses a reusable key if the snapshot changes mid-scan.
+  A split VCS build may add ordered `supplementary_compile_logs` at the
+  hierarchy boundary. Parse results are merged with separate phase commands;
+  the handle/snapshot identity covers every log while one-log callers retain
+  their old identity. Mixed-language manifests retain VHDL files in that
+  identity but send only Verilog/SystemVerilog inputs to Slang. The worker marks
+  VHDL as `opaque_vhdl_boundary`: blocking frontend diagnostics or missing VHDL
+  projection make negative claims inconclusive, but an IR-proved positive fact
+  still returns from Source Graph and does not enter Static.
   Privacy-safe operation metrics make full-sweep cost attributable without
   recording project identities: discovery/search timing, total sweep time,
   planned/attempted/completed interface counts, unique clock/signal counts,

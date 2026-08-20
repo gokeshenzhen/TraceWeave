@@ -481,6 +481,36 @@ compile log / refreshed `build_tb_hierarchy` handle invalidates the snapshot.
 If source inputs change, rebuild and refresh the hierarchy before querying so
 Source Graph stays aligned with the simulated compile session.
 
+VCS flows that split source compilation and elaboration across logs can build
+one context explicitly. Keep the source-compile log as the primary path (and
+use it for the structural scan), then supply the other source/elaboration logs
+in their build order:
+
+```text
+build_tb_hierarchy(
+  compile_log=".../comp.log",
+  supplementary_compile_logs=[".../vhdl_comp.log", ".../elab.log"],
+  simulator="vcs",
+)
+```
+
+The resulting handle, hierarchy snapshot, and Source Graph compile fingerprint
+cover every log and every ordered source/support input. Connectivity tools keep
+their existing signatures and continue to receive the same primary
+`compile_log`. Conflicting simulators/tops, duplicate logs, incomplete source
+order, or material parse warnings keep the manifest conservative instead of
+inventing a combined command.
+
+Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top
+and queried region can be elaborated by the Verilog/SystemVerilog frontend.
+VHDL files stay in the content identity but are not passed to Slang; coverage
+reports `opaque_vhdl_boundary` (and the unprojected-file count). A frontend
+diagnostic or opaque VHDL region therefore prevents exhaustive negative claims,
+but does not discard proved positive driver/load/path facts: a query with a
+positive fact returns Source Graph with `positive_fact_confidence`, while only
+an inconclusive no-match advances to Legacy Static. VHDL internals and a design
+whose selected elaboration top is itself VHDL are not projected in this phase.
+
 Source Graph is enabled by default. If the MCP interpreter does not have the
 optional frontend, the dependency blocker is recorded and the request continues
 to Legacy Static. The recommended setup installs `pyslang==11.0.0` into the
@@ -629,8 +659,8 @@ After connecting either client, run a quick end-to-end smoke test:
 This is the default workflow for simulation-log and waveform debug:
 
 1. Call `get_sim_paths(verif_root, case_name?)`. For non-standard layouts you may also pass explicit `sim_log` / `wave_file` / `compile_log` paths; any field you supply is used as-is and the omitted ones are still auto-discovered (a `sim_log` path also anchors discovery of the matching waveform and compile/elab logs). An explicit path may be absolute or relative — a relative path is resolved against `verif_root` and each of its ancestors (so a path relative to the repo root also works), and if still not found it is recovered by basename.
-2. Choose the `phase == "elaborate"` compile log.
-3. Run `build_tb_hierarchy` and `scan_structural_risks` in parallel on that same compile log.
+2. Choose the `phase == "elaborate"` compile log for a complete single-log flow. For split VCS source-compile/elaboration logs, use the source-compile log as primary and retain the ordered companions for `supplementary_compile_logs`.
+3. Run `build_tb_hierarchy` (with any supplements) and `scan_structural_risks` in parallel on that same primary compile log.
 4. If a sim log is present, call `parse_sim_log`; then, on a failing run with a waveform, call `sweep_handshakes` for a one-call whole-design protocol-health scan (a default-flow step, like `scan_structural_risks` at the runtime layer).
 5. Use `recommend_failure_debug_next_steps` or `analyze_failure_event`.
 6. Use `search_signals` and `analyze_failures` when you need waveform snapshots for explicit signals.
@@ -654,7 +684,7 @@ Important workflow rules:
 ### Paths and Hierarchy
 
 - `get_sim_paths`: Discover compile logs, sim logs, waveforms, simulator, and cases. Optional explicit `sim_log` / `wave_file` / `compile_log` overrides win over auto-discovery; omitted fields are still discovered (anchored at the `sim_log`/`wave_file` directory)
-- `build_tb_hierarchy`: Build testbench hierarchy server-side; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `hierarchy_handle`). Full data is reachable via the handle tools below.
+- `build_tb_hierarchy`: Build testbench hierarchy server-side; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `hierarchy_handle`). For split VCS flows, pass ordered `supplementary_compile_logs` once; later connectivity calls keep using the primary `compile_log`. Full data is reachable via the handle tools below.
 - `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
 
 ### Hierarchy Handle Tools

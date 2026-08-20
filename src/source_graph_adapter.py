@@ -51,9 +51,11 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.5"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.6"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
-_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
+_FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
+_OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
+_HDL_SUFFIXES = _FRONTEND_HDL_SUFFIXES | _OPAQUE_HDL_SUFFIXES
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _FIXED_LABEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -525,7 +527,7 @@ def _translate_tokens(
     index = 0
     if skip_executable and tokens:
         executable = Path(tokens[0]).name
-        if executable in {"vcs", "vlogan", "xrun", "irun"}:
+        if executable in {"vcs", "vlogan", "vhdlan", "xrun", "irun"}:
             index = 1
         else:
             state.options_complete = False
@@ -730,6 +732,34 @@ def _compilation_unit_records(
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return []
     return [item for item in raw if isinstance(item, Mapping) and item.get("path")]
+
+
+def _phase_recorded_inputs(
+    compile_result: Mapping[str, Any],
+    *,
+    source_log_index: int | None,
+    suffixes: set[str],
+) -> list[str]:
+    """Return recorded opaque inputs belonging to one merged source phase.
+
+    A VHDL-only phase is never replayed into Slang. Even when its source list
+    came from bounded command recovery rather than simulator-emitted unit
+    records, retain those files in content identity; the merge warning still
+    prevents the manifest from claiming exact source order or reusable coverage.
+    """
+
+    if source_log_index is None:
+        return []
+    paths: list[str] = []
+    for item in _compilation_unit_records(compile_result):
+        if item.get("source_log_index") != source_log_index:
+            continue
+        if str(item.get("role") or "project") == "simulator_instrumentation":
+            continue
+        path = Path(str(item["path"])).resolve(strict=False)
+        if path.suffix.lower() in suffixes:
+            paths.append(str(path))
+    return paths
 
 
 def _recorded_compilation_unit_paths(
@@ -1502,12 +1532,46 @@ def _build_compile_manifest(
         or ""
     )
     evidence = _compile_evidence(compile_result)
+    raw_source_phases = evidence.get("source_phases") if evidence is not None else None
+    source_phases = (
+        [item for item in raw_source_phases if isinstance(item, Mapping)]
+        if isinstance(raw_source_phases, Sequence)
+        and not isinstance(raw_source_phases, (str, bytes))
+        else []
+    )
     expanded_command = (
         str(evidence.get("expanded_replay_command") or "")
         if simulator == "xcelium" and evidence is not None
         else ""
     )
-    command = expanded_command or replay_command
+    phase_commands: list[tuple[str, Path, str, int | None]] = []
+    if source_phases:
+        for phase in source_phases:
+            rendered = str(
+                phase.get("expanded_replay_command")
+                or phase.get("compile_replay_command")
+                or phase.get("compile_command")
+                or ""
+            )
+            phase_cwd = Path(
+                str(phase.get("compile_cwd") or command_dir)
+            ).resolve(strict=False)
+            language = str(phase.get("language") or "unknown")
+            raw_log_index = phase.get("source_log_index")
+            log_index = raw_log_index if isinstance(raw_log_index, int) else None
+            phase_commands.append((rendered, phase_cwd, language, log_index))
+        command = _canonical_json(
+            [
+                {
+                    "command": rendered,
+                    "compile_cwd": str(phase_cwd),
+                    "language": language,
+                }
+                for rendered, phase_cwd, language, _ in phase_commands
+            ]
+        ).decode("utf-8")
+    else:
+        command = expanded_command or replay_command
     parse_warnings = compile_result.get("parse_warnings")
     warning_items = (
         [str(item) for item in parse_warnings]
@@ -1516,7 +1580,17 @@ def _build_compile_manifest(
         else []
     )
 
-    if (
+    if source_phases and any(
+        _ENV_REF_RE.search(rendered)
+        for rendered, _, language, _ in phase_commands
+        if rendered and language != "vhdl"
+    ):
+        # Cross-phase environment inference needs a phase-local proof for each
+        # command. Keep the recovered simulator unit order usable, but do not
+        # claim exact option replay until every phase binding is explicit.
+        state.options_complete = False
+        state.gap_codes.add("compile_environment_unresolved")
+    elif (
         replay_command
         and not expanded_command
         and (
@@ -1532,7 +1606,65 @@ def _build_compile_manifest(
         state.env_overrides.update(bindings)
         state.inferred_env_names.update(inferred_names)
 
-    if not command:
+    if source_phases:
+        frontend_phase_options: list[tuple[str, ...]] = []
+        if not phase_commands or any(
+            not rendered
+            for rendered, _, language, _ in phase_commands
+            if language != "vhdl"
+        ):
+            state.options_complete = False
+            state.gap_codes.add("compile_command_missing")
+        for rendered, phase_cwd, language, log_index in phase_commands:
+            if language == "vhdl":
+                state.gap_codes.add("opaque_vhdl_boundary")
+                state.objective_exclusions.add("opaque_vhdl_boundary")
+                for path in _phase_recorded_inputs(
+                    compile_result,
+                    source_log_index=log_index,
+                    suffixes=_OPAQUE_HDL_SUFFIXES,
+                ):
+                    state.inputs.append(path)
+                continue
+            if not rendered:
+                frontend_phase_options.append(())
+                continue
+            try:
+                tokens = shlex.split(rendered, comments=True, posix=True)
+            except ValueError:
+                state.inputs_complete = False
+                state.options_complete = False
+                state.gap_codes.add("compile_command_parse_failed")
+                continue
+            if not tokens:
+                continue
+            previous_command_dir = state.command_dir
+            state.command_dir = phase_cwd
+            option_start = len(state.options)
+            try:
+                _translate_tokens(
+                    state,
+                    tokens,
+                    base=phase_cwd,
+                    skip_executable=True,
+                )
+            finally:
+                state.command_dir = previous_command_dir
+            frontend_phase_options.append(tuple(state.options[option_start:]))
+        if len(frontend_phase_options) > 1 and any(
+            options != frontend_phase_options[0]
+            for options in frontend_phase_options[1:]
+        ):
+            # Slang consumes one global option vector, while independent
+            # vlogan phases can have phase-local defines/include lookup rules.
+            # Replay remains useful for positive facts, but it cannot claim an
+            # exact reusable manifest when those phase-local semantics differ.
+            state.options_complete = False
+            state.gap_codes.add("phase_local_compile_options_unmodeled")
+            state.objective_exclusions.add(
+                "phase_local_compile_options_unmodeled"
+            )
+    elif not command:
         state.options_complete = False
         state.gap_codes.add("compile_command_missing")
     else:
@@ -1656,6 +1788,9 @@ def _build_compile_manifest(
     if not state.inputs:
         state.inputs_complete = False
         state.gap_codes.add("compile_inputs_empty")
+    if any(Path(path).suffix.lower() in _OPAQUE_HDL_SUFFIXES for path in state.inputs):
+        state.gap_codes.add("opaque_vhdl_boundary")
+        state.objective_exclusions.add("opaque_vhdl_boundary")
 
     material_warnings = warning_items
     if state.inferred_env_names and not env_unresolved and project_sequence_matches:
@@ -1681,29 +1816,38 @@ def _build_compile_manifest(
     state.support_files.difference_update(
         Path(path) for path in recorded_instrumentation
     )
-    before_content = _content_stat_key(
-        inputs=state.inputs,
-        support_files=state.support_files,
-    )
-    fingerprint, content_complete = _compile_fingerprint(
-        simulator=simulator,
-        command=command,
-        inputs=state.inputs,
-        options=state.options,
-        tops=tops,
-        support_files=state.support_files,
-        exclusions=state.objective_exclusions,
-    )
-    after_content = _content_stat_key(
-        inputs=state.inputs,
-        support_files=state.support_files,
-    )
-    if before_content is None or after_content != before_content:
+    if tops:
+        before_content = _content_stat_key(
+            inputs=state.inputs,
+            support_files=state.support_files,
+        )
+        fingerprint, content_complete = _compile_fingerprint(
+            simulator=simulator,
+            command=command,
+            inputs=state.inputs,
+            options=state.options,
+            tops=tops,
+            support_files=state.support_files,
+            exclusions=state.objective_exclusions,
+        )
+        after_content = _content_stat_key(
+            inputs=state.inputs,
+            support_files=state.support_files,
+        )
+        if before_content is None or after_content != before_content:
+            fingerprint = None
+            content_complete = False
+        if not content_complete:
+            state.inputs_complete = False
+            state.gap_codes.add("compile_content_unavailable")
+    else:
+        # A missing elaboration top blocks every Source Graph plan before a
+        # reusable artifact can exist. Avoid hashing a potentially huge source
+        # set merely to report that deterministic blocker; the later merged
+        # hierarchy call will hash normally once a supplementary elab log
+        # supplies a proved top.
         fingerprint = None
-        content_complete = False
-    if not content_complete:
-        state.inputs_complete = False
-        state.gap_codes.add("compile_content_unavailable")
+        content_complete = True
 
     manifest = CompileInputManifest(
         fingerprint=fingerprint,

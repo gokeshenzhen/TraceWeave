@@ -918,6 +918,67 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["driver", "loads", "path"])
+async def test_split_compile_elaboration_context_routes_to_source_graph(
+    monkeypatch, tmp_path, tool
+):
+    source = (
+        server.os.path.dirname(server.__file__)
+        + "/tests/fixtures/source_graph_frontend/hand_connectivity.sv"
+    )
+    compile_log = tmp_path / "compile.log"
+    elaborate_log = tmp_path / "elaborate.log"
+    compile_log.write_text(
+        "Chronologic VCS simulator\n"
+        f"Command: vlogan {source}\n"
+        f"Parsing design file '{source}'\n",
+        encoding="utf-8",
+    )
+    elaborate_log.write_text(
+        "Chronologic VCS simulator\n"
+        "Command: vcs -top sg_top\n"
+        "Top Level Modules:\n"
+        "       sg_top\n",
+        encoding="utf-8",
+    )
+
+    hierarchy = await server._dispatch(
+        "build_tb_hierarchy",
+        {
+            "compile_log": str(compile_log),
+            "supplementary_compile_logs": [str(elaborate_log)],
+            "simulator": "vcs",
+        },
+    )
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    if tool == "driver":
+        query_args = _driver_args(str(compile_log))
+        query_args["simulator"] = "vcs"
+        result = await server._dispatch("explain_signal_driver", query_args)
+        assert result.driver_status == "resolved"
+    elif tool == "loads":
+        query_args = _load_args(str(compile_log))
+        query_args["simulator"] = "vcs"
+        result = await server._dispatch("find_signal_loads", query_args)
+        assert result.loads
+    else:
+        query_args = _path_args(str(compile_log))
+        query_args["simulator"] = "vcs"
+        result = await server._dispatch("trace_signal_path", query_args)
+        assert result.found is True
+
+    assert hierarchy.project["compile_context"]["status"] == "complete"
+    assert result.backend == "source_graph"
+    assert result.backend_status.source_graph.prepare_status == "ready"
+    assert result.backend_status.source_graph.adapter["manifest"]["top_count"] == 1
+    assert worker.calls == 1
+    assert static.driver_calls + static.load_calls + static.path_calls == 0
+
+
+@pytest.mark.anyio
 async def test_warm_public_request_reuses_compile_snapshot_and_ir(
     monkeypatch, tmp_path
 ):
@@ -1299,6 +1360,94 @@ async def test_partial_positive_stays_partial_and_does_not_fall_back(
         result.backend_status.source_graph.coverage_gap_codes
     )
     assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["driver", "loads"])
+async def test_opaque_vhdl_gap_keeps_positive_source_graph_facts(
+    monkeypatch, tmp_path, operation
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    coverage = CoverageReport(
+        status=CoverageStatus.INCONCLUSIVE,
+        files_total=2,
+        files_projected=1,
+        gaps=(
+            CoverageGap(
+                code="opaque_vhdl_boundary",
+                message="VHDL is outside the Source Graph projection",
+                impact=CoverageStatus.INCONCLUSIVE,
+                constructs=("vhdl", "mixed_language_boundary"),
+                scopes=("*",),
+            ),
+        ),
+        diagnostic_count=1,
+        blocking_diagnostic_count=1,
+    )
+    runtime = SourceGraphRuntime(ReadyWorker(ir=_production_ir(coverage=coverage)))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    if operation == "driver":
+        result = await server._dispatch(
+            "explain_signal_driver", _driver_args(compile_log)
+        )
+        assert result.driver_status == "resolved"
+        assert static.driver_calls == 0
+    else:
+        result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+        assert result.loads
+        assert static.load_calls == 0
+
+    assert result.backend == "source_graph"
+    assert result.backend_status.source_graph.query_status == "found"
+    assert result.backend_status.source_graph.coverage_status == "inconclusive"
+    assert "opaque_vhdl_boundary" in (
+        result.backend_status.source_graph.coverage_gap_codes
+    )
+    assert result.claim_semantics.positive_fact_confidence in {
+        "exact",
+        "conditional",
+    }
+    assert result.claim_semantics.negative_claim_allowed is False
+
+
+@pytest.mark.anyio
+async def test_opaque_vhdl_gap_falls_back_only_for_inconclusive_signal(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    gap = CoverageGap(
+        code="opaque_vhdl_boundary",
+        message="VHDL is outside the Source Graph projection",
+        impact=CoverageStatus.INCONCLUSIVE,
+        constructs=("vhdl", "mixed_language_boundary"),
+        scopes=("*",),
+    )
+    coverage = CoverageReport(
+        status=CoverageStatus.INCONCLUSIVE,
+        files_total=2,
+        files_projected=1,
+        gaps=(gap,),
+    )
+    runtime = SourceGraphRuntime(ReadyWorker(ir=_production_ir(coverage=coverage)))
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log, "sg_top.runtime_force"),
+    )
+
+    assert result.backend == "static"
+    assert result.backend_status.source_graph.query_status == "inconclusive"
+    assert "opaque_vhdl_boundary" in (
+        result.backend_status.source_graph.coverage_gap_codes
+    )
+    assert result.backend_status.fallback_reason == (
+        "source_graph_coverage_inconclusive"
+    )
+    assert static.driver_calls == 1
 
 
 @pytest.mark.anyio

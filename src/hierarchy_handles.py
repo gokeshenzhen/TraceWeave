@@ -20,15 +20,20 @@ Design points:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-from typing import Any
+from typing import Any, Sequence
 
 
 HANDLE_PREFIX = "tbh_"
 _HANDLE_SHA_LEN = 8
 
 
-def compute_handle(compile_log: str, simulator: str) -> str:
+def compute_handle(
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: Sequence[str] = (),
+) -> str:
     """Derive a content-addressed handle for a compile_log+simulator pair.
 
     The mtime is folded into the digest so that recompiling — which rewrites
@@ -37,11 +42,19 @@ def compute_handle(compile_log: str, simulator: str) -> str:
     resulting handle is still stable for the (path, simulator) pair, but a
     later successful build will replace it.
     """
-    digest = compute_snapshot_fingerprint(compile_log, simulator)[:_HANDLE_SHA_LEN]
+    digest = compute_snapshot_fingerprint(
+        compile_log,
+        simulator,
+        supplementary_compile_logs=supplementary_compile_logs,
+    )[:_HANDLE_SHA_LEN]
     return f"{HANDLE_PREFIX}{digest}"
 
 
-def compute_snapshot_fingerprint(compile_log: str, simulator: str) -> str:
+def compute_snapshot_fingerprint(
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: Sequence[str] = (),
+) -> str:
     """Return the full process-session hierarchy snapshot fingerprint.
 
     Public handles intentionally remain short and opaque.  Internal Source
@@ -55,7 +68,34 @@ def compute_snapshot_fingerprint(compile_log: str, simulator: str) -> str:
         mtime_ns = os.stat(abs_path).st_mtime_ns if abs_path else 0
     except OSError:
         mtime_ns = 0
-    material = f"{abs_path}|{simulator or ''}|{mtime_ns}".encode("utf-8")
+    if not supplementary_compile_logs:
+        # Preserve the exact one-log identity and public handle format.
+        material = f"{abs_path}|{simulator or ''}|{mtime_ns}".encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    records: list[tuple[str, int, int]] = []
+    for path in (compile_log, *supplementary_compile_logs):
+        canonical = os.path.realpath(os.path.abspath(path)) if path else ""
+        try:
+            stat_result = os.stat(canonical) if canonical else None
+        except OSError:
+            stat_result = None
+        records.append(
+            (
+                canonical,
+                stat_result.st_mtime_ns if stat_result is not None else 0,
+                stat_result.st_size if stat_result is not None else 0,
+            )
+        )
+    material = json.dumps(
+        {
+            "schema": "merged-v1",
+            "simulator": simulator or "",
+            "logs": records,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 

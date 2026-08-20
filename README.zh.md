@@ -437,6 +437,31 @@ IR/source assignment evidence，不改变端点是否连通。
 `build_tb_hierarchy` 后该 snapshot 会失效。若源码发生变化，应先重新编译并刷新 hierarchy，
 使 Source Graph 与实际仿真 compile session 保持一致。
 
+对于 source compile 与 elaboration 分属多个日志的 VCS 流程，可以显式构造同一个上下文。
+建议把包含源文件顺序的 compile log 保持为 primary（结构扫描也使用它），再按 build 顺序
+提供其余 source/elaboration 日志：
+
+```text
+build_tb_hierarchy(
+  compile_log=".../comp.log",
+  supplementary_compile_logs=[".../vhdl_comp.log", ".../elab.log"],
+  simulator="vcs",
+)
+```
+
+生成的 handle、hierarchy snapshot 与 Source Graph compile fingerprint 都覆盖全部日志以及
+全部有序 source/support input。后续 connectivity 工具的参数不变，仍传同一个 primary
+`compile_log`。若 simulator/top 冲突、日志重复、source order 不完整或存在实质性 parse
+warning，manifest 会保持保守/incomplete，不会拼出一个并不存在的合成命令。
+
+当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含
+Verilog、SystemVerilog 与 VHDL 的工程仍可进入 Source Graph。VHDL 文件继续参与内容身份，
+但不传给 Slang；coverage 会报告 `opaque_vhdl_boundary`（以及未投影文件计数）。因此 frontend
+diagnostic 或不透明 VHDL 区域会禁止穷尽式负结论，但不会丢弃已证明的正向 driver/load/path
+事实：有正向事实的查询仍以 Source Graph 返回并携带 `positive_fact_confidence`，只有没有
+可证明事实的 inconclusive 查询才继续降级到 Legacy Static。本阶段不投影 VHDL 内部；若
+所选 elaboration top 本身就是 VHDL，也仍不在本阶段的支持范围内。
+
 Source Graph 默认启用。若 MCP Python 没有 optional frontend，会记录 dependency blocker
 并继续 Legacy Static。推荐安装方式会把 `pyslang==11.0.0` 安装进启动 MCP server
 所使用的同一个仓库本地解释器：
@@ -561,8 +586,8 @@ partial/inconclusive coverage 下的正结果仍是 partial；只有 complete co
 这是仿真日志与波形调试的默认工作流:
 
 1. 调用 `get_sim_paths(verif_root, case_name?)`。对于非标准布局,还可显式传入 `sim_log` / `wave_file` / `compile_log` 路径;给定的字段按原样采用,省略的字段仍会自动发现(`sim_log` 路径还会锚定其所在 case 目录,据此发现对应波形与编译/elab 日志)。显式路径可为绝对或相对——相对路径会按 `verif_root` 及其各级祖先解析(因此相对仓库根的路径也可用),仍找不到时按文件名回收。
-2. 选择 `phase == "elaborate"` 的编译日志。
-3. 在同一个编译日志上并行运行 `build_tb_hierarchy` 与 `scan_structural_risks`。
+2. 完整 single-log 流程选择 `phase == "elaborate"` 的编译日志；split VCS source-compile/elaboration 流程以 source-compile log 为 primary，并保留有序 companion logs 作为 `supplementary_compile_logs`。
+3. 在同一个 primary compile log 上并行运行带 supplements 的 `build_tb_hierarchy` 与 `scan_structural_risks`。
 4. 如果有仿真日志,调用 `parse_sim_log`;然后在失败且有波形的运行上调用 `sweep_handshakes` 做一次全设计协议健康扫描(default-flow 步骤,相当于运行期的 `scan_structural_risks`)。
 5. 使用 `recommend_failure_debug_next_steps` 或 `analyze_failure_event`。
 6. 当需要针对显式信号的波形快照时,使用 `search_signals` 与 `analyze_failures`。
@@ -586,7 +611,7 @@ partial/inconclusive coverage 下的正结果仍是 partial；只有 complete co
 ### 路径与层次结构
 
 - `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case。可选的显式 `sim_log` / `wave_file` / `compile_log` 覆盖优先于自动发现,省略的字段仍会被发现(以 `sim_log`/`wave_file` 所在目录为锚点)
-- `build_tb_hierarchy`:服务端构建 testbench 层次结构;返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`hierarchy_handle`)。完整数据通过下方的 handle 工具按需获取。
+- `build_tb_hierarchy`:服务端构建 testbench 层次结构;返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`hierarchy_handle`)。split VCS 流程可在这里一次性传入有序的 `supplementary_compile_logs`;后续 connectivity 查询仍使用 primary `compile_log`。完整数据通过下方的 handle 工具按需获取。
 - `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
 
 ### 层次结构 Handle 工具

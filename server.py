@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 import hashlib
 import inspect
 import json
+import re
 import sys
 import os
 import threading
@@ -60,7 +61,11 @@ from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
-from src.compile_log_parser import parse_compile_log
+from src.compile_log_parser import (
+    detect_simulator,
+    merge_compile_results,
+    parse_compile_log,
+)
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import (
@@ -470,6 +475,40 @@ def _resolve_session_simulator(args: dict) -> str:
     return "auto"
 
 
+def _resolve_hierarchy_context(
+    compile_log: str,
+    simulator: str,
+) -> tuple[dict | None, str]:
+    """Resolve the active merged hierarchy while preserving one-log callers."""
+
+    candidates: list[str] = []
+    for source in (
+        _session_state.get("build_tb_hierarchy"),
+        _result_provenance.get("build_tb_hierarchy"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        if not _same_realpath(source.get("compile_log"), compile_log):
+            continue
+        source_simulator = source.get("simulator")
+        if source_simulator not in {None, "auto", simulator}:
+            continue
+        handle = source.get("hierarchy_handle")
+        if isinstance(handle, str) and handle:
+            candidates.append(handle)
+    candidates.append(compute_handle(compile_log, simulator))
+
+    for handle in dict.fromkeys(candidates):
+        hierarchy_result = _handle_store.resolve(handle)
+        if hierarchy_result is None:
+            continue
+        snapshot = hierarchy_result.get("_hierarchy_snapshot_sha256")
+        if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot):
+            snapshot = compute_snapshot_fingerprint(compile_log, simulator)
+        return hierarchy_result, snapshot
+    return None, compute_snapshot_fingerprint(compile_log, simulator)
+
+
 def _log_stat_info(log_path: str) -> dict:
     stat_result = os.stat(log_path)
     return {
@@ -675,6 +714,13 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             "compile_log": args.get("compile_log"),
             "simulator": args.get("simulator")
             or result.get("project", {}).get("simulator", "auto"),
+            "hierarchy_handle": args.get("_hierarchy_handle"),
+            "hierarchy_snapshot_sha256": args.get(
+                "_hierarchy_snapshot_sha256"
+            ),
+            "supplementary_compile_logs": list(
+                args.get("supplementary_compile_logs") or ()
+            ),
         }
 
 
@@ -699,13 +745,16 @@ Waveform debug workflow:
    - If discovery_mode is unknown, do not guess deeper paths; follow returned hints.
    - If case_name is unknown in root_dir mode, omit it to get available_cases first.
    - Inform the user early when hints show missing logs, empty logs, or missing waves.
-   - Prefer compile_logs entries with phase="elaborate" for build_tb_hierarchy.
+   - Prefer phase="elaborate" for a complete single-log build. For split VCS
+     source-compile/elaboration logs, use the source-compile log as primary and
+     pass the complementary logs in supplementary_compile_logs build order.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
 
 2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
    Both independently parse the same compile_log — call them in parallel.
    - build_tb_hierarchy: builds testbench hierarchy for source-aware analysis.
-     Use the elaborate-phase compile_log and simulator from step 1.
+     Use the selected primary compile_log and simulator from step 1. In a split
+     VCS flow, pass complementary logs only through supplementary_compile_logs.
      Returns a slim payload (project, stats, tree_skeleton truncated to depth 2,
      interfaces, ambiguous_basenames, hierarchy_handle). The full file list,
      full component_tree, class hierarchy, and raw compile_result are NOT in
@@ -2032,8 +2081,9 @@ async def _route_public_connectivity(
     else:
         operation_metrics.set_value("source_graph_phase", "adapter")
         adapter_started = time.perf_counter()
-        handle = compute_handle(args["compile_log"], simulator)
-        hierarchy_result = _handle_store.resolve(handle)
+        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
+            args["compile_log"], simulator
+        )
         if hierarchy_result is None:
             adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
             operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
@@ -2070,9 +2120,7 @@ async def _route_public_connectivity(
                         compile_log=args["compile_log"],
                         compile_result=compile_result,
                         hierarchy_result=hierarchy_result,
-                        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
-                            args["compile_log"], simulator
-                        ),
+                        hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
                         operation=(
                             QueryOperation.DRIVER
                             if operation == "driver"
@@ -2269,9 +2317,7 @@ async def _route_public_connectivity(
                                         compile_result=compile_result,
                                         hierarchy_result=hierarchy_result,
                                         hierarchy_snapshot_sha256=(
-                                            compute_snapshot_fingerprint(
-                                                args["compile_log"], simulator
-                                            )
+                                            hierarchy_snapshot_sha256
                                         ),
                                         operation=(
                                             QueryOperation.DRIVER
@@ -2702,8 +2748,9 @@ async def _route_public_signal_path(
     else:
         operation_metrics.set_value("source_graph_phase", "adapter")
         adapter_started = time.perf_counter()
-        handle = compute_handle(args["compile_log"], simulator)
-        hierarchy_result = _handle_store.resolve(handle)
+        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
+            args["compile_log"], simulator
+        )
         if hierarchy_result is None:
             adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
             operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
@@ -2741,9 +2788,7 @@ async def _route_public_signal_path(
                             compile_log=args["compile_log"],
                             compile_result=compile_result,
                             hierarchy_result=hierarchy_result,
-                            hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
-                                args["compile_log"], simulator
-                            ),
+                            hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
                             from_signal=args["from_signal"],
                             to_signal=args["to_signal"],
                             top_hint=args.get("top_hint"),
@@ -3361,8 +3406,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
         )
     else:
-        handle = compute_handle(compile_log, simulator)
-        hierarchy_result = _handle_store.resolve(handle)
+        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
+            compile_log, simulator
+        )
         if hierarchy_result is None:
             source_graph_reason = "source_graph_hierarchy_context_unavailable"
             source_graph_receipt = _blocked_source_graph_receipt(
@@ -3399,7 +3445,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                                 compile_result=compile_result,
                                 hierarchy_result=hierarchy_result,
                                 hierarchy_snapshot_sha256=(
-                                    compute_snapshot_fingerprint(compile_log, simulator)
+                                    hierarchy_snapshot_sha256
                                 ),
                                 signal_paths=tuple(scope_targets),
                                 top_hint=top_hint,
@@ -4445,7 +4491,8 @@ async def list_tools():
         Tool(
             name="build_tb_hierarchy",
             description=(
-                "Parse the compile/elaborate log, scan source files, and cache the full testbench hierarchy server-side. "
+                "Parse one compile/elaborate log plus optional complementary phase logs, scan source files, and cache the full testbench hierarchy server-side. "
+                "For split VCS flows, prefer the source-compile log as compile_log and pass VHDL/source/elaboration companions in build order; later connectivity tools continue using that primary path. "
                 "Returns a SLIM payload: project, stats, tree_skeleton (depth 2), interfaces, ambiguous_basenames, "
                 "and hierarchy_handle. Use the handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
                 "get_tb_file_detail / get_tb_class_hierarchy / dump_tb_section to access the full data on demand."
@@ -4455,7 +4502,17 @@ async def list_tools():
                 "properties": {
                     "compile_log": {
                         "type": "string",
-                        "description": "Absolute path to a compile or elaborate log",
+                        "description": "Absolute path to the primary compile or elaborate log",
+                    },
+                    "supplementary_compile_logs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 16,
+                        "description": (
+                            "Optional ordered complementary compile/elaboration logs "
+                            "from the same simulator build; their order participates "
+                            "in the hierarchy and Source Graph identity"
+                        ),
                     },
                     "simulator": {
                         "type": "string",
@@ -6079,19 +6136,94 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
-        resolved_args = {**args, "simulator": simulator}
         compile_log = args["compile_log"]
+        raw_supplements = args.get("supplementary_compile_logs") or []
+        if (
+            not isinstance(raw_supplements, list)
+            or len(raw_supplements) > 16
+            or any(not isinstance(path, str) or not path.strip() for path in raw_supplements)
+        ):
+            raise ValueError("supplementary_compile_logs must contain 0..16 paths")
+        supplementary_compile_logs = [path.strip() for path in raw_supplements]
+        primary_result = parse_compile_log(compile_log, simulator)
+        context_simulator = str(
+            primary_result.get("simulator") or simulator or "auto"
+        )
+        if supplementary_compile_logs:
+            supplementary_results = []
+            for path in supplementary_compile_logs:
+                detected = detect_simulator(path)
+                parse_simulator = (
+                    detected
+                    if detected in {"vcs", "xcelium"}
+                    else context_simulator
+                )
+                supplementary_results.append(
+                    parse_compile_log(path, parse_simulator)
+                )
+            compile_result = merge_compile_results(
+                primary_result,
+                supplementary_results,
+                primary_log=compile_log,
+                supplementary_logs=supplementary_compile_logs,
+            )
+        else:
+            compile_result = primary_result
+        hierarchy_snapshot_sha256 = compute_snapshot_fingerprint(
+            compile_log,
+            context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
+        )
+        handle = compute_handle(
+            compile_log,
+            context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
+        )
+        resolved_args = {
+            **args,
+            "simulator": context_simulator,
+            "supplementary_compile_logs": supplementary_compile_logs,
+            "_hierarchy_handle": handle,
+            "_hierarchy_snapshot_sha256": hierarchy_snapshot_sha256,
+        }
         full_result = build_hierarchy(
-            parse_compile_log(
-                compile_log,
-                simulator,
-            ),
+            compile_result,
             compile_log_path=compile_log,
         )
+        evidence = compile_result.get("compile_evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        source_logs = evidence.get("source_logs")
+        phase_roles = (
+            [
+                str(item.get("role") or "unknown")
+                for item in source_logs
+                if isinstance(item, dict)
+            ]
+            if isinstance(source_logs, list)
+            else ["single_log"]
+        )
+        merge_conflicts = evidence.get("merge_conflicts")
+        full_result["project"]["compile_context"] = {
+            "status": str(
+                evidence.get("merge_status")
+                or ("single_log" if not supplementary_compile_logs else "incomplete")
+            ),
+            "log_count": 1 + len(supplementary_compile_logs),
+            "supplementary_log_count": len(supplementary_compile_logs),
+            "phase_roles": phase_roles,
+            "conflicts": (
+                [str(item) for item in merge_conflicts]
+                if isinstance(merge_conflicts, list)
+                else []
+            ),
+        }
+        full_result["_hierarchy_snapshot_sha256"] = hierarchy_snapshot_sha256
         _update_session_state(name, resolved_args, full_result)
         scan_call = None
-        if _get_compatible_scan_cache(compile_log, simulator) is None:
-            scan_call = _build_scan_required_next_call(compile_log, simulator)
+        if _get_compatible_scan_cache(compile_log, context_simulator) is None:
+            scan_call = _build_scan_required_next_call(
+                compile_log, context_simulator
+            )
         suggested = None
         if scan_call is not None:
             suggested = {
@@ -6120,7 +6252,6 @@ async def _dispatch(name: str, args: dict):
         # Slim path. Register full result against a content-addressed
         # handle so handle tools (phase 4) can resolve later. The slim
         # payload is what crosses the wire to the LLM.
-        handle = compute_handle(compile_log, simulator)
         _handle_store.register(handle, full_result)
         slim = build_slim_payload(full_result, handle, kdb_hint=None)
         slim["required_next_call"] = scan_call
@@ -7095,6 +7226,14 @@ def _build_result_provenance(
             "simulator": args.get("simulator")
             or result.project.get("simulator")
             or "auto",
+            "hierarchy_handle": args.get("_hierarchy_handle")
+            or result.hierarchy_handle,
+            "hierarchy_snapshot_sha256": args.get(
+                "_hierarchy_snapshot_sha256"
+            ),
+            "supplementary_compile_logs": list(
+                args.get("supplementary_compile_logs") or ()
+            ),
         }
     if tool_name == "scan_structural_risks":
         return {

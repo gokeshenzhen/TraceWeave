@@ -168,6 +168,30 @@ def test_worker_replays_all_ordered_tops_from_compile_manifest():
     ]
 
 
+def test_worker_keeps_vhdl_in_identity_but_not_slang_arguments():
+    request = _request(explicit_artifact=False)
+    request = replace(
+        request,
+        identity=replace(
+            request.identity,
+            compile_inputs=replace(
+                request.identity.compile_inputs,
+                ordered_inputs=(
+                    "rtl/leaf.vhd",
+                    "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+                    "rtl/legacy.vhdl",
+                ),
+            ),
+        ),
+    )
+
+    args = _frontend_args(request)
+
+    assert "rtl/leaf.vhd" not in args
+    assert "rtl/legacy.vhdl" not in args
+    assert "tests/fixtures/source_graph_frontend/hand_connectivity.sv" in args
+
+
 class ImmediateWorker:
     def __init__(self, results=None):
         self.count = 0

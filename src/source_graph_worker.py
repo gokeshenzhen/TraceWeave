@@ -45,6 +45,10 @@ from src.source_graph_runtime import (  # noqa: E402
 )
 
 
+_FRONTEND_HDL_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
+_VHDL_SUFFIXES = frozenset({".vhd", ".vhdl"})
+
+
 def _read_rss_kib() -> tuple[int | None, int | None]:
     current = None
     try:
@@ -113,7 +117,14 @@ def _frontend_args(
         else request.source
     )
     manifest = source_identity.compile_inputs
-    result = [*manifest.ordered_options, *manifest.ordered_inputs]
+    result = [
+        *manifest.ordered_options,
+        *(
+            path
+            for path in manifest.ordered_inputs
+            if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
+        ),
+    ]
     tops = manifest.ordered_tops or (request.scope.top,)
     for top in tops:
         result.extend(["--top", top])
@@ -253,6 +264,17 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         diagnostics = list(compilation.getAllDiagnostics())
         diagnostic_payload = _diagnostics_payload(driver, diagnostics)
         source_root = Path.cwd()
+        manifest = identity.compile_inputs
+        frontend_inputs = tuple(
+            path
+            for path in manifest.ordered_inputs
+            if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
+        )
+        vhdl_inputs = tuple(
+            path
+            for path in manifest.ordered_inputs
+            if Path(path).suffix.lower() in _VHDL_SUFFIXES
+        )
         exclusions = tuple(
             ProjectionExclusion(
                 code=code,
@@ -263,7 +285,22 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
             )
             for code in request.scope.coverage_boundary.objective_exclusions
         )
-        manifest = identity.compile_inputs
+        if vhdl_inputs and "opaque_vhdl_boundary" not in {
+            item.code for item in exclusions
+        }:
+            exclusions = (
+                *exclusions,
+                ProjectionExclusion(
+                    code="opaque_vhdl_boundary",
+                    message=(
+                        "VHDL source is retained in build identity but projected "
+                        "as an opaque mixed-language boundary"
+                    ),
+                    impact=CoverageStatus.INCONCLUSIVE,
+                    scopes=("*",),
+                    constructs=("vhdl", "mixed_language_boundary"),
+                ),
+            )
         projection = project_slang_design(
             root=root,
             source_manager=driver.sourceManager,
@@ -273,7 +310,7 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
                 files_total=len(manifest.ordered_inputs),
                 files_projected=sum(
                     Path(path).expanduser().is_file()
-                    for path in manifest.ordered_inputs
+                    for path in frontend_inputs
                 ),
                 diagnostics=_projection_diagnostics(diagnostic_payload, source_root),
                 diagnostic_total=int(diagnostic_payload["total"]),

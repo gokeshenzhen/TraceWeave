@@ -63,6 +63,50 @@ def test_handle_changes_with_mtime(compile_log):
     assert h1 != h2
 
 
+def test_merged_context_handle_includes_ordered_supplement_snapshots(
+    compile_log, tmp_path
+):
+    first = tmp_path / "compile_phase.log"
+    second = tmp_path / "elaborate_phase.log"
+    first.write_text("compile", encoding="utf-8")
+    second.write_text("elaborate", encoding="utf-8")
+
+    merged = compute_handle(
+        compile_log,
+        "vcs",
+        supplementary_compile_logs=(str(first), str(second)),
+    )
+    reordered = compute_handle(
+        compile_log,
+        "vcs",
+        supplementary_compile_logs=(str(second), str(first)),
+    )
+
+    assert merged != compute_handle(compile_log, "vcs")
+    assert merged != reordered
+
+
+def test_merged_context_handle_changes_when_supplement_changes(
+    compile_log, tmp_path
+):
+    supplement = tmp_path / "elaborate.log"
+    supplement.write_text("elaborate", encoding="utf-8")
+    first = compute_handle(
+        compile_log,
+        "vcs",
+        supplementary_compile_logs=(str(supplement),),
+    )
+    future = time.time() + 2
+    os.utime(supplement, (future, future))
+    second = compute_handle(
+        compile_log,
+        "vcs",
+        supplementary_compile_logs=(str(supplement),),
+    )
+
+    assert first != second
+
+
 def test_handle_missing_file_returns_stable_value():
     h1 = compute_handle("/no/such/file.log", "vcs")
     h2 = compute_handle("/no/such/file.log", "vcs")

@@ -23,16 +23,21 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │  - If discovery_mode == "unknown" → stop guessing and follow hints
 │  - If case_name omitted in root_dir mode → check available_cases, ask user to pick one
 │  - If hints contain warnings (empty log, missing wave) → inform user early
-│  - Pick compile_log with phase="elaborate" for step 2
+│  - For a complete single-log flow, pick compile_log with phase="elaborate"
+│  - For split VCS source-compile/elaboration logs, use the source-compile log
+│    as primary and pass the other ordered logs to build_tb_hierarchy via
+│    supplementary_compile_logs; scan_structural_risks uses that same primary
 │  - Store simulator for all subsequent tool calls
 │  - If fsdb_runtime.enabled is false → ignore `.fsdb` when `.vcd` is available
 │  - Only proceed to step 3 when `sim_logs` is non-empty
 │
 ▼
-Step 2 (parallel): build_tb_hierarchy(compile_log, simulator)
+Step 2 (parallel): build_tb_hierarchy(compile_log, simulator,
+                                      supplementary_compile_logs?)
                    + scan_structural_risks(compile_log, simulator)
-│  Run both independently on the SAME elaborate-phase compile log before
-│  analyzing failures. Do not wait for one before starting the other.
+│  Run both independently on the SAME primary compile log before analyzing
+│  failures. Do not wait for one before starting the other. In a split VCS
+│  flow only build_tb_hierarchy receives the supplementary logs.
 │
 ├─ build_tb_hierarchy builds project-level understanding.
 │  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):

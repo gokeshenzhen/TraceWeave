@@ -7,7 +7,7 @@ import pytest
 
 import src.cancellation as cancellation
 import src.source_graph_adapter as source_graph_adapter
-from src.compile_log_parser import parse_compile_log
+from src.compile_log_parser import merge_compile_results, parse_compile_log
 from src.hierarchy_handles import compute_snapshot_fingerprint
 from src.source_graph_adapter import (
     AdapterStatus,
@@ -211,6 +211,213 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert receipt["adapter_version"] == SOURCE_GRAPH_ADAPTER_VERSION
     assert receipt["manifest"]["complete"] is True
     assert receipt["cross_request_reusable"] is True
+
+
+def test_merged_source_phases_replay_options_without_fictional_command(tmp_path):
+    first = tmp_path / "rtl" / "first.sv"
+    second = tmp_path / "rtl" / "second.sv"
+    _write(first, "module dut; logic [3:0] q; endmodule\n")
+    _write(second, "module tb; dut dut(); endmodule\n")
+    compile_log = tmp_path / "compile.log"
+    supplement_log = tmp_path / "compile_second.log"
+    elaborate_log = tmp_path / "elab.log"
+    for path in (compile_log, supplement_log, elaborate_log):
+        _write(path, path.name + "\n")
+
+    def phase(command: str, source: Path | None, top: str | None = None) -> dict:
+        units = (
+            [{"path": str(source), "type": "module", "role": "project"}]
+            if source is not None
+            else []
+        )
+        return {
+            "simulator": "vcs",
+            "compile_cwd": str(tmp_path),
+            "primary_top": top,
+            "top_modules": [top] if top else [],
+            "files": {
+                "user": (
+                    [
+                        {
+                            "path": str(source),
+                            "type": "module",
+                            "category": "rtl",
+                        }
+                    ]
+                    if source is not None
+                    else []
+                ),
+                "filtered_count": 0,
+            },
+            "include_tree": {},
+            "filelist_tree": {},
+            "interfaces": [],
+            "compile_command": command,
+            "parse_warnings": [],
+            "compile_evidence": {
+                "schema_version": 1,
+                "unit_order_source": (
+                    "simulator_log" if source is not None else "unavailable"
+                ),
+                "ordered_compilation_units": units,
+                "ordered_includes": [],
+                "filelists": [],
+                "expanded_replay_command": None,
+            },
+        }
+
+    merged = merge_compile_results(
+        phase(f"vlogan +define+FIRST=1 {first}", first),
+        [
+            phase(f"vlogan +define+SECOND=1 {second}", second),
+            phase("vcs -top tb", None, "tb"),
+        ],
+        primary_log=str(compile_log),
+        supplementary_logs=[str(supplement_log), str(elaborate_log)],
+    )
+
+    plan = _plan(tmp_path, merged)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(first.resolve()), str(second.resolve()))
+    assert "+define+FIRST=1" in manifest.ordered_options
+    assert "+define+SECOND=1" in manifest.ordered_options
+    assert manifest.ordered_tops == ("tb",)
+    assert manifest.complete is False
+    assert "phase_local_compile_options_unmodeled" in plan.receipt.gap_codes
+    assert "phase_local_compile_options_unmodeled" in (
+        plan.receipt.objective_exclusions
+    )
+
+
+def test_vhdl_inputs_are_content_identified_without_blocking_sv_manifest(tmp_path):
+    sv = tmp_path / "top.sv"
+    vhdl = tmp_path / "leaf.vhd"
+    _write(sv, "module tb; logic q; endmodule\n")
+    _write(
+        vhdl,
+        "entity leaf is port(i : in bit); end entity;\n"
+        "architecture rtl of leaf is begin end architecture;\n",
+    )
+    compile_result = _compile_result(
+        tmp_path,
+        command=f"xrun -sv {sv} {vhdl} -top tb",
+        sources=(sv, vhdl),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(sv.resolve()), str(vhdl.resolve()))
+    assert manifest.complete is True
+    assert "compile_option_unclassified" not in plan.receipt.gap_codes
+    assert "opaque_vhdl_boundary" in plan.receipt.gap_codes
+    assert "opaque_vhdl_boundary" in plan.receipt.objective_exclusions
+
+
+def test_split_vhdlan_phase_does_not_replay_vhdl_only_options_into_slang(tmp_path):
+    sv = tmp_path / "top.sv"
+    vhdl = tmp_path / "leaf.vhd"
+    compile_log = tmp_path / "sv_compile.log"
+    vhdl_log = tmp_path / "vhdl_compile.log"
+    elaborate_log = tmp_path / "elaborate.log"
+    _write(sv, "module tb; logic q; endmodule\n")
+    _write(vhdl, "entity leaf is port(i : in bit); end entity;\n")
+    _write(
+        compile_log,
+        "Chronologic VCS simulator\n"
+        f"Command: vlogan -sverilog {sv}\n"
+        f"Parsing design file '{sv}'\n",
+    )
+    _write(
+        vhdl_log,
+        "Chronologic VCS simulator\n"
+        f"Command: vhdlan -vhdl_vendor_semantics {vhdl}\n"
+        f"Parsing design file '{vhdl}'\n",
+    )
+    _write(
+        elaborate_log,
+        "Chronologic VCS simulator\n"
+        "Command: vcs -top tb\n"
+        "Top Level Modules:\n"
+        "       tb\n",
+    )
+    primary = parse_compile_log(str(compile_log), "vcs")
+    supplements = [
+        parse_compile_log(str(vhdl_log), "vcs"),
+        parse_compile_log(str(elaborate_log), "vcs"),
+    ]
+    merged = merge_compile_results(
+        primary,
+        supplements,
+        primary_log=str(compile_log),
+        supplementary_logs=[str(vhdl_log), str(elaborate_log)],
+    )
+
+    plan = _plan(tmp_path, merged, signal_path="tb.q")
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(sv.resolve()), str(vhdl.resolve()))
+    assert "-vhdl_vendor_semantics" not in manifest.ordered_options
+    assert manifest.complete is True
+    assert "opaque_vhdl_boundary" in plan.receipt.objective_exclusions
+
+
+def test_command_recovered_vhdlan_input_stays_in_content_identity(tmp_path):
+    sv = tmp_path / "top.sv"
+    vhdl = tmp_path / "leaf.vhd"
+    compile_log = tmp_path / "sv_compile.log"
+    vhdl_log = tmp_path / "vhdl_compile.log"
+    elaborate_log = tmp_path / "elaborate.log"
+    _write(sv, "module tb; logic q; endmodule\n")
+    _write(vhdl, "entity leaf is port(i : in bit); end entity;\n")
+    _write(
+        compile_log,
+        "Chronologic VCS simulator\n"
+        f"Command: vlogan -sverilog {sv}\n"
+        f"Parsing design file '{sv}'\n",
+    )
+    # Some vhdlan transcripts preserve only the invocation, so source order is
+    # conservatively command-recovered rather than simulator-log proved.
+    _write(
+        vhdl_log,
+        "Chronologic VCS simulator\n"
+        f"Command: vhdlan -work WORK {vhdl}\n",
+    )
+    _write(
+        elaborate_log,
+        "Chronologic VCS simulator\n"
+        "Command: vcs -top tb\n"
+        "Top Level Modules:\n"
+        "       tb\n",
+    )
+    merged = merge_compile_results(
+        parse_compile_log(str(compile_log), "vcs"),
+        [
+            parse_compile_log(str(vhdl_log), "vcs"),
+            parse_compile_log(str(elaborate_log), "vcs"),
+        ],
+        primary_log=str(compile_log),
+        supplementary_logs=[str(vhdl_log), str(elaborate_log)],
+    )
+
+    plan = _plan(tmp_path, merged, signal_path="tb.q")
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(sv.resolve()), str(vhdl.resolve()))
+    assert manifest.fingerprint is not None
+    assert manifest.complete is False
+    assert "compile_log_parse_warning" in plan.receipt.gap_codes
+    assert "opaque_vhdl_boundary" in plan.receipt.objective_exclusions
+    assert plan.receipt.cross_request_reusable is False
 
 
 def test_plusargs_with_hdl_suffix_values_are_not_misfiled_as_sources(tmp_path):
@@ -732,6 +939,35 @@ def test_content_fingerprint_changes_when_an_input_changes(tmp_path):
     assert first_fingerprint != second_fingerprint
     assert len(first_fingerprint) == 64
     assert int(first_fingerprint, 16) >= 0
+
+
+def test_compile_only_manifest_without_top_skips_source_hashing(monkeypatch, tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv",
+        sources=(source,),
+        tops=(),
+    )
+
+    monkeypatch.setattr(
+        source_graph_adapter,
+        "_hash_file_and_scan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source hashing must wait for a proved top")
+        ),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "compile_tops_unavailable"
+    assert plan.receipt.manifest_complete is False
+    assert "compile_fingerprint_missing" in (
+        plan.receipt.manifest_incomplete_reasons
+    )
 
 
 def test_content_fingerprint_cache_hits_and_invalidates_on_rebuild(
