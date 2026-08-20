@@ -199,9 +199,11 @@ If the client supports server instructions, it can follow the built-in workflow 
 ### Claude Code
 
 Environment inheritance depends on how the MCP client itself is launched and on
-that client's environment policy. A Codex process launched from a terminal can
-inherit variables already exported by that shell; an IDE/GUI launch or another
-MCP client may not. For a deterministic Claude Code setup, list every variable
+that client's environment policy. In one tested terminal-launched `tcsh`/LSF
+setup, Claude Code passed the shell-configured LSF, Verdi, and license variables
+to TraceWeave, and remote NPI driver/load/path queries worked without a separate
+MCP environment list. An IDE/GUI launch or another client setup may not inherit
+the same environment. For a deterministic Claude Code setup, list every variable
 the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the
 one most often missed; without it NPI silently falls back to Static and
 `trace_signal_path` returns `found: false`).
@@ -240,9 +242,20 @@ claude mcp list
 
 ### Codex
 
-Codex can forward variables inherited by its own process through `env_vars`;
-fixed values belong in `env`. For a deterministic EDA setup, configure the
-required values explicitly in `~/.codex/config.toml`:
+Codex supports two ways to provide environment variables to the TraceWeave MCP
+server:
+
+- Put fixed values in `[mcp_servers.TraceWeave.env]`. This suits stable tool and
+  license locations, or a Codex process that is not launched from a configured
+  terminal.
+- Use `env_vars` to allow and forward variables already inherited by the Codex
+  process. This suits EDA environments managed by `.bashrc`, `.tcshrc`, or a
+  site setup script.
+
+Choose one source for each variable; do not configure the same name in both
+`env` and `env_vars`. This matches the official
+[Codex MCP configuration](https://developers.openai.com/codex/mcp/). The example
+below uses fixed values in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.TraceWeave]
@@ -262,6 +275,10 @@ CDS_LICENSE_FILE = "xxxx@c-license.example.com"
 LD_LIBRARY_PATH = "<library-path>"
 PATH = "<path>"
 ```
+
+If a site setup script manages these values, do not copy its expanded values
+into `env`. Launch Codex from the configured terminal and use the inherited
+environment pattern in the LSF-only section below instead.
 
 Verify the connection:
 
@@ -304,21 +321,46 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
 Putting these values in `.bashrc` / `.tcshrc` works only when the MCP client
-inherits that shell environment. A terminal-launched Codex process can do so;
-IDE/GUI-launched clients often do not. When the Codex parent process already
-contains the exported namespaced queue, the relevant portion of the final
-merged configuration should look like this; keep the other EDA variables from
-the setup above, then restart or reconnect the MCP server:
+passes that shell environment to the TraceWeave server. In the tested
+terminal-launched setup, Claude Code did so and completed LSF-hosted NPI
+driver/load/path queries. Codex required the needed site variables to be named
+in `env_vars`; without them, the NPI attempt failed.
+
+The following Codex configuration is for an EDA environment already established
+by the parent shell. It is an alternative to the fixed-value EDA block in the
+Codex section above. The list reflects one tested LSF/EGO site; add or remove
+names to match the site's setup, and do not repeat any name under `env`:
 
 ```toml
 [mcp_servers.TraceWeave]
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = [
+  "TRACEWEAVE_NPI_LSF_QUEUE",
+
+  "LSF_ENVDIR",
+  "LSF_BINDIR",
+  "LSF_SERVERDIR",
+  "LSF_LIBDIR",
+  "PATH",
+
+  "EGO_TOP",
+  "EGO_BINDIR",
+  "EGO_CONFDIR",
+  "EGO_ESRVDIR",
+  "EGO_LIBDIR",
+  "EGO_LOCAL_CONFDIR",
+  "EGO_SERVERDIR",
+
+  "VERDI_HOME",
+  "LD_LIBRARY_PATH",
+
+  "LM_LICENSE_FILE",
+  "SNPSLMD_LICENSE_FILE",
+]
 
 [mcp_servers.TraceWeave.env]
-# Keep the existing EDA environment entries here.
 TRACEWEAVE_NPI_EXECUTION = "lsf"
 ```
 
@@ -327,9 +369,13 @@ Values under `[mcp_servers.TraceWeave.env]` are copied literally by Codex, so do
 way to forward the value that the user's shell already expanded. If the Codex
 parent does not inherit the shell environment, omit the queue from `env_vars`
 and put a fixed `TRACEWEAVE_NPI_LSF_QUEUE = "digital"` directly under
-`[mcp_servers.TraceWeave.env]` instead.
+`[mcp_servers.TraceWeave.env]` instead. If some EDA values are intentionally
+fixed under `env`, omit those same names from `env_vars`.
 
-For Claude Code, merge the following fixed values into the existing TraceWeave
+In the tested terminal-launched Claude Code setup, no extra MCP environment map
+was needed when the shell already exported both namespaced values and the full
+site environment. For a deterministic setup, or when the client does not inherit
+that shell, merge the following fixed values into the existing TraceWeave
 server's `"env"` object (replace `digital` with the user's queue):
 
 ```json

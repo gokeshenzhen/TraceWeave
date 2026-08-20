@@ -182,11 +182,12 @@ bash scripts/verify_fsdb.sh
 ### Claude Code
 
 环境变量是否进入 MCP server,取决于 MCP client 本身如何启动以及它采用的环境
-转发策略。从 terminal 启动的 Codex 可以继承该 shell 已经 `export` 的变量;
-IDE/GUI 启动或其他 MCP client 则不一定。为了让 Claude Code 配置确定可复现,
-应显式列出 server 需要的变量 —— 工具根目录,以及 `dlopen` 链(最容易遗漏的是
-`LD_LIBRARY_PATH`;一旦缺失,NPI 会静默回退到 Static,
-`trace_signal_path` 会返回 `found: false`)。
+转发策略。在一个从 terminal 启动的 `tcsh`/LSF 实测环境中,Claude Code 将 shell
+配置的 LSF、Verdi 和 license 变量传给了 TraceWeave,无需单独维护 MCP 环境变量
+清单即可完成远端 NPI driver/load/path 查询。IDE/GUI 启动或其他 client 配置不一定
+继承相同环境。为了让 Claude Code 配置确定可复现,应显式列出 server 需要的变量
+—— 工具根目录,以及 `dlopen` 链(最容易遗漏的是 `LD_LIBRARY_PATH`;一旦缺失,NPI
+会静默回退到 Static,`trace_signal_path` 会返回 `found: false`)。
 
 在 `~/.claude.json` 中添加:
 
@@ -222,8 +223,16 @@ claude mcp list
 
 ### Codex
 
-Codex 可以用 `env_vars` 转发其父进程已经继承的变量;固定值则放在 `env` 中。
-为了让 EDA 环境确定可复现,在 `~/.codex/config.toml` 中显式配置所需值:
+Codex 可以通过两种方式为 TraceWeave MCP server 提供环境变量:
+
+- 固定值放在 `[mcp_servers.TraceWeave.env]` 中,适合工具和 license 路径稳定,
+  或 Codex 不是从已配置 terminal 启动的环境。
+- 通过 `env_vars` 允许并转发 Codex 父进程已经继承的变量,适合由 `.bashrc`、
+  `.tcshrc` 或站点 setup 脚本统一管理的 EDA 环境。
+
+对同一个变量请选择其中一种来源,不要同时配置在 `env` 和 `env_vars` 中。这与
+[Codex 官方 MCP 配置](https://developers.openai.com/codex/mcp/)一致。下面是在
+`~/.codex/config.toml` 中使用固定值的示例:
 
 ```toml
 [mcp_servers.TraceWeave]
@@ -243,6 +252,9 @@ CDS_LICENSE_FILE = "xxxx@c-license.example.com"
 LD_LIBRARY_PATH = "<library-path>"
 PATH = "<path>"
 ```
+
+如果 EDA 环境由站点 setup 脚本管理,不要把展开后的值复制到 `env`。应从完成环境
+设置的 terminal 启动 Codex,并改用下面 LSF-only 小节中的 shell 环境转发方式。
 
 验证连接:
 
@@ -283,20 +295,45 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "digital"
 setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
-只有 MCP client 继承了对应 shell 环境时,`.bashrc` / `.tcshrc` 中的设置才会
-生效;从 terminal 启动的 Codex 可以继承,IDE/GUI 启动的 client 则经常不会。
-当 Codex 父进程已经包含导出的 namespaced queue 时,最终合并后的配置相关部分
-应如下;保留前面已有的其他 EDA 环境变量,修改后重启或重新连接 MCP server:
+只有 MCP client 把对应 shell 环境传给 TraceWeave server 时,`.bashrc` /
+`.tcshrc` 中的设置才会生效。在实测的 terminal 启动环境中,Claude Code 能直接
+完成 LSF 上的 NPI driver/load/path 查询;Codex 则必须在 `env_vars` 中列出站点所需
+变量,否则 NPI 尝试会失败。
+
+下面的 Codex 配置适用于父 shell 已经建立好 EDA 环境的情况,它是前面 Codex 小节
+中固定值 EDA 配置的替代方案。清单来自一个实际 LSF/EGO 站点;其他站点应按自己的
+setup 增减变量,并且不要在 `env` 中重复同名变量:
 
 ```toml
 [mcp_servers.TraceWeave]
 command = "<TRACEWEAVE_HOME>/.venv/bin/python"
 args = ["<TRACEWEAVE_HOME>/server.py"]
 cwd = "<TRACEWEAVE_HOME>"
-env_vars = ["TRACEWEAVE_NPI_LSF_QUEUE"]
+env_vars = [
+  "TRACEWEAVE_NPI_LSF_QUEUE",
+
+  "LSF_ENVDIR",
+  "LSF_BINDIR",
+  "LSF_SERVERDIR",
+  "LSF_LIBDIR",
+  "PATH",
+
+  "EGO_TOP",
+  "EGO_BINDIR",
+  "EGO_CONFDIR",
+  "EGO_ESRVDIR",
+  "EGO_LIBDIR",
+  "EGO_LOCAL_CONFDIR",
+  "EGO_SERVERDIR",
+
+  "VERDI_HOME",
+  "LD_LIBRARY_PATH",
+
+  "LM_LICENSE_FILE",
+  "SNPSLMD_LICENSE_FILE",
+]
 
 [mcp_servers.TraceWeave.env]
-# 其他已有 EDA 环境变量继续保留在这里。
 TRACEWEAVE_NPI_EXECUTION = "lsf"
 ```
 
@@ -305,10 +342,13 @@ Codex 会原样复制 `[mcp_servers.TraceWeave.env]` 中的值，因此不要写
 且由 shell 提前展开好的变量应使用 `env_vars`。如果 Codex 父进程没有继承
 shell 环境,就不要把 queue 放入 `env_vars`,而应直接在
 `[mcp_servers.TraceWeave.env]` 下设置固定值
-`TRACEWEAVE_NPI_LSF_QUEUE = "digital"`。
+`TRACEWEAVE_NPI_LSF_QUEUE = "digital"`。如果有些 EDA 值有意固定在 `env` 中,
+则应从 `env_vars` 中删除这些同名变量。
 
-Claude Code 用户可把下面两个固定值合并进已有 TraceWeave server 的 `"env"`
-对象中(`digital` 替换成用户自己的队列):
+在实测的 terminal 启动 Claude Code 环境中,如果 shell 已经导出了这两个
+namespaced 变量和完整站点环境,则不需要额外的 MCP 环境 map。为了获得确定可复现
+的配置,或者 client 没有继承该 shell 时,可把下面两个固定值合并进已有 TraceWeave
+server 的 `"env"` 对象中(`digital` 替换成用户自己的队列):
 
 ```json
 {
