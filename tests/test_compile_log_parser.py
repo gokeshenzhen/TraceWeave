@@ -12,6 +12,30 @@ from src.compile_log_parser import (
 )
 
 
+class _NoReadlinesWrapper:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def __enter__(self):
+        self._stream.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._stream.__exit__(*args)
+
+    def __iter__(self):
+        return iter(self._stream)
+
+    def __next__(self):
+        return next(self._stream)
+
+    def readlines(self, *_args, **_kwargs):
+        raise AssertionError("compile log parser must stream instead of readlines()")
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 def _write(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
@@ -63,6 +87,85 @@ class TestDetectSimulator:
 
 
 class TestParseCompileLog:
+    def test_large_log_paths_never_require_readlines(self, monkeypatch, tmp_path):
+        source = tmp_path / "top.sv"
+        _write(source, "module top; endmodule\n")
+        vcs_log = tmp_path / "vcs.log"
+        _write(
+            vcs_log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs {source} -top top\n"
+            f"Parsing design file '{source}'\n"
+            "Top Level Modules:\n"
+            "       top\n",
+        )
+        xrun_log = tmp_path / "xrun.log"
+        _write(
+            xrun_log,
+            "xrun\n"
+            "  -top top\n"
+            f"  {source}\n"
+            f"file: {source}\n"
+            "  module worklib.top:v\n",
+        )
+        real_open = open
+        guarded = {str(vcs_log.resolve()), str(xrun_log.resolve())}
+
+        def no_readlines_open(path, *args, **kwargs):
+            stream = real_open(path, *args, **kwargs)
+            if str(Path(path).resolve()) in guarded:
+                return _NoReadlinesWrapper(stream)
+            return stream
+
+        monkeypatch.setattr("builtins.open", no_readlines_open)
+
+        assert parse_compile_log(str(vcs_log), "vcs")["top_modules"] == ["top"]
+        assert parse_compile_log(str(xrun_log), "xcelium")["top_modules"] == [
+            "top"
+        ]
+
+    def test_xcelium_definition_evidence_maps_entity_to_source(self, tmp_path):
+        source = tmp_path / "top.sv"
+        _write(source, "module top; endmodule\n")
+        xcelium_log = tmp_path / "xrun.log"
+        _write(
+            xcelium_log,
+            "xrun\n"
+            f"    {source}\n"
+            f"file: {source}\n"
+            "module worklib.top:v\n",
+        )
+
+        result = parse_compile_log(str(xcelium_log), "xcelium")
+
+        assert result["definitions"]["modules"]["top"] == [
+            str(source.resolve())
+        ]
+
+    def test_vcs_detached_recompile_summary_is_not_mapped_to_last_file(
+        self, tmp_path
+    ):
+        first = tmp_path / "first.sv"
+        last = tmp_path / "last.sv"
+        _write(first, "module first; endmodule\n")
+        _write(last, "module last; endmodule\n")
+        vcs_log = tmp_path / "vcs.log"
+        _write(
+            vcs_log,
+            "Chronologic VCS simulator\n"
+            f"Parsing design file '{first}'\n"
+            f"Parsing design file '{last}'\n"
+            "Starting vcs inline pass...\n"
+            "recompiling module first\n"
+            "recompiling module last\n"
+            "Top Level Modules:\n"
+            "       last\n",
+        )
+
+        result = parse_compile_log(str(vcs_log), "vcs")
+
+        assert result["definitions"]["modules"] == {}
+
     def test_parse_vcs_compile_log(self):
         tmp, root = _make_demo_tree()
         try:

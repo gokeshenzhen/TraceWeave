@@ -5,15 +5,56 @@ tb_hierarchy_builder.py
 
 import os
 import re
+import time
 from collections import defaultdict
+
+from .cancellation import check_cancelled
+from .operation_metrics import read_process_rss_kib
 
 
 _CLASS_EXTENDS_RE = re.compile(r"\bclass\s+(\w+)\s+extends\s+(\w+)", re.IGNORECASE)
 _CLASS_RE = re.compile(r"\bclass\s+(\w+)(?:\s+extends\s+\w+)?", re.IGNORECASE)
 _MODULE_RE = re.compile(r"^\s*module\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
 _INTERFACE_RE = re.compile(r"^\s*interface\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
+_PACKAGE_RE = re.compile(r"^\s*package\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
+_PACKAGE_IMPORT_RE = re.compile(
+    r"\bimport\s+([A-Za-z_][A-Za-z0-9_$]*)\s*::", re.IGNORECASE
+)
+_INCLUDE_DIRECTIVE_RE = re.compile(r"`include\s+[\"<]([^\">]+)[\">]")
+_CONDITIONAL_DIRECTIVE_RE = re.compile(
+    r"`(?:ifdef|ifndef|elsif)\b", re.IGNORECASE
+)
+_MACRO_DEFINE_RE = re.compile(r"`define\s+([A-Za-z_][A-Za-z0-9_$]*)")
+_MACRO_CONDITION_RE = re.compile(
+    r"`(?:ifdef|ifndef|elsif)\s+([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
+)
+_MACRO_TOKEN_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_$]*)")
+_PREPROCESSOR_KEYWORDS = {
+    "begin_keywords",
+    "celldefine",
+    "default_nettype",
+    "define",
+    "else",
+    "elsif",
+    "end_keywords",
+    "endcelldefine",
+    "endif",
+    "ifdef",
+    "ifndef",
+    "include",
+    "line",
+    "nounconnected_drive",
+    "pragma",
+    "resetall",
+    "timescale",
+    "unconnected_drive",
+    "undef",
+    "undefineall",
+}
 _CREATE_RE = re.compile(r'(\w+)\s*=\s*(\w+)::type_id::create\s*\(\s*"([^"]+)"', re.IGNORECASE)
 _VIRTUAL_IF_RE = re.compile(r"\bvirtual\s+(\w+)\s+(\w+)", re.IGNORECASE)
+_UVM_IMPORT_RE = re.compile(r"\bimport\s+uvm_pkg\s*::", re.IGNORECASE)
+_UVM_EXTENDS_RE = re.compile(r"\bextends\s+uvm_\w+", re.IGNORECASE)
 _SV_TOKEN_RE = re.compile(
     r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_$]*|::|[#$(),;.\[\]{}:]'
 )
@@ -36,6 +77,7 @@ _MODULE_INSTANCE_PRECEDING_EXCLUDES = {
     "covergroup", "constraint", "import", "export", "return", "new",
     "automatic", "static",
 }
+_HIERARCHY_RSS_SAMPLE_STRIDE = 32
 
 
 def _classify_node(module_name: str, instance_name: str) -> str:
@@ -84,6 +126,19 @@ def _module_bodies(tokens: list[str]):
         if tokens[index].lower() != "module":
             index += 1
             continue
+        name_index = index + 1
+        if (
+            name_index < len(tokens)
+            and tokens[name_index].lower() in {"automatic", "static"}
+        ):
+            name_index += 1
+        if (
+            name_index >= len(tokens)
+            or not _SV_IDENTIFIER_RE.fullmatch(tokens[name_index])
+        ):
+            index += 1
+            continue
+        module_name = tokens[name_index]
         header_end = index + 1
         nesting = 0
         while header_end < len(tokens):
@@ -100,7 +155,7 @@ def _module_bodies(tokens: list[str]):
         body_end = header_end + 1
         while body_end < len(tokens) and tokens[body_end].lower() != "endmodule":
             body_end += 1
-        yield tokens[header_end + 1 : body_end]
+        yield module_name, tokens[header_end + 1 : body_end]
         index = body_end + 1
 
 
@@ -150,9 +205,11 @@ def _parse_instance_statement(
     return None
 
 
-def _extract_module_instances(text: str) -> list[dict]:
+def _extract_module_instances(text: str) -> tuple[list[dict], dict[str, list[dict]]]:
     instances: list[dict] = []
-    for body in _module_bodies(_sv_tokens(text)):
+    by_module: dict[str, list[dict]] = {}
+    for module_name, body in _module_bodies(_sv_tokens(text)):
+        module_instances: list[dict] = []
         index = 0
         while index < len(body):
             parsed = _parse_instance_statement(body, index)
@@ -161,12 +218,24 @@ def _extract_module_instances(text: str) -> list[dict]:
                 continue
             found, index = parsed
             instances.extend(found)
-    return instances
+            module_instances.extend(found)
+        by_module.setdefault(module_name, []).extend(module_instances)
+    return instances, by_module
 
 
-def scan_sv_file(file_path: str) -> dict:
+def scan_sv_file(file_path: str, *, retain_source_text: bool = True) -> dict:
+    """Extract hierarchy metadata from one SystemVerilog source.
+
+    ``retain_source_text`` defaults to the historical behavior for direct
+    callers such as Legacy Static.  Full hierarchy construction sets it only
+    long enough to derive cross-file metadata, then drops the text before the
+    result enters the handle store.
+    """
+
+    check_cancelled()
     with open(file_path, "r", errors="replace") as f:
         raw = f.read()
+    check_cancelled()
     text = _strip_comments(raw)
 
     class_extends = {child: parent for child, parent in _CLASS_EXTENDS_RE.findall(text)}
@@ -178,7 +247,7 @@ def scan_sv_file(file_path: str) -> dict:
         for var, cls, inst in _CREATE_RE.findall(text)
     ]
 
-    module_instances = _extract_module_instances(text)
+    module_instances, module_instance_map = _extract_module_instances(text)
 
     virtual_interfaces = [
         {"interface_name": if_name, "var_name": var_name}
@@ -193,19 +262,43 @@ def scan_sv_file(file_path: str) -> dict:
     elif interfaces:
         file_type = "interface"
 
-    return {
+    result = {
         "path": file_path,
         "name": os.path.basename(file_path),
         "type": file_type,
-        "source_text": raw,
+        "has_uvm_import": bool(_UVM_IMPORT_RE.search(text)),
         "classes": classes,
         "class_extends": class_extends,
         "modules": modules,
         "interfaces": interfaces,
+        "packages": list(dict.fromkeys(_PACKAGE_RE.findall(text))),
+        "package_imports": list(dict.fromkeys(_PACKAGE_IMPORT_RE.findall(text))),
+        "include_directives": list(
+            dict.fromkeys(_INCLUDE_DIRECTIVE_RE.findall(text))
+        ),
+        "has_conditional_preprocessing": bool(
+            _CONDITIONAL_DIRECTIVE_RE.search(text)
+        ),
+        "macro_definitions": list(dict.fromkeys(_MACRO_DEFINE_RE.findall(text))),
+        "conditional_macros": list(
+            dict.fromkeys(_MACRO_CONDITION_RE.findall(text))
+        ),
+        "macro_uses": list(
+            dict.fromkeys(
+                name
+                for name in _MACRO_TOKEN_RE.findall(text)
+                if name.lower() not in _PREPROCESSOR_KEYWORDS
+                and name not in {"__FILE__", "__LINE__"}
+            )
+        ),
         "creates": creates,
         "module_instances": module_instances,
+        "module_instance_map": module_instance_map,
         "virtual_interfaces": virtual_interfaces,
     }
+    if retain_source_text:
+        result["source_text"] = raw
+    return result
 
 
 def build_class_hierarchy(scan_results: list[dict]) -> list[str]:
@@ -317,12 +410,26 @@ def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
     return component_tree
 
 
-def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -> dict:
+def build_hierarchy(
+    compile_result: dict,
+    compile_log_path: str | None = None,
+    *,
+    apply_source_overlay: bool = True,
+) -> dict:
+    total_started = time.perf_counter()
+    rss_start_kib = read_process_rss_kib()
     file_entries = compile_result.get("files", {}).get("user", [])
-    scan_results, scan_by_path, source_text_cache = _scan_user_files(file_entries)
+    scan_started = time.perf_counter()
+    (
+        scan_results,
+        scan_by_path,
+        interface_defs,
+        interface_bindings,
+        scan_metrics,
+    ) = _scan_user_files(file_entries)
+    scan_wall_ms = (time.perf_counter() - scan_started) * 1000.0
     grouped_files = _group_files_by_category(file_entries, scan_by_path)
     source_root = _compute_source_root(file_entries)
-    interface_defs, interface_bindings = _collect_interface_metadata(scan_results, source_text_cache)
 
     top_module = compile_result.get("primary_top") or (
         compile_result.get("top_modules", [""])[0]
@@ -338,7 +445,9 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
             "bound_in": interface_bindings.get(interface_name, ""),
         })
 
+    tree_started = time.perf_counter()
     component_tree = build_component_tree(scan_results, top_module) if top_module else {}
+    tree_wall_ms = (time.perf_counter() - tree_started) * 1000.0
 
     source_info_overlay = "compile_log"
     source_info_overlay_reason = None
@@ -347,13 +456,42 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
     # netlist and overwrite each component_tree node's source info with
     # NPI's truth. Failures here must never break the compile-log
     # baseline; ``_npi_annotate_component_tree`` swallows everything.
-    if compile_log_path and top_module and component_tree:
+    overlay_started = time.perf_counter()
+    if apply_source_overlay and compile_log_path and top_module and component_tree:
         source_info_overlay, source_info_overlay_reason = _npi_annotate_component_tree(
             component_tree=component_tree,
             top_module=top_module,
             compile_result=compile_result,
             compile_log_path=compile_log_path,
         )
+    overlay_wall_ms = (time.perf_counter() - overlay_started) * 1000.0
+    rss_end_kib = read_process_rss_kib()
+    sampled_rss = [
+        value
+        for value in (
+            rss_start_kib,
+            scan_metrics.get("rss_peak_kib"),
+            rss_end_kib,
+        )
+        if isinstance(value, int)
+    ]
+    build_metrics = {
+        "status": "completed",
+        **{
+            key: value
+            for key, value in scan_metrics.items()
+            if key != "rss_peak_kib"
+        },
+        "scan_wall_ms": round(scan_wall_ms, 3),
+        "tree_wall_ms": round(tree_wall_ms, 3),
+        "source_overlay_wall_ms": round(overlay_wall_ms, 3),
+        "total_wall_ms": round(
+            (time.perf_counter() - total_started) * 1000.0, 3
+        ),
+        "rss_start_kib": rss_start_kib,
+        "rss_peak_kib": max(sampled_rss) if sampled_rss else None,
+        "rss_end_kib": rss_end_kib,
+    }
 
     return {
         "project": {
@@ -368,6 +506,7 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
         "class_hierarchy": build_class_hierarchy(scan_results),
         "interfaces": interfaces,
         "compile_result": compile_result,
+        "build_metrics": build_metrics,
         # Internal: kept on the full result so slim-payload helpers can
         # derive per-file metadata (e.g. uvm_file_count) without re-reading
         # source. Stripped from the LLM-facing slim payload in
@@ -375,6 +514,60 @@ def build_hierarchy(compile_result: dict, compile_log_path: str | None = None) -
         # public schema.
         "_scan_results": scan_results,
     }
+
+
+def apply_npi_source_overlay(
+    hierarchy_result: dict,
+    compile_log_path: str,
+) -> dict:
+    """Apply the optional local NPI source overlay after lock-free scanning.
+
+    The server uses this split so compile-log parsing and thousands of source
+    scans can run in a cancellable worker thread while the existing local NPI
+    execution model remains on the dispatch thread.  Direct callers retain the
+    historical one-call behavior through ``build_hierarchy``'s default.
+    """
+
+    project = hierarchy_result.get("project")
+    component_tree = hierarchy_result.get("component_tree")
+    compile_result = hierarchy_result.get("compile_result")
+    if not isinstance(project, dict):
+        return hierarchy_result
+    top_module = str(project.get("top_module") or "")
+    started = time.perf_counter()
+    overlay = "compile_log"
+    reason = None
+    if (
+        top_module
+        and isinstance(component_tree, dict)
+        and component_tree
+        and isinstance(compile_result, dict)
+    ):
+        overlay, reason = _npi_annotate_component_tree(
+            component_tree=component_tree,
+            top_module=top_module,
+            compile_result=compile_result,
+            compile_log_path=compile_log_path,
+        )
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    project["source_info_overlay"] = overlay
+    project["source_info_overlay_reason"] = reason
+    metrics = hierarchy_result.get("build_metrics")
+    if isinstance(metrics, dict):
+        previous_overlay_ms = float(metrics.get("source_overlay_wall_ms") or 0.0)
+        metrics["source_overlay_wall_ms"] = round(
+            previous_overlay_ms + elapsed_ms, 3
+        )
+        metrics["total_wall_ms"] = round(
+            float(metrics.get("total_wall_ms") or 0.0) + elapsed_ms, 3
+        )
+        rss_end_kib = read_process_rss_kib()
+        metrics["rss_end_kib"] = rss_end_kib
+        if isinstance(rss_end_kib, int):
+            metrics["rss_peak_kib"] = max(
+                int(metrics.get("rss_peak_kib") or 0), rss_end_kib
+            )
+    return hierarchy_result
 
 
 def _npi_annotate_component_tree(
@@ -470,19 +663,83 @@ def _overlay_npi_on_subtree(
     return annotated_count
 
 
-def _scan_user_files(file_entries: list[dict]) -> tuple[list[dict], dict[str, dict], dict[str, str]]:
-    scan_results = []
-    scan_by_path = {}
-    source_text_cache: dict[str, str] = {}
-    for entry in file_entries:
+def _scan_user_files(
+    file_entries: list[dict],
+) -> tuple[
+    list[dict],
+    dict[str, dict],
+    dict[str, dict],
+    dict[str, str],
+    dict[str, int],
+]:
+    """Scan every compile input once without retaining its source body.
+
+    Interface binding historically considered definitions encountered up to
+    the current compile-order file.  Derive that fact while the current raw
+    text is still available, then discard the text before storing the compact
+    scan result.  This preserves the old ordering semantics and prevents handle
+    memory from scaling with the sum of all source-file bytes.
+    """
+
+    scan_results: list[dict] = []
+    scan_by_path: dict[str, dict] = {}
+    interface_defs: dict[str, dict] = {}
+    interface_bindings: dict[str, str] = {}
+    requested_count = len(file_entries)
+    scanned_count = 0
+    missing_count = 0
+    source_bytes_scanned = 0
+    largest_source_bytes = 0
+    rss_peak_kib = read_process_rss_kib() or 0
+    for index, entry in enumerate(file_entries):
+        check_cancelled()
         path = entry["path"]
-        if not os.path.exists(path):
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            missing_count += 1
             continue
         result = scan_sv_file(path)
+        scanned_count += 1
+        source_bytes_scanned += stat_result.st_size
+        largest_source_bytes = max(largest_source_bytes, stat_result.st_size)
+        source_text = result.pop("source_text", "")
+        for interface_name in result["interfaces"]:
+            interface_defs[interface_name] = result
+        for binding in result["virtual_interfaces"]:
+            interface_bindings.setdefault(
+                binding["interface_name"], result["name"]
+            )
+        for interface_name in interface_defs:
+            if interface_name in result["name"]:
+                continue
+            if re.search(rf"\b{re.escape(interface_name)}\b", source_text):
+                interface_bindings.setdefault(interface_name, result["name"])
         scan_results.append(result)
         scan_by_path[path] = result
-        source_text_cache[path] = result["source_text"]
-    return scan_results, scan_by_path, source_text_cache
+        if (index + 1) % _HIERARCHY_RSS_SAMPLE_STRIDE == 0:
+            sampled = read_process_rss_kib()
+            if sampled is not None:
+                rss_peak_kib = max(rss_peak_kib, sampled)
+    check_cancelled()
+    sampled = read_process_rss_kib()
+    if sampled is not None:
+        rss_peak_kib = max(rss_peak_kib, sampled)
+    return (
+        scan_results,
+        scan_by_path,
+        interface_defs,
+        interface_bindings,
+        {
+            "source_file_count_requested": requested_count,
+            "source_file_count_scanned": scanned_count,
+            "source_file_count_missing": missing_count,
+            "source_bytes_scanned": source_bytes_scanned,
+            "source_text_bytes_retained": 0,
+            "largest_source_file_bytes": largest_source_bytes,
+            "rss_peak_kib": rss_peak_kib,
+        },
+    )
 
 
 def _group_files_by_category(file_entries: list[dict], scan_by_path: dict[str, dict]) -> dict[str, list[dict]]:
@@ -515,34 +772,6 @@ def _build_symbol_indexes(scan_results: list[dict]) -> tuple[dict[str, dict], di
     return module_to_scan, class_to_scan
 
 
-def _collect_interface_metadata(
-    scan_results: list[dict], source_text_cache: dict[str, str]
-) -> tuple[dict[str, dict], dict[str, str]]:
-    interface_defs = {}
-    interface_bindings = {}
-    for result in scan_results:
-        for interface_name in result["interfaces"]:
-            interface_defs[interface_name] = result
-        for binding in result["virtual_interfaces"]:
-            interface_bindings.setdefault(binding["interface_name"], result["name"])
-        _bind_interfaces_by_reference(result, interface_defs, interface_bindings, source_text_cache)
-    return interface_defs, interface_bindings
-
-
-def _bind_interfaces_by_reference(
-    scan_result: dict,
-    interface_defs: dict[str, dict],
-    interface_bindings: dict[str, str],
-    source_text_cache: dict[str, str],
-):
-    source_text = source_text_cache.get(scan_result["path"], "")
-    for interface_name in interface_defs:
-        if interface_name in scan_result["name"]:
-            continue
-        if re.search(rf"\b{re.escape(interface_name)}\b", source_text):
-            interface_bindings.setdefault(interface_name, scan_result["name"])
-
-
 # ---------------------------------------------------------------------------
 # Slim payload helpers (phase 2)
 #
@@ -554,8 +783,6 @@ def _bind_interfaces_by_reference(
 # ---------------------------------------------------------------------------
 
 
-_UVM_IMPORT_RE = re.compile(r"\bimport\s+uvm_pkg\s*::", re.IGNORECASE)
-_UVM_EXTENDS_RE = re.compile(r"\bextends\s+uvm_\w+", re.IGNORECASE)
 # Skeleton depth must stay small; raising this risks pulling token usage
 # back toward the bloated payload we are trying to escape.
 _DEFAULT_SKELETON_DEPTH = 2
@@ -568,6 +795,8 @@ def _is_uvm_scan(scan: dict) -> bool:
     - source_text imports uvm_pkg
     - any class extends a uvm_* base class
     """
+    if scan.get("has_uvm_import") is True:
+        return True
     text = scan.get("source_text", "") or ""
     if _UVM_IMPORT_RE.search(text):
         return True
@@ -821,6 +1050,7 @@ def build_slim_payload(
             top_module,
         ),
         "interfaces": list(full_result.get("interfaces", []) or []),
+        "build_metrics": dict(full_result.get("build_metrics", {}) or {}),
         "ambiguous_basenames": detect_ambiguous_basenames(user_files),
         "kdb_hint": kdb_hint,
         "handle_tools": dict(HANDLE_TOOL_NAMES),

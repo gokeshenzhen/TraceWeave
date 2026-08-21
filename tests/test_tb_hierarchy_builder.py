@@ -142,6 +142,30 @@ Top Level Modules:
         finally:
             tmp.cleanup()
 
+    def test_full_hierarchy_retains_compact_scan_metadata_not_source_text(self):
+        tmp, root = _make_project()
+        try:
+            log = root / "comp.log"
+            log.write_text(
+                f"Parsing design file '{root / 'tb' / 'my_if.sv'}'\n"
+                f"Parsing design file '{root / 'tb' / 'my_env.sv'}'\n"
+                f"Parsing design file '{root / 'tb' / 'top_tb.sv'}'\n"
+                "Top Level Modules:\n"
+                "       top_tb\n"
+            )
+            hierarchy = build_hierarchy(parse_compile_log(str(log), "vcs"))
+
+            scans = hierarchy["_scan_results"]
+            assert scans
+            assert all("source_text" not in scan for scan in scans)
+            assert all("has_uvm_import" in scan for scan in scans)
+            metrics = hierarchy["build_metrics"]
+            assert metrics["source_text_bytes_retained"] == 0
+            assert metrics["source_bytes_scanned"] > 0
+            assert metrics["source_file_count_scanned"] == len(scans)
+        finally:
+            tmp.cleanup()
+
     def test_component_tree_marks_roles_and_filters_pseudo_nodes(self):
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)

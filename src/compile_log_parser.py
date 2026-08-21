@@ -28,7 +28,6 @@ _VCS_FILE_RE = re.compile(r"Parsing design file '([^']+)'")
 _VCS_INC_RE = re.compile(r"Parsing included file '([^']+)'")
 _VCS_BACK_RE = re.compile(r"Back to file '([^']+)'")
 _VCS_TOP_RE = re.compile(r"^\s+([A-Za-z_]\w*)\s*$")
-_VCS_MODULE_RE = re.compile(r"recompiling module (\w+)", re.IGNORECASE)
 _VCS_IF_RE = re.compile(r"recompiling interface (\w+)", re.IGNORECASE)
 _VCS_SHELL_COMMAND_RE = re.compile(
     r"^\s*cd\s+(?P<cwd>.+?)\s+&&\s+"
@@ -51,6 +50,7 @@ _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
 _SIMULATOR_DETECT_MAX_LINES = 1_000
 _COMPILE_EVIDENCE_SCHEMA_VERSION = 1
+_LOG_CANCEL_CHECK_STRIDE = 4096
 _VCS_FLAGS_WITH_VALUE = frozenset(
     {
         "-assert",
@@ -200,12 +200,28 @@ def _collect_user_files(
     return user, filtered_count
 
 
-def parse_vcs_compile_log(log_path: str) -> dict:
-    with open(log_path, "r", errors="replace") as f:
-        lines = f.readlines()
+def _record_definition(
+    definitions: dict[str, dict[str, list[str]]],
+    kind: str,
+    name: str,
+    path: str | None,
+) -> None:
+    if not path:
+        return
+    paths = definitions[kind].setdefault(name, [])
+    if path not in paths:
+        paths.append(path)
 
+
+def parse_vcs_compile_log(log_path: str) -> dict:
     log_dir = os.path.dirname(log_path)
-    compile_command, command_dir = _extract_vcs_invocation(lines, log_dir)
+    # Only the invocation itself needs limited look-ahead for continuation
+    # lines.  Keep that small prefix in memory and stream the (potentially
+    # multi-hundred-thousand-line) compile evidence below.
+    invocation_lines = _read_vcs_invocation_lines(log_path)
+    compile_command, command_dir = _extract_vcs_invocation(
+        invocation_lines, log_dir
+    )
     parse_warnings: list[str] = []
     command_tokens = _tokenize_vcs_text(
         compile_command or "", "VCS Command", parse_warnings
@@ -229,6 +245,11 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     include_tree: dict[str, list[str]] = {}
     file_info: dict[str, dict] = {}
     interfaces: set[str] = set()
+    definitions: dict[str, dict[str, list[str]]] = {
+        "modules": {},
+        "interfaces": {},
+        "packages": {},
+    }
     reported_top_modules: list[str] = []
     ordered_design_paths: list[str] = []
     ordered_reported_paths: list[str] = []
@@ -236,65 +257,75 @@ def parse_vcs_compile_log(log_path: str) -> dict:
     stack: list[str] = []
     in_top_section = False
 
-    for line in lines:
-        if line.startswith("Top Level Modules:"):
-            in_top_section = True
-            continue
-        if in_top_section:
-            match = _VCS_TOP_RE.match(line)
-            if match:
-                reported_top_modules.append(match.group(1))
+    with open(log_path, "r", errors="replace") as stream:
+        lines_seen = 0
+        for line in stream:
+            lines_seen += 1
+            if lines_seen % _LOG_CANCEL_CHECK_STRIDE == 0:
+                _check_cancelled()
+            if line.startswith("Top Level Modules:"):
+                in_top_section = True
                 continue
-            in_top_section = False
+            if in_top_section:
+                match = _VCS_TOP_RE.match(line)
+                if match:
+                    reported_top_modules.append(match.group(1))
+                    continue
+                in_top_section = False
 
-        match = _VCS_FILE_RE.search(line)
-        if match:
-            raw_path = match.group(1)
-            path = _normalize_path(raw_path, command_dir)
-            stack = [path]
-            ordered_design_paths.append(path)
-            ordered_reported_paths.append(
-                _normalize_reported_path(raw_path, command_dir)
-            )
-            file_info.setdefault(path, {"type": "module"})
-            continue
+            match = _VCS_FILE_RE.search(line)
+            if match:
+                raw_path = match.group(1)
+                path = _normalize_path(raw_path, command_dir)
+                stack = [path]
+                ordered_design_paths.append(path)
+                ordered_reported_paths.append(
+                    _normalize_reported_path(raw_path, command_dir)
+                )
+                file_info.setdefault(path, {"type": "module"})
+                continue
 
-        match = _VCS_INC_RE.search(line)
-        if match and stack:
-            parent = stack[-1]
-            raw_child = match.group(1)
-            child = _normalize_path(raw_child, os.path.dirname(parent))
-            if not os.path.isabs(raw_child):
-                # VCS may echo an include either as a bare basename (resolved
-                # through +incdir) or as a cwd-relative path such as
-                # ``src/core/defs.svh``. Trying the compile cwd first avoids
-                # incorrectly nesting the latter beneath the including file.
-                for base in (command_dir, *incdirs):
-                    candidate = _normalize_path(raw_child, base)
-                    if os.path.exists(candidate):
-                        child = candidate
-                        break
-            include_tree.setdefault(parent, [])
-            if child not in include_tree[parent]:
-                include_tree[parent].append(child)
-            ordered_includes.append({"parent": parent, "path": child})
-            file_info.setdefault(child, {"type": "unknown"})
-            stack.append(child)
-            continue
+            match = _VCS_INC_RE.search(line)
+            if match and stack:
+                parent = stack[-1]
+                raw_child = match.group(1)
+                child = _normalize_path(raw_child, os.path.dirname(parent))
+                if not os.path.isabs(raw_child):
+                    # VCS may echo an include either as a bare basename (resolved
+                    # through +incdir) or as a cwd-relative path such as
+                    # ``src/core/defs.svh``. Trying the compile cwd first avoids
+                    # incorrectly nesting the latter beneath the including file.
+                    for base in (command_dir, *incdirs):
+                        candidate = _normalize_path(raw_child, base)
+                        if os.path.exists(candidate):
+                            child = candidate
+                            break
+                include_tree.setdefault(parent, [])
+                if child not in include_tree[parent]:
+                    include_tree[parent].append(child)
+                ordered_includes.append({"parent": parent, "path": child})
+                file_info.setdefault(child, {"type": "unknown"})
+                stack.append(child)
+                continue
 
-        match = _VCS_BACK_RE.search(line)
-        if match:
-            target = _normalize_path(match.group(1), command_dir)
-            while stack and stack[-1] != target:
-                stack.pop()
-            continue
+            match = _VCS_BACK_RE.search(line)
+            if match:
+                target = _normalize_path(match.group(1), command_dir)
+                while stack and stack[-1] != target:
+                    stack.pop()
+                continue
 
-        match = _VCS_IF_RE.search(line)
-        if match:
-            interfaces.add(match.group(1))
-            continue
-
-        _VCS_MODULE_RE.search(line)
+            # VCS emits ``recompiling module/package/interface`` as a detached
+            # inline-pass summary after every design file has been parsed.  The
+            # names are useful as inventory hints but carry no source path;
+            # associating them with the current include stack would silently
+            # map every summary entry to the last parsed file.  Preserve the
+            # historical interface-name list, but leave definition-to-file
+            # proof to bounded bootstrap's capped source inventory.
+            match = _VCS_IF_RE.search(line)
+            if match:
+                interfaces.add(match.group(1))
+                continue
 
     used_command_fallback = not file_info
     if used_command_fallback and command_tokens:
@@ -334,6 +365,7 @@ def parse_vcs_compile_log(log_path: str) -> dict:
         "include_tree": include_tree,
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
+        "definitions": definitions,
         "compile_command": compile_command,
         "parse_warnings": parse_warnings,
         "compile_evidence": {
@@ -356,6 +388,48 @@ def parse_vcs_compile_log(log_path: str) -> dict:
             "expanded_replay_command": None,
         },
     }
+
+
+def _check_cancelled() -> None:
+    """Keep the parser lightweight when cancellation support is unavailable.
+
+    compile_log_parser is also used by small standalone scripts.  Importing
+    lazily avoids adding server/runtime initialization to those callers while
+    still making long MCP parses cooperatively cancellable.
+    """
+
+    try:
+        from .cancellation import check_cancelled  # noqa: PLC0415
+    except ImportError:
+        return
+    check_cancelled()
+
+
+def _read_vcs_invocation_lines(log_path: str) -> list[str]:
+    """Return only the VCS invocation evidence, never the whole log."""
+
+    wrapper: list[str] = []
+    with open(log_path, "r", errors="replace") as stream:
+        iterator = iter(stream)
+        for line_number, line in enumerate(iterator, 1):
+            if line_number % _LOG_CANCEL_CHECK_STRIDE == 0:
+                _check_cancelled()
+            if not wrapper and _VCS_SHELL_COMMAND_RE.match(line.rstrip("\n")):
+                wrapper = [line]
+            stripped = line.lstrip()
+            if not stripped.startswith("Command:"):
+                continue
+            result = [line]
+            body = stripped[len("Command:") :].strip()
+            while body.endswith("\\"):
+                try:
+                    continuation = next(iterator)
+                except StopIteration:
+                    break
+                result.append(continuation)
+                body = continuation.rstrip("\n")
+            return result
+    return wrapper
 
 
 def _extract_vcs_command(lines: list[str]) -> str | None:
@@ -700,20 +774,23 @@ def _add_vcs_source(
 
 
 def parse_xcelium_compile_log(log_path: str) -> dict:
-    with open(log_path, "r", errors="replace") as f:
-        lines = f.readlines()
-
     log_dir = os.path.dirname(log_path)
+    invocation_lines = _read_xcelium_invocation_lines(log_path)
     compile_command, replay_command, command_dir = _extract_xcelium_invocation(
-        lines, log_dir
+        invocation_lines, log_dir
     )
     expanded_replay_command, evidence_filelists = _extract_xcelium_expanded_evidence(
-        lines, command_dir
+        invocation_lines, command_dir
     )
     file_info: dict[str, dict] = {}
     include_tree: dict[str, list[str]] = {}
     filelist_tree: dict[str, list[str]] = {}
     interfaces: set[str] = set()
+    definitions: dict[str, dict[str, list[str]]] = {
+        "modules": {},
+        "interfaces": {},
+        "packages": {},
+    }
     top_modules: list[str] = []
     command_started = False
     current_file: str | None = None
@@ -736,7 +813,7 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
             path = _normalize_path(filelist_match.group(1), command_dir)
             filelist_tree.setdefault(os.path.basename(path), [])
 
-    for line in lines:
+    for line in invocation_lines:
         stripped = line.strip()
         if stripped == "xrun":
             command_started = True
@@ -776,23 +853,34 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
             file_info.setdefault(path, {"type": "unknown"})
             expanded_source_paths.append(path)
 
-    for line in lines:
-        match = _XCE_FILE_RE.match(line)
-        if match:
-            raw_path = match.group(1)
-            current_file = _normalize_path(raw_path, command_dir)
-            ordered_unit_paths.append(current_file)
-            ordered_reported_paths.append(
-                _normalize_reported_path(raw_path, command_dir)
-            )
-            file_info.setdefault(current_file, {"type": "unknown"})
-            continue
-        match = _XCE_ENTITY_RE.match(line)
-        if match and current_file:
-            entity_type, entity_name = match.group(1).lower(), match.group(2)
-            file_info[current_file]["type"] = entity_type
-            if entity_type == "interface":
-                interfaces.add(entity_name)
+    with open(log_path, "r", errors="replace") as stream:
+        lines_seen = 0
+        for line in stream:
+            lines_seen += 1
+            if lines_seen % _LOG_CANCEL_CHECK_STRIDE == 0:
+                _check_cancelled()
+            match = _XCE_FILE_RE.match(line)
+            if match:
+                raw_path = match.group(1)
+                current_file = _normalize_path(raw_path, command_dir)
+                ordered_unit_paths.append(current_file)
+                ordered_reported_paths.append(
+                    _normalize_reported_path(raw_path, command_dir)
+                )
+                file_info.setdefault(current_file, {"type": "unknown"})
+                continue
+            match = _XCE_ENTITY_RE.match(line)
+            if match and current_file:
+                entity_type, entity_name = match.group(1).lower(), match.group(2)
+                file_info[current_file]["type"] = entity_type
+                _record_definition(
+                    definitions,
+                    f"{entity_type}s",
+                    entity_name,
+                    current_file,
+                )
+                if entity_type == "interface":
+                    interfaces.add(entity_name)
 
     user, filtered_count = _collect_user_files(file_info)
     if ordered_unit_paths:
@@ -817,6 +905,7 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
         "include_tree": include_tree,
         "filelist_tree": filelist_tree,
         "interfaces": sorted(interfaces),
+        "definitions": definitions,
         "compile_command": compile_command,
         # Native xrun logs indent expanded command-file contents beneath the
         # top-level ``-f`` argument.  ``compile_command`` intentionally keeps
@@ -844,6 +933,35 @@ def parse_xcelium_compile_log(log_path: str) -> dict:
             "expanded_replay_command": expanded_replay_command,
         },
     }
+
+
+def _read_xcelium_invocation_lines(log_path: str) -> list[str]:
+    """Read only the indentation-bounded native xrun invocation block.
+
+    Wrapper logs that contain ``cd ... && xrun ...`` need just that one line.
+    In either form the large compile/entity transcript remains streamed by the
+    parser instead of being retained as a Python list of lines.
+    """
+
+    wrapper: list[str] = []
+    invocation: list[str] = []
+    collecting = False
+    with open(log_path, "r", errors="replace") as stream:
+        for line_number, line in enumerate(stream, 1):
+            if line_number % _LOG_CANCEL_CHECK_STRIDE == 0:
+                _check_cancelled()
+            if collecting:
+                rendered = line.rstrip("\n")
+                if not rendered.strip() or rendered == rendered.lstrip(" \t"):
+                    break
+                invocation.append(line)
+                continue
+            if not wrapper and _XCE_SHELL_COMMAND_RE.match(line.rstrip("\n")):
+                wrapper = [line]
+            if line.strip() == "xrun":
+                collecting = True
+                invocation = [line]
+    return invocation or wrapper
 
 
 def _extract_xcelium_invocation(
@@ -1128,6 +1246,31 @@ def _stable_merge_mapping_lists(results: list[dict], field: str) -> dict:
     return merged
 
 
+def _stable_merge_definitions(results: list[dict]) -> dict[str, dict[str, list[str]]]:
+    merged: dict[str, dict[str, list[str]]] = {
+        "modules": {},
+        "interfaces": {},
+        "packages": {},
+    }
+    for result in results:
+        definitions = result.get("definitions")
+        if not isinstance(definitions, dict):
+            continue
+        for kind in merged:
+            by_name = definitions.get(kind)
+            if not isinstance(by_name, dict):
+                continue
+            for name, raw_paths in by_name.items():
+                if not isinstance(raw_paths, list):
+                    continue
+                destination = merged[kind].setdefault(str(name), [])
+                for path in raw_paths:
+                    rendered = str(path)
+                    if rendered not in destination:
+                        destination.append(rendered)
+    return merged
+
+
 def merge_compile_results(
     primary: dict,
     supplements: list[dict],
@@ -1311,6 +1454,7 @@ def merge_compile_results(
                     if item
                 )
             ),
+            "definitions": _stable_merge_definitions(eligible_results),
             "compile_command": command_source.get("compile_command"),
             "compile_replay_command": command_source.get(
                 "compile_replay_command"

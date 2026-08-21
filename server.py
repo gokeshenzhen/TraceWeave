@@ -51,6 +51,8 @@ from config import (
     DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
+    get_bounded_bootstrap_config,
+    get_hierarchy_execution_config,
     get_source_graph_execution_config,
 )
 import src.cancellation as cancellation
@@ -66,6 +68,7 @@ from src.compile_log_parser import (
     merge_compile_results,
     parse_compile_log,
 )
+from src.bounded_hierarchy_bootstrap import build_bounded_connectivity_context
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import (
@@ -112,7 +115,11 @@ from src.window_verify import verify_window
 from src.txn_reconstruct import reconstruct_transactions
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
-from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
+from src.tb_hierarchy_builder import (
+    apply_npi_source_overlay,
+    build_hierarchy,
+    build_slim_payload,
+)
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.x_trace import inspect_upstream_values, trace_x_source
@@ -162,6 +169,12 @@ _log_snapshot_history: dict[tuple[str, str], list[str]] = {}
 # cache entry — see _invalidate_downstream / _clear_result_state.
 _handle_store = HandleStore()
 
+# Small process-session cache of parsed compile evidence.  It is populated
+# before the expensive source scan, so a timed-out/blocked full hierarchy can
+# still seed an explicitly requested bounded connectivity bootstrap.
+_COMPILE_CONTEXT_CACHE_MAX = 4
+_compile_context_cache: dict[str, dict] = {}
+
 # Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
 # is process-scoped — same semantics as _handle_store: no persistence,
 # server restart drops every cursor.
@@ -205,6 +218,11 @@ _HANDLE_TOOL_NAMES = {
     "get_tb_file_detail",
     "get_tb_class_hierarchy",
     "dump_tb_section",
+}
+
+_BOUNDED_BOOTSTRAP_TOOLS = {
+    "explain_signal_driver",
+    "find_signal_loads",
 }
 
 _PREREQUISITE_REASONS: dict[str, str] = {
@@ -305,6 +323,12 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
         return None
     args = args or {}
     for step in prereqs:
+        if (
+            step == "build_tb_hierarchy"
+            and tool_name in _BOUNDED_BOOTSTRAP_TOOLS
+            and args.get("allow_bounded_bootstrap") is True
+        ):
+            continue
         if _session_state[step] is None and not _restore_prerequisite_state_from_cache(
             step, tool_name, args
         ):
@@ -385,6 +409,7 @@ def _clear_result_state():
     _log_snapshots.clear()
     _log_snapshot_history.clear()
     _handle_store.invalidate()
+    _compile_context_cache.clear()
     _cursor_store.clear()
 
 
@@ -473,6 +498,339 @@ def _resolve_session_simulator(args: dict) -> str:
     ):
         return hierarchy_result.project["simulator"]
     return "auto"
+
+
+def _validated_supplementary_compile_logs(args: dict) -> list[str]:
+    raw_supplements = args.get("supplementary_compile_logs") or []
+    if (
+        not isinstance(raw_supplements, list)
+        or len(raw_supplements) > 16
+        or any(
+            not isinstance(path, str) or not path.strip()
+            for path in raw_supplements
+        )
+    ):
+        raise ValueError("supplementary_compile_logs must contain 0..16 paths")
+    return [path.strip() for path in raw_supplements]
+
+
+def _parse_merged_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+) -> tuple[dict, str]:
+    """Parse primary/supplementary evidence without scanning source bodies."""
+
+    primary_result = parse_compile_log(compile_log, simulator)
+    context_simulator = str(primary_result.get("simulator") or simulator or "auto")
+    if not supplementary_compile_logs:
+        return primary_result, context_simulator
+    supplementary_results = []
+    for path in supplementary_compile_logs:
+        cancellation.check_cancelled()
+        detected = detect_simulator(path)
+        parse_simulator = (
+            detected if detected in {"vcs", "xcelium"} else context_simulator
+        )
+        supplementary_results.append(parse_compile_log(path, parse_simulator))
+    return (
+        merge_compile_results(
+            primary_result,
+            supplementary_results,
+            primary_log=compile_log,
+            supplementary_logs=supplementary_compile_logs,
+        ),
+        context_simulator,
+    )
+
+
+def _cache_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+    snapshot_sha256: str,
+    compile_result: dict,
+) -> None:
+    _compile_context_cache[snapshot_sha256] = {
+        "compile_log": os.path.realpath(compile_log),
+        "simulator": simulator,
+        "supplementary_compile_logs": [
+            os.path.realpath(path) for path in supplementary_compile_logs
+        ],
+        "snapshot_sha256": snapshot_sha256,
+        "compile_result": compile_result,
+    }
+    while len(_compile_context_cache) > _COMPILE_CONTEXT_CACHE_MAX:
+        _compile_context_cache.pop(next(iter(_compile_context_cache)))
+
+
+def _resolve_cached_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+) -> dict | None:
+    primary = os.path.realpath(compile_log)
+    supplements = [os.path.realpath(path) for path in supplementary_compile_logs]
+    # Newest wins when the caller omits supplements after a prior full-build
+    # attempt established their exact identity.
+    for record in reversed(tuple(_compile_context_cache.values())):
+        if record.get("compile_log") != primary:
+            continue
+        record_simulator = str(record.get("simulator") or "auto")
+        if simulator != "auto" and record_simulator not in {simulator, "auto"}:
+            continue
+        if supplements and record.get("supplementary_compile_logs") != supplements:
+            continue
+        expected = compute_snapshot_fingerprint(
+            compile_log,
+            record_simulator if simulator == "auto" else simulator,
+            supplementary_compile_logs=(
+                supplementary_compile_logs
+                if supplements
+                else record.get("supplementary_compile_logs") or ()
+            ),
+        )
+        if expected != record.get("snapshot_sha256"):
+            continue
+        return record
+    return None
+
+
+def _hierarchy_source_preflight(
+    compile_result: dict,
+    *,
+    max_source_bytes: int,
+) -> tuple[dict[str, int], bool]:
+    files = compile_result.get("files")
+    user_files = files.get("user", []) if isinstance(files, dict) else []
+    requested = len(user_files) if isinstance(user_files, list) else 0
+    readable = 0
+    missing = 0
+    total_bytes = 0
+    largest_bytes = 0
+    if isinstance(user_files, list):
+        for item in user_files:
+            cancellation.check_cancelled()
+            path = item.get("path") if isinstance(item, dict) else None
+            if not isinstance(path, str) or not path:
+                missing += 1
+                continue
+            try:
+                size = os.stat(path).st_size
+            except OSError:
+                missing += 1
+                continue
+            readable += 1
+            total_bytes += size
+            largest_bytes = max(largest_bytes, size)
+            if max_source_bytes and total_bytes > max_source_bytes:
+                return (
+                    {
+                        "source_file_count_requested": requested,
+                        "source_file_count_readable": readable,
+                        "source_file_count_missing": missing,
+                        "source_bytes_planned": total_bytes,
+                        "largest_source_file_bytes": largest_bytes,
+                        "source_byte_limit": max_source_bytes,
+                    },
+                    False,
+                )
+    return (
+        {
+            "source_file_count_requested": requested,
+            "source_file_count_readable": readable,
+            "source_file_count_missing": missing,
+            "source_bytes_planned": total_bytes,
+            "largest_source_file_bytes": largest_bytes,
+            "source_byte_limit": max_source_bytes,
+        },
+        True,
+    )
+
+
+def _blocked_hierarchy_result(
+    *,
+    code: str,
+    stage: str,
+    metrics: dict | None = None,
+    project: dict | None = None,
+) -> schemas.BuildTbHierarchyResult:
+    return schemas.BuildTbHierarchyResult.model_validate(
+        {
+            "build_status": "blocked",
+            "project": project or {},
+            "build_metrics": {"status": "blocked", **(metrics or {})},
+            "blocker": {"code": code, "stage": stage},
+        }
+    )
+
+
+def _bootstrap_blocked_receipt(
+    *,
+    code: str,
+    stage: str,
+    wall_time_ms: float = 0.0,
+) -> dict:
+    return {
+        "used": True,
+        "status": "blocked",
+        "scope": "single_endpoint",
+        "ancestor_chain_proved": False,
+        "coverage_status": "inconclusive",
+        "objective_exclusions": [
+            "bootstrap_compile_inputs_scoped",
+            "bootstrap_hierarchy_scoped",
+        ],
+        "metrics": {"wall_time_ms": round(wall_time_ms, 3)},
+        "blocker": {"code": code, "stage": stage},
+    }
+
+
+async def _resolve_connectivity_hierarchy_context(
+    *,
+    args: dict,
+    simulator: str,
+) -> tuple[dict | None, str, dict | None, str | None]:
+    """Prefer a full hierarchy, then optionally prove a bounded one."""
+
+    hierarchy_result, snapshot = _resolve_hierarchy_context(
+        args["compile_log"], simulator
+    )
+    if hierarchy_result is not None or args.get("allow_bounded_bootstrap") is not True:
+        return hierarchy_result, snapshot, None, None
+
+    started = time.perf_counter()
+    config = get_bounded_bootstrap_config()
+    if not config.valid:
+        code = config.error_code or "bootstrap_config_invalid"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="execution_config",
+            ),
+            code,
+        )
+    try:
+        supplementary_logs = _validated_supplementary_compile_logs(args)
+    except ValueError:
+        code = "bootstrap_supplementary_logs_invalid"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(code=code, stage="compile_log_parse"),
+            code,
+        )
+
+    cached = _resolve_cached_compile_context(
+        compile_log=args["compile_log"],
+        simulator=simulator,
+        supplementary_compile_logs=supplementary_logs,
+    )
+    if cached is not None:
+        compile_result = cached["compile_result"]
+        context_simulator = str(cached.get("simulator") or simulator)
+        snapshot = str(cached["snapshot_sha256"])
+    else:
+        try:
+            with anyio.fail_after(config.timeout_sec):
+                compile_result, context_simulator = await _run_in_cancellable_thread(
+                    lambda: _parse_merged_compile_context(
+                        compile_log=args["compile_log"],
+                        simulator=simulator,
+                        supplementary_compile_logs=supplementary_logs,
+                    )
+                )
+        except TimeoutError:
+            code = "bootstrap_timeout"
+            elapsed = (time.perf_counter() - started) * 1000.0
+            return (
+                None,
+                snapshot,
+                _bootstrap_blocked_receipt(
+                    code=code,
+                    stage="compile_log_parse",
+                    wall_time_ms=elapsed,
+                ),
+                code,
+            )
+        except (OSError, ValueError):
+            code = "bootstrap_compile_log_parse_failed"
+            elapsed = (time.perf_counter() - started) * 1000.0
+            return (
+                None,
+                snapshot,
+                _bootstrap_blocked_receipt(
+                    code=code,
+                    stage="compile_log_parse",
+                    wall_time_ms=elapsed,
+                ),
+                code,
+            )
+        snapshot = compute_snapshot_fingerprint(
+            args["compile_log"],
+            context_simulator,
+            supplementary_compile_logs=supplementary_logs,
+        )
+        _cache_compile_context(
+            compile_log=args["compile_log"],
+            simulator=context_simulator,
+            supplementary_compile_logs=supplementary_logs,
+            snapshot_sha256=snapshot,
+            compile_result=compile_result,
+        )
+
+    elapsed_sec = time.perf_counter() - started
+    remaining = config.timeout_sec - elapsed_sec
+    if remaining <= 0:
+        code = "bootstrap_timeout"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="target_scope",
+                wall_time_ms=elapsed_sec * 1000.0,
+            ),
+            code,
+        )
+    try:
+        with anyio.fail_after(remaining):
+            result = await _run_in_cancellable_thread(
+                lambda: build_bounded_connectivity_context(
+                    compile_result=compile_result,
+                    hierarchy_snapshot_sha256=snapshot,
+                    signal_path=args["signal_path"],
+                    top_hint=args.get("top_hint"),
+                    config=config,
+                )
+            )
+    except TimeoutError:
+        code = "bootstrap_timeout"
+        elapsed = (time.perf_counter() - started) * 1000.0
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="target_scope",
+                wall_time_ms=elapsed,
+            ),
+            code,
+        )
+    if result.status != "ready" or result.hierarchy_result is None:
+        blocker = result.receipt.get("blocker") or {}
+        return (
+            None,
+            snapshot,
+            result.receipt,
+            str(blocker.get("code") or "bootstrap_context_blocked"),
+        )
+    return result.hierarchy_result, snapshot, result.receipt, None
 
 
 def _resolve_hierarchy_context(
@@ -1952,7 +2310,9 @@ async def _route_public_connectivity(
         select_backend,
     )
 
-    backend_status = _safe_probe_backend(args["compile_log"], simulator)
+    backend_status = await _run_in_cancellable_thread(
+        lambda: _safe_probe_backend(args["compile_log"], simulator)
+    )
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
     try:
@@ -2058,6 +2418,13 @@ async def _route_public_connectivity(
     config = get_source_graph_execution_config()
     source_graph_receipt: dict
     source_graph_reason: str
+    bootstrap_receipt: dict | None = None
+    bootstrap_active = False
+    if args.get("allow_bounded_bootstrap") is True:
+        existing_hierarchy, _ = _resolve_hierarchy_context(
+            args["compile_log"], simulator
+        )
+        bootstrap_active = existing_hierarchy is None
     if not config.enabled:
         source_graph_reason = "source_graph_disabled"
         source_graph_receipt = _blocked_source_graph_receipt(
@@ -2065,6 +2432,12 @@ async def _route_public_connectivity(
             code=source_graph_reason,
             stage="execution_config",
         )
+        if bootstrap_active:
+            bootstrap_receipt = _bootstrap_blocked_receipt(
+                code=source_graph_reason,
+                stage="execution_config",
+            )
+            source_graph_receipt["bootstrap_context"] = bootstrap_receipt
         attempts.append(
             _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
         )
@@ -2075,25 +2448,44 @@ async def _route_public_connectivity(
             code=source_graph_reason,
             stage="execution_config",
         )
+        if bootstrap_active:
+            bootstrap_receipt = _bootstrap_blocked_receipt(
+                code=source_graph_reason,
+                stage="execution_config",
+            )
+            source_graph_receipt["bootstrap_context"] = bootstrap_receipt
         attempts.append(
             _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
         )
     else:
         operation_metrics.set_value("source_graph_phase", "adapter")
         adapter_started = time.perf_counter()
-        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
-            args["compile_log"], simulator
+        (
+            hierarchy_result,
+            hierarchy_snapshot_sha256,
+            bootstrap_receipt,
+            bootstrap_blocker_reason,
+        ) = await _resolve_connectivity_hierarchy_context(
+            args=args,
+            simulator=simulator,
         )
+        bootstrap_active = bootstrap_receipt is not None
         if hierarchy_result is None:
             adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
             operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
-            source_graph_reason = "source_graph_hierarchy_context_unavailable"
+            source_graph_reason = (
+                f"source_graph_{bootstrap_blocker_reason}"
+                if bootstrap_blocker_reason
+                else "source_graph_hierarchy_context_unavailable"
+            )
             source_graph_receipt = _blocked_source_graph_receipt(
                 "blocked",
                 code=source_graph_reason,
                 stage="target_scope",
                 adapter_wall_ms=adapter_wall_ms,
             )
+            if bootstrap_receipt is not None:
+                source_graph_receipt["bootstrap_context"] = bootstrap_receipt
             attempts.append(
                 _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
             )
@@ -2109,6 +2501,8 @@ async def _route_public_connectivity(
                     stage="compile_manifest",
                     adapter_wall_ms=adapter_wall_ms,
                 )
+                if bootstrap_receipt is not None:
+                    source_graph_receipt["bootstrap_context"] = bootstrap_receipt
                 attempts.append(
                     _backend_attempt(
                         "source_graph", "blocked", reason=source_graph_reason
@@ -2161,6 +2555,8 @@ async def _route_public_connectivity(
                         adapter=plan.receipt.to_dict(),
                         adapter_wall_ms=adapter_wall_ms,
                     )
+                    if bootstrap_receipt is not None:
+                        source_graph_receipt["bootstrap_context"] = bootstrap_receipt
                     attempts.append(
                         _backend_attempt(
                             "source_graph",
@@ -2195,6 +2591,10 @@ async def _route_public_connectivity(
                         )
                         outcome = execution["outcome"]
                         source_graph_receipt = execution["receipt"]
+                        if bootstrap_receipt is not None:
+                            source_graph_receipt["bootstrap_context"] = (
+                                bootstrap_receipt
+                            )
                         source_graph_reason = execution["reason"]
                         source_result = execution["result"]
                         query_receipt = execution["query"]
@@ -2256,7 +2656,8 @@ async def _route_public_connectivity(
                             and int(query_receipt.get("unresolved_bit_count", 0)) > 0
                         )
                         can_expand = (
-                            bool(frontiers)
+                            not bootstrap_active
+                            and bool(frontiers)
                             and scope_limited
                             and source_provenance_ok
                             and "query_depth_limit" not in gap_codes
@@ -2407,6 +2808,7 @@ async def _route_public_connectivity(
                             and query_receipt is not None
                             and source_provenance_ok
                             and query_status in {"found", "not_connected"}
+                            and (not bootstrap_active or query_status == "found")
                         ):
                             source_graph_receipt["artifact_attempt_count"] = (
                                 artifact_attempt_count
@@ -2495,6 +2897,57 @@ async def _route_public_connectivity(
                     )
                     source_graph_receipt["metrics"].update(aggregate_metrics)
                     _publish_source_graph_trace_metrics(aggregate_metrics)
+
+    if bootstrap_active:
+        # Bounded bootstrap negative/inconclusive results must not trigger the
+        # same whole-source Legacy Static scan that this route is intended to
+        # avoid. Only the proved-positive return above may carry connectivity
+        # facts from an incomplete bootstrap artifact.
+        source_graph_receipt["fallback_used"] = False
+        claim_semantics = {
+            "positive_fact_confidence": None,
+            "target_bit_coverage": "none",
+            "global_coverage_status": "inconclusive",
+            "exhaustive_search": False,
+            "exclusive_driver_proved": (
+                False if operation == "driver" else None
+            ),
+            "negative_claim_allowed": False,
+        }
+        if operation == "driver":
+            clean = {
+                "signal_path": args["signal_path"],
+                "wave_path": args["wave_path"],
+                "resolved_rtl_name": args["signal_path"].rsplit(".", 1)[-1],
+                "driver_status": "unknown",
+                "confidence": "unverified",
+                "claim_semantics": claim_semantics,
+                "unsupported_reason": source_graph_reason,
+                "recursive": bool(args.get("recursive", False)),
+                "backend": "source_graph",
+            }
+        else:
+            clean = {
+                "signal_path": args["signal_path"],
+                "resolved_rtl_name": args["signal_path"].rsplit(".", 1)[-1],
+                "loads": [],
+                "completeness": "shallow_only",
+                "unsupported_reason": source_graph_reason,
+                "claim_semantics": claim_semantics,
+                "backend": "source_graph",
+            }
+        status = _finalize_public_connectivity_status(
+            backend_status=backend_status,
+            selected_backend=selected_backend,
+            actual_backend="source_graph",
+            attempts=attempts,
+            fallback_reason=source_graph_reason,
+            npi_backend=npi_backend if npi_selected else None,
+            npi_execution=npi_execution,
+            source_graph_receipt=source_graph_receipt,
+            npi_kdb_status=npi_kdb_status,
+        )
+        return clean, status
 
     # Legacy Static is always a whole-result recomputation.  No NPI or Source
     # Graph facts survive into the payload; their attempt receipts remain only
@@ -4069,6 +4522,30 @@ def _integer_or_string_schema() -> dict:
     return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
 
 
+def _bounded_bootstrap_input_properties() -> dict:
+    return {
+        "supplementary_compile_logs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 16,
+            "description": (
+                "Optional complementary compile/elaboration logs used by bounded "
+                "bootstrap when no hierarchy handle exists."
+            ),
+        },
+        "allow_bounded_bootstrap": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "If true and full hierarchy is unavailable, prove a hard-bounded "
+                "single-endpoint Source Graph context. Only positive facts may be "
+                "returned; no-match remains inconclusive and never triggers a "
+                "whole-source Static rescan."
+            ),
+        },
+    }
+
+
 # Time inputs accept a TimeSpec: an integer (ps), a cursor reference
 # "@<name>", or a unit literal like "12.34ns". See src/timespec.py.
 _TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c', or a unit literal like '12.34ns'."
@@ -4491,10 +4968,10 @@ async def list_tools():
         Tool(
             name="build_tb_hierarchy",
             description=(
-                "Parse one compile/elaborate log plus optional complementary phase logs, scan source files, and cache the full testbench hierarchy server-side. "
+                "Stream one compile/elaborate log plus optional complementary phase logs, scan source files, and cache the full testbench hierarchy server-side without retaining raw source bodies. "
                 "For split VCS flows, prefer the source-compile log as compile_log and pass VHDL/source/elaboration companions in build order; later connectivity tools continue using that primary path. "
                 "Returns a SLIM payload: project, stats, tree_skeleton (depth 2), interfaces, ambiguous_basenames, "
-                "and hierarchy_handle. Use the handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
+                "build_metrics, and hierarchy_handle. A configured timeout/source-byte guard returns build_status='blocked' plus a fixed blocker and no handle. Use a completed handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
                 "get_tb_file_detail / get_tb_class_hierarchy / dump_tb_section to access the full data on demand."
             ),
             inputSchema={
@@ -4686,7 +5163,10 @@ async def list_tools():
                 "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
                 "the static source-regex backend cannot reach. If NPI is unavailable or "
                 "cannot return a trustworthy result, TraceWeave next attempts a bounded, "
-                "on-demand Source Graph projection; Legacy Static remains the final fallback. "
+                "on-demand Source Graph projection; Legacy Static remains the normal final fallback. "
+                "The explicit allow_bounded_bootstrap path is the resource-bounded exception: "
+                "without a full hierarchy it returns only proved positive Source Graph facts, "
+                "and an inconclusive/blocker result does not start a whole-source Static scan. "
                 "Source Graph preserves per-bit port-binding provenance, so mixed bindings "
                 "such as concatenations, constants, truncation, and width extension are "
                 "reported as segments instead of forcing an all-or-nothing exact-width match. "
@@ -4722,6 +5202,7 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
@@ -4750,13 +5231,15 @@ async def list_tools():
                 "resolves the cross-hierarchy / interface-positional / generate-block cases "
                 "that the static source-regex backend cannot reach. If NPI is unavailable or "
                 "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
-                "on-demand Source Graph; Legacy Static remains the final fallback "
-                "(shallow_only). backend_status preserves the complete attempt chain and Source "
+                "on-demand Source Graph; Legacy Static remains the normal final fallback "
+                "(shallow_only). When allow_bounded_bootstrap=true and no full hierarchy exists, "
+                "only proved positive Source Graph facts are returned; an inconclusive/blocker "
+                "does not trigger a whole-source Static rescan. backend_status preserves the complete attempt chain and Source "
                 "Graph coverage/build receipt. claim_semantics separates confidence in returned "
                 "positive load facts from whole-artifact coverage; exhaustive_search is required "
                 "before treating the list as all loads, and negative_claim_allowed is required "
                 "before claiming there are none. A complete Source Graph not_connected is distinct "
-                "from an inconclusive no-match, which falls through to Static. Each load "
+                "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. Each load "
                 "query normalizes trailing numeric selects for Legacy Static matching, while "
                 "Source Graph validates the selected bits against the declaration. Each load "
                 "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
@@ -4767,6 +5250,7 @@ async def list_tools():
                 "properties": {
                     "signal_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
@@ -5827,14 +6311,20 @@ async def call_tool(name: str, arguments: dict):
                 (time.perf_counter() - serialize_started) * 1000.0,
             )
             operation_metrics.set_value("sweep_result_bytes", len(text.encode("utf-8")))
+        hierarchy_blocked = (
+            isinstance(result, schemas.BuildTbHierarchyResult)
+            and result.build_status == "blocked"
+        )
         ok = not isinstance(
             result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
-        )
-        blocked = isinstance(result, schemas.PrerequisiteBlockResult)
+        ) and not hierarchy_blocked
+        blocked = isinstance(result, schemas.PrerequisiteBlockResult) or hierarchy_blocked
         if isinstance(result, schemas.PrerequisiteBlockResult):
             error_code = result.error_code
         elif isinstance(result, schemas.ToolErrorResult):
             error_code = result.error_code or "tool_error"
+        elif hierarchy_blocked:
+            error_code = str((result.blocker or {}).get("code") or "hierarchy_blocked")
         return [TextContent(type="text", text=text)]
     except anyio.get_cancelled_exc_class():
         # Client abandoned the request; the finally block still records the
@@ -6137,42 +6627,74 @@ async def _dispatch(name: str, args: dict):
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
         compile_log = args["compile_log"]
-        raw_supplements = args.get("supplementary_compile_logs") or []
-        if (
-            not isinstance(raw_supplements, list)
-            or len(raw_supplements) > 16
-            or any(not isinstance(path, str) or not path.strip() for path in raw_supplements)
-        ):
-            raise ValueError("supplementary_compile_logs must contain 0..16 paths")
-        supplementary_compile_logs = [path.strip() for path in raw_supplements]
-        primary_result = parse_compile_log(compile_log, simulator)
-        context_simulator = str(
-            primary_result.get("simulator") or simulator or "auto"
-        )
-        if supplementary_compile_logs:
-            supplementary_results = []
-            for path in supplementary_compile_logs:
-                detected = detect_simulator(path)
-                parse_simulator = (
-                    detected
-                    if detected in {"vcs", "xcelium"}
-                    else context_simulator
-                )
-                supplementary_results.append(
-                    parse_compile_log(path, parse_simulator)
-                )
-            compile_result = merge_compile_results(
-                primary_result,
-                supplementary_results,
-                primary_log=compile_log,
-                supplementary_logs=supplementary_compile_logs,
+        supplementary_compile_logs = _validated_supplementary_compile_logs(args)
+        hierarchy_config = get_hierarchy_execution_config()
+        if not hierarchy_config.valid:
+            return _blocked_hierarchy_result(
+                code=hierarchy_config.error_code or "hierarchy_config_invalid",
+                stage="execution_config",
             )
-        else:
-            compile_result = primary_result
+        hierarchy_started = time.perf_counter()
+        timeout_sec = hierarchy_config.timeout_sec
+        try:
+            if timeout_sec:
+                with anyio.fail_after(timeout_sec):
+                    compile_result, context_simulator = (
+                        await _run_in_cancellable_thread(
+                            lambda: _parse_merged_compile_context(
+                                compile_log=compile_log,
+                                simulator=simulator,
+                                supplementary_compile_logs=(
+                                    supplementary_compile_logs
+                                ),
+                            )
+                        )
+                    )
+            else:
+                compile_result, context_simulator = (
+                    await _run_in_cancellable_thread(
+                        lambda: _parse_merged_compile_context(
+                            compile_log=compile_log,
+                            simulator=simulator,
+                            supplementary_compile_logs=(
+                                supplementary_compile_logs
+                            ),
+                        )
+                    )
+                )
+        except TimeoutError:
+            return _blocked_hierarchy_result(
+                code="hierarchy_timeout",
+                stage="compile_log_parse",
+                metrics={
+                    "timeout_ms": round(timeout_sec * 1000.0, 3),
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+            )
+        except MemoryError:
+            return _blocked_hierarchy_result(
+                code="hierarchy_memory_exhausted",
+                stage="compile_log_parse",
+                metrics={
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+            )
+        parse_wall_ms = (time.perf_counter() - hierarchy_started) * 1000.0
         hierarchy_snapshot_sha256 = compute_snapshot_fingerprint(
             compile_log,
             context_simulator,
             supplementary_compile_logs=supplementary_compile_logs,
+        )
+        _cache_compile_context(
+            compile_log=compile_log,
+            simulator=context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
+            snapshot_sha256=hierarchy_snapshot_sha256,
+            compile_result=compile_result,
         )
         handle = compute_handle(
             compile_log,
@@ -6186,10 +6708,102 @@ async def _dispatch(name: str, args: dict):
             "_hierarchy_handle": handle,
             "_hierarchy_snapshot_sha256": hierarchy_snapshot_sha256,
         }
-        full_result = build_hierarchy(
-            compile_result,
-            compile_log_path=compile_log,
-        )
+
+        def _build_full_hierarchy_work():
+            preflight, within_limit = _hierarchy_source_preflight(
+                compile_result,
+                max_source_bytes=hierarchy_config.max_source_bytes,
+            )
+            if not within_limit:
+                return None, preflight
+            result = build_hierarchy(
+                compile_result,
+                compile_log_path=compile_log,
+                apply_source_overlay=False,
+            )
+            result.setdefault("build_metrics", {})["parse_wall_ms"] = round(
+                parse_wall_ms, 3
+            )
+            return result, preflight
+
+        if timeout_sec:
+            remaining_sec = timeout_sec - (time.perf_counter() - hierarchy_started)
+            if remaining_sec <= 0:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_timeout",
+                    stage="compile_log_parse",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "timeout_ms": round(timeout_sec * 1000.0, 3),
+                    },
+                    project={"simulator": context_simulator},
+                )
+            try:
+                with anyio.fail_after(remaining_sec):
+                    full_result, preflight = await _run_in_cancellable_thread(
+                        _build_full_hierarchy_work
+                    )
+            except TimeoutError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_timeout",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "timeout_ms": round(timeout_sec * 1000.0, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+            except MemoryError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_memory_exhausted",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+        else:
+            try:
+                full_result, preflight = await _run_in_cancellable_thread(
+                    _build_full_hierarchy_work
+                )
+            except MemoryError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_memory_exhausted",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+        if full_result is None:
+            return _blocked_hierarchy_result(
+                code="hierarchy_source_byte_limit_exceeded",
+                stage="source_preflight",
+                metrics={
+                    **preflight,
+                    "parse_wall_ms": round(parse_wall_ms, 3),
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+                project={"simulator": context_simulator},
+            )
+        # Preserve the existing local-NPI execution model: only the lock-free
+        # parse/source scan moved to a cancellable worker thread.
+        apply_npi_source_overlay(full_result, compile_log)
         evidence = compile_result.get("compile_evidence")
         evidence = evidence if isinstance(evidence, dict) else {}
         source_logs = evidence.get("source_logs")

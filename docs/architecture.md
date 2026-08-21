@@ -384,10 +384,14 @@ Verification
 
 `build_tb_hierarchy` generates a full hierarchy result server-side (project
 metadata, grouped file list, complete `component_tree`, `class_hierarchy`,
-raw `compile_result`, per-file scan results) but returns only a **slim
+raw `compile_result`, compact per-file scan results) but returns only a **slim
 payload** to the LLM: project, stats, depth-2 `tree_skeleton`, interfaces,
-`ambiguous_basenames`, and a content-addressed `hierarchy_handle`. The
-full result is registered in an in-process `HandleStore`
+`ambiguous_basenames`, numeric `build_metrics`, and a content-addressed
+`hierarchy_handle`. Compile transcripts are consumed as streams. A source body
+exists only while its file is being scanned; cross-file facts are derived at
+that point and `source_text` is removed before the result enters the handle
+store. Retained hierarchy memory therefore scales with extracted metadata, not
+the sum of source bytes. The full result is registered in an in-process `HandleStore`
 (`src/hierarchy_handles.py`) keyed by the handle.
 
 Six handle tools (`src/handle_tools.py`) resolve a handle and return
@@ -414,6 +418,11 @@ Lifecycle:
   both call `_handle_store.invalidate()`, so cache invalidation is symmetric.
 - Unknown handles return `HandleErrorResult{error: "handle_expired"}` with
   HTTP 200 so the LLM can read and react.
+- Optional `TRACEWEAVE_HIERARCHY_TIMEOUT` and
+  `TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES` guards are disabled by default. A hit
+  returns `build_status="blocked"` plus a fixed-label blocker and never
+  registers a partial handle. The already-parsed compact compile context stays
+  in a four-entry process cache for an explicitly requested bounded bootstrap.
 
 Why this shape:
 
@@ -431,12 +440,45 @@ The legacy full-fat payload remains accessible behind
 `TRACEWEAVE_LEGACY_HIERARCHY_PAYLOAD=1` as a one-release migration safety
 net, validated against `BuildTbHierarchyResultLegacy`.
 
+## Bounded Hierarchy Bootstrap
+
+`src/bounded_hierarchy_bootstrap.py` is a single-endpoint escape path for
+`explain_signal_driver` and `find_signal_loads` when no full hierarchy handle
+exists and the caller sets `allow_bounded_bootstrap=true`. It does not serve
+hierarchy browsing, path queries, or X tracing.
+
+The bootstrap starts from the parsed compile context and simulator-recorded
+ordered inputs. It never searches the filesystem. A capped lexical inventory
+is used only when the compile transcript does not pair a definition name with
+its source file. The resolver requires a unique top/module/interface
+definition, walks direct instances one ancestor at a time, closes selected
+package/include dependencies, and rejects unproved preprocessor context. It
+never replays the simulator's full UVM library; a `uvm_pkg` import
+adds the existing `uvm_dynamic_connectivity` exclusion and lets only unrelated
+IR-proved local positives survive. Bootstrap compile replay retains defines and
+include options but removes broad `-v`/`-y` library search options, recording
+`bootstrap_library_context_scoped`. Time, selected-input count/bytes, inventory count/bytes, include depth,
+and hierarchy depth all have hard limits. A limit or ambiguity produces only a
+fixed blocker plus numeric metrics.
+
+The resulting compile subset is content-fingerprinted but intentionally marks
+the manifest incomplete and non-reusable across requests, with
+`bootstrap_hierarchy_scoped` and `bootstrap_compile_inputs_scoped` objective
+exclusions. Only an IR-proved positive fact may leave this route. A no-match,
+blocker, dependency failure, or timeout returns no connectivity fact with
+`exhaustive_search=false` and `negative_claim_allowed=false`; it does not start
+a whole-source Legacy Static recomputation. This is the one deliberate
+exception to the normal fallback chain below, because such a recomputation
+would defeat the bootstrap's resource bound.
+
 ## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
 NPI is the deepest path, Source Graph is the bounded semantic fallback, and
-Static is the final source-regex fallback. A clean KDB can support both
+Static is the normal final source-regex fallback. A clean KDB can support both
 positive and negative NPI conclusions. A degraded KDB supports positive facts
-only; an incomplete or negative answer advances the route.
+only; an incomplete or negative answer advances the route. The explicit
+bootstrap-only exception above stops before Static when no full hierarchy
+exists.
 
 ```text
 select_backend(probe_status)
@@ -491,6 +533,8 @@ degraded resolved driver / non-empty loads /
 degraded found path                            → return NPI, coverage=partial
 degraded incomplete or negative result         → Source Graph → Static
 NPI load/query/worker failure                   → Source Graph → Static
+no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positive
+                                                → otherwise scoped no-fact receipt
 ```
 
 **Key properties:**

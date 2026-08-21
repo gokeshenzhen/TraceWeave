@@ -194,6 +194,116 @@ KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Compile-log hierarchy and bounded Source Graph bootstrap budgets
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class HierarchyExecutionConfig:
+    """Optional internal guardrails for full hierarchy construction.
+
+    Zero keeps the corresponding limit disabled so existing installations do
+    not acquire a new implicit deadline.  Operators with a stricter outer MCP
+    watchdog can set an earlier internal timeout and receive a structured
+    blocker while the server remains responsive.
+    """
+
+    timeout_sec: float = 0.0
+    max_source_bytes: int = 0
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_hierarchy_execution_config() -> HierarchyExecutionConfig:
+    raw_timeout = os.environ.get("TRACEWEAVE_HIERARCHY_TIMEOUT", "0").strip()
+    raw_source_bytes = os.environ.get(
+        "TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES", "0"
+    ).strip()
+    try:
+        timeout_sec = float(raw_timeout)
+        max_source_bytes = int(raw_source_bytes)
+    except ValueError:
+        return HierarchyExecutionConfig(error_code="hierarchy_config_invalid")
+    if (
+        timeout_sec < 0
+        or timeout_sec > 86_400
+        or max_source_bytes < 0
+        or max_source_bytes > (1 << 63) - 1
+    ):
+        return HierarchyExecutionConfig(error_code="hierarchy_config_invalid")
+    return HierarchyExecutionConfig(
+        timeout_sec=timeout_sec,
+        max_source_bytes=max_source_bytes,
+    )
+
+
+@dataclass(frozen=True)
+class BoundedBootstrapConfig:
+    """Hard limits for a single-endpoint hierarchy bootstrap."""
+
+    timeout_sec: float = 15.0
+    max_source_inputs: int = 32
+    max_source_bytes: int = 16 * 1024 * 1024
+    max_inventory_files: int = 4096
+    max_inventory_bytes: int = 256 * 1024 * 1024
+    max_include_depth: int = 16
+    max_hierarchy_depth: int = 64
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_bounded_bootstrap_config() -> BoundedBootstrapConfig:
+    defaults = BoundedBootstrapConfig()
+    raw_values = {
+        "timeout_sec": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_TIMEOUT", str(defaults.timeout_sec)
+        ).strip(),
+        "max_source_inputs": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS",
+            str(defaults.max_source_inputs),
+        ).strip(),
+        "max_source_bytes": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES",
+            str(defaults.max_source_bytes),
+        ).strip(),
+        "max_inventory_files": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES",
+            str(defaults.max_inventory_files),
+        ).strip(),
+        "max_inventory_bytes": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES",
+            str(defaults.max_inventory_bytes),
+        ).strip(),
+        "max_include_depth": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH",
+            str(defaults.max_include_depth),
+        ).strip(),
+        "max_hierarchy_depth": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH",
+            str(defaults.max_hierarchy_depth),
+        ).strip(),
+    }
+    try:
+        timeout_sec = float(raw_values.pop("timeout_sec"))
+        integers = {name: int(value) for name, value in raw_values.items()}
+    except ValueError:
+        return BoundedBootstrapConfig(error_code="bootstrap_config_invalid")
+    if (
+        timeout_sec < 0.001
+        or timeout_sec > 86_400
+        or any(value < 1 or value > (1 << 63) - 1 for value in integers.values())
+    ):
+        return BoundedBootstrapConfig(error_code="bootstrap_config_invalid")
+    return BoundedBootstrapConfig(timeout_sec=timeout_sec, **integers)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Source Graph on-demand execution policy
 # ═══════════════════════════════════════════════════════════════════
 

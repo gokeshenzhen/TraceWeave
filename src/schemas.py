@@ -102,11 +102,14 @@ class BuildTbHierarchyResult(SchemaModel):
     """
 
     hierarchy_handle: str = ""
+    build_status: Literal["completed", "blocked"] = "completed"
+    blocker: dict[str, Any] | None = None
     project: dict[str, Any] = Field(default_factory=dict)
     compile_command: str = ""
     stats: dict[str, int] = Field(default_factory=dict)
     tree_skeleton: dict[str, Any] = Field(default_factory=dict)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    build_metrics: dict[str, Any] = Field(default_factory=dict)
     ambiguous_basenames: list[dict[str, Any]] = Field(default_factory=list)
     kdb_hint: dict[str, Any] | None = None
     handle_tools: dict[str, str] = Field(default_factory=dict)
@@ -125,6 +128,7 @@ class BuildTbHierarchyResultLegacy(SchemaModel):
     class_hierarchy: list[str] = Field(default_factory=list)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
     compile_result: dict[str, Any] = Field(default_factory=dict)
+    build_metrics: dict[str, Any] = Field(default_factory=dict)
     required_next_call: dict[str, Any] | None = None
     suggested_next: dict[str, Any] | None = None
 
@@ -822,6 +826,7 @@ class SourceGraphScopeMatchReceipt(SchemaModel):
 
 class SourceGraphBackendReceipt(SchemaModel):
     adapter_status: Literal["ready", "blocked", "disabled", "invalid"]
+    bootstrap_context: dict[str, Any] | None = None
     adapter: dict[str, Any] | None = None
     prepare_status: (
         Literal[

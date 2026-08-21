@@ -454,6 +454,65 @@ build_tb_hierarchy(
 `compile_log`。若 simulator/top 冲突、日志重复、source order 不完整或存在实质性 parse
 warning，manifest 会保持保守/incomplete，不会拼出一个并不存在的合成命令。
 
+#### 大编译集与 bounded bootstrap
+
+完整 hierarchy 仍是默认路径，因为 hierarchy 浏览与全设计分析需要这张 testbench 全景图。
+现在 compile log 采用流式解析；handle 只保留每个文件的紧凑扫描事实，不再保存源码正文。
+精简结果新增数值型 `build_metrics`，包括源码文件数/字节数、各阶段耗时、RSS 采样，以及
+`source_text_bytes_retained=0`。
+
+完整构建有两个默认关闭的可选 guardrail。若站点外层 MCP watchdog 为固定时限，可以把
+内部阈值设得更早，从而收到结构化 blocker，而不是只看到 client/process 被终止：
+
+```bash
+export TRACEWEAVE_HIERARCHY_TIMEOUT=20
+export TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES=1073741824
+```
+
+触发阈值时返回 `build_status="blocked"`、固定 `blocker`，且不生成
+`hierarchy_handle`；它不会把部分 hierarchy 冒充成全景图。紧凑 compile context 会保留在
+最多四项的进程内 cache 中，随后可以对单个 endpoint 显式启用 bounded bootstrap：
+
+```text
+find_signal_loads(
+  signal_path="top.u_agent.gate_en",
+  compile_log=".../comp.log",
+  supplementary_compile_logs=[".../elab.log"],
+  simulator="vcs",
+  allow_bounded_bootstrap=true,
+)
+```
+
+Bootstrap 不是 `build_tb_hierarchy` 的替代品。它只开放给
+`explain_signal_driver` 与 `find_signal_loads`，保持 NPI 优先级，只检查 simulator 记录的
+有序输入（绝不搜索文件系统），证明 top 到 target 的实例链以及 package/include 和
+preprocessor 上下文，对实际选中的每个输入做内容指纹，并从 bootstrap replay 中移除
+可能重新展开大库的 `-v`/`-y`。遇到 `uvm_pkg` import 时只记录明确的
+`uvm_dynamic_connectivity` exclusion，不展开整套 simulator UVM library。Source Graph 证明的正事实可以
+使用，但始终是 scoped：`coverage_status=inconclusive`、`exhaustive_search=false`、
+`negative_claim_allowed=false`。若 scope/build/query 无法证明，bootstrap 返回诚实的无事实
+回执，不再启动它原本就是为了避免的全源码 Legacy Static 扫描。正常 full-hierarchy 路径
+仍保持既有的 Source Graph-to-Static fallback。
+
+Bootstrap 的限制都是硬上限，可分别配置（字节值使用纯整数）：
+
+```bash
+export TRACEWEAVE_BOOTSTRAP_TIMEOUT=15
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS=32
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES=16777216
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES=4096
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES=268435456
+export TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH=16
+export TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH=64
+```
+
+可用下面两条命令复现用户所报规模的基准：
+
+```bash
+python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode hierarchy
+python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode bootstrap
+```
+
 当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含
 Verilog、SystemVerilog 与 VHDL 的工程仍可进入 Source Graph。VHDL 文件继续参与内容身份，
 但不传给 Slang；coverage 会报告 `opaque_vhdl_boundary`（以及未投影文件计数）。因此 frontend
@@ -570,8 +629,9 @@ build/compile/IR fingerprint、cache disposition 和数值资源指标的 Source
 新增的固定 label 会区分 `memory`、`disk`、`build` tier 和 disk validation outcome；
 回执不会暴露 cache path 或 entry name。
 partial/inconclusive coverage 下的正结果仍是 partial；只有 complete coverage 才能确定
-`not_connected`。fallback 会由 Legacy Static 整体重算结果，因此 payload provenance
-不会混合。
+`not_connected`。正常 full-hierarchy 路径的 fallback 会由 Legacy Static 整体重算结果，
+因此 payload provenance 不会混合。上文所述显式 bootstrap-only 例外会抑制这次无界 Static
+重扫，并且不能据此给出负结论。
 
 ### 功能性验证
 
@@ -611,7 +671,7 @@ partial/inconclusive coverage 下的正结果仍是 partial；只有 complete co
 ### 路径与层次结构
 
 - `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case。可选的显式 `sim_log` / `wave_file` / `compile_log` 覆盖优先于自动发现,省略的字段仍会被发现(以 `sim_log`/`wave_file` 所在目录为锚点)
-- `build_tb_hierarchy`:服务端构建 testbench 层次结构;返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`hierarchy_handle`)。split VCS 流程可在这里一次性传入有序的 `supplementary_compile_logs`;后续 connectivity 查询仍使用 primary `compile_log`。完整数据通过下方的 handle 工具按需获取。
+- `build_tb_hierarchy`:流式读取编译证据并在服务端构建完整 testbench 层次结构，不保留源码正文；返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`build_metrics`、`hierarchy_handle`)。split VCS 流程可在这里一次性传入有序的 `supplementary_compile_logs`;后续 connectivity 查询仍使用 primary `compile_log`。配置的资源 guard 被触发时返回 `build_status="blocked"` 且没有 handle；成功构建的完整数据通过下方 handle 工具按需获取。
 - `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
 
 ### 层次结构 Handle 工具

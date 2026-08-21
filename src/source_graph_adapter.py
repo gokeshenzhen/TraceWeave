@@ -51,7 +51,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.6"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.7"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
@@ -466,6 +466,40 @@ def _mark_native_toolchain_exclusion(state: _TranslationState) -> None:
     state.gap_codes.add("native_runtime_input_excluded")
 
 
+def _drop_bootstrap_library_search_options(state: _TranslationState) -> None:
+    """Prevent a scoped bootstrap from reopening broad HDL libraries.
+
+    Compile/filelist replay is still useful for exact defines and include
+    options, and simulator-recorded reconciliation later replaces its source
+    operands with the proved bootstrap subset.  ``-v`` and ``-y`` are
+    different: they can make the frontend parse a large library outside that
+    subset.  Remove only those normalized option/value pairs and keep the
+    limitation explicit in coverage.
+    """
+
+    filtered: list[str] = []
+    removed_support: set[Path] = set()
+    index = 0
+    removed = False
+    while index < len(state.options):
+        option = state.options[index]
+        if option in {"-v", "-y"}:
+            removed = True
+            if option == "-v" and index + 1 < len(state.options):
+                removed_support.add(Path(state.options[index + 1]))
+            index += 2 if index + 1 < len(state.options) else 1
+            continue
+        filtered.append(option)
+        index += 1
+    if not removed:
+        return
+    state.options = filtered
+    state.support_files.difference_update(removed_support)
+    state.options_complete = False
+    state.gap_codes.add("bootstrap_library_context_scoped")
+    state.objective_exclusions.add("bootstrap_library_context_scoped")
+
+
 def _translate_filelist(
     state: _TranslationState,
     raw_path: str,
@@ -726,8 +760,16 @@ def _compilation_unit_records(
     evidence = _compile_evidence(compile_result)
     if evidence is None:
         return []
-    if require_simulator_log and evidence.get("unit_order_source") != "simulator_log":
-        return []
+    if require_simulator_log:
+        order_source = evidence.get("unit_order_source")
+        bootstrap = compile_result.get("bootstrap_context")
+        bounded_subset = (
+            order_source == "bootstrap_subset"
+            and isinstance(bootstrap, Mapping)
+            and bootstrap.get("used") is True
+        )
+        if order_source != "simulator_log" and not bounded_subset:
+            return []
     raw = evidence.get("ordered_compilation_units")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return []
@@ -1526,6 +1568,19 @@ def _build_compile_manifest(
     command_dir = Path(str(raw_cwd)).resolve(strict=False)
     state = _TranslationState(simulator=simulator, command_dir=command_dir)
     state.options.extend(_BASE_OPTIONS.get(simulator, ()))
+    bootstrap = compile_result.get("bootstrap_context")
+    bootstrap_used = isinstance(bootstrap, Mapping) and bootstrap.get("used") is True
+    if bootstrap_used:
+        state.inputs_complete = False
+        state.gap_codes.add("bootstrap_compile_inputs_scoped")
+        raw_exclusions = bootstrap.get("objective_exclusions")
+        if isinstance(raw_exclusions, Sequence) and not isinstance(
+            raw_exclusions, (str, bytes)
+        ):
+            for exclusion in raw_exclusions:
+                rendered = str(exclusion)
+                if _FIXED_LABEL_RE.fullmatch(rendered):
+                    state.objective_exclusions.add(rendered)
     replay_command = str(
         compile_result.get("compile_replay_command")
         or compile_result.get("compile_command")
@@ -1676,7 +1731,7 @@ def _build_compile_manifest(
             state.options_complete = False
             state.gap_codes.add("compile_command_parse_failed")
         if tokens:
-            if simulator == "xcelium" and "-uvmhome" in tokens:
+            if simulator == "xcelium" and "-uvmhome" in tokens and not bootstrap_used:
                 uvm_library = _extract_xcelium_uvm_library(compile_log)
                 if uvm_library is not None:
                     include_dirs, sources = uvm_library
@@ -1694,6 +1749,9 @@ def _build_compile_manifest(
                 base=command_dir,
                 skip_executable=True,
             )
+
+    if bootstrap_used:
+        _drop_bootstrap_library_search_options(state)
 
     if expanded_command:
         _canonicalize_expanded_xcelium_inputs(state, compile_result)
@@ -1782,7 +1840,8 @@ def _build_compile_manifest(
                 state.inputs_complete = False
                 state.gap_codes.add("compile_log_source_reconciliation_gap")
 
-    _append_recorded_simulator_library_context(state, compile_result)
+    if not bootstrap_used:
+        _append_recorded_simulator_library_context(state, compile_result)
     if instrumentation_excluded:
         state.gap_codes.add("simulator_instrumentation_excluded")
     if not state.inputs:

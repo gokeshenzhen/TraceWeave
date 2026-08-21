@@ -17,6 +17,7 @@ docs/*
 !docs/architecture.md
 !docs/debug-discipline.md
 !docs/workflow.md
+!docs/PROPOSAL_BOUNDED_SOURCE_GRAPH_BOOTSTRAP.md
 .vscode/
 .idea/
 *.swp

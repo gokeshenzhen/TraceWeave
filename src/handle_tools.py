@@ -157,6 +157,8 @@ def get_tb_subtree(
 
 
 def _scan_has_uvm(scan: dict) -> bool:
+    if scan.get("has_uvm_import") is True:
+        return True
     text = (scan.get("source_text") or "")
     if "uvm_pkg" in text and "import" in text:
         return True

@@ -573,6 +573,70 @@ def _path_args(
 
 
 @pytest.mark.anyio
+async def test_bounded_bootstrap_returns_positive_load_without_full_hierarchy(
+    monkeypatch, tmp_path
+):
+    source = (
+        server.os.path.dirname(server.__file__)
+        + "/tests/fixtures/source_graph_frontend/hand_connectivity.sv"
+    )
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text(
+        "Chronologic VCS simulator\n"
+        f"Command: vcs -sverilog {source} -top sg_top\n"
+        f"Parsing design file '{source}'\n"
+        "Top Level Modules:\n"
+        "       sg_top\n",
+        encoding="utf-8",
+    )
+    coverage = CoverageReport(
+        status=CoverageStatus.INCONCLUSIVE,
+        files_total=1,
+        files_projected=1,
+        gaps=(
+            CoverageGap(
+                code="bootstrap_hierarchy_scoped",
+                message="bounded bootstrap context",
+                impact=CoverageStatus.INCONCLUSIVE,
+                constructs=("hierarchy_scope",),
+                scopes=("*",),
+            ),
+        ),
+    )
+    worker = ReadyWorker(ir=_production_ir(coverage=coverage))
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+    args = _load_args(str(compile_log))
+    args.update(
+        {
+            "simulator": "vcs",
+            "allow_bounded_bootstrap": True,
+        }
+    )
+
+    result = await server._dispatch("find_signal_loads", args)
+
+    assert result.backend == "source_graph"
+    assert result.loads
+    assert result.claim_semantics.exhaustive_search is False
+    assert result.claim_semantics.negative_claim_allowed is False
+    bootstrap = result.backend_status.source_graph.bootstrap_context
+    assert bootstrap["used"] is True
+    assert bootstrap["status"] == "ready"
+    assert bootstrap["ancestor_chain_proved"] is True
+    assert (
+        result.backend_status.source_graph.adapter["manifest"]["input_count"]
+        == 1
+    )
+    assert worker.calls == 1
+    assert static.load_calls == 0
+
+
+@pytest.mark.anyio
 async def test_npi_success_skips_source_graph_and_static(monkeypatch, tmp_path):
     compile_log, _ = _install_source_context(tmp_path)
     static = TrackingStaticBackend()

@@ -501,6 +501,74 @@ their existing signatures and continue to receive the same primary
 order, or material parse warnings keep the manifest conservative instead of
 inventing a combined command.
 
+#### Large compile sets and bounded bootstrap
+
+Full hierarchy construction remains the default because it is the testbench
+panorama used by hierarchy browsing and whole-design analysis. Compile logs are
+now parsed as streams, and the handle retains compact per-file facts rather than
+raw source bodies. The slim result includes numeric `build_metrics`, including
+source counts/bytes, phase timings, RSS samples, and
+`source_text_bytes_retained=0`.
+
+Two optional full-build guardrails are disabled by default. Set them below an
+outer MCP watchdog when a site wants a structured blocker instead of an opaque
+client/process termination:
+
+```bash
+export TRACEWEAVE_HIERARCHY_TIMEOUT=20
+export TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES=1073741824
+```
+
+A guardrail hit returns `build_status="blocked"`, a fixed `blocker`, and no
+`hierarchy_handle`; it does not masquerade as a partial panorama. The compact
+compile context is retained in a four-entry process cache so a subsequent
+single-endpoint driver/load query can opt into bounded bootstrap:
+
+```text
+find_signal_loads(
+  signal_path="top.u_agent.gate_en",
+  compile_log=".../comp.log",
+  supplementary_compile_logs=[".../elab.log"],
+  simulator="vcs",
+  allow_bounded_bootstrap=true,
+)
+```
+
+Bootstrap is intentionally not a replacement for `build_tb_hierarchy`. It is
+available only for `explain_signal_driver` and `find_signal_loads`, keeps NPI
+precedence, searches only simulator-recorded ordered inputs (never the
+filesystem), proves the top-to-target instance chain plus package/include and
+preprocessor context, fingerprints every selected input, and removes broad
+`-v`/`-y` library search options from bootstrap replay. A `uvm_pkg` import is
+kept as the explicit `uvm_dynamic_connectivity` exclusion without expanding the
+whole simulator UVM library. A proved positive
+Source Graph fact is usable but remains scoped: `coverage_status` is
+`inconclusive`, `exhaustive_search=false`, and `negative_claim_allowed=false`.
+If proof, build, or query is inconclusive, the bootstrap route returns an honest
+no-fact receipt and does not launch the whole-source Legacy Static scan that it
+was introduced to avoid. The normal full-hierarchy route keeps its existing
+Source Graph-to-Static fallback.
+
+Bootstrap limits are hard and independently configurable (byte values are plain
+integers):
+
+```bash
+export TRACEWEAVE_BOOTSTRAP_TIMEOUT=15
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS=32
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES=16777216
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES=4096
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES=268435456
+export TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH=16
+export TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH=64
+```
+
+Run the reproducible reported-scale benchmark with:
+
+```bash
+python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode hierarchy
+python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode bootstrap
+```
+
 Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top
 and queried region can be elaborated by the Verilog/SystemVerilog frontend.
 VHDL files stay in the content identity but are not passed to Slang; coverage
@@ -642,9 +710,11 @@ labels, coverage, build/compile/IR fingerprints, cache disposition, and numeric
 resource metrics. Additive fixed labels distinguish `memory`, `disk`, and
 `build` tiers plus the disk validation outcome; receipts never expose cache
 paths or entry names. Positive results under partial or inconclusive coverage stay
-partial; only complete coverage can establish `not_connected`. A fallback
-recomputes the whole result with Legacy Static, so payload provenance is never
-mixed.
+partial; only complete coverage can establish `not_connected`. On this normal
+full-hierarchy route, a fallback recomputes the whole result with Legacy Static,
+so payload provenance is never mixed. The explicit bootstrap-only exception is
+documented above: it suppresses that unbounded Static rescan and cannot make a
+negative claim.
 
 ### Functional Verification
 
@@ -684,7 +754,7 @@ Important workflow rules:
 ### Paths and Hierarchy
 
 - `get_sim_paths`: Discover compile logs, sim logs, waveforms, simulator, and cases. Optional explicit `sim_log` / `wave_file` / `compile_log` overrides win over auto-discovery; omitted fields are still discovered (anchored at the `sim_log`/`wave_file` directory)
-- `build_tb_hierarchy`: Build testbench hierarchy server-side; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `hierarchy_handle`). For split VCS flows, pass ordered `supplementary_compile_logs` once; later connectivity calls keep using the primary `compile_log`. Full data is reachable via the handle tools below.
+- `build_tb_hierarchy`: Stream compile evidence and build the full testbench hierarchy server-side without retaining raw source bodies; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `build_metrics`, `hierarchy_handle`). For split VCS flows, pass ordered `supplementary_compile_logs` once; later connectivity calls keep using the primary `compile_log`. A configured resource guard returns `build_status="blocked"` and no handle. Full completed data is reachable via the handle tools below.
 - `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
 
 ### Hierarchy Handle Tools
