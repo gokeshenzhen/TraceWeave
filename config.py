@@ -244,13 +244,13 @@ def get_hierarchy_execution_config() -> HierarchyExecutionConfig:
 class BoundedBootstrapConfig:
     """Hard limits for a single-endpoint hierarchy bootstrap."""
 
-    timeout_sec: float = 15.0
-    max_source_inputs: int = 32
-    max_source_bytes: int = 16 * 1024 * 1024
-    max_inventory_files: int = 4096
-    max_inventory_bytes: int = 256 * 1024 * 1024
-    max_include_depth: int = 16
-    max_hierarchy_depth: int = 64
+    timeout_sec: float = 24.0
+    max_source_inputs: int = 128
+    max_source_bytes: int = 64 * 1024 * 1024
+    max_inventory_files: int = 16_384
+    max_inventory_bytes: int = 1024 * 1024 * 1024
+    max_include_depth: int = 64
+    max_hierarchy_depth: int = 256
     error_code: str | None = None
 
     @property

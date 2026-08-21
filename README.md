@@ -550,16 +550,19 @@ was introduced to avoid. The normal full-hierarchy route keeps its existing
 Source Graph-to-Static fallback.
 
 Bootstrap limits are hard and independently configurable (byte values are plain
-integers):
+integers). The defaults leave substantial headroom above the reported
+3,843-source workload. The 24-second internal timeout deliberately remains
+below its observed 27-second outer termination so TraceWeave can return a
+structured blocker instead of being cut off mid-request:
 
 ```bash
-export TRACEWEAVE_BOOTSTRAP_TIMEOUT=15
-export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS=32
-export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES=16777216
-export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES=4096
-export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES=268435456
-export TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH=16
-export TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH=64
+export TRACEWEAVE_BOOTSTRAP_TIMEOUT=24
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS=128
+export TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES=67108864
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES=16384
+export TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES=1073741824
+export TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH=64
+export TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH=256
 ```
 
 Run the reproducible reported-scale benchmark with:

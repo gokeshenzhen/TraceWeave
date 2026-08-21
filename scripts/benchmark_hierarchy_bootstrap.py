@@ -196,18 +196,7 @@ def main() -> int:
             )
             status = "completed"
         else:
-            bootstrap_config = BoundedBootstrapConfig(
-                timeout_sec=30.0,
-                max_source_inputs=32,
-                max_source_bytes=16 * 1024 * 1024,
-                max_inventory_files=max(4096, args.source_count),
-                max_inventory_bytes=max(
-                    256 * 1024 * 1024,
-                    args.source_count * args.source_bytes,
-                ),
-                max_include_depth=16,
-                max_hierarchy_depth=64,
-            )
+            bootstrap_config = BoundedBootstrapConfig()
             result = build_bounded_connectivity_context(
                 compile_result=compile_result,
                 hierarchy_snapshot_sha256="0" * 64,

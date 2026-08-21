@@ -7,7 +7,11 @@ import threading
 
 import pytest
 
-from config import BoundedBootstrapConfig, SourceGraphExecutionConfig
+from config import (
+    BoundedBootstrapConfig,
+    SourceGraphExecutionConfig,
+    get_bounded_bootstrap_config,
+)
 import server
 from src import cancellation
 from src.bounded_hierarchy_bootstrap import build_bounded_connectivity_context
@@ -78,6 +82,32 @@ def _require_pinned_frontend() -> None:
     )
     if probe.returncode != 0 or probe.stdout.strip() != "11.0.0":
         pytest.skip("pinned pyslang 11.0.0 frontend is unavailable")
+
+
+def test_default_bootstrap_budgets_cover_reported_scale_with_headroom(
+    monkeypatch,
+):
+    for name in (
+        "TRACEWEAVE_BOOTSTRAP_TIMEOUT",
+        "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS",
+        "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES",
+        "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES",
+        "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES",
+        "TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH",
+        "TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = get_bounded_bootstrap_config()
+
+    assert config.valid is True
+    assert config.timeout_sec == 24.0
+    assert config.max_source_inputs == 128
+    assert config.max_source_bytes == 64 * 1024 * 1024
+    assert config.max_inventory_files == 16_384
+    assert config.max_inventory_bytes == 1024 * 1024 * 1024
+    assert config.max_include_depth == 64
+    assert config.max_hierarchy_depth == 256
 
 
 def test_bootstrap_selects_only_proved_ancestor_source_closure(tmp_path):
