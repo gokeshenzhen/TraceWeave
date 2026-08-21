@@ -1259,7 +1259,94 @@ def test_path_sibling_scope_uses_only_proved_ancestor_union_and_lca(tmp_path):
         "requested_cone_instance_count": 4,
         "coverage_boundary_instance_count": 4,
         "objective_exclusions": [],
+        "hierarchy_resolution": {
+            "status": "resolved",
+            "endpoint_count": 2,
+            "resolved_endpoint_count": 2,
+            "deferred_endpoint_count": 0,
+            "truncated_endpoint_count": 0,
+            "max_matched_instance_count": 3,
+            "max_remaining_path_segment_count": 1,
+            "first_stop_depth": None,
+            "missing_instance_proved": False,
+        },
     }
+
+
+def test_single_endpoint_receipt_exposes_deferred_hierarchy_suffix(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.iface.req.valid",
+        hierarchy={"component_tree": {"tb": {}}},
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.unprojected_instance_candidates == ("tb.iface",)
+    resolution = plan.receipt.to_dict()["scope"]["hierarchy_resolution"]
+    assert resolution == {
+        "status": "deferred",
+        "endpoint_count": 1,
+        "resolved_endpoint_count": 0,
+        "deferred_endpoint_count": 1,
+        "truncated_endpoint_count": 0,
+        "max_matched_instance_count": 1,
+        "max_remaining_path_segment_count": 3,
+        "first_stop_depth": 1,
+        "missing_instance_proved": False,
+    }
+    assert "hierarchy_ancestor_chain_truncated" not in plan.receipt.gap_codes
+
+
+def test_proved_missing_child_blocks_as_instance_outside_projected_scope(
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {"tb": {}},
+        "_scan_results": [
+            {
+                "module_instance_map": {
+                    "tb": [
+                        {
+                            "module_name": "dut",
+                            "instance_name": "u_dut",
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.u_dut.u_leaf.target_sig",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "instance_not_in_projected_scope"
+    assert "hierarchy_ancestor_chain_truncated" in plan.receipt.gap_codes
+    resolution = plan.receipt.to_dict()["scope"]["hierarchy_resolution"]
+    assert resolution["status"] == "truncated"
+    assert resolution["first_stop_depth"] == 1
+    assert resolution["missing_instance_proved"] is True
 
 
 def test_path_different_top_is_blocked_and_dotted_suffix_is_deferred(tmp_path):

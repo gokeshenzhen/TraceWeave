@@ -284,6 +284,14 @@ class SourceGraphConnectivityBackend:
 
     def __init__(self, entry: SourceGraphCacheEntry) -> None:
         self._entry = entry
+        self._unprojected_instance_candidates: tuple[str, ...] = ()
+
+    def set_unprojected_instance_candidates(self, candidates: tuple[str, ...]) -> None:
+        """Attach query-local scope hints without changing artifact identity."""
+
+        self._unprojected_instance_candidates = tuple(
+            dict.fromkeys(str(path) for path in candidates)
+        )
 
     def find_driver(
         self,
@@ -301,6 +309,7 @@ class SourceGraphConnectivityBackend:
             query = self._entry.query_engine.query_driver(
                 signal_path,
                 max_depth=max_depth,
+                unprojected_instance_candidates=(self._unprojected_instance_candidates),
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
@@ -336,6 +345,7 @@ class SourceGraphConnectivityBackend:
             query = self._entry.query_engine.query_loads(
                 signal_path,
                 max_depth=max_depth,
+                unprojected_instance_candidates=(self._unprojected_instance_candidates),
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc

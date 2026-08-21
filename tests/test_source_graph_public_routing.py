@@ -1599,6 +1599,37 @@ async def test_source_graph_signal_resolution_blockers_are_exact(
 
 
 @pytest.mark.anyio
+async def test_public_route_reports_truncated_ancestor_and_unprojected_instance(
+    monkeypatch, tmp_path
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+
+    result = await server._dispatch(
+        "explain_signal_driver",
+        _driver_args(compile_log, "sg_top.u_missing.target_sig"),
+    )
+
+    source_graph = result.backend_status.source_graph
+    assert result.backend == "static"
+    assert source_graph.blocker.code == "instance_not_in_projected_scope"
+    assert result.backend_status.fallback_reason == (
+        "source_graph_instance_not_in_projected_scope"
+    )
+    assert source_graph.coverage_status == "inconclusive"
+    assert "hierarchy_ancestor_chain_truncated" in source_graph.coverage_gap_codes
+    resolution = source_graph.adapter["scope"]["hierarchy_resolution"]
+    assert resolution["status"] == "truncated"
+    assert resolution["deferred_endpoint_count"] == 0
+    assert resolution["truncated_endpoint_count"] == 1
+    assert resolution["missing_instance_proved"] is False
+    assert resolution["query_confirmed_missing_intermediate_scope"] is True
+    assert static.driver_calls == 1
+
+
+@pytest.mark.anyio
 async def test_public_route_accepts_dotted_packed_member_endpoint(
     monkeypatch, tmp_path
 ):
@@ -1634,6 +1665,13 @@ async def test_public_route_accepts_dotted_packed_member_endpoint(
     assert result.signal_path == signal
     assert result.resolved_rtl_name == "lane_data.low"
     assert result.driver_status == "resolved"
+    resolution = result.backend_status.source_graph.adapter["scope"][
+        "hierarchy_resolution"
+    ]
+    assert resolution["status"] == "deferred"
+    assert "hierarchy_ancestor_chain_truncated" not in (
+        result.backend_status.source_graph.coverage_gap_codes
+    )
     assert static.driver_calls == 0
 
 

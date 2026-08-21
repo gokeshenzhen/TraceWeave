@@ -541,6 +541,15 @@ no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positiv
 
 - Payload facts always come from exactly one backend. NPI and Source Graph
   attempts survive only as identity-safe receipts when a later backend wins.
+- Source Graph adapter receipts expose a privacy-safe hierarchy-resolution
+  summary (counts and stop depth, never instance names). A dotted suffix is
+  initially `deferred` because it may be a legal interface or packed member.
+  If the hierarchy scan independently proves that the missing segment is a
+  child instance, the adapter stops before launching the frontend with
+  `instance_not_in_projected_scope`. Otherwise the IR gets the final say: only
+  when it also rejects the suffix root as a declared signal/member does the
+  query use that blocker and add `hierarchy_ancestor_chain_truncated`; ordinary
+  bad leaf names remain `signal_not_declared`.
 - `TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB=0` restores the clean-KDB-only admission
   policy. The probe retains `kdb_validation_status="elaboration_error"` and a
   fixed `npi_degraded_kdb_disabled` routing reason.

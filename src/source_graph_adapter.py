@@ -200,6 +200,85 @@ class SourceGraphAdapterBlocker:
 
 
 @dataclass(frozen=True)
+class HierarchyAncestorResolution:
+    """Private path-resolution evidence with a privacy-safe public summary.
+
+    A dotted suffix after the last proved instance is not automatically a
+    hierarchy failure: it may be an interface or packed member.  The candidate
+    path therefore stays private and the public receipt reports only counts.
+    ``missing_instance_proved`` is true only when the hierarchy scan metadata
+    independently names the missing child instance.
+    """
+
+    ancestors: tuple[str, ...]
+    remaining_path_segment_count: int
+    stop_depth: int | None = None
+    candidate_instance_path: str | None = None
+    missing_instance_proved: bool = False
+
+    def __post_init__(self) -> None:
+        ancestors = tuple(str(path) for path in self.ancestors)
+        if not ancestors or any(not path for path in ancestors):
+            raise ValueError("hierarchy resolution requires proved ancestors")
+        if self.remaining_path_segment_count < 1:
+            raise ValueError("hierarchy resolution must retain a signal suffix")
+        if self.candidate_instance_path is None:
+            if self.stop_depth is not None or self.missing_instance_proved:
+                raise ValueError(
+                    "resolved hierarchy path cannot carry missing-instance evidence"
+                )
+        else:
+            if not self.candidate_instance_path or self.stop_depth is None:
+                raise ValueError(
+                    "deferred hierarchy path requires a candidate and stop depth"
+                )
+            if self.stop_depth < 1:
+                raise ValueError("hierarchy stop depth must be positive")
+        object.__setattr__(self, "ancestors", ancestors)
+
+    @property
+    def status(self) -> str:
+        if self.candidate_instance_path is None:
+            return "resolved"
+        if self.missing_instance_proved:
+            return "truncated"
+        return "deferred"
+
+
+def _aggregate_hierarchy_resolutions(
+    resolutions: Sequence[HierarchyAncestorResolution],
+) -> dict[str, Any] | None:
+    if not resolutions:
+        return None
+    statuses = {item.status for item in resolutions}
+    status = next(iter(statuses)) if len(statuses) == 1 else "mixed"
+    stop_depths = [
+        item.stop_depth for item in resolutions if item.stop_depth is not None
+    ]
+    return {
+        "status": status,
+        "endpoint_count": len(resolutions),
+        "resolved_endpoint_count": sum(
+            item.status == "resolved" for item in resolutions
+        ),
+        "deferred_endpoint_count": sum(
+            item.status == "deferred" for item in resolutions
+        ),
+        "truncated_endpoint_count": sum(
+            item.status == "truncated" for item in resolutions
+        ),
+        "max_matched_instance_count": max(len(item.ancestors) for item in resolutions),
+        "max_remaining_path_segment_count": max(
+            item.remaining_path_segment_count for item in resolutions
+        ),
+        "first_stop_depth": min(stop_depths) if stop_depths else None,
+        "missing_instance_proved": any(
+            item.missing_instance_proved for item in resolutions
+        ),
+    }
+
+
+@dataclass(frozen=True)
 class SourceGraphAdapterReceipt:
     status: AdapterStatus
     input_count: int = 0
@@ -220,6 +299,7 @@ class SourceGraphAdapterReceipt:
     query_fingerprint_sha256: str | None = None
     snapshot_identity_complete: bool = False
     fingerprint_cache_disposition: str | None = None
+    hierarchy_resolutions: tuple[HierarchyAncestorResolution, ...] = ()
     blocker: SourceGraphAdapterBlocker | None = None
 
     def __post_init__(self) -> None:
@@ -258,6 +338,12 @@ class SourceGraphAdapterReceipt:
             "hit_session_snapshot",
         }:
             raise ValueError("invalid fingerprint cache disposition")
+        resolutions = tuple(self.hierarchy_resolutions)
+        if any(
+            not isinstance(item, HierarchyAncestorResolution) for item in resolutions
+        ):
+            raise ValueError("invalid hierarchy ancestor resolution")
+        object.__setattr__(self, "hierarchy_resolutions", resolutions)
         for field_name in (
             "artifact_fingerprint_sha256",
             "query_fingerprint_sha256",
@@ -293,6 +379,11 @@ class SourceGraphAdapterReceipt:
             "query_fingerprint_sha256": self.query_fingerprint_sha256,
             "snapshot_identity_complete": self.snapshot_identity_complete,
         }
+        hierarchy_resolution = _aggregate_hierarchy_resolutions(
+            self.hierarchy_resolutions
+        )
+        if hierarchy_resolution is not None:
+            result["scope"]["hierarchy_resolution"] = hierarchy_resolution
         if self.blocker is not None:
             result["blocker"] = self.blocker.to_dict()
         return result
@@ -310,6 +401,16 @@ class SourceGraphBuildPlan:
             raise ValueError("ready Source Graph plan requires a request")
         if self.status is AdapterStatus.BLOCKED and self.request is not None:
             raise ValueError("blocked Source Graph plan must not carry a request")
+
+    @property
+    def unprojected_instance_candidates(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                item.candidate_instance_path
+                for item in self.receipt.hierarchy_resolutions
+                if item.candidate_instance_path is not None
+            )
+        )
 
 
 @dataclass
@@ -2014,12 +2115,48 @@ def _selected_top(
     return root if root in tops else None
 
 
-def resolve_source_graph_hierarchy_ancestors(
+def _scan_proves_child_instance(
+    hierarchy_result: Mapping[str, Any],
+    *,
+    parent_module: str | None,
+    instance_name: str,
+) -> bool:
+    """Return true only for one unambiguous scanned parent definition."""
+
+    if not parent_module:
+        return False
+    scans = hierarchy_result.get("_scan_results")
+    if not isinstance(scans, Sequence) or isinstance(scans, (str, bytes)):
+        return False
+    parent_definition_count = 0
+    child_proved = False
+    for scan in scans:
+        check_cancelled()
+        if not isinstance(scan, Mapping):
+            continue
+        by_module = scan.get("module_instance_map")
+        if not isinstance(by_module, Mapping) or parent_module not in by_module:
+            continue
+        items = by_module.get(parent_module)
+        if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+            continue
+        parent_definition_count += 1
+        child_proved = child_proved or any(
+            isinstance(item, Mapping)
+            and str(item.get("instance_name") or "") == instance_name
+            for item in items
+        )
+    return parent_definition_count == 1 and child_proved
+
+
+def resolve_source_graph_hierarchy_scope(
     *,
     hierarchy_result: Mapping[str, Any],
     top: str,
     signal_path: str,
-) -> tuple[str, ...] | None:
+) -> HierarchyAncestorResolution | None:
+    """Resolve the proved instance prefix and retain any deferred suffix fact."""
+
     component_tree = hierarchy_result.get("component_tree")
     if not isinstance(component_tree, Mapping):
         return None
@@ -2028,6 +2165,7 @@ def resolve_source_graph_hierarchy_ancestors(
         return None
     ancestors = [top]
     children = component_tree.get(top)
+    parent_module: str | None = top
     index = 1
     while index < len(parts) - 1 and isinstance(children, Mapping):
         check_cancelled()
@@ -2035,6 +2173,8 @@ def resolve_source_graph_hierarchy_ancestors(
         if not isinstance(node, Mapping):
             break
         ancestors.append(".".join(parts[: index + 1]))
+        raw_module = node.get("class") or node.get("module")
+        parent_module = str(raw_module) if raw_module else None
         nested = node.get("children")
         children = nested if isinstance(nested, Mapping) else None
         index += 1
@@ -2043,7 +2183,40 @@ def resolve_source_graph_hierarchy_ancestors(
     # aggregate member. This never invents an instance: the artifact remains
     # bounded to the last proved ancestor and an invalid suffix is rejected by
     # exact IR declaration lookup before any fact can be returned.
-    return tuple(ancestors)
+    candidate_instance_path = None
+    missing_instance_proved = False
+    stop_depth = None
+    if index < len(parts) - 1:
+        candidate_instance_path = ".".join(parts[: index + 1])
+        stop_depth = index
+        missing_instance_proved = _scan_proves_child_instance(
+            hierarchy_result,
+            parent_module=parent_module,
+            instance_name=parts[index],
+        )
+    return HierarchyAncestorResolution(
+        ancestors=tuple(ancestors),
+        remaining_path_segment_count=len(parts) - index,
+        stop_depth=stop_depth,
+        candidate_instance_path=candidate_instance_path,
+        missing_instance_proved=missing_instance_proved,
+    )
+
+
+def resolve_source_graph_hierarchy_ancestors(
+    *,
+    hierarchy_result: Mapping[str, Any],
+    top: str,
+    signal_path: str,
+) -> tuple[str, ...] | None:
+    """Compatibility wrapper returning only the proved ancestor chain."""
+
+    resolution = resolve_source_graph_hierarchy_scope(
+        hierarchy_result=hierarchy_result,
+        top=top,
+        signal_path=signal_path,
+    )
+    return resolution.ancestors if resolution is not None else None
 
 
 def _blocked_plan(
@@ -2055,6 +2228,7 @@ def _blocked_plan(
     exclusions: Sequence[str] = (),
     scope_kind: str = "single_endpoint",
     endpoint_count: int = 1,
+    hierarchy_resolutions: Sequence[HierarchyAncestorResolution] = (),
 ) -> SourceGraphBuildPlan:
     blocker = SourceGraphAdapterBlocker(code=code, stage=stage)
     receipt = SourceGraphAdapterReceipt(
@@ -2068,6 +2242,7 @@ def _blocked_plan(
         objective_exclusions=tuple(exclusions),
         scope_kind=scope_kind,
         endpoint_count=endpoint_count,
+        hierarchy_resolutions=tuple(hierarchy_resolutions),
         blocker=blocker,
     )
     return SourceGraphBuildPlan(
@@ -2149,18 +2324,28 @@ def build_source_graph_plan(
             gaps=gaps,
             exclusions=exclusions,
         )
-    ancestors = resolve_source_graph_hierarchy_ancestors(
+    hierarchy_resolution = resolve_source_graph_hierarchy_scope(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_signal,
     )
-    if ancestors is None:
+    if hierarchy_resolution is None:
         return _blocked_plan(
             code="hierarchy_scope_unresolved",
             stage="target_scope",
             manifest=manifest,
             gaps=(*gaps, "hierarchy_scope_unresolved"),
             exclusions=exclusions,
+        )
+    ancestors = hierarchy_resolution.ancestors
+    if hierarchy_resolution.missing_instance_proved:
+        return _blocked_plan(
+            code="instance_not_in_projected_scope",
+            stage="target_scope",
+            manifest=manifest,
+            gaps=(*gaps, "hierarchy_ancestor_chain_truncated"),
+            exclusions=exclusions,
+            hierarchy_resolutions=(hierarchy_resolution,),
         )
 
     target = ConnectivityTarget(
@@ -2255,6 +2440,7 @@ def build_source_graph_plan(
         query_fingerprint_sha256=query_key.digest,
         snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
+        hierarchy_resolutions=(hierarchy_resolution,),
     )
     return SourceGraphBuildPlan(
         status=AdapterStatus.READY,
@@ -2545,6 +2731,7 @@ def build_source_graph_trace_plan(
     manifest = request.identity.compile_inputs
     top = request.scope.top
     chains: list[tuple[str, ...]] = []
+    hierarchy_resolutions: list[HierarchyAncestorResolution] = []
     for signal_path in normalized_paths:
         check_cancelled()
         if signal_path.split(".", 1)[0] != top:
@@ -2557,12 +2744,12 @@ def build_source_graph_trace_plan(
                 scope_kind=scope_kind,
                 endpoint_count=len(normalized_paths),
             )
-        ancestors = resolve_source_graph_hierarchy_ancestors(
+        hierarchy_resolution = resolve_source_graph_hierarchy_scope(
             hierarchy_result=hierarchy_result,
             top=top,
             signal_path=signal_path,
         )
-        if ancestors is None:
+        if hierarchy_resolution is None:
             return _blocked_plan(
                 code="trace_hierarchy_scope_unresolved",
                 stage="target_scope",
@@ -2572,6 +2759,22 @@ def build_source_graph_trace_plan(
                 scope_kind=scope_kind,
                 endpoint_count=len(normalized_paths),
             )
+        hierarchy_resolutions.append(hierarchy_resolution)
+        if hierarchy_resolution.missing_instance_proved:
+            return _blocked_plan(
+                code="instance_not_in_projected_scope",
+                stage="target_scope",
+                manifest=manifest,
+                gaps=(
+                    *base.receipt.gap_codes,
+                    "hierarchy_ancestor_chain_truncated",
+                ),
+                exclusions=base.receipt.objective_exclusions,
+                scope_kind=scope_kind,
+                endpoint_count=len(normalized_paths),
+                hierarchy_resolutions=tuple(hierarchy_resolutions),
+            )
+        ancestors = hierarchy_resolution.ancestors
         chains.append(ancestors)
 
     unique_chains = tuple(dict.fromkeys(chains))
@@ -2613,6 +2816,7 @@ def build_source_graph_trace_plan(
         cross_request_reusable=artifact_key.cross_request_reusable,
         artifact_fingerprint_sha256=artifact_key.digest,
         query_fingerprint_sha256=query_key.digest,
+        hierarchy_resolutions=tuple(hierarchy_resolutions),
     )
     return SourceGraphBuildPlan(
         status=AdapterStatus.READY,
@@ -2757,21 +2961,21 @@ def build_source_graph_path_plan(
             **blocker_kwargs,
         )
 
-    from_ancestors = resolve_source_graph_hierarchy_ancestors(
+    from_resolution = resolve_source_graph_hierarchy_scope(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_from,
     )
-    to_ancestors = resolve_source_graph_hierarchy_ancestors(
+    to_resolution = resolve_source_graph_hierarchy_scope(
         hierarchy_result=hierarchy_result,
         top=top,
         signal_path=normalized_to,
     )
-    if from_ancestors is None and to_ancestors is None:
+    if from_resolution is None and to_resolution is None:
         code = "path_endpoint_hierarchy_unresolved"
-    elif from_ancestors is None:
+    elif from_resolution is None:
         code = "path_from_hierarchy_unresolved"
-    elif to_ancestors is None:
+    elif to_resolution is None:
         code = "path_to_hierarchy_unresolved"
     else:
         code = None
@@ -2786,7 +2990,21 @@ def build_source_graph_path_plan(
             endpoint_count=endpoint_count,
         )
 
-    assert from_ancestors is not None and to_ancestors is not None
+    assert from_resolution is not None and to_resolution is not None
+    hierarchy_resolutions = (from_resolution, to_resolution)
+    if any(item.missing_instance_proved for item in hierarchy_resolutions):
+        return _blocked_plan(
+            code="instance_not_in_projected_scope",
+            stage="target_scope",
+            gaps=(*gaps, "hierarchy_ancestor_chain_truncated"),
+            manifest=manifest,
+            exclusions=exclusions,
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+            hierarchy_resolutions=hierarchy_resolutions,
+        )
+    from_ancestors = from_resolution.ancestors
+    to_ancestors = to_resolution.ancestors
     ancestor_union = _path_ancestor_union(from_ancestors, to_ancestors)
     lca = _path_lca(from_ancestors, to_ancestors)
     target = ConnectivityPathTarget(
@@ -2884,6 +3102,7 @@ def build_source_graph_path_plan(
         query_fingerprint_sha256=query_key.digest,
         snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
+        hierarchy_resolutions=hierarchy_resolutions,
     )
     return SourceGraphBuildPlan(
         status=AdapterStatus.READY,

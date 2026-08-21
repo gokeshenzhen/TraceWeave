@@ -2040,6 +2040,32 @@ def _merge_source_graph_query_receipt(
     receipt["metrics"]["query_wall_ms"] = max(query_wall_ms, 0.0)
 
 
+def _mark_source_graph_hierarchy_scope_gap(receipt: dict) -> None:
+    """Upgrade a deferred ancestor prefix after the IR rejects its root."""
+
+    gap_code = "hierarchy_ancestor_chain_truncated"
+    adapter = receipt.get("adapter")
+    if isinstance(adapter, dict):
+        adapter["gap_codes"] = sorted({*adapter.get("gap_codes", []), gap_code})
+        scope = adapter.get("scope")
+        if isinstance(scope, dict):
+            resolution = scope.get("hierarchy_resolution")
+            if isinstance(resolution, dict):
+                resolution["status"] = "truncated"
+                deferred = int(resolution.get("deferred_endpoint_count", 0))
+                truncated = int(resolution.get("truncated_endpoint_count", 0))
+                if deferred > 0:
+                    resolution["deferred_endpoint_count"] = deferred - 1
+                    truncated += 1
+                resolution["truncated_endpoint_count"] = max(truncated, 1)
+                resolution["query_confirmed_missing_intermediate_scope"] = True
+    receipt["coverage_status"] = "inconclusive"
+    receipt["coverage_gap_codes"] = sorted(
+        {*receipt.get("coverage_gap_codes", []), gap_code}
+    )
+    receipt["coverage_gap_count"] = len(receipt["coverage_gap_codes"])
+
+
 def _finalize_public_connectivity_status(
     *,
     backend_status: dict,
@@ -2170,6 +2196,16 @@ async def _call_public_connectivity_operation(
     return raw
 
 
+def _source_graph_backend_for_plan(entry, plan):
+    """Create a backend and attach optional query-local hierarchy evidence."""
+
+    backend = SourceGraphConnectivityBackend(entry)
+    configure = getattr(backend, "set_unprojected_instance_candidates", None)
+    if callable(configure):
+        configure(plan.unprojected_instance_candidates)
+    return backend
+
+
 async def _execute_source_graph_connectivity_plan(
     *,
     plan,
@@ -2246,7 +2282,7 @@ async def _execute_source_graph_connectivity_plan(
     assert outcome.entry is not None
     operation_metrics.set_value("source_graph_phase", "query")
     query_started = time.perf_counter()
-    source_backend = SourceGraphConnectivityBackend(outcome.entry)
+    source_backend = _source_graph_backend_for_plan(outcome.entry, plan)
     source_result = None
     query_receipt = None
     frontiers: tuple[str, ...] = ()
@@ -2268,6 +2304,8 @@ async def _execute_source_graph_connectivity_plan(
         raise asyncio.CancelledError from exc
     except SourceGraphQueryBlocked as exc:
         reason = f"source_graph_{exc.code}"
+        if exc.code == "instance_not_in_projected_scope":
+            _mark_source_graph_hierarchy_scope_gap(receipt)
     except (KeyError, ValueError):
         reason = "source_graph_query_target_unresolved"
     except Exception:  # noqa: BLE001
@@ -3346,8 +3384,8 @@ async def _route_public_signal_path(
                             assert outcome.entry is not None
                             operation_metrics.set_value("source_graph_phase", "query")
                             query_started = time.perf_counter()
-                            source_backend = SourceGraphConnectivityBackend(
-                                outcome.entry
+                            source_backend = _source_graph_backend_for_plan(
+                                outcome.entry, plan
                             )
                             source_result = None
                             query_receipt = None
@@ -4040,7 +4078,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                     selected_artifact_fingerprint = outcome.entry.build_key.digest
                     attempted_artifact_fingerprints[-1] = selected_artifact_fingerprint
                     trace_backend = SourceGraphTraceConnectivityBackend(
-                        backend=SourceGraphConnectivityBackend(outcome.entry),
+                        backend=_source_graph_backend_for_plan(outcome.entry, plan),
                         artifact_scope=(outcome.entry.artifact_scope_receipt.scope),
                         hierarchy_result=hierarchy_result,
                         artifact_fingerprint_sha256=(selected_artifact_fingerprint),

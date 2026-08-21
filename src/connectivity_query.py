@@ -71,6 +71,10 @@ class SignalInstanceUnresolved(SignalResolutionError):
     code = "signal_instance_unresolved"
 
 
+class SignalInstanceNotInProjectedScope(SignalResolutionError):
+    code = "instance_not_in_projected_scope"
+
+
 class SignalNotDeclared(SignalResolutionError):
     code = "signal_not_declared"
 
@@ -268,10 +272,14 @@ class ConnectivityQueryEngine:
         signal_path: str,
         *,
         max_depth: int = 64,
+        unprojected_instance_candidates: Iterable[str] = (),
     ) -> ConnectivityQueryResult:
         if max_depth < 0:
             raise ValueError("max_depth must not be negative")
-        signal = self.resolve_signal(signal_path)
+        signal = self.resolve_signal(
+            signal_path,
+            unprojected_instance_candidates=unprojected_instance_candidates,
+        )
         matches: list[QueryMatch] = []
         visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
         frontiers: list[QueryFrontier] = []
@@ -422,10 +430,14 @@ class ConnectivityQueryEngine:
         signal_path: str,
         *,
         max_depth: int = 64,
+        unprojected_instance_candidates: Iterable[str] = (),
     ) -> ConnectivityQueryResult:
         if max_depth < 0:
             raise ValueError("max_depth must not be negative")
-        signal = self.resolve_signal(signal_path)
+        signal = self.resolve_signal(
+            signal_path,
+            unprojected_instance_candidates=unprojected_instance_candidates,
+        )
         matches: list[QueryMatch] = []
         visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
         frontiers: list[QueryFrontier] = []
@@ -775,7 +787,12 @@ class ConnectivityQueryEngine:
                 scopes=(signal_path,),
             )
 
-    def resolve_signal(self, signal_path: str) -> SignalSelection:
+    def resolve_signal(
+        self,
+        signal_path: str,
+        *,
+        unprojected_instance_candidates: Iterable[str] = (),
+    ) -> SignalSelection:
         match = _TRAILING_SELECT_RE.fullmatch(signal_path.strip())
         if not match:
             raise SignalPathInvalid(
@@ -799,6 +816,21 @@ class ConnectivityQueryEngine:
         symbol = base[len(instance_path) + 1 :]
         resolved = self._resolve_symbol(instance_path, symbol)
         if resolved is None:
+            root, separator, _ = symbol.partition(".")
+            candidate_path = f"{instance_path}.{root}"
+            candidates = frozenset(
+                str(path) for path in unprojected_instance_candidates
+            )
+            if (
+                separator
+                and candidate_path in candidates
+                and not self._symbol_root_declared(instance_path, root)
+            ):
+                raise SignalInstanceNotInProjectedScope(
+                    signal_path,
+                    "intermediate instance scope is absent from the bounded IR: "
+                    f"{signal_path}",
+                )
             raise SignalNotDeclared(
                 signal_path,
                 f"signal is not declared in the IR: {signal_path}",
@@ -822,6 +854,11 @@ class ConnectivityQueryEngine:
             symbol=resolved.symbol,
             bits=tuple(bit_map[bit] for bit in requested_bits),
         )
+
+    def _symbol_root_declared(self, instance_path: str, root: str) -> bool:
+        instance = self._instances[instance_path]
+        definition = self._definitions[instance.definition_id]
+        return definition.direct_signal_range(root) is not None
 
     def _build_indexes(self) -> None:
         for binding in self.ir.bindings:

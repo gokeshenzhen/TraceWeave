@@ -164,6 +164,40 @@ def test_driver_reports_signal_not_declared_as_a_fixed_query_blocker():
     assert caught.value.code == "signal_not_declared"
 
 
+def test_driver_distinguishes_unprojected_intermediate_instance_scope():
+    backend = SourceGraphConnectivityBackend(_entry())
+    backend.set_unprojected_instance_candidates(("sg_top.u_missing",))
+
+    with pytest.raises(SourceGraphQueryBlocked) as driver_caught:
+        backend.find_driver(
+            signal_path="sg_top.u_missing.target_sig",
+            wave_path="wave.fsdb",
+            compile_log="compile.log",
+        )
+    with pytest.raises(SourceGraphQueryBlocked) as loads_caught:
+        backend.find_loads(
+            signal_path="sg_top.u_missing.target_sig",
+            compile_log="compile.log",
+        )
+
+    assert driver_caught.value.code == "instance_not_in_projected_scope"
+    assert loads_caught.value.code == "instance_not_in_projected_scope"
+
+
+def test_interface_root_is_not_misclassified_as_unprojected_instance():
+    backend = SourceGraphConnectivityBackend(_entry())
+    backend.set_unprojected_instance_candidates(("sg_top.bus",))
+
+    result = backend.find_loads(
+        signal_path="sg_top.bus.data[7:0]",
+        compile_log="compile.log",
+        max_depth=8,
+    )
+
+    assert result["loads"]
+    assert result["completeness"] == "exact"
+
+
 def test_driver_reports_selection_out_of_range_as_a_fixed_query_blocker():
     backend = SourceGraphConnectivityBackend(_entry())
 
@@ -199,6 +233,7 @@ def test_packed_member_query_preserves_requested_public_spelling():
     backend = SourceGraphConnectivityBackend(
         _entry(replace(ir, definitions=definitions))
     )
+    backend.set_unprojected_instance_candidates(("sg_top.lane_data",))
 
     result = backend.find_driver(
         signal_path="sg_top.lane_data.low[7:0]",
