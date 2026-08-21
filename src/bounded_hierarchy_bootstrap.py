@@ -19,7 +19,11 @@ import time
 from typing import Any, Mapping, Sequence
 
 from .cancellation import check_cancelled
-from .tb_hierarchy_builder import scan_sv_file
+from .sv_preprocessor import (
+    SystemVerilogPreprocessor,
+    merge_resolved_include_evidence,
+)
+from .tb_hierarchy_builder import scan_preprocessed_sv
 
 
 _HDL_UNIT_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
@@ -324,6 +328,9 @@ def build_bounded_connectivity_context(
     selected_source_paths: set[str] = set()
     selected_support_paths: set[str] = set()
     scan_cache: dict[str, dict] = {}
+    source_text_cache: dict[str, str] = {}
+    resolved_include_tree: dict[str, list[str]] = {}
+    resolved_ordered_includes: list[dict[str, str]] = []
     ancestors: list[str] = []
     objective_exclusions = {
         "bootstrap_hierarchy_scoped",
@@ -449,14 +456,15 @@ def build_bounded_connectivity_context(
                 used_definitions.append(proof)
             return kind, path
 
-        def select_and_scan(path: str, *, source_unit: bool) -> dict:
+        def select_source(path: str, *, source_unit: bool) -> str:
             nonlocal selected_bytes
             canonical = os.path.realpath(path)
-            cached = scan_cache.get(canonical)
-            if cached is not None:
+            cached_text = source_text_cache.get(canonical)
+            if cached_text is not None:
                 if source_unit:
                     selected_source_paths.add(canonical)
-                return cached
+                    selected_support_paths.discard(canonical)
+                return cached_text
             _deadline_check(deadline)
             if len(selected_paths) >= int(config.max_source_inputs):
                 raise _BootstrapBlocked("bootstrap_source_input_limit_exceeded", "source_closure")
@@ -466,14 +474,57 @@ def build_bounded_connectivity_context(
                 raise _BootstrapBlocked("bootstrap_source_unreadable", "source_closure") from None
             if selected_bytes + size > int(config.max_source_bytes):
                 raise _BootstrapBlocked("bootstrap_source_byte_limit_exceeded", "source_closure")
-            scan = scan_sv_file(canonical, retain_source_text=False)
+            try:
+                with open(canonical, "r", errors="replace") as stream:
+                    raw = stream.read()
+            except OSError:
+                raise _BootstrapBlocked(
+                    "bootstrap_source_unreadable", "source_closure"
+                ) from None
             selected_paths.add(canonical)
             selected_bytes += size
-            scan_cache[canonical] = scan
+            source_text_cache[canonical] = raw
             if source_unit:
                 selected_source_paths.add(canonical)
             else:
                 selected_support_paths.add(canonical)
+            return raw
+
+        preprocessor = SystemVerilogPreprocessor(
+            compile_result,
+            source_loader=lambda path: select_source(path, source_unit=False),
+            max_include_depth=int(config.max_include_depth),
+            source_cache_bytes=0,
+        )
+
+        def select_and_scan(path: str, *, source_unit: bool) -> dict:
+            canonical = os.path.realpath(path)
+            select_source(canonical, source_unit=source_unit)
+            cached = scan_cache.get(canonical)
+            if cached is not None:
+                return cached
+            preprocessed = preprocessor.preprocess(canonical)
+            issues = set(preprocessed.issues)
+            if "include_depth_exceeded" in issues:
+                raise _BootstrapBlocked(
+                    "bootstrap_include_depth_exceeded", "source_closure"
+                )
+            if issues:
+                raise _BootstrapBlocked(
+                    "bootstrap_include_context_unproved", "source_closure"
+                )
+            scan = scan_preprocessed_sv(
+                canonical,
+                preprocessed,
+                retain_source_text=False,
+            )
+            scan_cache[canonical] = scan
+            for parent, children in preprocessed.include_tree.items():
+                destination = resolved_include_tree.setdefault(parent, [])
+                for child in children:
+                    if child not in destination:
+                        destination.append(child)
+            resolved_ordered_includes.extend(preprocessed.ordered_includes)
             return scan
 
         top_path = unique_definition("modules", top)
@@ -519,32 +570,15 @@ def build_bounded_connectivity_context(
             current_path = child_path
             current_scan = select_and_scan(current_path, source_unit=True)
 
-        include_tree = compile_result.get("include_tree")
-        include_tree = include_tree if isinstance(include_tree, Mapping) else {}
-        pending = [(path, 0) for path in scan_cache]
+        pending = list(scan_cache)
         processed: set[str] = set()
         while pending:
             _deadline_check(deadline)
-            path, path_include_depth = pending.pop(0)
+            path = pending.pop(0)
             if path in processed:
                 continue
             processed.add(path)
             scan = scan_cache[path]
-            children = include_tree.get(path)
-            include_children = [
-                os.path.realpath(str(item))
-                for item in children
-            ] if isinstance(children, Sequence) and not isinstance(children, (str, bytes)) else []
-            if scan.get("include_directives") and not include_children:
-                raise _BootstrapBlocked("bootstrap_include_context_unproved", "source_closure")
-            for child in include_children:
-                child_depth = path_include_depth + 1
-                if child_depth > int(config.max_include_depth):
-                    raise _BootstrapBlocked(
-                        "bootstrap_include_depth_exceeded", "source_closure"
-                    )
-                select_and_scan(child, source_unit=False)
-                pending.append((child, child_depth))
             for package in scan.get("package_imports") or []:
                 if package == "std":
                     continue
@@ -559,7 +593,8 @@ def build_bounded_connectivity_context(
                     continue
                 package_path = unique_definition("packages", str(package))
                 select_and_scan(package_path, source_unit=True)
-                pending.append((package_path, 0))
+                if package_path not in processed:
+                    pending.append(package_path)
 
         selected_macro_defs = _compile_command_macro_definitions(compile_result)
         selected_macro_uses: set[str] = set()
@@ -593,8 +628,13 @@ def build_bounded_connectivity_context(
         ordered_selected_paths = {str(record["path"]) for record in selected_ordered_records}
         if ordered_selected_paths != selected_source_paths:
             raise _BootstrapBlocked("bootstrap_source_order_unproved", "compile_manifest")
-        bounded_compile_result = _trim_compile_result(
+        enriched_compile_result = merge_resolved_include_evidence(
             compile_result,
+            include_tree=resolved_include_tree,
+            ordered_includes=resolved_ordered_includes,
+        )
+        bounded_compile_result = _trim_compile_result(
+            enriched_compile_result,
             selected_source_paths=selected_source_paths,
             selected_support_paths=selected_support_paths,
             ordered_records=selected_ordered_records,

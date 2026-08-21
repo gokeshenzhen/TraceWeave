@@ -10,6 +10,11 @@ from collections import defaultdict
 
 from .cancellation import check_cancelled
 from .operation_metrics import read_process_rss_kib
+from .sv_preprocessor import (
+    PreprocessedSource,
+    SystemVerilogPreprocessor,
+    merge_resolved_include_evidence,
+)
 
 
 _CLASS_EXTENDS_RE = re.compile(r"\bclass\s+(\w+)\s+extends\s+(\w+)", re.IGNORECASE)
@@ -223,18 +228,19 @@ def _extract_module_instances(text: str) -> tuple[list[dict], dict[str, list[dic
     return instances, by_module
 
 
-def scan_sv_file(file_path: str, *, retain_source_text: bool = True) -> dict:
-    """Extract hierarchy metadata from one SystemVerilog source.
+def scan_sv_text(
+    file_path: str,
+    raw: str,
+    *,
+    retain_source_text: bool = True,
+) -> dict:
+    """Extract hierarchy metadata from already-loaded SystemVerilog text.
 
-    ``retain_source_text`` defaults to the historical behavior for direct
-    callers such as Legacy Static.  Full hierarchy construction sets it only
-    long enough to derive cross-file metadata, then drops the text before the
-    result enters the handle store.
+    Keeping this text entry point separate lets hierarchy construction splice
+    active include fragments before instance extraction without reading a
+    compilation unit twice.  Direct callers continue to use ``scan_sv_file``.
     """
 
-    check_cancelled()
-    with open(file_path, "r", errors="replace") as f:
-        raw = f.read()
     check_cancelled()
     text = _strip_comments(raw)
 
@@ -301,6 +307,70 @@ def scan_sv_file(file_path: str, *, retain_source_text: bool = True) -> dict:
     return result
 
 
+def scan_sv_file(file_path: str, *, retain_source_text: bool = True) -> dict:
+    """Extract hierarchy metadata from one SystemVerilog source.
+
+    ``retain_source_text`` defaults to the historical behavior for direct
+    callers such as Legacy Static.  Full hierarchy construction sets it only
+    long enough to derive cross-file metadata, then drops the text before the
+    result enters the handle store.
+    """
+
+    check_cancelled()
+    with open(file_path, "r", errors="replace") as f:
+        raw = f.read()
+    check_cancelled()
+    return scan_sv_text(
+        file_path,
+        raw,
+        retain_source_text=retain_source_text,
+    )
+
+
+def scan_preprocessed_sv(
+    file_path: str,
+    source: PreprocessedSource,
+    *,
+    retain_source_text: bool = True,
+) -> dict:
+    """Scan file-local metadata plus include-aware module instances."""
+
+    # Keep class/UVM metadata file-local. Expanding class-heavy headers into
+    # one synthetic source would make every class appear to own every factory
+    # ``create`` in that compilation unit. Only module-instance extraction
+    # needs the textual include view for this hierarchy gap.
+    result = scan_sv_text(
+        file_path,
+        source.root_text,
+        retain_source_text=retain_source_text,
+    )
+    if source.complete:
+        (
+            result["module_instances"],
+            result["module_instance_map"],
+        ) = _extract_module_instances(_strip_comments(source.text))
+    result["include_directives"] = list(source.root_include_directives)
+    result["active_include_directives"] = list(
+        source.active_include_directives
+    )
+    result["resolved_include_paths"] = list(source.included_paths)
+    result["include_context_complete"] = source.complete
+    result["include_resolution_issues"] = list(source.issues)
+    result["has_conditional_preprocessing"] = (
+        result["has_conditional_preprocessing"]
+        or source.has_conditional_preprocessing
+    )
+    result["conditional_macros"] = list(
+        dict.fromkeys(
+            [
+                *result["conditional_macros"],
+                *source.conditional_macros,
+            ]
+        )
+    )
+    return result
+
+
 def build_class_hierarchy(scan_results: list[dict]) -> list[str]:
     extends_map = {}
     for result in scan_results:
@@ -332,7 +402,13 @@ def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str])
     # overwrite ``source_file`` / ``source_line`` with elaborated-netlist
     # truth and flip ``source_info_origin`` to "npi".
     parent_path = result.get("path") or None
-    for item in result["module_instances"]:
+    by_module = result.get("module_instance_map")
+    items = (
+        by_module.get(module_name, [])
+        if isinstance(by_module, dict)
+        else result.get("module_instances", [])
+    )
+    for item in items:
         child_scan = module_to_scan.get(item["module_name"])
         child_src = child_scan["name"] if child_scan else ""
         node = {
@@ -426,7 +502,14 @@ def build_hierarchy(
         interface_defs,
         interface_bindings,
         scan_metrics,
-    ) = _scan_user_files(file_entries)
+        resolved_include_tree,
+        resolved_ordered_includes,
+    ) = _scan_user_files(file_entries, compile_result)
+    effective_compile_result = merge_resolved_include_evidence(
+        compile_result,
+        include_tree=resolved_include_tree,
+        ordered_includes=resolved_ordered_includes,
+    )
     scan_wall_ms = (time.perf_counter() - scan_started) * 1000.0
     grouped_files = _group_files_by_category(file_entries, scan_by_path)
     source_root = _compute_source_root(file_entries)
@@ -461,7 +544,7 @@ def build_hierarchy(
         source_info_overlay, source_info_overlay_reason = _npi_annotate_component_tree(
             component_tree=component_tree,
             top_module=top_module,
-            compile_result=compile_result,
+            compile_result=effective_compile_result,
             compile_log_path=compile_log_path,
         )
     overlay_wall_ms = (time.perf_counter() - overlay_started) * 1000.0
@@ -497,7 +580,7 @@ def build_hierarchy(
         "project": {
             "top_module": top_module,
             "source_root": source_root,
-            "simulator": compile_result.get("simulator", "unknown"),
+            "simulator": effective_compile_result.get("simulator", "unknown"),
             "source_info_overlay": source_info_overlay,
             "source_info_overlay_reason": source_info_overlay_reason,
         },
@@ -505,7 +588,7 @@ def build_hierarchy(
         "component_tree": component_tree,
         "class_hierarchy": build_class_hierarchy(scan_results),
         "interfaces": interfaces,
-        "compile_result": compile_result,
+        "compile_result": effective_compile_result,
         "build_metrics": build_metrics,
         # Internal: kept on the full result so slim-payload helpers can
         # derive per-file metadata (e.g. uvm_file_count) without re-reading
@@ -665,12 +748,15 @@ def _overlay_npi_on_subtree(
 
 def _scan_user_files(
     file_entries: list[dict],
+    compile_result: dict,
 ) -> tuple[
     list[dict],
     dict[str, dict],
     dict[str, dict],
     dict[str, str],
     dict[str, int],
+    dict[str, list[str]],
+    list[dict[str, str]],
 ]:
     """Scan every compile input once without retaining its source body.
 
@@ -691,6 +777,11 @@ def _scan_user_files(
     source_bytes_scanned = 0
     largest_source_bytes = 0
     rss_peak_kib = read_process_rss_kib() or 0
+    preprocessor = SystemVerilogPreprocessor(compile_result)
+    resolved_include_tree: dict[str, list[str]] = {}
+    resolved_ordered_includes: list[dict[str, str]] = []
+    resolved_include_paths: set[str] = set()
+    include_resolution_issues: set[str] = set()
     for index, entry in enumerate(file_entries):
         check_cancelled()
         path = entry["path"]
@@ -699,7 +790,20 @@ def _scan_user_files(
         except OSError:
             missing_count += 1
             continue
-        result = scan_sv_file(path)
+        try:
+            preprocessed = preprocessor.preprocess(path)
+        except OSError:
+            missing_count += 1
+            continue
+        result = scan_preprocessed_sv(path, preprocessed)
+        for parent, children in preprocessed.include_tree.items():
+            destination = resolved_include_tree.setdefault(parent, [])
+            for child in children:
+                if child not in destination:
+                    destination.append(child)
+                resolved_include_paths.add(child)
+        resolved_ordered_includes.extend(preprocessed.ordered_includes)
+        include_resolution_issues.update(preprocessed.issues)
         scanned_count += 1
         source_bytes_scanned += stat_result.st_size
         largest_source_bytes = max(largest_source_bytes, stat_result.st_size)
@@ -737,8 +841,12 @@ def _scan_user_files(
             "source_bytes_scanned": source_bytes_scanned,
             "source_text_bytes_retained": 0,
             "largest_source_file_bytes": largest_source_bytes,
+            "resolved_include_file_count": len(resolved_include_paths),
+            "include_resolution_issue_count": len(include_resolution_issues),
             "rss_peak_kib": rss_peak_kib,
         },
+        resolved_include_tree,
+        resolved_ordered_includes,
     )
 
 

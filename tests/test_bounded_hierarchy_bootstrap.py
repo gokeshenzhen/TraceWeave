@@ -48,6 +48,34 @@ def _vcs_context(tmp_path: Path, sources: list[Path], *, top: str = "top"):
     return compile_log, parse_compile_log(str(compile_log), "vcs")
 
 
+def _xcelium_context(tmp_path: Path, sources: list[Path], *, top: str = "top"):
+    compile_log = tmp_path / "elab.log"
+    filelist = tmp_path / "run.f"
+    _write(
+        filelist,
+        "+define+XCELIUM\n"
+        f"-incdir {tmp_path}\n"
+        + "".join(f"{path}\n" for path in sources),
+    )
+    expanded_sources = "".join(f"\t\t{path}\n" for path in sources)
+    entity_lines = "".join(
+        f"file: {path}\n\tmodule worklib.{path.stem}:sv\n"
+        for path in sources
+    )
+    _write(
+        compile_log,
+        "xrun\n"
+        "\t-sv\n"
+        f"\t-f {filelist}\n"
+        "\t\t+define+XCELIUM\n"
+        f"\t\t-incdir {tmp_path}\n"
+        f"{expanded_sources}"
+        f"\t-top {top}\n"
+        f"{entity_lines}",
+    )
+    return compile_log, parse_compile_log(str(compile_log), "xcelium")
+
+
 def _config(**overrides) -> BoundedBootstrapConfig:
     values = {
         "timeout_sec": 5.0,
@@ -171,6 +199,57 @@ def test_bootstrap_selects_only_proved_ancestor_source_closure(tmp_path):
     assert manifest.complete is False
     assert "bootstrap_compile_inputs_scoped" in plan.receipt.objective_exclusions
     assert plan.receipt.cross_request_reusable is False
+
+
+def test_xcelium_bootstrap_resolves_conditional_nested_include_without_sidecar(
+    tmp_path,
+):
+    top = tmp_path / "top.sv"
+    wrapper = tmp_path / "wrapper.sv"
+    leaf = tmp_path / "leaf.sv"
+    first = tmp_path / "xcelium_connect.svh"
+    nested = tmp_path / "nested_connect.svh"
+    _write(
+        top,
+        "module top;\n"
+        "`ifdef VCS\n"
+        "  `include \"missing_vcs_only.svh\"\n"
+        "`elsif XCELIUM\n"
+        "  `include \"xcelium_connect.svh\"\n"
+        "`endif\n"
+        "endmodule\n",
+    )
+    _write(first, '`include "nested_connect.svh"\n')
+    _write(nested, "wrapper u_dut();\n")
+    _write(wrapper, "module wrapper; leaf u_leaf(); endmodule\n")
+    _write(leaf, "module leaf; logic value; endmodule\n")
+    compile_log, compile_result = _xcelium_context(
+        tmp_path, [top, wrapper, leaf]
+    )
+
+    assert compile_result["include_tree"] == {}
+    assert compile_result["compile_evidence"]["ordered_includes"] == []
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="8" * 64,
+        signal_path="top.u_dut.u_leaf.value",
+        top_hint=None,
+        config=_config(),
+    )
+
+    assert result.status == "ready"
+    assert result.receipt["ancestor_chain_proved"] is True
+    assert result.receipt["metrics"]["selected_source_input_count"] == 3
+    assert result.receipt["metrics"]["selected_support_file_count"] == 2
+    tree = result.hierarchy_result["component_tree"]["top"]
+    assert tree["u_dut"]["class"] == "wrapper"
+    assert tree["u_dut"]["children"]["u_leaf"]["class"] == "leaf"
+    assert result.compile_result["include_tree"][str(top.resolve())] == [
+        str(first.resolve())
+    ]
+    assert result.compile_result["include_tree"][str(first.resolve())] == [
+        str(nested.resolve())
+    ]
 
 
 def test_bootstrap_adapter_drops_unbounded_library_search_options(tmp_path):

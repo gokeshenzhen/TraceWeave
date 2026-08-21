@@ -5,6 +5,8 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.compile_log_parser import parse_compile_log
@@ -72,6 +74,106 @@ endclass
 
 
 class TestBuildHierarchy:
+    @pytest.mark.parametrize("simulator", ["vcs", "xcelium"])
+    def test_module_body_include_fragment_builds_hierarchy_for_both_simulators(
+        self, tmp_path, simulator
+    ):
+        wrapper = tmp_path / "rtl" / "wrapper.sv"
+        top = tmp_path / "rtl" / "top.sv"
+        include_dir = tmp_path / "include"
+        active_fragment = include_dir / f"{simulator}_connect.svh"
+        nested_fragment = include_dir / "nested_connect.svh"
+        _write(
+            wrapper,
+            "module wrapper; leaf u_leaf(); endmodule\n"
+            "module leaf; logic value; endmodule\n"
+            "module helper; endmodule\n",
+        )
+        _write(
+            top,
+            "module tb_top;\n"
+            "`ifdef VCS\n"
+            "  `include \"vcs_connect.svh\"\n"
+            "`elsif XCELIUM\n"
+            "  `include \"xcelium_connect.svh\"\n"
+            "`endif\n"
+            "  helper u_helper();\n"
+            "endmodule\n",
+        )
+        _write(active_fragment, '`include "nested_connect.svh"\n')
+        _write(nested_fragment, "wrapper u_dut();\n")
+
+        log = tmp_path / ("comp.log" if simulator == "vcs" else "elab.log")
+        if simulator == "vcs":
+            _write(
+                log,
+                "Chronologic VCS simulator\n"
+                f"Command: vcs -sverilog +define+VCS +incdir+{include_dir} "
+                f"{wrapper} {top} -top tb_top\n"
+                f"Parsing design file '{wrapper}'\n"
+                f"Parsing design file '{top}'\n"
+                f"Parsing included file '{active_fragment}'.\n"
+                f"Parsing included file '{nested_fragment}'.\n"
+                f"Back to file '{active_fragment}'.\n"
+                f"Back to file '{top}'.\n"
+                "Top Level Modules:\n"
+                "       tb_top\n",
+            )
+        else:
+            filelist = tmp_path / "run.f"
+            _write(
+                filelist,
+                "+define+XCELIUM\n"
+                f"-incdir {include_dir}\n"
+                f"{wrapper}\n"
+                f"{top}\n",
+            )
+            _write(
+                log,
+                "xrun\n"
+                "\t-sv\n"
+                f"\t-f {filelist}\n"
+                "\t\t+define+XCELIUM\n"
+                f"\t\t-incdir {include_dir}\n"
+                f"\t\t{wrapper}\n"
+                f"\t\t{top}\n"
+                "\t-top tb_top\n"
+                f"file: {wrapper}\n"
+                "\tmodule worklib.wrapper:sv\n"
+                "\tmodule worklib.leaf:sv\n"
+                "\tmodule worklib.helper:sv\n"
+                f"file: {top}\n"
+                "\tmodule worklib.tb_top:sv\n",
+            )
+
+        compile_result = parse_compile_log(str(log), simulator)
+        if simulator == "xcelium":
+            # A normal elab.log has compilation-unit evidence but no include
+            # parent/child records. The hierarchy builder must not depend on
+            # xcelium.d/.incl* sidecars.
+            assert compile_result["include_tree"] == {}
+            assert compile_result["compile_evidence"]["ordered_includes"] == []
+
+        hierarchy = build_hierarchy(
+            compile_result,
+            str(log),
+            apply_source_overlay=False,
+        )
+        tree = hierarchy["component_tree"]["tb_top"]
+        assert set(tree) == {"u_dut", "u_helper"}
+        assert tree["u_dut"]["class"] == "wrapper"
+        assert set(tree["u_dut"]["children"]) == {"u_leaf"}
+        assert tree["u_dut"]["children"]["u_leaf"]["class"] == "leaf"
+        assert "children" not in tree["u_helper"]
+        assert hierarchy["build_metrics"]["include_resolution_issue_count"] == 0
+        enriched = hierarchy["compile_result"]
+        assert enriched["include_tree"][str(top.resolve())] == [
+            str(active_fragment.resolve())
+        ]
+        assert enriched["include_tree"][str(active_fragment.resolve())] == [
+            str(nested_fragment.resolve())
+        ]
+
     def test_full_pipeline(self):
         tmp, root = _make_project()
         try:
