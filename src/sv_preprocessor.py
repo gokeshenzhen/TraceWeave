@@ -32,9 +32,21 @@ _DIRECTIVE_RE = re.compile(
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _INCLUDE_LITERAL_RE = re.compile(r'^\s*["<]([^">]+)[">]')
 _INCLUDE_MACRO_RE = re.compile(r"^\s*`([A-Za-z_][A-Za-z0-9_$]*)\b")
+_MACRO_INVOCATION_RE = re.compile(
+    r"^\s*`(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\b"
+)
+_HIERARCHY_MACRO_INSTANCE_RE = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_$]*\s*"
+    r"(?:#\s*\([^;]*\)\s*)?"
+    r"[A-Za-z_][A-Za-z0-9_$]*\s*"
+    r"(?:\[[^\]]+\]\s*)?\(",
+    re.DOTALL,
+)
 _MAX_FILELIST_DEPTH = 32
 _MAX_FILELIST_TOKENS = 200_000
 _DEFAULT_SOURCE_CACHE_BYTES = 16 * 1024 * 1024
+_MAX_HIERARCHY_MACRO_EXPANSIONS = 4096
+_MAX_HIERARCHY_MACRO_BODY_BYTES = 16 * 1024
 
 
 @dataclass(frozen=True)
@@ -69,9 +81,16 @@ class _ConditionalFrame:
     active: bool
 
 
+@dataclass(frozen=True)
+class _TextMacro:
+    parameters: tuple[str, ...] | None
+    body: str
+
+
 @dataclass
 class _ExpansionState:
     macros: dict[str, str]
+    text_macros: dict[str, _TextMacro]
     include_tree: dict[str, list[str]]
     ordered_includes: list[dict[str, str]]
     included_paths: list[str]
@@ -81,6 +100,7 @@ class _ExpansionState:
     visited_paths: set[str]
     has_conditionals: bool = False
     has_conditional_include: bool = False
+    hierarchy_macro_expansions: int = 0
 
     def issue(self, code: str) -> None:
         if code not in self.issues:
@@ -380,6 +400,216 @@ def _macro_include_name(body: str, macros: Mapping[str, str]) -> str | None:
     return None
 
 
+def _parse_text_macro(body: str) -> tuple[str, _TextMacro] | None:
+    """Parse one single-line object-like or function-like macro definition.
+
+    General SystemVerilog macro expansion is deliberately outside this small
+    preprocessor.  The retained definition is used only when a standalone
+    invocation expands to one syntactically obvious module/interface instance.
+    """
+
+    match = _IDENTIFIER_RE.match(body.lstrip())
+    if match is None:
+        return None
+    rendered = body.lstrip()
+    name = match.group(0)
+    remainder = rendered[match.end() :].rstrip("\r\n")
+    parameters: tuple[str, ...] | None = None
+    if remainder.startswith("("):
+        close = remainder.find(")")
+        if close < 0:
+            return None
+        raw_parameters = remainder[1:close].strip()
+        parsed = tuple(
+            item.strip() for item in raw_parameters.split(",") if item.strip()
+        )
+        if any(_IDENTIFIER_RE.fullmatch(item) is None for item in parsed):
+            return None
+        parameters = parsed
+        remainder = remainder[close + 1 :]
+    macro_body = remainder.strip()
+    if len(macro_body.encode("utf-8", errors="replace")) > (
+        _MAX_HIERARCHY_MACRO_BODY_BYTES
+    ):
+        return None
+    return name, _TextMacro(parameters=parameters, body=macro_body)
+
+
+def _record_source_macro(state: _ExpansionState, body: str) -> None:
+    identifier = _directive_identifier(body)
+    if not identifier:
+        return
+    tail = body[body.find(identifier) + len(identifier) :].strip()
+    state.macros[identifier] = tail or "1"
+    parsed = _parse_text_macro(body)
+    if parsed is not None:
+        macro_name, definition = parsed
+        state.text_macros[macro_name] = definition
+
+
+def _strip_line_continuation(value: str) -> tuple[str, bool]:
+    rendered = value.rstrip("\r\n")
+    trimmed = rendered.rstrip()
+    if trimmed.endswith("\\"):
+        return trimmed[:-1], True
+    return rendered, False
+
+
+def _split_macro_arguments(value: str) -> tuple[tuple[str, ...], int] | None:
+    """Split a parenthesized macro argument list and return its end offset."""
+
+    if not value.startswith("("):
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    argument_start = 1
+    arguments: list[str] = []
+    for index, char in enumerate(value):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth -= 1
+            if depth == 0:
+                tail = value[argument_start:index].strip()
+                if tail or arguments:
+                    arguments.append(tail)
+                return tuple(arguments), index + 1
+            continue
+        if char == "," and depth == 1:
+            arguments.append(value[argument_start:index].strip())
+            argument_start = index + 1
+    return None
+
+
+def _substitute_macro_parameters(
+    body: str,
+    parameters: Sequence[str],
+    arguments: Sequence[str],
+) -> str:
+    rendered = body
+    for parameter, argument in zip(parameters, arguments):
+        rendered = re.sub(
+            rf"(?<![A-Za-z0-9_$]){re.escape(parameter)}(?![A-Za-z0-9_$])",
+            argument,
+            rendered,
+        )
+    return rendered
+
+
+def _expand_hierarchy_macro_line(
+    line: str,
+    masked: str,
+    state: _ExpansionState,
+) -> str:
+    """Expand a standalone macro only when it renders one HDL instance.
+
+    This avoids pulling UVM report/factory macro bodies into the hierarchy
+    scanner while recovering the common RTL pattern
+    `` `MAKE_INSTANCE(u_leaf) ``. Unsupported or compound macros remain in the
+    text and therefore cannot fabricate hierarchy.
+    """
+
+    match = _MACRO_INVOCATION_RE.match(masked)
+    if match is None:
+        return line
+    macro_name = match.group("name")
+    if macro_name.lower().startswith(("uvm_", "m_uvm_")):
+        return line
+    definition = state.text_macros.get(macro_name)
+    if definition is None or not definition.body:
+        return line
+
+    remainder = masked[match.end() :]
+    arguments: tuple[str, ...] = ()
+    consumed = 0
+    if definition.parameters is not None:
+        stripped = remainder.lstrip()
+        leading = len(remainder) - len(stripped)
+        parsed = _split_macro_arguments(stripped)
+        if parsed is None:
+            return line
+        arguments, consumed = parsed
+        consumed += leading
+        if len(arguments) != len(definition.parameters):
+            return line
+    trailing = remainder[consumed:].strip()
+    invocation_semicolon = trailing == ";"
+    if trailing not in {"", ";"}:
+        return line
+
+    rendered = _substitute_macro_parameters(
+        definition.body,
+        definition.parameters or (),
+        arguments,
+    ).strip()
+    prefix = _HIERARCHY_MACRO_INSTANCE_RE.match(rendered)
+    if prefix is None:
+        return line
+    if not _single_instance_tail(rendered, prefix.end() - 1):
+        state.issue("hierarchy_macro_compound_unsupported")
+        return line
+    if state.hierarchy_macro_expansions >= _MAX_HIERARCHY_MACRO_EXPANSIONS:
+        state.issue("hierarchy_macro_expansion_limit_exceeded")
+        return line
+    state.hierarchy_macro_expansions += 1
+    if invocation_semicolon and not rendered.endswith(";"):
+        rendered += ";"
+    indent = line[: len(line) - len(line.lstrip())]
+    newline = "\n" if line.endswith("\n") else ""
+    return f"{indent}{rendered}{newline}"
+
+
+def _single_instance_tail(rendered: str, open_paren: int) -> bool:
+    """Return whether ``open_paren`` closes the only instance statement.
+
+    The prefix recognizer deliberately accepts arbitrary parameter and port
+    expressions. This balanced suffix check prevents a macro containing an
+    instance plus a second statement from leaking compound macro content into
+    the hierarchy scanner.
+    """
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(open_paren, len(rendered)):
+        char = rendered[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char != ")":
+            continue
+        depth -= 1
+        if depth < 0:
+            return False
+        if depth == 0:
+            return rendered[index + 1 :].strip() in {"", ";"}
+    return False
+
+
 def _root_include_directives(raw: str) -> tuple[str, ...]:
     result: list[str] = []
     in_block_comment = False
@@ -544,6 +774,10 @@ class SystemVerilogPreprocessor:
             self._options_cache[contexts] = options
         state = _ExpansionState(
             macros=options.macro_dict(),
+            text_macros={
+                name: _TextMacro(parameters=None, body=value)
+                for name, value in options.macros
+            },
             include_tree={},
             ordered_includes=[],
             included_paths=[],
@@ -616,17 +850,33 @@ class SystemVerilogPreprocessor:
         frames: list[_ConditionalFrame] = []
         active = True
         in_block_comment = False
+        continued_define: list[str] | None = None
+        continued_define_active = False
         for line in raw.splitlines(keepends=True):
             check_cancelled()
             masked, in_block_comment = _mask_comments(line, in_block_comment)
+            newline = "\n" if line.endswith("\n") else ""
+            if continued_define is not None:
+                part, continues = _strip_line_continuation(masked)
+                continued_define.append(part)
+                output.append(newline)
+                if not continues:
+                    if continued_define_active:
+                        _record_source_macro(state, " ".join(continued_define))
+                    continued_define = None
+                    continued_define_active = False
+                continue
             match = _DIRECTIVE_RE.match(masked)
             if not match:
-                output.append(line if active else ("\n" if line.endswith("\n") else ""))
+                output.append(
+                    _expand_hierarchy_macro_line(line, masked, state)
+                    if active
+                    else ("\n" if line.endswith("\n") else "")
+                )
                 continue
 
             directive = match.group("name").lower()
             body = match.group("body")
-            newline = "\n" if line.endswith("\n") else ""
             if directive in {"ifdef", "ifndef"}:
                 state.has_conditionals = True
                 identifier = _directive_identifier(body)
@@ -685,24 +935,33 @@ class SystemVerilogPreprocessor:
                 continue
             if directive == "include" and frames:
                 state.has_conditional_include = True
+            if directive == "define":
+                first_part, continues = _strip_line_continuation(body)
+                if continues:
+                    continued_define = [first_part]
+                    continued_define_active = active
+                    output.append(newline)
+                    continue
             if not active:
                 output.append(newline)
                 continue
             if directive == "define":
-                identifier = _directive_identifier(body)
-                if identifier:
-                    tail = body[body.find(identifier) + len(identifier) :].strip()
-                    state.macros[identifier] = tail or "1"
-                output.append(line)
+                _record_source_macro(state, body)
+                # A macro definition is not active HDL source. Keeping its
+                # replacement tokens here can fabricate an instance before
+                # the macro is ever invoked.
+                output.append(newline)
                 continue
             if directive == "undef":
                 identifier = _directive_identifier(body)
                 if identifier:
                     state.macros.pop(identifier, None)
+                    state.text_macros.pop(identifier, None)
                 output.append(newline)
                 continue
             if directive == "undefineall":
                 state.macros.clear()
+                state.text_macros.clear()
                 output.append(newline)
                 continue
             if directive == "include":
@@ -742,6 +1001,8 @@ class SystemVerilogPreprocessor:
                 continue
             output.append(line)
 
+        if continued_define is not None:
+            state.issue("macro_continuation_unterminated")
         if frames:
             state.issue("conditional_unbalanced")
         return "".join(output)

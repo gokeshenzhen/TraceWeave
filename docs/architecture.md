@@ -453,7 +453,16 @@ is used only when the compile transcript does not pair a definition name with
 its source file. The resolver requires a unique top/module/interface
 definition, walks direct instances one ancestor at a time, closes selected
 package/include dependencies, and rejects unproved preprocessor context. It
-never replays the simulator's full UVM library; a `uvm_pkg` import
+reconstructs the active text with command/filelist defines and include paths,
+honoring `ifdef`/`ifndef`/`elsif`/`else`/`endif` and bounded nested includes for
+both VCS and Xcelium transcripts. The lightweight instance tokenizer preserves
+all operators so assignments, casts, constructors, and UVM calls cannot be
+collapsed into instance syntax. A separate bounded path expands only a
+standalone object-like or function-like macro whose replacement is proved to be
+exactly one HDL instance (maximum 4096 expansions and 16 KiB per retained macro
+body). It never expands `uvm_*` / `m_uvm_*` macros; a compound instance macro or
+an exceeded bound makes bootstrap coverage unproved rather than fabricating a
+tree. It never replays the simulator's full UVM library; a `uvm_pkg` import
 adds the existing `uvm_dynamic_connectivity` exclusion and lets only unrelated
 IR-proved local positives survive. Bootstrap compile replay retains defines and
 include options but removes broad `-v`/`-y` library search options, recording
@@ -541,6 +550,17 @@ no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positiv
 
 - Payload facts always come from exactly one backend. NPI and Source Graph
   attempts survive only as identity-safe receipts when a later backend wins.
+- Slang's `WildcardPortConnection` (`.*`) is represented as an implicit named
+  binding, never positional. The resolved per-port mappings remain the
+  connectivity facts. UVM packages/classes are not projected as hierarchy
+  instances. If module RTL assigns a value from an opaque DPI call, a call
+  resolved under `uvm_pkg`, a `uvm_hdl_*` API, or a selected runtime system
+  call, the assignment location remains terminal driver evidence but the
+  call's arguments are not asserted as structural dependencies of its return
+  value. Coverage records `dpi_runtime_not_modeled`,
+  `uvm_dynamic_call_not_modeled`, or `runtime_system_call_not_modeled` as
+  applicable; ordinary local helper-call arguments keep their existing partial
+  dependency behavior.
 - Source Graph adapter receipts expose a privacy-safe hierarchy-resolution
   summary (counts and stop depth, never instance names). A dotted suffix is
   initially `deferred` because it may be a legal interface or packed member.

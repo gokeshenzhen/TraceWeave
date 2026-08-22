@@ -1405,14 +1405,7 @@ class SlangConnectivityProjector:
                 return
             name = str(getattr(node, "subroutineName", "<unknown>"))
             if bool(getattr(node, "isSystemCall", False)):
-                if name in {
-                    "$random",
-                    "$urandom",
-                    "$time",
-                    "$realtime",
-                    "$test$plusargs",
-                    "$value$plusargs",
-                } or name.lower().startswith("$fsdb"):
+                if _is_opaque_runtime_system_call(node):
                     limitations.add(
                         (
                             "runtime_system_call_not_modeled",
@@ -1424,6 +1417,16 @@ class SlangConnectivityProjector:
                 return
             subroutine = getattr(node, "subroutine", None)
             flags = str(getattr(subroutine, "flags", ""))
+            is_uvm_call = _is_uvm_dynamic_call(node)
+            if is_uvm_call:
+                limitations.add(
+                    (
+                        "uvm_dynamic_call_not_modeled",
+                        f"UVM call {name} has no projected dynamic implementation",
+                        CoverageStatus.INCONCLUSIVE,
+                        ("uvm_dynamic_call",),
+                    )
+                )
             if "DPIImport" in flags:
                 limitations.add(
                     (
@@ -1433,7 +1436,7 @@ class SlangConnectivityProjector:
                         ("dpi",),
                     )
                 )
-            else:
+            elif not is_uvm_call:
                 limitations.add(
                     (
                         "subroutine_body_not_projected",
@@ -1491,7 +1494,14 @@ class SlangConnectivityProjector:
             return _dedupe_selections(direct)
         candidates: list[SignalSelection] = []
 
-        def collect(node: Any) -> None:
+        def collect(node: Any) -> Any:
+            if _kind_name(node) == "Call" and _is_opaque_dependency_call(node):
+                # Keep the assignment as terminal driver evidence, but do not
+                # turn arguments to an opaque runtime/DPI/UVM call into
+                # structural data edges to the call's return value.
+                from pyslang import ast as slang_ast
+
+                return slang_ast.VisitAction.Skip
             if _kind_name(node) not in {
                 "NamedValue",
                 "HierarchicalValue",
@@ -1504,6 +1514,7 @@ class SlangConnectivityProjector:
             selection = self._template_selection(node, record, aliases)
             if selection is not None:
                 candidates.append(selection)
+            return None
 
         try:
             expression.visit(collect)
@@ -1911,6 +1922,40 @@ def _kind_name(value: Any) -> str:
     return str(getattr(kind, "name", kind or ""))
 
 
+def _is_opaque_runtime_system_call(call: Any) -> bool:
+    if not bool(getattr(call, "isSystemCall", False)):
+        return False
+    name = str(getattr(call, "subroutineName", ""))
+    return name in {
+        "$random",
+        "$urandom",
+        "$time",
+        "$realtime",
+        "$test$plusargs",
+        "$value$plusargs",
+    } or name.lower().startswith("$fsdb")
+
+
+def _is_uvm_dynamic_call(call: Any) -> bool:
+    """Recognize calls whose implementation belongs to the UVM runtime."""
+
+    name = str(getattr(call, "subroutineName", ""))
+    subroutine = getattr(call, "subroutine", None)
+    path = str(getattr(subroutine, "hierarchicalPath", ""))
+    return (
+        path.startswith("uvm_pkg::")
+        or path.startswith("uvm_pkg.")
+        or name.lower().startswith("uvm_hdl_")
+    )
+
+
+def _is_opaque_dependency_call(call: Any) -> bool:
+    if _is_opaque_runtime_system_call(call) or _is_uvm_dynamic_call(call):
+        return True
+    subroutine = getattr(call, "subroutine", None)
+    return "DPIImport" in str(getattr(subroutine, "flags", ""))
+
+
 def _parameterization(instance: Any) -> tuple[tuple[str, str], ...]:
     result = []
     for parameter in tuple(getattr(instance.body, "parameters", ())):
@@ -2050,7 +2095,10 @@ def _port_direction(direction: Any) -> PortDirection:
 def _binding_style(instance: Any) -> BindingStyle:
     syntax = getattr(instance, "syntax", None)
     connections = tuple(getattr(syntax, "connections", ())) if syntax else ()
-    if any(_kind_name(item) == "NamedPortConnection" for item in connections):
+    if any(
+        _kind_name(item) in {"NamedPortConnection", "WildcardPortConnection"}
+        for item in connections
+    ):
         return BindingStyle.NAMED
     return BindingStyle.POSITIONAL
 

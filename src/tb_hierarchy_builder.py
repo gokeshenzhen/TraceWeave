@@ -61,7 +61,12 @@ _VIRTUAL_IF_RE = re.compile(r"\bvirtual\s+(\w+)\s+(\w+)", re.IGNORECASE)
 _UVM_IMPORT_RE = re.compile(r"\bimport\s+uvm_pkg\s*::", re.IGNORECASE)
 _UVM_EXTENDS_RE = re.compile(r"\bextends\s+uvm_\w+", re.IGNORECASE)
 _SV_TOKEN_RE = re.compile(
-    r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_$]*|::|[#$(),;.\[\]{}:]'
+    # Keep every non-whitespace delimiter instead of silently dropping
+    # operators.  The instance recognizer relies on adjacency: collapsing
+    # ``lhs = func(...)`` into ``lhs func(...)`` makes an assignment look
+    # exactly like ``module_type instance_name(...)``.  Multi-character scope
+    # tokens stay grouped; all remaining punctuation is intentionally opaque.
+    r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_$]*|::|\S'
 )
 _SV_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 

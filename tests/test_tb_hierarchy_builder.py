@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.compile_log_parser import parse_compile_log
-from src.tb_hierarchy_builder import build_hierarchy, scan_sv_file
+from src.tb_hierarchy_builder import build_hierarchy, scan_sv_file, scan_sv_text
 
 
 def _write(path: Path, text: str):
@@ -406,6 +406,307 @@ endmodule
             {"module_name": "leaf", "instance_name": "u_leaf0"},
             {"module_name": "leaf", "instance_name": "u_leaf1"},
         ]
+
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            "status = uvm_hdl_read(path, data);",
+            "status <= uvm_hdl_deposit(path, data);",
+            "status = uvm_hdl_force(path, data);",
+            "status = uvm_hdl_release(path);",
+            "status = uvm_hdl_check_path(path);",
+            "data = uvm_hdl_data_t'(value);",
+            "status = helper_func(data);",
+            "status <= helper_func(data);",
+            "status = helper_func(data) + 1;",
+            "status = flag ? helper_func(data) : 0;",
+            "status = randomize();",
+            "status = $urandom();",
+            'status = $value$plusargs("VALUE=%d", data);',
+            "mailbox mb = new();",
+            "semaphore sem = new(1);",
+            'uvm_event ev = new("ev");',
+            'uvm_object obj = new("obj");',
+            "uvm_hdl_path paths = new();",
+            'obj = new("obj");',
+            "data = new[16];",
+            'uvm_config_db#(virtual vif_t)::set(null, "*", "vif", vif);',
+            (
+                "status = uvm_config_db#(virtual vif_t)::get("
+                'this, "", "vif", vif);'
+            ),
+            'obj = my_item::type_id::create("obj");',
+            "proc = process::self();",
+            "status = std::randomize(data);",
+            "status = obj.randomize();",
+            "void'(uvm_hdl_read(path, data));",
+            "if (!uvm_hdl_read(path, data)) status = 0;",
+            "assert (obj.randomize());",
+            '`uvm_info("ID", "fake_mod fake_inst();", UVM_LOW)',
+            'path = "fake_mod fake_inst(.*);";',
+            "uvm_component component;",
+            "virtual vif_t vif;",
+            "-> done_event;",
+            "coverage.sample();",
+            "queue.push_back(data);",
+            "data = queue.pop_front();",
+            "phase.raise_objection(this);",
+            "seq.start(seqr);",
+        ],
+    )
+    def test_assignment_calls_casts_and_constructors_are_not_instances(
+        self, statement
+    ):
+        scanned = scan_sv_text(
+            "uvm_shapes.sv",
+            f"""
+module real_mod; endmodule
+module audit_top;
+  real_mod u_real();
+  initial begin
+    {statement}
+  end
+endmodule
+""",
+            retain_source_text=False,
+        )
+
+        assert scanned["module_instance_map"]["audit_top"] == [
+            {"module_name": "real_mod", "instance_name": "u_real"}
+        ]
+
+    @pytest.mark.parametrize(
+        ("definition", "invocation", "expected_instance"),
+        [
+            (
+                "`define MAKE_LEAF leaf u_from_object(.*);",
+                "`MAKE_LEAF",
+                "u_from_object",
+            ),
+            (
+                "`define MAKE_LEAF(NAME) leaf NAME(.*);",
+                "`MAKE_LEAF(u_from_function)",
+                "u_from_function",
+            ),
+        ],
+    )
+    def test_simple_macro_generated_instance_is_recovered(
+        self, tmp_path, definition, invocation, expected_instance
+    ):
+        source = tmp_path / "macro_top.sv"
+        _write(
+            source,
+            f"""{definition}
+module leaf(input logic value); endmodule
+module tb_top;
+  logic value;
+  {invocation}
+endmodule
+""",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {
+                        "path": str(source),
+                        "category": "tb",
+                        "type": "module",
+                    }
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "xcelium",
+            "compile_command": f"xrun -sv {source} -top tb_top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        child = hierarchy["component_tree"]["tb_top"][expected_instance]
+        assert child["class"] == "leaf"
+
+    @pytest.mark.parametrize(
+        ("simulator", "simulator_define", "expected_instance"),
+        [
+            ("vcs", "VCS", "u_vcs"),
+            ("xcelium", "XCELIUM", "u_xcelium"),
+        ],
+    )
+    def test_macro_instance_respects_simulator_conditional_branch(
+        self, tmp_path, simulator, simulator_define, expected_instance
+    ):
+        source = tmp_path / "conditional_macro_top.sv"
+        _write(
+            source,
+            "`define MAKE_VCS leaf u_vcs(.*);\n"
+            "`define MAKE_XCELIUM leaf u_xcelium(.*);\n"
+            "module leaf(input logic value); endmodule\n"
+            "module tb_top;\n"
+            "  logic value;\n"
+            "`ifdef VCS\n"
+            "  `MAKE_VCS\n"
+            "`elsif XCELIUM\n"
+            "  `MAKE_XCELIUM\n"
+            "`endif\n"
+            "endmodule\n",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "tb", "type": "module"}
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": simulator,
+            "compile_command": (
+                f"{'vcs' if simulator == 'vcs' else 'xrun'} -sv "
+                f"+define+{simulator_define} {source} -top tb_top"
+            ),
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        assert set(hierarchy["component_tree"]["tb_top"]) == {
+            expected_instance
+        }
+        assert hierarchy["build_metrics"]["include_resolution_issue_count"] == 0
+
+    def test_ifndef_else_undef_and_undefineall_select_only_active_instances(
+        self, tmp_path
+    ):
+        source = tmp_path / "remaining_directives_top.sv"
+        _write(
+            source,
+            "`define LOCAL_TEMP\n"
+            "`undef LOCAL_TEMP\n"
+            "module leaf; endmodule\n"
+            "module tb_top;\n"
+            "`ifndef LOCAL_TEMP\n"
+            "  leaf u_ifndef();\n"
+            "`else\n"
+            "  leaf u_inactive_else();\n"
+            "`endif\n"
+            "`define LOCAL_AGAIN\n"
+            "`undefineall\n"
+            "`ifdef LOCAL_AGAIN\n"
+            "  leaf u_inactive_ifdef();\n"
+            "`else\n"
+            "  leaf u_else();\n"
+            "`endif\n"
+            "endmodule\n",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "tb", "type": "module"}
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "xcelium",
+            "compile_command": f"xrun -sv {source} -top tb_top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        assert set(hierarchy["component_tree"]["tb_top"]) == {
+            "u_ifndef",
+            "u_else",
+        }
+        assert hierarchy["build_metrics"]["include_resolution_issue_count"] == 0
+
+    def test_multiline_macro_generated_parameterized_instance_is_recovered(
+        self, tmp_path
+    ):
+        source = tmp_path / "multiline_macro_top.sv"
+        _write(
+            source,
+            "`define MAKE_LEAF(NAME) \\\n"
+            "  leaf #(.WIDTH(1)) NAME(.*);\n"
+            "module leaf #(parameter int WIDTH = 1)(input logic value); endmodule\n"
+            "module tb_top;\n"
+            "  logic value;\n"
+            "  `MAKE_LEAF(u_multiline)\n"
+            "endmodule\n",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "tb", "type": "module"}
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "xcelium",
+            "compile_command": f"xrun -sv {source} -top tb_top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        child = hierarchy["component_tree"]["tb_top"]["u_multiline"]
+        assert child["class"] == "leaf"
+        assert hierarchy["build_metrics"]["include_resolution_issue_count"] == 0
+
+    @pytest.mark.parametrize(
+        ("macro_source", "expected_issue_count"),
+        [
+            ("`define UNUSED(NAME) ghost NAME();\n", 0),
+            ("`define UNUSED(NAME) \\\n  ghost NAME();\n", 0),
+            (
+                "`define MAKE_TWO ghost u_bad(); ghost u_also();\n"
+                "  `MAKE_TWO\n",
+                1,
+            ),
+            (
+                "`define uvm_object_utils(NAME) ghost NAME();\n"
+                "  `uvm_object_utils(u_bad)\n",
+                0,
+            ),
+        ],
+    )
+    def test_uninvoked_compound_and_uvm_macros_do_not_fabricate_hierarchy(
+        self, tmp_path, macro_source, expected_issue_count
+    ):
+        source = tmp_path / "macro_safety_top.sv"
+        _write(
+            source,
+            f"{macro_source}"
+            "module ghost; endmodule\n"
+            "module real_mod; endmodule\n"
+            "module tb_top;\n"
+            "  real_mod u_real();\n"
+            "endmodule\n",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "tb", "type": "module"}
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "xcelium",
+            "compile_command": f"xrun -sv {source} -top tb_top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        assert set(hierarchy["component_tree"]["tb_top"]) == {"u_real"}
+        assert (
+            hierarchy["build_metrics"]["include_resolution_issue_count"]
+            == expected_issue_count
+        )
 
 
 # ---------------------------------------------------------------------------

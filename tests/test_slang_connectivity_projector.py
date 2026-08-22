@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.connectivity_ir import (
+    BindingStyle,
     BindingSourceKind,
     ConnectivityIR,
     CoverageStatus,
@@ -280,6 +281,123 @@ endmodule
     binding = projection.ir.bindings[0]
     assert binding.instance_path == "top.u_leaf"
     assert binding.evidence.location.line == 6
+
+
+def test_real_frontend_treats_wildcard_port_connections_as_named():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic data_i); endmodule
+module top;
+  logic data_i;
+  leaf u_leaf(.*);
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+
+    binding = projection.ir.bindings[0]
+    assert binding.instance_path == "top.u_leaf"
+    assert binding.style is BindingStyle.NAMED
+    assert binding.port_position is None
+    assert binding.mappings[0].source.path() == "top.data_i"
+
+
+def test_opaque_uvm_and_dpi_calls_do_not_publish_argument_dependencies():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+package uvm_pkg;
+  import "DPI-C" function int uvm_hdl_read(
+    input string path,
+    output logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_deposit(
+    input string path,
+    input logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_force(
+    input string path,
+    input logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_release(input string path);
+  import "DPI-C" function int uvm_hdl_check_path(input string path);
+  function automatic int uvm_helper(input logic [31:0] data);
+    return int'(data[0]);
+  endfunction
+endpackage
+
+module top;
+  import uvm_pkg::*;
+  import "DPI-C" function int c_transform(input logic [31:0] data);
+  string path;
+  logic [31:0] data;
+  logic direct;
+  int dpi_status;
+  int deposit_status;
+  int force_status;
+  int release_status;
+  int check_status;
+  int c_status;
+  int plusarg_status;
+  int uvm_status;
+  int local_status;
+
+  function automatic int local_helper(input logic [31:0] value);
+    return int'(value[0]);
+  endfunction
+
+  initial begin
+    dpi_status = direct | uvm_hdl_read(path, data);
+    deposit_status = direct | uvm_hdl_deposit(path, data);
+    force_status = direct | uvm_hdl_force(path, data);
+    release_status = direct | uvm_hdl_release(path);
+    check_status = direct | uvm_hdl_check_path(path);
+    c_status = direct | c_transform(data);
+    plusarg_status = direct | $value$plusargs("data=%d", data);
+    uvm_status = direct | uvm_helper(data);
+    local_status = direct | local_helper(data);
+  end
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+    top = next(item for item in projection.ir.definitions if item.name == "top")
+    by_target = {
+        assignment.target.symbol: assignment for assignment in top.assignments
+    }
+
+    for target in (
+        "dpi_status",
+        "deposit_status",
+        "force_status",
+        "release_status",
+        "check_status",
+        "c_status",
+        "plusarg_status",
+        "uvm_status",
+    ):
+        assert {
+            item.source.symbol for item in by_target[target].dependencies
+        } == {"direct"}
+    assert {
+        item.source.symbol for item in by_target["local_status"].dependencies
+    } == {"direct", "data"}
+    assert {item.name for item in projection.ir.definitions} == {"top"}
+    assert {item.path for item in projection.ir.instances} == {"top"}
+    gap_codes = {item.code for item in projection.ir.coverage.gaps}
+    assert "dpi_runtime_not_modeled" in gap_codes
+    assert "uvm_dynamic_call_not_modeled" in gap_codes
+    assert "runtime_system_call_not_modeled" in gap_codes
+    assert "subroutine_body_not_projected" in gap_codes
 
 
 def test_real_frontend_projects_parameterized_generate_and_packed_members():
