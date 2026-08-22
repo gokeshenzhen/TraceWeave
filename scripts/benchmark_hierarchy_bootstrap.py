@@ -83,17 +83,28 @@ def _fixture(
     *,
     source_count: int,
     interface_count: int,
+    shared_include_lines: int,
     source_bytes: int,
     compile_bytes: int,
     compile_lines: int,
     elaborate_bytes: int,
     elaborate_lines: int,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, int]:
     sources: list[Path] = []
+    source_prefix = ""
+    shared_include_bytes = 0
+    if shared_include_lines:
+        shared_include = root / "shared_defs.svh"
+        shared_include.write_text(
+            "`timescale 1ns/1ps\n" + "\n" * (shared_include_lines - 1)
+        )
+        shared_include_bytes = shared_include.stat().st_size
+        source_prefix = '`include "shared_defs.svh"\n'
     top = root / "target_top.sv"
     _write_sized_source(
         top,
-        "module target_top(input logic a, output logic y);\n"
+        source_prefix
+        + "module target_top(input logic a, output logic y);\n"
         "  logic gate_en;\n"
         "  assign gate_en = a;\n"
         "  assign y = gate_en;\n"
@@ -108,7 +119,7 @@ def _fixture(
         if index <= interface_count:
             interface_name = interface_names[index - 1]
             path = root / f"{interface_name}.sv"
-            body = f"interface {interface_name}; endinterface\n"
+            body = source_prefix + f"interface {interface_name}; endinterface\n"
         else:
             path = root / f"unit_{index:04d}.sv"
             if interface_names and index == interface_count + 1:
@@ -117,12 +128,16 @@ def _fixture(
                     for offset, name in enumerate(interface_names)
                 )
                 body = (
-                    f"module unit_{index:04d};\n"
+                    source_prefix
+                    + f"module unit_{index:04d};\n"
                     f"{references}"
                     "endmodule\n"
                 )
             else:
-                body = f"module unit_{index:04d}; endmodule\n"
+                body = (
+                    source_prefix
+                    + f"module unit_{index:04d}; endmodule\n"
+                )
         _write_sized_source(
             path,
             body,
@@ -132,6 +147,7 @@ def _fixture(
 
     command = (
         "Command: vcs -sverilog "
+        + (f"+incdir+{root} " if shared_include_lines else "")
         + " ".join(str(path) for path in sources)
         + "\n"
     ).encode()
@@ -157,7 +173,7 @@ def _fixture(
         ],
         suffix_lines=[b"Top Level Modules:\n", b"       target_top\n"],
     )
-    return compile_log, elaborate_log
+    return compile_log, elaborate_log, shared_include_bytes
 
 
 def _parse_merged(compile_log: Path, elaborate_log: Path) -> tuple[dict, dict]:
@@ -187,6 +203,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=("hierarchy", "bootstrap"), required=True)
     parser.add_argument("--source-count", type=int, default=3843)
     parser.add_argument("--interface-count", type=int, default=0)
+    parser.add_argument("--shared-include-lines", type=int, default=0)
     parser.add_argument("--source-bytes", type=int, default=16 * 1024)
     parser.add_argument("--compile-bytes", type=int, default=51 * 1024 * 1024)
     parser.add_argument("--compile-lines", type=int, default=200_000)
@@ -195,13 +212,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.interface_count < 0 or args.interface_count >= args.source_count:
         parser.error("--interface-count must be >= 0 and < --source-count")
+    if args.shared_include_lines < 0:
+        parser.error("--shared-include-lines must be >= 0")
 
     with tempfile.TemporaryDirectory(prefix="traceweave_hierarchy_bench_") as tmp:
         root = Path(tmp)
-        compile_log, elaborate_log = _fixture(
+        compile_log, elaborate_log, shared_include_bytes = _fixture(
             root,
             source_count=args.source_count,
             interface_count=args.interface_count,
+            shared_include_lines=args.shared_include_lines,
             source_bytes=args.source_bytes,
             compile_bytes=args.compile_bytes,
             compile_lines=args.compile_lines,
@@ -243,6 +263,8 @@ def main() -> int:
                 "elaborate_lines": args.elaborate_lines,
                 "source_count": args.source_count,
                 "interface_count": args.interface_count,
+                "shared_include_lines": args.shared_include_lines,
+                "shared_include_bytes": shared_include_bytes,
                 "source_bytes_each": args.source_bytes,
                 "source_bytes_total": args.source_count * args.source_bytes,
             },

@@ -237,3 +237,134 @@ def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch)
         {"module_name": "leaf", "instance_name": "u_leaf"}
     ]
     assert extract_calls == 1
+
+
+def test_shared_include_mask_cache_is_bounded_and_reused(tmp_path, monkeypatch):
+    header = tmp_path / "shared.svh"
+    roots = [tmp_path / "first.sv", tmp_path / "second.sv"]
+    header_text = (
+        "`timescale 1ns/1ps\n"
+        "// comment containing `include \"ignored.svh\"\n"
+        "\n"
+    )
+    header.write_text(header_text)
+    for index, root in enumerate(roots):
+        root.write_text(
+            '`include "shared.svh"\n'
+            f"module root_{index}; endmodule\n"
+        )
+    mask_calls = 0
+    original = sv_preprocessor._mask_comments
+
+    def counted(line: str, in_block_comment: bool):
+        nonlocal mask_calls
+        mask_calls += 1
+        return original(line, in_block_comment)
+
+    monkeypatch.setattr(sv_preprocessor, "_mask_comments", counted)
+    cache_limit = 4096
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": (
+                f"vcs -sverilog +incdir+{tmp_path} "
+                + " ".join(str(root) for root in roots)
+            ),
+        },
+        source_cache_bytes=cache_limit,
+    )
+
+    results = [preprocessor.preprocess(str(root)) for root in roots]
+
+    root_line_count = sum(
+        len(root.read_text().splitlines(keepends=True)) for root in roots
+    )
+    header_line_count = len(header_text.splitlines(keepends=True))
+    assert mask_calls == root_line_count + header_line_count
+    assert all(result.complete for result in results)
+    assert preprocessor._cache_bytes <= cache_limit
+    assert preprocessor._cache_bytes == sum(
+        entry.size for entry in preprocessor._cache.values()
+    )
+    cached_header = preprocessor._cache[str(header.resolve())]
+    assert cached_header.masked is not None
+    assert (
+        preprocessor._cached_masked_text(
+            str(header.resolve()),
+            header_text + "changed",
+        )
+        is None
+    )
+
+
+def test_shared_include_mask_cache_respects_disabled_and_tiny_limits(
+    tmp_path, monkeypatch
+):
+    header = tmp_path / "shared.svh"
+    roots = [tmp_path / "first.sv", tmp_path / "second.sv"]
+    header_text = "`timescale 1ns/1ps\n\n"
+    header.write_text(header_text)
+    for index, root in enumerate(roots):
+        root.write_text(
+            '`include "shared.svh"\n'
+            f"module root_{index}; endmodule\n"
+        )
+    original = sv_preprocessor._mask_comments
+
+    for cache_limit in (0, len(header_text) * 2 - 1):
+        mask_calls = 0
+
+        def counted(line: str, in_block_comment: bool):
+            nonlocal mask_calls
+            mask_calls += 1
+            return original(line, in_block_comment)
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(sv_preprocessor, "_mask_comments", counted)
+            preprocessor = SystemVerilogPreprocessor(
+                {
+                    "compile_cwd": str(tmp_path),
+                    "compile_command": (
+                        f"vcs -sverilog +incdir+{tmp_path} "
+                        + " ".join(str(root) for root in roots)
+                    ),
+                },
+                source_cache_bytes=cache_limit,
+            )
+            for root in roots:
+                preprocessor.preprocess(str(root))
+
+        expected_calls = sum(
+            len(root.read_text().splitlines(keepends=True)) for root in roots
+        ) + 2 * len(header_text.splitlines(keepends=True))
+        assert mask_calls == expected_calls
+        assert preprocessor._cache_bytes <= cache_limit
+
+
+def test_source_cache_lru_accounts_for_raw_and_masked_text(tmp_path):
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": "vcs -sverilog",
+        },
+        source_cache_bytes=10,
+    )
+
+    assert preprocessor._store_cache_entry(
+        "first",
+        sv_preprocessor._SourceCacheEntry(raw="abc", masked="   "),
+    )
+    assert preprocessor._store_cache_entry(
+        "second",
+        sv_preprocessor._SourceCacheEntry(raw="defg"),
+    )
+    assert preprocessor._cache_bytes == 10
+
+    assert preprocessor._cached_masked_text("first", "abc") == "   "
+    assert preprocessor._store_cache_entry(
+        "third",
+        sv_preprocessor._SourceCacheEntry(raw="hi"),
+    )
+
+    assert list(preprocessor._cache) == ["first", "third"]
+    assert preprocessor._cache_bytes == 8

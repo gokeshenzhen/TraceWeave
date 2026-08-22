@@ -88,6 +88,17 @@ class _TextMacro:
 
 
 @dataclass(frozen=True)
+class _SourceCacheEntry:
+    raw: str
+    masked: str | None = None
+
+    @property
+    def size(self) -> int:
+        masked_size = len(self.masked) if self.masked is not None else 0
+        return len(self.raw) + masked_size
+
+
+@dataclass(frozen=True)
 class _CommandContextTemplate:
     command: str
     base: str | None
@@ -728,8 +739,9 @@ class SystemVerilogPreprocessor:
         self._compile_result = compile_result
         self._source_loader = source_loader or self._read_source
         self._max_include_depth = max(0, int(max_include_depth))
+        # Raw and derived masked text share one hard LRU budget.
         self._cache_limit = max(0, int(source_cache_bytes))
-        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._cache: OrderedDict[str, _SourceCacheEntry] = OrderedDict()
         self._cache_bytes = 0
         self._canonical_cache: dict[str, str] = {}
         self._context_index = _CommandContextIndex(
@@ -801,18 +813,54 @@ class SystemVerilogPreprocessor:
         cached = self._cache.get(canonical)
         if cached is not None:
             self._cache.move_to_end(canonical)
-            return cached
+            return cached.raw
         check_cancelled()
         raw = self._source_loader(canonical)
         check_cancelled()
-        size = len(raw)
-        if self._cache_limit and size <= self._cache_limit:
-            while self._cache and self._cache_bytes + size > self._cache_limit:
-                _, removed = self._cache.popitem(last=False)
-                self._cache_bytes -= len(removed)
-            self._cache[canonical] = raw
-            self._cache_bytes += size
+        self._store_cache_entry(canonical, _SourceCacheEntry(raw=raw))
         return raw
+
+    def _store_cache_entry(
+        self,
+        canonical: str,
+        entry: _SourceCacheEntry,
+    ) -> bool:
+        if not self._cache_limit or entry.size > self._cache_limit:
+            return False
+        previous = self._cache.pop(canonical, None)
+        if previous is not None:
+            self._cache_bytes -= previous.size
+        while self._cache and self._cache_bytes + entry.size > self._cache_limit:
+            _, removed = self._cache.popitem(last=False)
+            self._cache_bytes -= removed.size
+        self._cache[canonical] = entry
+        self._cache_bytes += entry.size
+        return True
+
+    def _cached_masked_text(self, canonical: str, raw: str) -> str | None:
+        cached = self._cache.get(canonical)
+        if (
+            cached is None
+            or cached.masked is None
+            or cached.raw != raw
+            or len(cached.masked) != len(raw)
+        ):
+            return None
+        self._cache.move_to_end(canonical)
+        return cached.masked
+
+    def _store_masked_text(
+        self,
+        canonical: str,
+        raw: str,
+        masked: str,
+    ) -> None:
+        if len(masked) != len(raw):
+            return
+        self._store_cache_entry(
+            canonical,
+            _SourceCacheEntry(raw=raw, masked=masked),
+        )
 
     def _resolve_include(
         self,
@@ -943,9 +991,28 @@ class SystemVerilogPreprocessor:
         in_block_comment = False
         continued_define: list[str] | None = None
         continued_define_active = False
+        cached_masked = self._cached_masked_text(canonical, raw)
+        masked_offset = 0
+        collect_masked = (
+            cached_masked is None
+            and depth > 0
+            and self._cache_limit > 0
+            and len(raw) * 2 <= self._cache_limit
+        )
+        masked_parts: list[str] | None = [] if collect_masked else None
         for line in raw.splitlines(keepends=True):
             check_cancelled()
-            masked, in_block_comment = _mask_comments(line, in_block_comment)
+            if cached_masked is None:
+                masked, in_block_comment = _mask_comments(
+                    line,
+                    in_block_comment,
+                )
+                if masked_parts is not None:
+                    masked_parts.append(masked)
+            else:
+                masked_end = masked_offset + len(line)
+                masked = cached_masked[masked_offset:masked_end]
+                masked_offset = masked_end
             newline = "\n" if line.endswith("\n") else ""
             match = _DIRECTIVE_RE.match(masked)
             if match and depth == 0 and match.group("name").lower() == "include":
@@ -1103,6 +1170,9 @@ class SystemVerilogPreprocessor:
             state.issue("macro_continuation_unterminated")
         if frames:
             state.issue("conditional_unbalanced")
+        if masked_parts is not None:
+            check_cancelled()
+            self._store_masked_text(canonical, raw, "".join(masked_parts))
         return "".join(output)
 
 
