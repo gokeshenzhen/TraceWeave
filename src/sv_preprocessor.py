@@ -87,6 +87,134 @@ class _TextMacro:
     body: str
 
 
+@dataclass(frozen=True)
+class _CommandContextTemplate:
+    command: str
+    base: str | None
+
+
+class _CommandContextIndex:
+    """Resolve per-source compile contexts without rescanning every unit.
+
+    ``ordered_compilation_units`` can contain the same canonical source more
+    than once.  Preserve the historical first-match rule exactly: the first
+    record decides ``source_log_index``.  A missing/non-integer index retains
+    the old conservative behaviour of replaying every recorded source phase.
+    """
+
+    def __init__(
+        self,
+        compile_result: Mapping[str, Any],
+        *,
+        canonicalize: Callable[[str | os.PathLike[str]], str] | None = None,
+    ) -> None:
+        if canonicalize is None:
+            canonicalize = _canonical
+        self._canonicalize = canonicalize
+        self._source_log_indexes: dict[str, int | None] = {}
+        self._contexts_by_source: dict[
+            str, tuple[tuple[str, str], ...]
+        ] = {}
+
+        evidence = compile_result.get("compile_evidence")
+        evidence = evidence if isinstance(evidence, Mapping) else {}
+        records = evidence.get("ordered_compilation_units")
+        if isinstance(records, Sequence) and not isinstance(
+            records, (str, bytes)
+        ):
+            for record in records:
+                if not isinstance(record, Mapping) or not record.get("path"):
+                    continue
+                canonical = canonicalize(str(record["path"]))
+                if canonical in self._source_log_indexes:
+                    continue
+                raw_index = record.get("source_log_index")
+                self._source_log_indexes[canonical] = (
+                    raw_index if isinstance(raw_index, int) else None
+                )
+
+        default_cwd = compile_result.get("compile_cwd")
+        default_base = (
+            canonicalize(str(default_cwd)) if default_cwd else None
+        )
+        all_templates: list[_CommandContextTemplate] = []
+        templates_by_index: dict[Any, list[_CommandContextTemplate]] = {}
+        phases = evidence.get("source_phases")
+        if isinstance(phases, Sequence) and not isinstance(phases, (str, bytes)):
+            for phase in phases:
+                if not isinstance(phase, Mapping):
+                    continue
+                command = str(
+                    phase.get("expanded_replay_command")
+                    or phase.get("compile_replay_command")
+                    or phase.get("compile_command")
+                    or ""
+                )
+                if not command:
+                    continue
+                phase_cwd = phase.get("compile_cwd")
+                base = (
+                    canonicalize(str(phase_cwd))
+                    if phase_cwd
+                    else default_base
+                )
+                template = _CommandContextTemplate(command=command, base=base)
+                all_templates.append(template)
+                raw_index = phase.get("source_log_index")
+                try:
+                    templates_by_index.setdefault(raw_index, []).append(template)
+                except TypeError:
+                    # A malformed, unhashable phase index cannot equal the
+                    # integer source indices accepted above.
+                    continue
+
+        self._all_templates = tuple(all_templates)
+        self._templates_by_index = {
+            key: tuple(value) for key, value in templates_by_index.items()
+        }
+        self._fallback_command = str(
+            evidence.get("expanded_replay_command")
+            or compile_result.get("compile_replay_command")
+            or compile_result.get("compile_command")
+            or ""
+        )
+        self._fallback_base = default_base
+
+    def contexts_for(self, source_path: str) -> tuple[tuple[str, str], ...]:
+        canonical_source = self._canonicalize(source_path)
+        cached = self._contexts_by_source.get(canonical_source)
+        if cached is not None:
+            return cached
+
+        source_log_index = self._source_log_indexes.get(canonical_source)
+        templates = (
+            self._all_templates
+            if source_log_index is None
+            else self._templates_by_index.get(source_log_index, ())
+        )
+        source_base: str | None = None
+
+        def render_base(template_base: str | None) -> str:
+            nonlocal source_base
+            if template_base is not None:
+                return template_base
+            if source_base is None:
+                source_base = self._canonicalize(Path(canonical_source).parent)
+            return source_base
+
+        contexts = tuple(
+            (template.command, render_base(template.base))
+            for template in templates
+        )
+        if not contexts and self._fallback_command:
+            contexts = ((
+                self._fallback_command,
+                render_base(self._fallback_base),
+            ),)
+        self._contexts_by_source[canonical_source] = contexts
+        return contexts
+
+
 @dataclass
 class _ExpansionState:
     macros: dict[str, str]
@@ -124,56 +252,7 @@ def _render_path(raw: str, base: str) -> str | None:
 def _command_contexts(
     compile_result: Mapping[str, Any], source_path: str
 ) -> list[tuple[str, str]]:
-    evidence = compile_result.get("compile_evidence")
-    evidence = evidence if isinstance(evidence, Mapping) else {}
-    source_log_index: int | None = None
-    records = evidence.get("ordered_compilation_units")
-    if isinstance(records, Sequence) and not isinstance(records, (str, bytes)):
-        canonical_source = _canonical(source_path)
-        for record in records:
-            if not isinstance(record, Mapping) or not record.get("path"):
-                continue
-            if _canonical(str(record["path"])) != canonical_source:
-                continue
-            raw_index = record.get("source_log_index")
-            if isinstance(raw_index, int):
-                source_log_index = raw_index
-            break
-
-    phases = evidence.get("source_phases")
-    if isinstance(phases, Sequence) and not isinstance(phases, (str, bytes)):
-        selected: list[tuple[str, str]] = []
-        for phase in phases:
-            if not isinstance(phase, Mapping):
-                continue
-            raw_index = phase.get("source_log_index")
-            if source_log_index is not None and raw_index != source_log_index:
-                continue
-            command = str(
-                phase.get("expanded_replay_command")
-                or phase.get("compile_replay_command")
-                or phase.get("compile_command")
-                or ""
-            )
-            if not command:
-                continue
-            base = str(
-                phase.get("compile_cwd")
-                or compile_result.get("compile_cwd")
-                or Path(source_path).parent
-            )
-            selected.append((command, _canonical(base)))
-        if selected:
-            return selected
-
-    command = str(
-        evidence.get("expanded_replay_command")
-        or compile_result.get("compile_replay_command")
-        or compile_result.get("compile_command")
-        or ""
-    )
-    base = str(compile_result.get("compile_cwd") or Path(source_path).parent)
-    return [(command, _canonical(base))] if command else []
+    return list(_CommandContextIndex(compile_result).contexts_for(source_path))
 
 
 def _split_plus_defines(token: str) -> list[str]:
@@ -665,18 +744,33 @@ class SystemVerilogPreprocessor:
         self._cache_limit = max(0, int(source_cache_bytes))
         self._cache: OrderedDict[str, str] = OrderedDict()
         self._cache_bytes = 0
+        self._canonical_cache: dict[str, str] = {}
+        self._context_index = _CommandContextIndex(
+            compile_result,
+            canonicalize=self._canonical_path,
+        )
         self._options_cache: dict[
             tuple[tuple[str, str], ...], PreprocessorOptions
         ] = {}
         self._exact_includes = self._build_exact_include_map(compile_result)
+
+    def _canonical_path(self, path: str | os.PathLike[str]) -> str:
+        raw = os.fspath(path)
+        cached = self._canonical_cache.get(raw)
+        if cached is not None:
+            return cached
+        canonical = _canonical(raw)
+        self._canonical_cache[raw] = canonical
+        self._canonical_cache.setdefault(canonical, canonical)
+        return canonical
 
     @staticmethod
     def _read_source(path: str) -> str:
         with open(path, "r", errors="replace") as stream:
             return stream.read()
 
-    @staticmethod
     def _build_exact_include_map(
+        self,
         compile_result: Mapping[str, Any]
     ) -> dict[str, list[str]]:
         result: dict[str, list[str]] = {}
@@ -694,8 +788,8 @@ class SystemVerilogPreprocessor:
                     or not item.get("path")
                 ):
                     continue
-                parent = _canonical(str(item["parent"]))
-                child = _canonical(str(item["path"]))
+                parent = self._canonical_path(str(item["parent"]))
+                child = self._canonical_path(str(item["path"]))
                 result.setdefault(parent, []).append(child)
         tree = compile_result.get("include_tree")
         if isinstance(tree, Mapping):
@@ -706,15 +800,17 @@ class SystemVerilogPreprocessor:
                     or isinstance(children, (str, bytes))
                 ):
                     continue
-                destination = result.setdefault(_canonical(str(parent)), [])
+                destination = result.setdefault(
+                    self._canonical_path(str(parent)), []
+                )
                 for child in children:
-                    canonical = _canonical(str(child))
+                    canonical = self._canonical_path(str(child))
                     if canonical not in destination:
                         destination.append(canonical)
         return result
 
     def _load(self, path: str) -> str:
-        canonical = _canonical(path)
+        canonical = self._canonical_path(path)
         cached = self._cache.get(canonical)
         if cached is not None:
             self._cache.move_to_end(canonical)
@@ -741,10 +837,10 @@ class SystemVerilogPreprocessor:
         parent_dir = str(Path(parent).parent)
         search_candidates: list[str] = []
         if os.path.isabs(raw_name):
-            search_candidates.append(_canonical(raw_name))
+            search_candidates.append(self._canonical_path(raw_name))
         else:
             for base in (parent_dir, *include_dirs):
-                candidate = _canonical(Path(base) / raw_name)
+                candidate = self._canonical_path(Path(base) / raw_name)
                 if candidate not in search_candidates:
                     search_candidates.append(candidate)
 
@@ -766,8 +862,8 @@ class SystemVerilogPreprocessor:
         return None
 
     def preprocess(self, source_path: str) -> PreprocessedSource:
-        root = _canonical(source_path)
-        contexts = tuple(_command_contexts(self._compile_result, root))
+        root = self._canonical_path(source_path)
+        contexts = self._context_index.contexts_for(root)
         options = self._options_cache.get(contexts)
         if options is None:
             options = _extract_options_from_contexts(contexts)
@@ -828,7 +924,7 @@ class SystemVerilogPreprocessor:
         depth: int,
         stack: tuple[str, ...],
     ) -> str:
-        canonical = _canonical(path)
+        canonical = self._canonical_path(path)
         state.visited_paths.add(canonical)
         if depth > self._max_include_depth:
             state.issue("include_depth_exceeded")
