@@ -88,6 +88,7 @@ _MODULE_INSTANCE_PRECEDING_EXCLUDES = {
     "automatic", "static",
 }
 _HIERARCHY_RSS_SAMPLE_STRIDE = 32
+_INTERFACE_REFERENCE_PATTERN_MAX_NAMES = 256
 
 
 def _classify_node(module_name: str, instance_name: str) -> str:
@@ -374,6 +375,65 @@ def scan_preprocessed_sv(
         )
     )
     return result
+
+
+def _find_interface_references(
+    source_text: str,
+    interface_names: list[str],
+) -> set[str]:
+    r"""Find interface-name tokens with bounded whole-file regex passes.
+
+    Interface definitions are ``\w+`` names, so an alternation wrapped in
+    word boundaries is equivalent to the historical per-name
+    ``re.search(r"\bNAME\b", source_text)`` checks.  Chunking bounds regex
+    compilation size while changing the scan count from one pass per
+    interface to one pass per bounded group.
+    """
+
+    found: set[str] = set()
+    for offset in range(
+        0,
+        len(interface_names),
+        _INTERFACE_REFERENCE_PATTERN_MAX_NAMES,
+    ):
+        check_cancelled()
+        chunk = interface_names[
+            offset : offset + _INTERFACE_REFERENCE_PATTERN_MAX_NAMES
+        ]
+        pattern = re.compile(
+            rf"\b(?:{'|'.join(re.escape(name) for name in chunk)})\b"
+        )
+        chunk_found: set[str] = set()
+        for match in pattern.finditer(source_text):
+            chunk_found.add(match.group(0))
+            if len(chunk_found) == len(chunk):
+                break
+        found.update(chunk_found)
+    return found
+
+
+def _bind_referenced_interfaces(
+    *,
+    source_text: str,
+    source_name: str,
+    interface_defs: dict[str, dict],
+    interface_bindings: dict[str, str],
+) -> None:
+    # A binding is first-wins. Once set, later source files cannot change it,
+    # so rescanning those names has no observable effect. Preserve the old
+    # basename substring exclusion and interface-definition insertion order.
+    candidates = [
+        interface_name
+        for interface_name in interface_defs
+        if interface_name not in interface_bindings
+        and interface_name not in source_name
+    ]
+    if not candidates:
+        return
+    referenced = _find_interface_references(source_text, candidates)
+    for interface_name in candidates:
+        if interface_name in referenced:
+            interface_bindings.setdefault(interface_name, source_name)
 
 
 def build_class_hierarchy(scan_results: list[dict]) -> list[str]:
@@ -819,11 +879,12 @@ def _scan_user_files(
             interface_bindings.setdefault(
                 binding["interface_name"], result["name"]
             )
-        for interface_name in interface_defs:
-            if interface_name in result["name"]:
-                continue
-            if re.search(rf"\b{re.escape(interface_name)}\b", source_text):
-                interface_bindings.setdefault(interface_name, result["name"])
+        _bind_referenced_interfaces(
+            source_text=source_text,
+            source_name=result["name"],
+            interface_defs=interface_defs,
+            interface_bindings=interface_bindings,
+        )
         scan_results.append(result)
         scan_by_path[path] = result
         if (index + 1) % _HIERARCHY_RSS_SAMPLE_STRIDE == 0:

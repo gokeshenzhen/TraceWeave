@@ -82,6 +82,7 @@ def _fixture(
     root: Path,
     *,
     source_count: int,
+    interface_count: int,
     source_bytes: int,
     compile_bytes: int,
     compile_lines: int,
@@ -100,11 +101,31 @@ def _fixture(
         source_bytes,
     )
     sources.append(top)
+    interface_names = [
+        f"bench_if_{index:04d}" for index in range(interface_count)
+    ]
     for index in range(1, source_count):
-        path = root / f"unit_{index:04d}.sv"
+        if index <= interface_count:
+            interface_name = interface_names[index - 1]
+            path = root / f"{interface_name}.sv"
+            body = f"interface {interface_name}; endinterface\n"
+        else:
+            path = root / f"unit_{index:04d}.sv"
+            if interface_names and index == interface_count + 1:
+                references = "".join(
+                    f"  {name} if_{offset:04d}();\n"
+                    for offset, name in enumerate(interface_names)
+                )
+                body = (
+                    f"module unit_{index:04d};\n"
+                    f"{references}"
+                    "endmodule\n"
+                )
+            else:
+                body = f"module unit_{index:04d}; endmodule\n"
         _write_sized_source(
             path,
-            f"module unit_{index:04d}; endmodule\n",
+            body,
             source_bytes,
         )
         sources.append(path)
@@ -165,18 +186,22 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("hierarchy", "bootstrap"), required=True)
     parser.add_argument("--source-count", type=int, default=3843)
+    parser.add_argument("--interface-count", type=int, default=0)
     parser.add_argument("--source-bytes", type=int, default=16 * 1024)
     parser.add_argument("--compile-bytes", type=int, default=51 * 1024 * 1024)
     parser.add_argument("--compile-lines", type=int, default=200_000)
     parser.add_argument("--elaborate-bytes", type=int, default=658 * 1024)
     parser.add_argument("--elaborate-lines", type=int, default=8_913)
     args = parser.parse_args()
+    if args.interface_count < 0 or args.interface_count >= args.source_count:
+        parser.error("--interface-count must be >= 0 and < --source-count")
 
     with tempfile.TemporaryDirectory(prefix="traceweave_hierarchy_bench_") as tmp:
         root = Path(tmp)
         compile_log, elaborate_log = _fixture(
             root,
             source_count=args.source_count,
+            interface_count=args.interface_count,
             source_bytes=args.source_bytes,
             compile_bytes=args.compile_bytes,
             compile_lines=args.compile_lines,
@@ -217,6 +242,7 @@ def main() -> int:
                 "elaborate_bytes": elaborate_log.stat().st_size,
                 "elaborate_lines": args.elaborate_lines,
                 "source_count": args.source_count,
+                "interface_count": args.interface_count,
                 "source_bytes_each": args.source_bytes,
                 "source_bytes_total": args.source_count * args.source_bytes,
             },

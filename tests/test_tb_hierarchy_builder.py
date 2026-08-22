@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src import tb_hierarchy_builder
 from src.compile_log_parser import parse_compile_log
 from src.tb_hierarchy_builder import build_hierarchy, scan_sv_file, scan_sv_text
 
@@ -74,6 +75,91 @@ endclass
 
 
 class TestBuildHierarchy:
+    def test_interface_binding_preserves_compile_order_and_first_match(
+        self, tmp_path
+    ):
+        before = tmp_path / "before_definition.sv"
+        comment_if = tmp_path / "comment_if.sv"
+        direct_if = tmp_path / "direct_if.sv"
+        earlier_only_if = tmp_path / "earlier_only_if.sv"
+        first_user = tmp_path / "first_user.sv"
+        later_user = tmp_path / "later_user.sv"
+        _write(
+            before,
+            "module before_definition; earlier_only_if ignored(); endmodule\n",
+        )
+        _write(comment_if, "interface comment_if; endinterface\n")
+        _write(direct_if, "interface direct_if; endinterface\n")
+        _write(
+            earlier_only_if,
+            "interface earlier_only_if; endinterface\n",
+        )
+        _write(
+            first_user,
+            "// comment_if remains a historical raw-text reference\n"
+            "module first_user; direct_if active(); endmodule\n",
+        )
+        _write(
+            later_user,
+            "module later_user;\n"
+            "  comment_if later_comment();\n"
+            "  direct_if later_direct();\n"
+            "endmodule\n",
+        )
+        files = [
+            before,
+            comment_if,
+            direct_if,
+            earlier_only_if,
+            first_user,
+            later_user,
+        ]
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(path), "category": "rtl", "type": "module"}
+                    for path in files
+                ]
+            },
+            "primary_top": "first_user",
+            "top_modules": ["first_user"],
+            "interfaces": [],
+            "simulator": "vcs",
+            "compile_command": "vcs -sverilog "
+            + " ".join(str(path) for path in files),
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+        interfaces = {item["name"]: item for item in hierarchy["interfaces"]}
+
+        assert interfaces["comment_if"]["bound_in"] == "first_user.sv"
+        assert interfaces["direct_if"]["bound_in"] == "first_user.sv"
+        assert interfaces["earlier_only_if"]["bound_in"] == ""
+
+    def test_interface_reference_scan_is_bounded_by_name_chunks(
+        self, monkeypatch
+    ):
+        interface_names = [f"bus_if_{index:04d}" for index in range(600)]
+        source_text = " ".join(interface_names)
+        compile_calls = 0
+        original = tb_hierarchy_builder.re.compile
+
+        def counted(pattern: str, *args, **kwargs):
+            nonlocal compile_calls
+            compile_calls += 1
+            return original(pattern, *args, **kwargs)
+
+        monkeypatch.setattr(tb_hierarchy_builder.re, "compile", counted)
+
+        found = tb_hierarchy_builder._find_interface_references(
+            source_text,
+            interface_names,
+        )
+
+        assert found == set(interface_names)
+        assert compile_calls == 3
+
     @pytest.mark.parametrize("simulator", ["vcs", "xcelium"])
     def test_module_body_include_fragment_builds_hierarchy_for_both_simulators(
         self, tmp_path, simulator
