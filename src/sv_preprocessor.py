@@ -222,6 +222,7 @@ class _ExpansionState:
     include_tree: dict[str, list[str]]
     ordered_includes: list[dict[str, str]]
     included_paths: list[str]
+    root_include_directives: list[str]
     active_include_directives: list[str]
     conditional_macros: set[str]
     issues: list[str]
@@ -689,20 +690,6 @@ def _single_instance_tail(rendered: str, open_paren: int) -> bool:
     return False
 
 
-def _root_include_directives(raw: str) -> tuple[str, ...]:
-    result: list[str] = []
-    in_block_comment = False
-    for line in raw.splitlines(keepends=True):
-        masked, in_block_comment = _mask_comments(line, in_block_comment)
-        match = _DIRECTIVE_RE.match(masked)
-        if not match or match.group("name").lower() != "include":
-            continue
-        literal = _INCLUDE_LITERAL_RE.match(match.group("body"))
-        if literal and literal.group(1) not in result:
-            result.append(literal.group(1))
-    return tuple(result)
-
-
 def _common_include_guard(raw: str) -> str | None:
     directives: list[tuple[str, str]] = []
     in_block_comment = False
@@ -877,6 +864,7 @@ class SystemVerilogPreprocessor:
             include_tree={},
             ordered_includes=[],
             included_paths=[],
+            root_include_directives=[],
             active_include_directives=[],
             conditional_macros=set(),
             issues=[],
@@ -906,7 +894,7 @@ class SystemVerilogPreprocessor:
             included_paths=tuple(state.included_paths),
             include_tree=state.include_tree,
             ordered_includes=tuple(state.ordered_includes),
-            root_include_directives=_root_include_directives(raw),
+            root_include_directives=tuple(state.root_include_directives),
             active_include_directives=tuple(state.active_include_directives),
             conditional_macros=tuple(sorted(state.conditional_macros)),
             has_conditional_preprocessing=state.has_conditionals,
@@ -941,6 +929,13 @@ class SystemVerilogPreprocessor:
                 return ""
             state.issue("include_cycle")
             return ""
+        if "`" not in raw:
+            # Without a backtick this file cannot contain a directive or a
+            # hierarchy macro invocation.  Returning the immutable source
+            # text is equivalent to the line-wise expansion and avoids a
+            # full comment-masking pass for ordinary RTL files.
+            check_cancelled()
+            return raw
 
         output: list[str] = []
         frames: list[_ConditionalFrame] = []
@@ -952,6 +947,14 @@ class SystemVerilogPreprocessor:
             check_cancelled()
             masked, in_block_comment = _mask_comments(line, in_block_comment)
             newline = "\n" if line.endswith("\n") else ""
+            match = _DIRECTIVE_RE.match(masked)
+            if match and depth == 0 and match.group("name").lower() == "include":
+                literal = _INCLUDE_LITERAL_RE.match(match.group("body"))
+                if (
+                    literal
+                    and literal.group(1) not in state.root_include_directives
+                ):
+                    state.root_include_directives.append(literal.group(1))
             if continued_define is not None:
                 part, continues = _strip_line_continuation(masked)
                 continued_define.append(part)
@@ -962,7 +965,6 @@ class SystemVerilogPreprocessor:
                     continued_define = None
                     continued_define_active = False
                 continue
-            match = _DIRECTIVE_RE.match(masked)
             if not match:
                 output.append(
                     _expand_hierarchy_macro_line(line, masked, state)

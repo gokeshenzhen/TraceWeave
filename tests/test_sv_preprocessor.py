@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from src import sv_preprocessor
+from src import tb_hierarchy_builder
 from src.sv_preprocessor import SystemVerilogPreprocessor
 
 
@@ -142,3 +143,97 @@ def test_context_index_canonicalization_scales_linearly(tmp_path, monkeypatch):
         preprocessor.preprocess(str(path))
 
     assert canonical_calls <= source_count + 4
+
+
+def test_plain_source_skips_directive_comment_masking(tmp_path, monkeypatch):
+    source = tmp_path / "plain.sv"
+    raw = "module plain; /* ordinary comment */ endmodule\n"
+    source.write_text(raw)
+    mask_calls = 0
+    original = sv_preprocessor._mask_comments
+
+    def counted(line: str, in_block_comment: bool):
+        nonlocal mask_calls
+        mask_calls += 1
+        return original(line, in_block_comment)
+
+    monkeypatch.setattr(sv_preprocessor, "_mask_comments", counted)
+    result = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs -sverilog {source}",
+        }
+    ).preprocess(str(source))
+
+    assert result.text == raw
+    assert result.root_include_directives == ()
+    assert mask_calls == 0
+
+
+def test_root_include_inventory_is_collected_during_expansion(tmp_path):
+    source = tmp_path / "top.sv"
+    active = tmp_path / "active.svh"
+    active.write_text("leaf u_leaf();\n")
+    source.write_text(
+        "/* `include \"commented.svh\" */\n"
+        "`define INCLUDE_TEXT \\\n"
+        "`include \"macro_body.svh\"\n"
+        "`ifdef DISABLED\n"
+        "  `include \"inactive.svh\"\n"
+        "`endif\n"
+        "module top;\n"
+        "  `include \"active.svh\"\n"
+        "endmodule\n"
+    )
+
+    result = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs -sverilog +incdir+{tmp_path} {source}",
+        }
+    ).preprocess(str(source))
+
+    assert result.root_include_directives == (
+        "macro_body.svh",
+        "inactive.svh",
+        "active.svh",
+    )
+    assert result.active_include_directives == ("active.svh",)
+    assert result.complete is True
+
+
+def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch):
+    source = tmp_path / "top.sv"
+    source.write_text(
+        "module leaf; endmodule\n"
+        "module top; leaf u_leaf(); endmodule\n"
+    )
+    preprocessed = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs -sverilog {source}",
+        }
+    ).preprocess(str(source))
+    extract_calls = 0
+    original = tb_hierarchy_builder._extract_module_instances
+
+    def counted(text: str):
+        nonlocal extract_calls
+        extract_calls += 1
+        return original(text)
+
+    monkeypatch.setattr(
+        tb_hierarchy_builder,
+        "_extract_module_instances",
+        counted,
+    )
+
+    result = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert result["module_instance_map"]["top"] == [
+        {"module_name": "leaf", "instance_name": "u_leaf"}
+    ]
+    assert extract_calls == 1

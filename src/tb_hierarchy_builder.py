@@ -349,7 +349,7 @@ def scan_preprocessed_sv(
         source.root_text,
         retain_source_text=retain_source_text,
     )
-    if source.complete:
+    if source.complete and source.text != source.root_text:
         (
             result["module_instances"],
             result["module_instance_map"],
