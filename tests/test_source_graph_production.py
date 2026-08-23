@@ -120,6 +120,11 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     assert get_source_graph_execution_config().error_code == (
         "source_graph_execution_config_invalid"
     )
+    for invalid in ("nan", "inf", "0", "86400.1"):
+        monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", invalid)
+        assert get_source_graph_execution_config().error_code == (
+            "source_graph_execution_config_invalid"
+        )
 
 
 def test_source_graph_frontier_limits_are_namespaced_and_bounded(monkeypatch):

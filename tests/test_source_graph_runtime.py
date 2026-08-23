@@ -196,9 +196,11 @@ class ImmediateWorker:
     def __init__(self, results=None):
         self.count = 0
         self.results = list(results or [])
+        self.timeout_seconds = []
 
     async def run(self, request, *, timeout_seconds, cancel_event):
         self.count += 1
+        self.timeout_seconds.append(timeout_seconds)
         if self.results:
             result = self.results.pop(0)
             return result(request) if callable(result) else result
@@ -206,8 +208,9 @@ class ImmediateWorker:
 
 
 class ControlledWorker:
-    def __init__(self):
+    def __init__(self, result=None):
         self.count = 0
+        self.result = result
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.cancel_seen = False
@@ -229,6 +232,8 @@ class ControlledWorker:
                     stage="worker_process",
                     metrics=WorkerResourceMetrics(cancel_to_exit_ms=0.1),
                 )
+            if self.result is not None:
+                return self.result(request) if callable(self.result) else self.result
             return _ready_result(request)
         finally:
             for task in (release_wait, cancel_wait):
@@ -266,6 +271,25 @@ async def test_cold_prepare_then_exact_memory_hit_builds_once():
 
 
 @pytest.mark.anyio
+async def test_prepare_receipt_records_validated_effective_timeout():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+
+    outcome = await runtime.prepare(_request(), timeout_seconds=7.5)
+
+    assert worker.timeout_seconds == [7.5]
+    assert outcome.effective_timeout_sec == 7.5
+    assert outcome.to_receipt()["effective_timeout_sec"] == 7.5
+
+    for invalid in (True, 0.0, float("nan"), float("inf"), 86_400.1):
+        with pytest.raises(ValueError):
+            await runtime.prepare(
+                _request(label=f"invalid_{invalid}"),
+                timeout_seconds=invalid,
+            )
+
+
+@pytest.mark.anyio
 async def test_proven_superset_hits_but_subset_builds_again():
     worker = ImmediateWorker()
     runtime = SourceGraphRuntime(worker)
@@ -298,7 +322,7 @@ async def test_proven_superset_hits_but_subset_builds_again():
 
 
 @pytest.mark.anyio
-async def test_incomplete_key_bypasses_cache_and_cross_request_single_flight():
+async def test_incomplete_key_bypasses_cache_between_sequential_requests():
     worker = ImmediateWorker()
     runtime = SourceGraphRuntime(worker)
     request = _request(complete=False)
@@ -313,6 +337,194 @@ async def test_incomplete_key_bypasses_cache_and_cross_request_single_flight():
     assert second.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
     assert worker.count == 2
     assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_concurrent_incomplete_key_coalesces_only_live_flight():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+
+    first_task = asyncio.create_task(runtime.prepare(request))
+    await worker.started.wait()
+    second_task = asyncio.create_task(runtime.prepare(request))
+    await asyncio.sleep(0)
+    worker.release.set()
+    first, second = await asyncio.gather(first_task, second_task)
+    stats = runtime.stats_snapshot()
+
+    assert worker.count == 1
+    assert first.entry is second.entry
+    assert {first.metrics.flight_disposition, second.metrics.flight_disposition} == {
+        FlightDisposition.BUILDER,
+        FlightDisposition.COALESCED,
+    }
+    assert first.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
+    assert second.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
+    assert sum(item.metrics.actual_build_count for item in (first, second)) == 1
+    assert stats["actual_build_count"] == 1
+    assert stats["coalesced_waiter_count"] == 1
+    assert stats["cache_entry_count"] == 0
+    assert stats["inflight_count"] == 0
+
+    later = await runtime.prepare(request)
+    assert later.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert later.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
+    assert worker.count == 2
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_driver_and_load_share_exact_artifact_flight():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    requests = (
+        _request(
+            complete=False,
+            scope=_scope(operation=QueryOperation.DRIVER, max_hops=10),
+        ),
+        _request(
+            complete=False,
+            scope=_scope(operation=QueryOperation.LOADS, max_hops=1),
+        ),
+    )
+
+    first_task = asyncio.create_task(runtime.prepare(requests[0]))
+    await worker.started.wait()
+    second_task = asyncio.create_task(runtime.prepare(requests[1]))
+    await asyncio.sleep(0)
+    worker.release.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert first.build_key.digest == second.build_key.digest
+    assert worker.count == 1
+    assert first.entry is second.entry
+    assert second.metrics.flight_disposition is FlightDisposition.COALESCED
+    assert second.cache_lookup_reason is CacheLookupReason.SAME_ARTIFACT_INFLIGHT
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_flight_one_waiter_cancel_keeps_other_alive():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+    first_cancel = asyncio.Event()
+    second_cancel = asyncio.Event()
+
+    first_task = asyncio.create_task(
+        runtime.prepare(request, cancel_event=first_cancel)
+    )
+    await worker.started.wait()
+    second_task = asyncio.create_task(
+        runtime.prepare(request, cancel_event=second_cancel)
+    )
+    await asyncio.sleep(0)
+    first_cancel.set()
+    first = await first_task
+
+    assert first.status is PrepareStatus.CANCELLED
+    assert worker.cancel_seen is False
+
+    worker.release.set()
+    second = await second_task
+    assert second.status is PrepareStatus.READY
+    assert worker.count == 1
+    assert worker.cancel_seen is False
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_all_incomplete_waiters_cancel_worker_and_allow_retry():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+    first_cancel = asyncio.Event()
+    second_cancel = asyncio.Event()
+
+    first_task = asyncio.create_task(
+        runtime.prepare(request, cancel_event=first_cancel)
+    )
+    await worker.started.wait()
+    second_task = asyncio.create_task(
+        runtime.prepare(request, cancel_event=second_cancel)
+    )
+    await asyncio.sleep(0)
+    first_cancel.set()
+    first = await first_task
+    assert first.status is PrepareStatus.CANCELLED
+    assert worker.cancel_seen is False
+
+    second_cancel.set()
+    second = await second_task
+    await runtime.wait_idle()
+
+    assert second.status is PrepareStatus.CANCELLED
+    assert worker.count == 1
+    assert worker.cancel_seen is True
+    assert runtime.stats_snapshot()["inflight_count"] == 0
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+    worker.started.clear()
+    worker.release.set()
+    retried = await runtime.prepare(request)
+    assert retried.status is PrepareStatus.READY
+    assert worker.count == 2
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_timeout_flight_clears_and_allows_retry():
+    timeout = WorkerBuildResult.failed(
+        PrepareStatus.TIMED_OUT,
+        code="worker_timeout",
+        stage="worker_process",
+    )
+    worker = ControlledWorker(timeout)
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+
+    first_task = asyncio.create_task(runtime.prepare(request))
+    await worker.started.wait()
+    second_task = asyncio.create_task(runtime.prepare(request))
+    await asyncio.sleep(0)
+    worker.release.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert {first.status, second.status} == {PrepareStatus.TIMED_OUT}
+    assert worker.count == 1
+    assert runtime.stats_snapshot()["inflight_count"] == 0
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+    worker.result = None
+    retried = await runtime.prepare(request)
+    assert retried.status is PrepareStatus.READY
+    assert worker.count == 2
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_timeout_participates_in_exact_flight_identity():
+    worker = ControlledWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+
+    first_task = asyncio.create_task(
+        runtime.prepare(request, timeout_seconds=1.0)
+    )
+    await worker.started.wait()
+    second_task = asyncio.create_task(
+        runtime.prepare(request, timeout_seconds=2.0)
+    )
+    await asyncio.sleep(0)
+    worker.release.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert worker.count == 2
+    assert first.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert second.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert first.effective_timeout_sec == 1.0
+    assert second.effective_timeout_sec == 2.0
 
 
 @pytest.mark.anyio

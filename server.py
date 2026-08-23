@@ -2027,6 +2027,7 @@ def _source_graph_receipt_from_prepare(
         "adapter_status": "ready",
         "adapter": plan.receipt.to_dict(),
         "prepare_status": outcome.status.value,
+        "effective_timeout_sec": outcome.effective_timeout_sec,
         "cache_disposition": outcome.metrics.cache_disposition.value,
         "flight_disposition": outcome.metrics.flight_disposition.value,
         "coverage_status": (entry.coverage_status.value if entry is not None else None),
@@ -2349,6 +2350,7 @@ async def _execute_source_graph_connectivity_plan(
             adapter_wall_ms=adapter_wall_ms,
         )
         receipt["prepare_status"] = "build_failed"
+        receipt["effective_timeout_sec"] = config.timeout_sec
         receipt["build_key_sha256"] = compute_source_graph_build_key(
             plan.request
         ).digest
@@ -3441,6 +3443,9 @@ async def _route_public_signal_path(
                             adapter_wall_ms=adapter_wall_ms,
                         )
                         source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["effective_timeout_sec"] = (
+                            config.timeout_sec
+                        )
                         source_graph_receipt["build_key_sha256"] = (
                             compute_source_graph_build_key(plan.request).digest
                         )
@@ -4130,6 +4135,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                             adapter_wall_ms=adapter_wall_ms,
                         )
                         source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["effective_timeout_sec"] = (
+                            config.timeout_sec
+                        )
                         source_graph_receipt["build_key_sha256"] = (
                             attempted_artifact_fingerprints[-1]
                         )

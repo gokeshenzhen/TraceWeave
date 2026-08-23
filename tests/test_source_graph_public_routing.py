@@ -968,6 +968,7 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
     assert result.backend_status.actual_backend == "source_graph"
     assert result.backend_status.single_backend_provenance is True
     assert result.backend_status.source_graph.prepare_status == "ready"
+    assert result.backend_status.source_graph.effective_timeout_sec == 5.0
     assert result.backend_status.source_graph.query_status == "found"
     assert result.backend_status.source_graph.coverage_status == "complete"
     assert result.backend_status.source_graph.coverage_files_total == 1

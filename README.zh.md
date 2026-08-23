@@ -547,6 +547,13 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+`TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` 是有限的 worker 秒级时限（范围
+`0.001..86400`），默认值仍为 120。每次实际进入 prepare 的回执都会以
+`source_graph.effective_timeout_sec` 报告校验后的有效值。即使 compile manifest
+不完整，精确相同且时间重叠的 build 也只共享当前正在运行的 worker；该 artifact 仍不会写入
+内存或磁盘 cache，flight 结束后的后续请求会重新构建。取消一个 waiter 不会影响其他
+waiter；全部 waiter 都取消时才终止 worker。
+
 当已有可用 KDB，但需要专门验证 Source Graph 的 driver、load、path 或 X-trace
 路径时，可以显式选择：
 

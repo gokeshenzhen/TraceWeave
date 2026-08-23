@@ -15,6 +15,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -24,7 +25,6 @@ import tempfile
 import threading
 import time
 from typing import Any, Mapping, Protocol
-import uuid
 
 from .connectivity_ir import ConnectivityIR, CoverageStatus
 from .connectivity_query import ConnectivityQueryEngine
@@ -53,6 +53,8 @@ from .source_graph_disk_cache import (
 _PROCESS_COLD_BUILD_LOCK = threading.Lock()
 DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES = 8
 DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES = 512 * 1024 * 1024
+MIN_SOURCE_GRAPH_TIMEOUT_SECONDS = 0.001
+MAX_SOURCE_GRAPH_TIMEOUT_SECONDS = 86_400.0
 
 
 class PrepareStatus(str, Enum):
@@ -109,6 +111,39 @@ def _fixed_label(value: str, label: str) -> str:
 
 def _round_ms(value: float) -> float:
     return round(max(value, 0.0), 6)
+
+
+def _validated_timeout_seconds(value: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError("timeout_seconds must be a finite number")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("timeout_seconds must be a finite number") from None
+    if (
+        not math.isfinite(timeout)
+        or timeout < MIN_SOURCE_GRAPH_TIMEOUT_SECONDS
+        or timeout > MAX_SOURCE_GRAPH_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "timeout_seconds must be between 0.001 and 86400 seconds"
+        )
+    return timeout
+
+
+def _exact_flight_key(
+    build_key: SourceGraphBuildKey,
+    effective_timeout_sec: float,
+) -> str:
+    """Return an exact process-local preparation identity.
+
+    The artifact digest covers every available source/snapshot/scope input,
+    including explicit incompleteness flags.  Timeout affects worker behavior,
+    so it participates in flight identity without entering persistent cache
+    identity.
+    """
+
+    return f"{build_key.digest}:{effective_timeout_sec.hex()}"
 
 
 @dataclass(frozen=True)
@@ -342,8 +377,7 @@ class IsolatedSourceGraphProcessRunner:
         timeout_seconds: float,
         cancel_event: asyncio.Event,
     ) -> WorkerBuildResult:
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        timeout_seconds = _validated_timeout_seconds(timeout_seconds)
         if cancel_event.is_set():
             return WorkerBuildResult.failed(
                 PrepareStatus.CANCELLED,
@@ -704,12 +738,18 @@ class SourceGraphPrepareOutcome:
     build_key: SourceGraphBuildKey
     metrics: SourceGraphPrepareMetrics
     cache_lookup_reason: CacheLookupReason
+    effective_timeout_sec: float
     entry: SourceGraphCacheEntry | None = None
     blocker: InternalBuildBlocker | None = None
     scope_match: ScopeReuseDecision | None = None
     fallback_used: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "effective_timeout_sec",
+            _validated_timeout_seconds(self.effective_timeout_sec),
+        )
         if self.fallback_used:
             raise ValueError("Source Graph prepare must never use fallback")
         if self.status is PrepareStatus.READY and self.entry is None:
@@ -726,6 +766,7 @@ class SourceGraphPrepareOutcome:
             "status": self.status.value,
             "build_key": self.build_key.to_dict(),
             "cache_lookup_reason": self.cache_lookup_reason.value,
+            "effective_timeout_sec": self.effective_timeout_sec,
             "fallback_used": False,
             "metrics": self.metrics.to_dict(),
         }
@@ -760,6 +801,7 @@ class _Flight:
     build_key: SourceGraphBuildKey
     cache_disposition: CacheDisposition
     cache_lookup_reason: CacheLookupReason
+    effective_timeout_sec: float
     worker_cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[SourceGraphPrepareOutcome] | None = None
     waiter_count: int = 0
@@ -857,8 +899,7 @@ class SourceGraphRuntime:
         timeout_seconds: float = 120.0,
         cancel_event: asyncio.Event | None = None,
     ) -> SourceGraphPrepareOutcome:
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        effective_timeout_sec = _validated_timeout_seconds(timeout_seconds)
         started = time.perf_counter()
         build_key = compute_source_graph_build_key(request)
         if cancel_event is not None and cancel_event.is_set():
@@ -871,6 +912,7 @@ class SourceGraphRuntime:
                     if build_key.cross_request_reusable
                     else CacheDisposition.BYPASS_INCOMPLETE_KEY
                 ),
+                effective_timeout_sec,
             )
 
         async with self._state_lock:
@@ -880,17 +922,29 @@ class SourceGraphRuntime:
                     entry, disposition, match = cached
                     self._stats["cache_hit_count"] += 1
                     return self._cache_hit_outcome(
-                        build_key, entry, disposition, match, started
+                        build_key,
+                        entry,
+                        disposition,
+                        match,
+                        started,
+                        effective_timeout_sec,
                     )
                 cache_disposition = CacheDisposition.MISS
                 cache_lookup_reason = self._cache_miss_reason_locked(build_key)
                 self._stats["cache_miss_count"] += 1
-                flight_key = build_key.digest
             else:
                 cache_disposition = CacheDisposition.BYPASS_INCOMPLETE_KEY
                 cache_lookup_reason = CacheLookupReason.IDENTITY_NOT_REUSABLE
                 self._stats["cache_bypass_count"] += 1
-                flight_key = f"{build_key.digest}:{uuid.uuid4().hex}"
+
+            # Incomplete identities remain ineligible for memory/disk reuse,
+            # but exact overlapping requests may share only the live worker.
+            # A completed flight is removed immediately and cannot serve a
+            # later request as a cache hit.
+            flight_key = _exact_flight_key(
+                build_key,
+                effective_timeout_sec,
+            )
 
             flight = self._inflight.get(flight_key)
             if flight is not None and flight.task is not None and flight.task.done():
@@ -904,11 +958,12 @@ class SourceGraphRuntime:
                     build_key=build_key,
                     cache_disposition=cache_disposition,
                     cache_lookup_reason=cache_lookup_reason,
+                    effective_timeout_sec=effective_timeout_sec,
                     waiter_count=1,
                 )
                 self._inflight[flight_key] = flight
                 flight.task = asyncio.create_task(
-                    self._execute_flight(flight, timeout_seconds=timeout_seconds)
+                    self._execute_flight(flight)
                 )
             else:
                 flight.waiter_count += 1
@@ -989,21 +1044,15 @@ class SourceGraphRuntime:
     async def _execute_flight(
         self,
         flight: _Flight,
-        *,
-        timeout_seconds: float,
     ) -> SourceGraphPrepareOutcome:
         try:
-            return await self._execute_flight_body(
-                flight, timeout_seconds=timeout_seconds
-            )
+            return await self._execute_flight_body(flight)
         finally:
             await self._remove_flight(flight)
 
     async def _execute_flight_body(
         self,
         flight: _Flight,
-        *,
-        timeout_seconds: float,
     ) -> SourceGraphPrepareOutcome:
         request = flight.request
         key = flight.build_key
@@ -1045,7 +1094,7 @@ class SourceGraphRuntime:
             try:
                 worker = await self._worker_runner.run(
                     request,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=flight.effective_timeout_sec,
                     cancel_event=flight.worker_cancel_event,
                 )
             except Exception as exc:
@@ -1155,6 +1204,7 @@ class SourceGraphRuntime:
             status=PrepareStatus.READY,
             build_key=key,
             cache_lookup_reason=flight.cache_lookup_reason,
+            effective_timeout_sec=flight.effective_timeout_sec,
             entry=entry,
             scope_match=scope_match,
             metrics=self._prepare_metrics(
@@ -1298,6 +1348,7 @@ class SourceGraphRuntime:
             status=PrepareStatus.READY,
             build_key=flight.build_key,
             cache_lookup_reason=flight.cache_lookup_reason,
+            effective_timeout_sec=flight.effective_timeout_sec,
             entry=entry,
             scope_match=scope_match,
             metrics=self._prepare_metrics(
@@ -1544,6 +1595,7 @@ class SourceGraphRuntime:
         disposition: CacheDisposition,
         match: ScopeReuseDecision,
         started: float,
+        effective_timeout_sec: float,
     ) -> SourceGraphPrepareOutcome:
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.READY,
@@ -1553,6 +1605,7 @@ class SourceGraphRuntime:
                 if disposition is CacheDisposition.HIT_EXACT
                 else CacheLookupReason.DOMINATING_ARTIFACT
             ),
+            effective_timeout_sec=effective_timeout_sec,
             entry=entry,
             scope_match=match,
             metrics=SourceGraphPrepareMetrics(
@@ -1671,6 +1724,7 @@ class SourceGraphRuntime:
             status=worker.status,
             build_key=flight.build_key,
             cache_lookup_reason=flight.cache_lookup_reason,
+            effective_timeout_sec=flight.effective_timeout_sec,
             blocker=worker.blocker,
             metrics=self._prepare_metrics(
                 flight,
@@ -1698,6 +1752,7 @@ class SourceGraphRuntime:
             status=status,
             build_key=flight.build_key,
             cache_lookup_reason=flight.cache_lookup_reason,
+            effective_timeout_sec=flight.effective_timeout_sec,
             blocker=InternalBuildBlocker(code=code, stage=stage, message=message),
             metrics=self._prepare_metrics(
                 flight,
@@ -1721,6 +1776,7 @@ class SourceGraphRuntime:
             status=PrepareStatus.CANCELLED,
             build_key=flight.build_key,
             cache_lookup_reason=flight.cache_lookup_reason,
+            effective_timeout_sec=flight.effective_timeout_sec,
             blocker=InternalBuildBlocker(code="request_cancelled", stage="waiter"),
             metrics=SourceGraphPrepareMetrics(
                 cache_disposition=flight.cache_disposition,
@@ -1763,11 +1819,13 @@ class SourceGraphRuntime:
         build_key: SourceGraphBuildKey,
         started: float,
         disposition: CacheDisposition,
+        effective_timeout_sec: float,
     ) -> SourceGraphPrepareOutcome:
         return SourceGraphPrepareOutcome(
             status=PrepareStatus.CANCELLED,
             build_key=build_key,
             cache_lookup_reason=CacheLookupReason.CANCELLED_BEFORE_LOOKUP,
+            effective_timeout_sec=effective_timeout_sec,
             blocker=InternalBuildBlocker(code="request_cancelled", stage="admission"),
             metrics=SourceGraphPrepareMetrics(
                 cache_disposition=disposition,

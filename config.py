@@ -4,6 +4,7 @@ config.py — 集中放置环境相关路径和解析行为常量
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -406,7 +407,11 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         error_code = "source_graph_execution_config_invalid"
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}", frontend_version):
         error_code = "source_graph_execution_config_invalid"
-    if timeout_sec < 0.001 or timeout_sec > 86_400:
+    if (
+        not math.isfinite(timeout_sec)
+        or timeout_sec < 0.001
+        or timeout_sec > 86_400
+    ):
         error_code = "source_graph_execution_config_invalid"
 
     try:

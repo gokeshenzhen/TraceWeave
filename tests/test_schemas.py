@@ -259,6 +259,7 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
             "source_graph": {
                 "adapter_status": "ready",
                 "prepare_status": "ready",
+                "effective_timeout_sec": 7.5,
                 "cache_disposition": "miss",
                 "flight_disposition": "builder",
                 "coverage_status": "partial",
@@ -311,6 +312,7 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.connectivity_route == "source_graph"
     assert status.attempted_backends[0].status == "skipped"
     assert status.source_graph.query_confidence == "partial"
+    assert status.source_graph.effective_timeout_sec == 7.5
     assert status.source_graph.claim_semantics.positive_fact_confidence == "exact"
     assert status.source_graph.claim_semantics.exhaustive_search is False
     assert status.source_graph.coverage_files_total == 785
@@ -329,6 +331,18 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert "disk_validation_outcome" not in serialized
     assert "frontend_launch_count" not in serialized["metrics"]
     assert all(not key.startswith("disk_") for key in serialized["metrics"])
+
+    with pytest.raises(ValidationError):
+        BackendStatus.model_validate(
+            {
+                "simulator": "vcs",
+                "backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "effective_timeout_sec": float("inf"),
+                },
+            }
+        )
 
 
 def test_backend_status_validates_additive_exact_disk_cache_receipt():

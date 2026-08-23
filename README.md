@@ -611,6 +611,14 @@ export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
 
+`TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` is a finite worker deadline in seconds
+(`0.001..86400`); the default remains 120. Every attempted preparation reports
+the validated value as `source_graph.effective_timeout_sec`. Exact overlapping
+builds share one live worker even when the compile manifest is incomplete, but
+an incomplete artifact is still never inserted into the memory or disk cache.
+Once that flight ends, a later request builds again. Cancelling one waiter
+leaves the worker alive for the others; cancelling all waiters terminates it.
+
 When a usable KDB is present but you specifically need to exercise Source Graph
 for a driver, load, path, or X-trace test, select it explicitly:
 

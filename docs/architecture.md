@@ -156,6 +156,14 @@ Verification
   never bypasses fresh adapter content validation. A verified hit constructs
   an independent query engine; corruption is a safe miss and failed/cancelled
   builds are never published.
+  Exact overlapping preparations use a process-local flight identity over the
+  artifact digest and effective worker timeout. This also coalesces an
+  incomplete/non-cacheable identity while the worker is live, without upgrading
+  it to memory or disk reuse; the flight is removed on success, failure,
+  timeout, or final-waiter cancellation. One waiter cannot cancel a worker still
+  needed by another. The finite validated timeout remains configurable through
+  `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` and is echoed numerically as
+  `source_graph.effective_timeout_sec`.
   Adapter and graph queries use the
   lock-free cancellable worker path, so neither build nor query holds a waveform
   lock or blocks light event-loop calls. Cancellation terminates the request

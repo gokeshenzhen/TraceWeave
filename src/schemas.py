@@ -840,6 +840,11 @@ class SourceGraphBackendReceipt(SchemaModel):
         ]
         | None
     ) = None
+    effective_timeout_sec: float | None = Field(
+        default=None,
+        ge=0.001,
+        le=86_400.0,
+    )
     cache_disposition: (
         Literal[
             "hit_exact",
