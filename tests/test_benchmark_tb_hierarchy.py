@@ -38,6 +38,7 @@ def test_real_hierarchy_benchmark_reports_stable_oracle_without_paths(tmp_path):
         "simulator": "vcs",
         "compile_log_count": 1,
         "npi_source_overlay": False,
+        "hierarchy_template_sharing": True,
     }
     assert first["hierarchy_oracle"]["file_count"] == 2
     assert first["hierarchy_oracle"]["instance_count"] == 1
@@ -55,4 +56,5 @@ def test_real_hierarchy_benchmark_parser_defaults_to_no_npi_overlay():
 
     assert args.simulator == "auto"
     assert args.npi_source_overlay is False
+    assert args.hierarchy_template_sharing is True
     assert args.supplementary_compile_log == []

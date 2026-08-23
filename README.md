@@ -562,6 +562,15 @@ misses, entries, and evictions; they never expose paths, include names, macros,
 or source content. Source Graph manifest receipts expose digest reuse/read
 counts and bytes plus a conflict count under the same privacy boundary.
 
+Repeated module/UVM descendants are retained as an internal template object
+DAG while preserving the existing nested-dict hierarchy and handle-tool
+schemas. Logical stats count each instance path, but memoized summaries and the
+retained handle do not copy an identical descendant subtree for every parent.
+The metrics report logical nodes, reachable physical nodes, allocations, cache
+hits, and reused nodes. If local NPI later adds instance-specific `file:line`
+facts, the overlay uses copy-on-write only along annotated paths, so siblings
+sharing one template cannot acquire each other's provenance.
+
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted
 strings are removed with the same grammar before structural token collection;
@@ -675,6 +684,15 @@ of the measurement.
 ```bash
 python3.11 scripts/benchmark_tb_hierarchy.py \
   --compile-log /path/to/build.log --simulator vcs
+```
+
+Pass `--no-hierarchy-template-sharing` only for a real-design eager/shared A/B.
+The focused fresh-process synthetic benchmark makes repeated-subtree scaling
+and semantic equivalence directly reproducible:
+
+```bash
+python3.11 scripts/benchmark_hierarchy_materialization.py \
+  --branches 1000 --fanout 1000 --repeats 3
 ```
 
 Use the companion structural benchmark to measure the other half of the

@@ -171,7 +171,7 @@ If the task involves behavior validation or regression checks, also read:
   final-waiter cancellation stops preload. An explicit bounded bootstrap may
   join an already-active exact index but never creates a full-design preload on
   a miss. Public metrics contain numeric counters and fixed dispositions only.
-- `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction.
+- `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction. Repeated module/UVM descendants retain the compatibility nested-dict schema but share immutable children mappings as an internal object DAG. Logical stats memoize shared subtree summaries; build metrics distinguish logical nodes, reachable physical nodes, allocations, cache hits, and reuse. The optional path-specific NPI `file:line` overlay detects aliases and uses copy-on-write only on annotated paths, so provenance never bleeds between repeated instances. `scripts/benchmark_hierarchy_materialization.py` provides the fresh-process eager/shared scaling oracle; `scripts/benchmark_tb_hierarchy.py --no-hierarchy-template-sharing` is the real-design A/B control.
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
 - `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.
 - `src/signal_load.py` resolves load/fanout for a signal — the symmetric counterpart to `signal_driver`.

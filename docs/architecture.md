@@ -510,6 +510,18 @@ fixed-size record per file, not the sum of source bytes. The full result is
 registered in an in-process `HandleStore` (`src/hierarchy_handles.py`) keyed by
 the handle.
 
+Repeated module and UVM descendants use an internal template object DAG: every
+logical instance edge keeps the same compatibility dict fields, but identical
+descendant mappings in the same recursion context are retained once. Public
+stats summarize shared mappings with memoized logical counts, so a repeated
+subtree still contributes once per instance path without first allocating a
+flat node list. Handle tools remain read-only over the same nested-dict schema.
+The optional NPI `file:line` overlay detects aliases and applies path-specific
+facts with copy-on-write, cloning only mappings/nodes on annotated paths; an
+annotation can therefore never bleed into a sibling instance that shares the
+same definition template. Numeric `build_metrics` distinguish logical nodes,
+reachable physical nodes, allocations, cache hits, and reused nodes.
+
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted
 before that uncertainty boundary remain available, while later text is excluded

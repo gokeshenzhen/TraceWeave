@@ -566,6 +566,141 @@ Top Level Modules:
         finally:
             tmp.cleanup()
 
+    def test_repeated_module_descendants_share_templates_without_schema_change(
+        self,
+    ):
+        scan = scan_sv_text(
+            "/synthetic/repeated.sv",
+            """
+module leaf; endmodule
+module mid;
+  leaf u_leaf0();
+  leaf u_leaf1();
+endmodule
+module top;
+  mid u_mid0();
+  mid u_mid1();
+endmodule
+""",
+            retain_source_text=False,
+        )
+        eager_metrics = {}
+        shared_metrics = {}
+        eager = tb_hierarchy_builder.build_component_tree(
+            [scan],
+            "top",
+            share_templates=False,
+            metrics=eager_metrics,
+        )
+        shared = tb_hierarchy_builder.build_component_tree(
+            [scan],
+            "top",
+            share_templates=True,
+            metrics=shared_metrics,
+        )
+
+        assert shared == eager
+        eager_top = eager["top"]
+        shared_top = shared["top"]
+        assert eager_top["u_mid0"]["children"] is not eager_top["u_mid1"][
+            "children"
+        ]
+        assert shared_top["u_mid0"] is not shared_top["u_mid1"]
+        assert shared_top["u_mid0"]["children"] is shared_top["u_mid1"][
+            "children"
+        ]
+        assert shared_metrics["hierarchy_logical_node_count"] == 6
+        assert shared_metrics["hierarchy_physical_node_count"] == 4
+        assert shared_metrics["hierarchy_template_reused_node_count"] == 2
+        assert shared_metrics["component_template_cache_hit_count"] >= 1
+        assert eager_metrics["hierarchy_physical_node_count"] == 6
+        assert tb_hierarchy_builder.compute_stats(
+            {"component_tree": shared}
+        ) == {
+            "file_count": 0,
+            "module_count": 2,
+            "instance_count": 6,
+            "tree_depth": 3,
+            "class_count": 0,
+            "interface_count": 0,
+            "uvm_file_count": 0,
+        }
+
+    def test_template_cache_preserves_recursive_module_cutoff(self):
+        scan = scan_sv_text(
+            "/synthetic/cycle.sv",
+            """
+module a; b u_b(); endmodule
+module b; a u_a(); endmodule
+module top; a u_a(); endmodule
+""",
+            retain_source_text=False,
+        )
+
+        eager = tb_hierarchy_builder.build_component_tree(
+            [scan], "top", share_templates=False
+        )
+        shared = tb_hierarchy_builder.build_component_tree(
+            [scan], "top", share_templates=True
+        )
+
+        assert shared == eager
+        assert tb_hierarchy_builder.compute_stats(
+            {"component_tree": shared}
+        )["instance_count"] == 3
+
+    def test_npi_copy_on_write_does_not_leak_between_repeated_instances(self):
+        scan = scan_sv_text(
+            "/synthetic/repeated.sv",
+            """
+module leaf; endmodule
+module mid;
+  leaf u_leaf0();
+  leaf u_leaf1();
+endmodule
+module top;
+  mid u_mid0();
+  mid u_mid1();
+endmodule
+""",
+            retain_source_text=False,
+        )
+        tree = tb_hierarchy_builder.build_component_tree([scan], "top")
+        original_children = tree["top"]["u_mid0"]["children"]
+        assert original_children is tree["top"]["u_mid1"]["children"]
+        assert tb_hierarchy_builder._component_children_have_aliases(tree["top"])
+        stats = {"hierarchy_node_count": 0, "annotated_node_count": 0}
+        copy_stats = {"cloned_node_count": 0, "cloned_children_count": 0}
+
+        updated, annotated = (
+            tb_hierarchy_builder._overlay_npi_on_subtree_copy_on_write(
+                tree["top"],
+                "top",
+                {"top.u_mid0.u_leaf0": ("/elaborated/leaf.sv", 41)},
+                stats=stats,
+                copy_stats=copy_stats,
+            )
+        )
+        tree["top"] = updated
+
+        mid0_children = tree["top"]["u_mid0"]["children"]
+        mid1_children = tree["top"]["u_mid1"]["children"]
+        assert mid0_children is not mid1_children
+        assert mid0_children["u_leaf0"]["source_info_origin"] == "npi"
+        assert mid0_children["u_leaf0"]["source_line"] == 41
+        assert mid1_children["u_leaf0"]["source_info_origin"] == "compile_log"
+        assert mid0_children["u_leaf1"] is mid1_children["u_leaf1"]
+        assert original_children["u_leaf0"]["source_info_origin"] == "compile_log"
+        assert annotated == 1
+        assert stats == {
+            "hierarchy_node_count": 6,
+            "annotated_node_count": 1,
+        }
+        assert copy_stats == {
+            "cloned_node_count": 2,
+            "cloned_children_count": 2,
+        }
+
     def test_parameterized_multiline_instances_build_nested_hierarchy(self, tmp_path):
         source = tmp_path / "soc.sv"
         _write(
@@ -1122,6 +1257,85 @@ Top Level Modules:
             assert "private_path" not in overlay_metrics["npi_backend"]
         finally:
             tmp.cleanup()
+
+    def test_npi_annotation_uses_copy_on_write_for_repeated_modules(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        source = tmp_path / "repeated.sv"
+        _write(
+            source,
+            """
+module leaf; endmodule
+module mid;
+  leaf u_leaf0();
+  leaf u_leaf1();
+endmodule
+module top;
+  mid u_mid0();
+  mid u_mid1();
+endmodule
+""",
+        )
+        log = tmp_path / "comp.log"
+        log.write_text(
+            f"Parsing design file '{source}'\n"
+            "Top Level Modules:\n"
+            "       top\n"
+        )
+        monkeypatch.setattr(
+            "src.verdi_backend.probe_verdi_backend",
+            lambda compile_result, compile_log_path=None: {
+                "kdb_flow": "vcs_two_step",
+                "kdb_path": "/fake/kdb",
+            },
+        )
+
+        class _RepeatedNpiBackend:
+            name = "verdi_npi"
+            supports_targeted_instance_src_map = True
+
+            def collect_instance_src_map(
+                self,
+                compile_log,
+                simulator,
+                *,
+                instance_paths=None,
+            ):
+                assert instance_paths == (
+                    "top.u_mid0",
+                    "top.u_mid0.u_leaf0",
+                    "top.u_mid0.u_leaf1",
+                    "top.u_mid1",
+                    "top.u_mid1.u_leaf0",
+                    "top.u_mid1.u_leaf1",
+                )
+                return {"top.u_mid0.u_leaf0": ("/elaborated/leaf.sv", 41)}
+
+        monkeypatch.setattr(
+            "src.connectivity_backend.select_backend",
+            lambda status: _RepeatedNpiBackend(),
+        )
+
+        hierarchy = build_hierarchy(
+            parse_compile_log(str(log), "vcs"),
+            compile_log_path=str(log),
+        )
+
+        top = hierarchy["component_tree"]["top"]
+        assert top["u_mid0"]["children"]["u_leaf0"]["source_line"] == 41
+        assert top["u_mid0"]["children"]["u_leaf0"][
+            "source_info_origin"
+        ] == "npi"
+        assert top["u_mid1"]["children"]["u_leaf0"][
+            "source_info_origin"
+        ] == "compile_log"
+        metrics = hierarchy["build_metrics"]["source_overlay_metrics"]
+        assert metrics["template_alias_detected"] == 1
+        assert metrics["template_overlay_copy_on_write"] == 1
+        assert metrics["template_overlay_cloned_node_count"] == 2
+        assert metrics["template_overlay_cloned_children_count"] == 2
 
     def test_targeted_npi_overlay_skips_before_collection_at_path_cap(
         self,

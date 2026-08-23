@@ -121,6 +121,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         compile_result,
         args.compile_log,
         apply_source_overlay=args.npi_source_overlay,
+        share_hierarchy_templates=args.hierarchy_template_sharing,
     )
     build_wall_ms = (time.perf_counter() - build_started) * 1000.0
     metrics = hierarchy["build_metrics"]
@@ -141,6 +142,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "simulator": context_simulator,
             "compile_log_count": 1 + len(args.supplementary_compile_log),
             "npi_source_overlay": args.npi_source_overlay,
+            "hierarchy_template_sharing": args.hierarchy_template_sharing,
         },
         "measurement": {
             "parse_wall_ms": round(parse_wall_ms, 3),
@@ -179,6 +181,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Include the optional licensed NPI file/line overlay.",
+    )
+    parser.add_argument(
+        "--hierarchy-template-sharing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Share repeated hierarchy descendants (disable for A/B only).",
     )
     return parser
 

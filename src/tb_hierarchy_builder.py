@@ -90,6 +90,10 @@ def _source_overlay_metrics(status: str) -> dict:
         "hierarchy_node_count": 0,
         "annotated_node_count": 0,
         "annotation_coverage_ppm": 0,
+        "template_alias_detected": 0,
+        "template_overlay_copy_on_write": 0,
+        "template_overlay_cloned_node_count": 0,
+        "template_overlay_cloned_children_count": 0,
         "rss_start_kib": rss_kib,
         "rss_peak_kib": rss_kib,
         "rss_end_kib": rss_kib,
@@ -627,13 +631,23 @@ def _add_module_children(
     design_to_scan: dict,
     definition_kinds: dict[str, str],
     seen: set[str],
+    *,
+    template_cache: dict[tuple[str, frozenset[str]], dict] | None = None,
+    metrics: dict[str, int] | None = None,
 ) -> dict:
     if module_name in seen:
         return {}
+    cache_key = (module_name, frozenset(seen))
+    if template_cache is not None and cache_key in template_cache:
+        if metrics is not None:
+            metrics["component_template_cache_hit_count"] += 1
+        return template_cache[cache_key]
     seen = seen | {module_name}
     tree = {}
     result = design_to_scan.get(module_name)
     if not result:
+        if template_cache is not None:
+            template_cache[cache_key] = tree
         return tree
     # Baseline provenance comes from the compile_log file list (the parent
     # module is declared in result["path"]). B2's NPI pass may later
@@ -662,15 +676,21 @@ def _add_module_children(
             "source_line": None,
             "source_info_origin": "compile_log" if parent_path else None,
         }
+        if metrics is not None:
+            metrics["component_template_node_allocation_count"] += 1
         descendants = _add_module_children(
             child_name,
             design_to_scan,
             definition_kinds,
             seen,
+            template_cache=template_cache,
+            metrics=metrics,
         )
         if descendants:
             node["children"] = descendants
         tree[item["instance_name"]] = node
+    if template_cache is not None:
+        template_cache[cache_key] = tree
     return tree
 
 
@@ -695,13 +715,28 @@ def _pick_uvm_test_class(scan_results: list[dict]) -> str | None:
     return sorted(non_bases or candidates)[0]
 
 
-def _build_uvm_tree(class_name: str, class_to_scan: dict, seen: set[str]) -> dict:
+def _build_uvm_tree(
+    class_name: str,
+    class_to_scan: dict,
+    seen: set[str],
+    *,
+    template_cache: dict[tuple[str, frozenset[str]], dict] | None = None,
+    metrics: dict[str, int] | None = None,
+) -> dict:
     if class_name in seen:
         return {}
+    cache_key = (class_name, frozenset(seen))
+    if template_cache is not None and cache_key in template_cache:
+        if metrics is not None:
+            metrics["uvm_template_cache_hit_count"] += 1
+        return template_cache[cache_key]
     seen = seen | {class_name}
     result = class_to_scan.get(class_name)
     if not result:
-        return {}
+        tree = {}
+        if template_cache is not None:
+            template_cache[cache_key] = tree
+        return tree
 
     tree = {}
     for item in result["creates"]:
@@ -711,17 +746,63 @@ def _build_uvm_tree(class_name: str, class_to_scan: dict, seen: set[str]) -> dic
             "src": child_scan["name"] if child_scan else "",
             "role": _classify_node(item["class_name"], item["instance_name"]),
         }
-        descendants = _build_uvm_tree(item["class_name"], class_to_scan, seen)
+        if metrics is not None:
+            metrics["uvm_template_node_allocation_count"] += 1
+        descendants = _build_uvm_tree(
+            item["class_name"],
+            class_to_scan,
+            seen,
+            template_cache=template_cache,
+            metrics=metrics,
+        )
         if descendants:
             child_node["children"] = descendants
         tree[item["instance_name"]] = child_node
+    if template_cache is not None:
+        template_cache[cache_key] = tree
     return tree
 
 
-def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
+def _hierarchy_template_metrics_defaults(share_templates: bool) -> dict[str, int]:
+    return {
+        "component_template_cache_entry_count": 0,
+        "component_template_cache_hit_count": 0,
+        "component_template_node_allocation_count": 0,
+        "uvm_template_cache_entry_count": 0,
+        "uvm_template_cache_hit_count": 0,
+        "uvm_template_node_allocation_count": 0,
+        "hierarchy_template_sharing_enabled": int(share_templates),
+        "hierarchy_logical_node_count": 0,
+        "hierarchy_physical_node_count": 0,
+        "hierarchy_node_allocation_count": 0,
+        "hierarchy_template_reused_node_count": 0,
+        "hierarchy_logical_tree_depth": 0,
+    }
+
+
+def build_component_tree(
+    scan_results: list[dict],
+    top_module: str,
+    *,
+    share_templates: bool = True,
+    metrics: dict[str, int] | None = None,
+) -> dict:
+    """Build the compatibility hierarchy, optionally sharing descendants.
+
+    The public value remains the historical nested-dict shape. Internally,
+    repeated module/class instances may point at the same immutable children
+    mapping, forming an object DAG until an instance-specific writer requests
+    copy-on-write materialization.
+    """
+
     design_to_scan, definition_kinds, class_to_scan = _build_symbol_indexes(
         scan_results
     )
+
+    build_metrics = metrics if metrics is not None else {}
+    build_metrics.update(_hierarchy_template_metrics_defaults(share_templates))
+    component_template_cache = {} if share_templates else None
+    uvm_template_cache = {} if share_templates else None
 
     component_tree = {}
     top_node = _add_module_children(
@@ -729,13 +810,51 @@ def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
         design_to_scan,
         definition_kinds,
         set(),
+        template_cache=component_template_cache,
+        metrics=build_metrics,
     )
     if top_node:
         component_tree[top_module] = top_node
 
     test_class = _pick_uvm_test_class(scan_results)
     if test_class:
-        component_tree["uvm_test_top"] = _build_uvm_tree(test_class, class_to_scan, set())
+        component_tree["uvm_test_top"] = _build_uvm_tree(
+            test_class,
+            class_to_scan,
+            set(),
+            template_cache=uvm_template_cache,
+            metrics=build_metrics,
+        )
+
+    build_metrics["component_template_cache_entry_count"] = (
+        len(component_template_cache)
+        if component_template_cache is not None
+        else 0
+    )
+    build_metrics["uvm_template_cache_entry_count"] = (
+        len(uvm_template_cache) if uvm_template_cache is not None else 0
+    )
+    build_metrics["hierarchy_template_sharing_enabled"] = int(share_templates)
+    (
+        logical_node_count,
+        _,
+        logical_depth,
+        physical_node_count,
+    ) = _summarize_component_tree(
+        component_tree
+    )
+    node_allocation_count = (
+        build_metrics["component_template_node_allocation_count"]
+        + build_metrics["uvm_template_node_allocation_count"]
+    )
+    build_metrics["hierarchy_logical_node_count"] = logical_node_count
+    build_metrics["hierarchy_physical_node_count"] = physical_node_count
+    build_metrics["hierarchy_node_allocation_count"] = node_allocation_count
+    build_metrics["hierarchy_template_reused_node_count"] = max(
+        logical_node_count - physical_node_count,
+        0,
+    )
+    build_metrics["hierarchy_logical_tree_depth"] = logical_depth
 
     return component_tree
 
@@ -747,6 +866,7 @@ def build_hierarchy(
     apply_source_overlay: bool = True,
     source_index: CompileSourceIndex | None = None,
     source_index_disposition: str | None = None,
+    share_hierarchy_templates: bool = True,
 ) -> dict:
     total_started = time.perf_counter()
     rss_start_kib = read_process_rss_kib()
@@ -790,7 +910,19 @@ def build_hierarchy(
         })
 
     tree_started = time.perf_counter()
-    component_tree = build_component_tree(scan_results, top_module) if top_module else {}
+    tree_metrics = _hierarchy_template_metrics_defaults(
+        share_hierarchy_templates
+    )
+    component_tree = (
+        build_component_tree(
+            scan_results,
+            top_module,
+            share_templates=share_hierarchy_templates,
+            metrics=tree_metrics,
+        )
+        if top_module
+        else {}
+    )
     tree_wall_ms = (time.perf_counter() - tree_started) * 1000.0
 
     source_info_overlay = "compile_log"
@@ -835,6 +967,7 @@ def build_hierarchy(
         },
         "scan_wall_ms": round(scan_wall_ms, 3),
         "tree_wall_ms": round(tree_wall_ms, 3),
+        **tree_metrics,
         "source_overlay_wall_ms": round(overlay_wall_ms, 3),
         "source_overlay_metrics": source_overlay_metrics,
         "total_wall_ms": round(
@@ -1141,12 +1274,35 @@ def _npi_annotate_component_tree(
             "annotated_node_count": 0,
         }
         phase_started = time.perf_counter()
-        annotated_count = _overlay_npi_on_subtree(
-            children,
-            top_module,
-            inst_map,
-            stats=merge_stats,
-        )
+        aliases_present = _component_children_have_aliases(children)
+        metrics["template_alias_detected"] = int(aliases_present)
+        if aliases_present:
+            copy_stats = {
+                "cloned_node_count": 0,
+                "cloned_children_count": 0,
+            }
+            children, annotated_count = _overlay_npi_on_subtree_copy_on_write(
+                children,
+                top_module,
+                inst_map,
+                stats=merge_stats,
+                copy_stats=copy_stats,
+            )
+            component_tree[top_module] = children
+            metrics["template_overlay_copy_on_write"] = 1
+            metrics["template_overlay_cloned_node_count"] = copy_stats[
+                "cloned_node_count"
+            ]
+            metrics["template_overlay_cloned_children_count"] = copy_stats[
+                "cloned_children_count"
+            ]
+        else:
+            annotated_count = _overlay_npi_on_subtree(
+                children,
+                top_module,
+                inst_map,
+                stats=merge_stats,
+            )
         metrics["merge_wall_ms"] = round(
             (time.perf_counter() - phase_started) * 1000.0,
             3,
@@ -1201,6 +1357,108 @@ def _collect_component_instance_paths(
             if isinstance(child, dict)
         )
     return tuple(paths), False
+
+
+def _component_children_have_aliases(children: dict) -> bool:
+    """Return whether a hierarchy subtree contains shared mutable dicts.
+
+    ``build_component_tree`` represents repeated module/class descendants as
+    an object DAG while preserving the historical public dict shape. Readers
+    may traverse that shape normally, but an instance-specific NPI overlay
+    must use copy-on-write when the same node/template occurs at two paths.
+    """
+
+    seen_children: set[int] = set()
+    seen_nodes: set[int] = set()
+    stack = [children]
+    visited = 0
+    while stack:
+        current = stack.pop()
+        children_identity = id(current)
+        if children_identity in seen_children:
+            return True
+        seen_children.add(children_identity)
+        for node in current.values():
+            if not isinstance(node, dict):
+                continue
+            node_identity = id(node)
+            if node_identity in seen_nodes:
+                return True
+            seen_nodes.add(node_identity)
+            visited += 1
+            if visited % 1024 == 0:
+                check_cancelled()
+            sub = node.get("children")
+            if isinstance(sub, dict):
+                stack.append(sub)
+    return False
+
+
+def _overlay_npi_on_subtree_copy_on_write(
+    children: dict,
+    parent_path: str,
+    inst_map: dict,
+    *,
+    stats: dict[str, int] | None = None,
+    copy_stats: dict[str, int] | None = None,
+) -> tuple[dict, int]:
+    """Apply path-specific NPI facts without mutating shared templates.
+
+    Only a mapping and the nodes on an actually annotated path are cloned.
+    Unaffected descendants remain shared, so admitting an NPI overlay does not
+    automatically materialize the complete logical hierarchy.
+    """
+
+    annotated_count = 0
+    output = children
+    for inst_name, node in children.items():
+        if not isinstance(node, dict):
+            continue
+        if stats is not None:
+            stats["hierarchy_node_count"] += 1
+        full_path = f"{parent_path}.{inst_name}"
+        sub = node.get("children")
+        updated_sub = sub
+        if isinstance(sub, dict):
+            updated_sub, nested_count = _overlay_npi_on_subtree_copy_on_write(
+                sub,
+                full_path,
+                inst_map,
+                stats=stats,
+                copy_stats=copy_stats,
+            )
+            annotated_count += nested_count
+
+        npi_entry = inst_map.get(full_path)
+        file_val = None
+        line_val = None
+        if npi_entry is not None:
+            file_val, line_val = npi_entry
+        annotate_node = file_val is not None or line_val is not None
+        replace_node = annotate_node or updated_sub is not sub
+        if not replace_node:
+            continue
+
+        if output is children:
+            output = dict(children)
+            if copy_stats is not None:
+                copy_stats["cloned_children_count"] += 1
+        updated_node = dict(node)
+        if copy_stats is not None:
+            copy_stats["cloned_node_count"] += 1
+        if updated_sub is not sub:
+            updated_node["children"] = updated_sub
+        if annotate_node:
+            if file_val is not None:
+                updated_node["source_file"] = file_val
+            if line_val is not None:
+                updated_node["source_line"] = line_val
+            updated_node["source_info_origin"] = "npi"
+            annotated_count += 1
+            if stats is not None:
+                stats["annotated_node_count"] += 1
+        output[inst_name] = updated_node
+    return output, annotated_count
 
 
 def _overlay_npi_on_subtree(
@@ -1483,31 +1741,66 @@ def _walk_children(children: dict):
             yield from _walk_children(sub)
 
 
-def _tree_depth(component_tree: dict) -> int:
-    """Maximum depth of the component_tree. Root counts as 1."""
-    if not component_tree:
-        return 0
+def _summarize_component_tree(
+    component_tree: dict,
+) -> tuple[int, set[str], int, int]:
+    """Return logical count, classes, depth, and physical count over a DAG.
 
-    def _depth_of_children(children: dict) -> int:
-        if not children:
-            return 0
-        best = 0
+    A shared children mapping still represents a separate logical subtree at
+    every instance path. Memoizing its per-occurrence summary keeps this walk
+    proportional to the compact physical representation while preserving the
+    historical logical counts exposed by the public hierarchy tools.
+    """
+
+    if not component_tree:
+        return 0, set(), 0, 0
+
+    summary_by_children_id: dict[int, tuple[int, int]] = {}
+    classes: set[str] = set()
+    physical_node_count = 0
+
+    def _summarize_children(children: dict) -> tuple[int, int]:
+        nonlocal physical_node_count
+        cached = summary_by_children_id.get(id(children))
+        if cached is not None:
+            return cached
+        logical_count = 0
+        max_depth = 0
         for node in children.values():
             if not isinstance(node, dict):
                 continue
+            class_name = node.get("class")
+            if class_name:
+                classes.add(class_name)
+            physical_node_count += 1
+            if physical_node_count % 1024 == 0:
+                check_cancelled()
             sub = node.get("children")
-            d = 1 + (_depth_of_children(sub) if isinstance(sub, dict) else 0)
-            if d > best:
-                best = d
-        return best
+            sub_count = 0
+            sub_depth = 0
+            if isinstance(sub, dict):
+                sub_count, sub_depth = _summarize_children(sub)
+            logical_count += 1 + sub_count
+            max_depth = max(max_depth, 1 + sub_depth)
+        summary = (logical_count, max_depth)
+        summary_by_children_id[id(children)] = summary
+        return summary
 
-    overall = 0
+    instance_count = 0
+    tree_depth = 0
     for top_val in component_tree.values():
-        if isinstance(top_val, dict):
-            d = 1 + _depth_of_children(top_val)
-            if d > overall:
-                overall = d
-    return overall
+        if not isinstance(top_val, dict):
+            continue
+        child_count, child_depth = _summarize_children(top_val)
+        instance_count += child_count
+        tree_depth = max(tree_depth, 1 + child_depth)
+    return instance_count, classes, tree_depth, physical_node_count
+
+
+def _tree_depth(component_tree: dict) -> int:
+    """Maximum logical depth of the component_tree. Root counts as 1."""
+
+    return _summarize_component_tree(component_tree)[2]
 
 
 def compute_stats(full_result: dict) -> dict:
@@ -1522,11 +1815,13 @@ def compute_stats(full_result: dict) -> dict:
     file_count = len(user_files)
 
     component_tree = full_result.get("component_tree", {}) or {}
-    nodes = list(_walk_component_tree(component_tree))
-    instance_count = len(nodes)
-    module_count = len({
-        node.get("class") for _, node in nodes if node.get("class")
-    })
+    (
+        instance_count,
+        module_classes,
+        tree_depth,
+        _,
+    ) = _summarize_component_tree(component_tree)
+    module_count = len(module_classes)
 
     interfaces = full_result.get("interfaces", []) or []
     class_hierarchy = full_result.get("class_hierarchy", []) or []
@@ -1538,7 +1833,7 @@ def compute_stats(full_result: dict) -> dict:
         "file_count": file_count,
         "module_count": module_count,
         "instance_count": instance_count,
-        "tree_depth": _tree_depth(component_tree),
+        "tree_depth": tree_depth,
         "class_count": len(class_hierarchy),
         "interface_count": len(interfaces),
         "uvm_file_count": uvm_file_count,
