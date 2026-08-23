@@ -43,6 +43,10 @@ class HierarchyProviderKind(str, Enum):
     VERDI_NPI = "verdi_npi"
 
 
+class HierarchyCandidateLimitExceeded(ValueError):
+    """A signal path exceeds the bounded exact-prefix lookup budget."""
+
+
 def _fixed_label(value: str, label: str) -> str:
     if not isinstance(value, str) or not _FIXED_LABEL_RE.fullmatch(value):
         raise ValueError(f"{label} must be a fixed snake_case label")
@@ -110,7 +114,11 @@ class HierarchyInstanceBinding:
             f"{self.parent_path}."
         ):
             raise ValueError("hierarchy binding parent must be an exact path ancestor")
-        if self.source_line is not None and self.source_line < 1:
+        if self.source_line is not None and (
+            not isinstance(self.source_line, int)
+            or isinstance(self.source_line, bool)
+            or self.source_line < 1
+        ):
             raise ValueError("hierarchy binding source line must be positive")
         if self.source_origin is not None:
             _fixed_label(self.source_origin, "hierarchy source origin")
@@ -239,6 +247,56 @@ class HierarchyProvider(Protocol):
     ) -> HierarchyChildrenResult | None: ...
 
 
+@dataclass(frozen=True)
+class NpiInstanceBindingFact:
+    """Exact, target-looked-up NPI instance fact before provider binding."""
+
+    path: str
+    definition_name: str
+    source_file: str | None = None
+    source_line: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.path or not self.definition_name:
+            raise ValueError("NPI instance path and definition must not be empty")
+        if self.source_line is not None and (
+            not isinstance(self.source_line, int)
+            or isinstance(self.source_line, bool)
+            or self.source_line < 1
+        ):
+            raise ValueError("NPI instance source line must be positive")
+
+
+def hierarchy_candidate_instance_paths(
+    *,
+    top: str,
+    signal_path: str,
+    max_candidates: int,
+) -> tuple[str, ...]:
+    """Return every bounded dotted prefix that could be an instance.
+
+    Exact providers query these names individually. Generate-block path atoms
+    naturally miss while the complete generated child path can still resolve;
+    no sibling or descendant walk is needed.
+    """
+
+    if (
+        not isinstance(max_candidates, int)
+        or isinstance(max_candidates, bool)
+        or max_candidates < 1
+    ):
+        raise ValueError("max_candidates must be a positive integer")
+    parts = signal_path.split(".")
+    if not top or len(parts) < 2 or parts[0] != top:
+        return ()
+    candidate_count = len(parts) - 1
+    if candidate_count > max_candidates:
+        raise HierarchyCandidateLimitExceeded(
+            "signal hierarchy exceeds the exact-prefix candidate budget"
+        )
+    return tuple(".".join(parts[:end]) for end in range(1, len(parts)))
+
+
 def _module_gap_codes(
     hierarchy_result: Mapping[str, Any], module_name: str
 ) -> tuple[str, ...]:
@@ -358,7 +416,11 @@ class LexicalHierarchyProvider:
     ) -> HierarchyInstanceBinding:
         definition_id = definition_name
         source_line = node.get("source_line") if node is not None else None
-        if not isinstance(source_line, int) or isinstance(source_line, bool):
+        if (
+            not isinstance(source_line, int)
+            or isinstance(source_line, bool)
+            or source_line < 1
+        ):
             source_line = None
         source_file = node.get("source_file") if node is not None else None
         source_origin = node.get("source_info_origin") if node is not None else None
@@ -428,9 +490,9 @@ class LexicalHierarchyProvider:
         node, _ = self._node_at(top=top, instance_path=instance_path)
         if node is None:
             return None
-        definition_name = str(node.get("class") or node.get("module") or "")
-        if not definition_name:
-            return None
+        definition_name = str(
+            node.get("class") or node.get("module") or "unknown_definition"
+        )
         raw_gaps = node.get("hierarchy_gap_codes")
         gaps = (
             tuple(str(code) for code in raw_gaps)
@@ -480,14 +542,12 @@ class LexicalHierarchyProvider:
             path = ".".join(parts[: index + 1])
             raw_module = node.get("class") or node.get("module")
             parent_module = str(raw_module) if raw_module else None
-            if parent_module is None:
-                break
             ancestors.append(path)
             bindings.append(
                 self._binding(
                     path=path,
                     name=parts[index],
-                    definition_name=parent_module,
+                    definition_name=parent_module or "unknown_definition",
                     parent_path=ancestors[-2],
                     node=node,
                     gap_codes=node_gaps,
@@ -751,6 +811,173 @@ class ConnectivityIRHierarchyProvider:
         )
 
 
+class NpiHierarchyProvider:
+    """Partial authoritative hierarchy from bounded exact NPI lookups.
+
+    The provider never calls NPI itself and never walks a design. Its input is
+    the exact set of successful ``netlist.get_inst`` results for one target's
+    dotted prefixes. Positive ancestor bindings are authoritative; the
+    fragment always carries an incomplete-coverage gap because siblings and
+    descendants were deliberately not enumerated.
+    """
+
+    kind = HierarchyProviderKind.VERDI_NPI
+    _FRAGMENT_GAP = "npi_hierarchy_fragment_bounded"
+
+    def __init__(
+        self,
+        facts: Sequence[NpiInstanceBindingFact],
+        *,
+        top: str,
+        design_identity: str,
+    ) -> None:
+        if not top or not design_identity:
+            raise ValueError("NPI hierarchy provider requires top and identity")
+        self.top = top
+        self.design_identity = design_identity
+        fact_by_path = {
+            fact.path: fact
+            for fact in facts
+            if fact.path == top or fact.path.startswith(f"{top}.")
+        }
+        if top not in fact_by_path:
+            raise ValueError("NPI hierarchy fragment does not contain its top")
+        ordered_paths = sorted(
+            fact_by_path,
+            key=lambda path: (path.count("."), len(path), path),
+        )
+        bindings: dict[str, HierarchyInstanceBinding] = {}
+        for path in ordered_paths:
+            check_cancelled()
+            fact = fact_by_path[path]
+            if path == top:
+                parent_path = None
+            else:
+                parent_path = max(
+                    (
+                        candidate
+                        for candidate in bindings
+                        if path.startswith(f"{candidate}.")
+                    ),
+                    key=len,
+                    default=None,
+                )
+                if parent_path is None:
+                    # A partial fragment cannot turn an orphan into a proved
+                    # root-to-leaf chain.
+                    continue
+            name = path.rsplit(".", 1)[-1]
+            bindings[path] = HierarchyInstanceBinding(
+                provider_kind=self.kind,
+                instance_id=_instance_id(
+                    provider_kind=self.kind,
+                    design_identity=design_identity,
+                    path=path,
+                    definition_id=fact.definition_name,
+                ),
+                path=path,
+                name=name,
+                definition_id=fact.definition_name,
+                definition_name=fact.definition_name,
+                parent_path=parent_path,
+                source_file=fact.source_file,
+                source_line=fact.source_line,
+                source_origin="npi",
+                gap_codes=(self._FRAGMENT_GAP,),
+            )
+        self._bindings = bindings
+        children: dict[str, list[str]] = defaultdict(list)
+        for binding in bindings.values():
+            if binding.parent_path is not None:
+                children[binding.parent_path].append(binding.path)
+        self._children = {
+            parent: tuple(sorted(paths)) for parent, paths in children.items()
+        }
+
+    def lookup_instance(
+        self, *, top: str, instance_path: str
+    ) -> HierarchyInstanceBinding | None:
+        if top != self.top:
+            return None
+        return self._bindings.get(instance_path)
+
+    def _longest_instance_prefix(self, signal_path: str) -> str | None:
+        boundary = signal_path.rfind(".")
+        while boundary > 0:
+            check_cancelled()
+            candidate = signal_path[:boundary]
+            if candidate in self._bindings:
+                return candidate
+            boundary = signal_path.rfind(".", 0, boundary)
+        return None
+
+    def resolve_scope(
+        self, *, top: str, signal_path: str
+    ) -> HierarchyAncestorResolution | None:
+        if top != self.top or not signal_path.startswith(f"{top}."):
+            return None
+        leaf_path = self._longest_instance_prefix(signal_path)
+        if leaf_path is None:
+            return None
+        reverse: list[HierarchyInstanceBinding] = []
+        current: str | None = leaf_path
+        while current is not None:
+            check_cancelled()
+            binding = self._bindings.get(current)
+            if binding is None:
+                return None
+            reverse.append(binding)
+            current = binding.parent_path
+        bindings = tuple(reversed(reverse))
+        if not bindings or bindings[0].path != top:
+            return None
+        suffix = signal_path[len(leaf_path) + 1 :]
+        if not suffix:
+            return None
+        suffix_parts = suffix.split(".")
+        candidate_instance_path = None
+        stop_depth = None
+        if len(suffix_parts) > 1:
+            candidate_instance_path = f"{leaf_path}.{suffix_parts[0]}"
+            stop_depth = len(leaf_path.split("."))
+        return HierarchyAncestorResolution(
+            ancestors=tuple(binding.path for binding in bindings),
+            remaining_path_segment_count=len(suffix_parts),
+            stop_depth=stop_depth,
+            candidate_instance_path=candidate_instance_path,
+            missing_instance_proved=False,
+            gap_codes=(self._FRAGMENT_GAP,),
+            provider_kind=self.kind,
+            bindings=bindings,
+        )
+
+    def direct_children(
+        self,
+        *,
+        top: str,
+        instance_path: str,
+        max_children: int | None,
+    ) -> HierarchyChildrenResult | None:
+        if max_children is not None and (
+            not isinstance(max_children, int)
+            or isinstance(max_children, bool)
+            or max_children < 1
+        ):
+            raise ValueError("max_children must be a positive integer or None")
+        if self.lookup_instance(top=top, instance_path=instance_path) is None:
+            return None
+        paths = self._children.get(instance_path, ())
+        selected = paths if max_children is None else paths[:max_children]
+        return HierarchyChildrenResult(
+            parent_path=instance_path,
+            children=tuple(self._bindings[path] for path in selected),
+            # Exact-prefix fragments never prove that the returned rows are all
+            # direct children, even when no selected child was truncated.
+            truncated=True,
+            available_count=None,
+        )
+
+
 def lexical_hierarchy_provider(
     hierarchy_result: Mapping[str, Any],
 ) -> LexicalHierarchyProvider:
@@ -763,10 +990,14 @@ __all__ = [
     "ConnectivityIRHierarchyProvider",
     "HIERARCHY_INFORMATIONAL_GAP_CODES",
     "HierarchyAncestorResolution",
+    "HierarchyCandidateLimitExceeded",
     "HierarchyChildrenResult",
     "HierarchyInstanceBinding",
     "HierarchyProvider",
     "HierarchyProviderKind",
     "LexicalHierarchyProvider",
+    "NpiHierarchyProvider",
+    "NpiInstanceBindingFact",
+    "hierarchy_candidate_instance_paths",
     "lexical_hierarchy_provider",
 ]

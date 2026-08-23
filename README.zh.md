@@ -525,6 +525,14 @@ specialization 保留 elaborated `InstanceDecl` binding，同时不复制另一�
 重复建立 path dict。provider-local stable instance ID 受 immutable design identity 限定；公开
 hierarchy 与 Source Graph receipt schema 保持不变。
 
+在具备 license 的开发机上，可以用
+`scripts/benchmark_hierarchy_provider_soc.py` 离线比较该 Slang provider 与有界 NPI
+oracle；两侧在独立 fresh process 中运行。NPI 侧只对目标的 dotted prefix 做 exact
+`get_inst()`（默认最多 256、硬上限 1,024），不遍历 top 或 sibling；其 partial fragment
+不能支持 exhaustive negative hierarchy claim。benchmark 只输出 hash、count、timing 与 RSS，
+不输出 signal/source/instance 名。这只是 opt-in 开发工具，不会由 `build_tb_hierarchy`
+调用，也不改变生产 backend route。
+
 完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
 不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted
 string；simulator 记录的 include edge 先形成无歧义 basename index，再进入目录搜索。正向

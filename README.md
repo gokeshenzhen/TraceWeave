@@ -595,6 +595,16 @@ copying another full hierarchy or rebuilding path dictionaries. Provider-local
 stable instance IDs are scoped by the immutable design identity; the public
 hierarchy and Source Graph receipt schemas are unchanged.
 
+For offline provider validation on a licensed development host,
+`scripts/benchmark_hierarchy_provider_soc.py` compares this Slang provider with
+a bounded NPI oracle in separate fresh processes. The NPI arm performs only
+exact dotted-prefix `get_inst()` lookups (256 by default, hard-capped at 1,024),
+never a top/sibling walk, and its partial fragment cannot support exhaustive
+negative hierarchy claims. The benchmark emits hashes, counts, timings, and RSS
+rather than signal/source/instance names. It is opt-in development tooling: it
+does not run from `build_tb_hierarchy` and does not change production backend
+routing.
+
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted
 strings are removed with the same grammar before structural token collection;

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.connectivity_ir import (
     ConnectivityIR,
     CoverageGap,
@@ -12,8 +14,12 @@ from src.connectivity_ir import (
 )
 from src.hierarchy_provider import (
     ConnectivityIRHierarchyProvider,
+    HierarchyCandidateLimitExceeded,
     HierarchyProviderKind,
     LexicalHierarchyProvider,
+    NpiHierarchyProvider,
+    NpiInstanceBindingFact,
+    hierarchy_candidate_instance_paths,
 )
 
 
@@ -263,3 +269,66 @@ def test_semantic_instance_ids_are_snapshot_scoped_and_deterministic():
     assert changed_binding is not None
     assert first_binding.instance_id == same_binding.instance_id
     assert first_binding.instance_id != changed_binding.instance_id
+
+
+def test_npi_candidate_paths_admit_generated_instance_without_walking():
+    candidates = hierarchy_candidate_instance_paths(
+        top="top",
+        signal_path="top.u_dut.g_lane[3].u_leaf.value",
+        max_candidates=8,
+    )
+
+    assert candidates == (
+        "top",
+        "top.u_dut",
+        "top.u_dut.g_lane[3]",
+        "top.u_dut.g_lane[3].u_leaf",
+    )
+    with pytest.raises(HierarchyCandidateLimitExceeded):
+        hierarchy_candidate_instance_paths(
+            top="top",
+            signal_path="top.u_dut.g_lane[3].u_leaf.value",
+            max_candidates=3,
+        )
+
+
+@pytest.mark.parametrize("source_line", (0, -1, True, "12"))
+def test_npi_binding_fact_rejects_non_positive_integer_lines(source_line):
+    with pytest.raises(ValueError, match="positive"):
+        NpiInstanceBindingFact("top", "top_def", "top.sv", source_line)
+
+
+def test_npi_provider_skips_generate_pseudo_parent_and_stays_partial():
+    provider = NpiHierarchyProvider(
+        (
+            NpiInstanceBindingFact("top", "top_def", "top.sv", 1),
+            NpiInstanceBindingFact("top.u_dut", "dut", "top.sv", 5),
+            NpiInstanceBindingFact(
+                "top.u_dut.g_lane[3].u_leaf", "leaf", "dut.sv", 20
+            ),
+        ),
+        top="top",
+        design_identity="npi-snapshot",
+    )
+
+    resolution = provider.resolve_scope(
+        top="top", signal_path="top.u_dut.g_lane[3].u_leaf.value"
+    )
+
+    assert resolution is not None
+    assert resolution.provider_kind is HierarchyProviderKind.VERDI_NPI
+    assert resolution.ancestors == (
+        "top",
+        "top.u_dut",
+        "top.u_dut.g_lane[3].u_leaf",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.coverage_gap_codes == (
+        "npi_hierarchy_fragment_bounded",
+    )
+    children = provider.direct_children(
+        top="top", instance_path="top.u_dut", max_children=8
+    )
+    assert children is not None
+    assert children.paths == ("top.u_dut.g_lane[3].u_leaf",)
+    assert children.truncated is True

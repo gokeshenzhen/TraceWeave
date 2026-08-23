@@ -19,6 +19,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import ctypes
+import hashlib
 import logging
 import os
 import re
@@ -31,6 +32,12 @@ from config import NPI_ALLOW_DEGRADED_KDB
 from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
+from .hierarchy_provider import (
+    HierarchyCandidateLimitExceeded,
+    NpiHierarchyProvider,
+    NpiInstanceBindingFact,
+    hierarchy_candidate_instance_paths,
+)
 from .operation_metrics import read_process_rss_kib
 from .verdi_backend import (
     kdb_has_elaboration_errors,
@@ -277,6 +284,7 @@ class VerdiNpiBackend:
     execution_mode = "local"
     uses_external_worker = False
     supports_targeted_instance_src_map = True
+    supports_targeted_hierarchy_provider = True
 
     def __init__(self, fallback: StaticConnectivityBackend | None = None):
         self._fallback = fallback or StaticConnectivityBackend()
@@ -288,6 +296,11 @@ class VerdiNpiBackend:
         self._degraded_error_log: str | None = None
         self._last_query_kdb_status: dict[str, Any] | None = None
         self._last_instance_src_map_metrics: dict[str, Any] | None = None
+        self._last_instance_binding_map: dict[str, NpiInstanceBindingFact] = {}
+        self._last_hierarchy_provider_metrics: dict[str, Any] | None = None
+        self._hierarchy_context_cache: tuple[
+            tuple[Any, ...], dict[str, Any]
+        ] | None = None
         self._npi_modules: tuple[Any, Any] | None = None  # (npisys, netlist)
 
     # ── public API matching ConnectivityBackend ────────────────────────
@@ -536,6 +549,7 @@ class VerdiNpiBackend:
         simulator: str = "auto",
         *,
         instance_paths: tuple[str, ...] | None = None,
+        top_hint: str | None = None,
     ) -> dict[str, tuple[str | None, int | None]]:
         """Return ``full_path -> (file, line)`` from the elaborated netlist.
 
@@ -543,15 +557,18 @@ class VerdiNpiBackend:
         source info with NPI's elaborated truth.  When ``instance_paths`` is
         supplied, query only those already-proved hierarchy paths through
         ``netlist.get_inst``; the legacy recursive full walk remains available
-        to direct callers that omit it. NPI failures return an empty dict so
-        the caller can keep going without annotation; cooperative cancellation
-        still propagates.
+        to direct callers that omit it. ``top_hint`` selects an explicitly
+        requested elaborated top instead of silently reusing the compile-log
+        primary top. NPI failures return an empty dict so the caller can keep
+        going without annotation; cooperative cancellation still propagates.
         """
         started = time.perf_counter()
         rss_start_kib = read_process_rss_kib()
+        self._last_instance_binding_map = {}
         metrics: dict[str, Any] = {
             "status": "started",
             "compile_parse_wall_ms": 0.0,
+            "compile_context_cache_hit": 0,
             "kdb_probe_wall_ms": 0.0,
             "design_load_wall_ms": 0.0,
             "top_list_wall_ms": 0.0,
@@ -565,6 +582,9 @@ class VerdiNpiBackend:
             "top_instance_count": 0,
             "instance_visited_count": 0,
             "source_entry_count": 0,
+            "binding_entry_count": 0,
+            "binding_lookup_miss_count": 0,
+            "binding_path_mismatch_count": 0,
             "depth_limit_count": 0,
             "full_name_error_count": 0,
             "child_list_error_count": 0,
@@ -596,7 +616,10 @@ class VerdiNpiBackend:
 
         try:
             phase_started = time.perf_counter()
-            compile_result = parse_compile_log(compile_log, simulator)
+            compile_result, context_cache_hit = self._hierarchy_lookup_context(
+                compile_log, simulator
+            )
+            metrics["compile_context_cache_hit"] = int(context_cache_hit)
             metrics["compile_parse_wall_ms"] = round(
                 (time.perf_counter() - phase_started) * 1000.0,
                 3,
@@ -607,7 +630,7 @@ class VerdiNpiBackend:
                 (time.perf_counter() - phase_started) * 1000.0,
                 3,
             )
-            top = self._top_from(compile_result)
+            top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:
                 _finish("missing_kdb_or_top")
                 return {}
@@ -661,7 +684,32 @@ class VerdiNpiBackend:
                     except Exception:  # noqa: BLE001
                         metrics["lookup_error_count"] += 1
                         continue
+                    if inst is None:
+                        metrics["binding_lookup_miss_count"] += 1
+                        continue
+                    actual_path = _inst_full_name(inst)
+                    if actual_path != path:
+                        metrics["binding_path_mismatch_count"] += 1
+                        continue
                     file_val, line_val = _inst_src_info(inst)
+                    definition_name = _inst_definition_name(inst)
+                    if definition_name:
+                        binding_line = (
+                            line_val
+                            if isinstance(line_val, int)
+                            and not isinstance(line_val, bool)
+                            and line_val > 0
+                            else None
+                        )
+                        self._last_instance_binding_map[path] = (
+                            NpiInstanceBindingFact(
+                                path=path,
+                                definition_name=definition_name,
+                                source_file=str(file_val) if file_val else None,
+                                source_line=binding_line,
+                            )
+                        )
+                        metrics["binding_entry_count"] += 1
                     if file_val is None and line_val is None:
                         continue
                     out[path] = (file_val, line_val)
@@ -713,6 +761,169 @@ class VerdiNpiBackend:
             if self._last_instance_src_map_metrics is not None
             else None
         )
+
+    def collect_instance_binding_map(
+        self,
+        compile_log: str,
+        simulator: str = "auto",
+        *,
+        instance_paths: tuple[str, ...],
+        top_hint: str | None = None,
+    ) -> dict[str, NpiInstanceBindingFact]:
+        """Return exact target-path instance/definition facts without a walk."""
+
+        self.collect_instance_src_map(
+            compile_log,
+            simulator,
+            instance_paths=instance_paths,
+            top_hint=top_hint,
+        )
+        return dict(self._last_instance_binding_map)
+
+    def build_hierarchy_provider(
+        self,
+        compile_log: str,
+        signal_path: str,
+        simulator: str = "auto",
+        *,
+        top_hint: str | None = None,
+        max_candidate_paths: int = 256,
+    ) -> NpiHierarchyProvider | None:
+        """Build one bounded exact-prefix NPI hierarchy fragment.
+
+        This is an explicit provider operation for differential evaluation and
+        future routing. It never calls ``get_top_inst_list`` or ``inst_list``;
+        each candidate is one dotted prefix of the target signal and is queried
+        by exact ``netlist.get_inst``. Missing generate-block prefixes are safe
+        misses. The normal hierarchy build does not invoke this method.
+        """
+
+        started = time.perf_counter()
+        metrics: dict[str, Any] = {
+            "status": "started",
+            "candidate_path_limit": max_candidate_paths,
+            "candidate_path_count": 0,
+            "binding_count": 0,
+            "matched_ancestor_count": 0,
+            "total_wall_ms": 0.0,
+        }
+        self._last_hierarchy_provider_metrics = metrics
+
+        def _finish(status: str) -> None:
+            metrics["status"] = status
+            metrics["total_wall_ms"] = round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            )
+
+        if (
+            not isinstance(max_candidate_paths, int)
+            or isinstance(max_candidate_paths, bool)
+            or not 1 <= max_candidate_paths <= 1024
+        ):
+            _finish("candidate_limit_invalid")
+            return None
+        top = top_hint
+        if not top:
+            try:
+                compile_result, _ = self._hierarchy_lookup_context(
+                    compile_log, simulator
+                )
+                top = self._top_from(compile_result)
+            except Exception:  # noqa: BLE001
+                _finish("top_unresolved")
+                return None
+        if not top:
+            _finish("top_unresolved")
+            return None
+        try:
+            candidates = hierarchy_candidate_instance_paths(
+                top=top,
+                signal_path=signal_path,
+                max_candidates=max_candidate_paths,
+            )
+        except HierarchyCandidateLimitExceeded:
+            _finish("candidate_limit_exceeded")
+            return None
+        except ValueError:
+            _finish("candidate_limit_invalid")
+            return None
+        metrics["candidate_path_count"] = len(candidates)
+        if not candidates:
+            _finish("target_scope_invalid")
+            return None
+        facts = self.collect_instance_binding_map(
+            compile_log,
+            simulator,
+            instance_paths=candidates,
+            top_hint=top,
+        )
+        metrics["binding_count"] = len(facts)
+        if top not in facts:
+            _finish("top_binding_unavailable")
+            return None
+        identity = hashlib.sha256(
+            "\0".join((self._loaded_kdb or "unloaded_kdb", top)).encode()
+        ).hexdigest()
+        try:
+            provider = NpiHierarchyProvider(
+                tuple(facts.values()),
+                top=top,
+                design_identity=identity,
+            )
+        except ValueError:
+            _finish("binding_fragment_invalid")
+            return None
+        resolution = provider.resolve_scope(top=top, signal_path=signal_path)
+        if resolution is None:
+            _finish("target_scope_unresolved")
+            return None
+        metrics["matched_ancestor_count"] = len(resolution.ancestors)
+        _finish(
+            "completed"
+            if resolution.status == "resolved"
+            else "completed_deferred"
+        )
+        return provider
+
+    @property
+    def hierarchy_provider_metrics(self) -> dict[str, Any] | None:
+        return (
+            dict(self._last_hierarchy_provider_metrics)
+            if self._last_hierarchy_provider_metrics is not None
+            else None
+        )
+
+    def _hierarchy_lookup_context(
+        self, compile_log: str, simulator: str
+    ) -> tuple[dict[str, Any], bool]:
+        """Reuse one stat-anchored compile parse for targeted hierarchy reads."""
+
+        check_cancelled()
+        try:
+            path = os.path.realpath(compile_log)
+            stat_result = os.stat(path)
+            key: tuple[Any, ...] | None = (
+                path,
+                simulator,
+                stat_result.st_dev,
+                stat_result.st_ino,
+                stat_result.st_size,
+                stat_result.st_mtime_ns,
+                stat_result.st_ctime_ns,
+            )
+        except OSError:
+            key = None
+        if (
+            key is not None
+            and self._hierarchy_context_cache is not None
+            and self._hierarchy_context_cache[0] == key
+        ):
+            return self._hierarchy_context_cache[1], True
+        compile_result = parse_compile_log(compile_log, simulator)
+        if key is not None:
+            self._hierarchy_context_cache = (key, compile_result)
+        return compile_result, False
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -1747,6 +1958,28 @@ def _scope_inst_of(hdl: Any) -> Any:
         return hdl.scope_inst()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _inst_full_name(inst_hdl: Any) -> str | None:
+    if inst_hdl is None or not hasattr(inst_hdl, "full_name"):
+        return None
+    try:
+        value = inst_hdl.full_name()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(value) if value else None
+
+
+def _inst_definition_name(inst_hdl: Any) -> str | None:
+    """Read an instance's elaborated definition name without guessing."""
+
+    if inst_hdl is None or not hasattr(inst_hdl, "def_name"):
+        return None
+    try:
+        value = inst_hdl.def_name()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(value) if value else None
 
 
 def _inst_src_info(inst_hdl: Any) -> tuple[str | None, int | None]:

@@ -452,9 +452,11 @@ Verification
   diagnostics. NPI's `find_path` wraps `sig_to_sig_conn_list` and remains the
   highest-priority implementation for the `trace_signal_path` MCP tool; the
   bounded Source Graph is its production fallback. Another NPI-only capability,
-  `collect_instance_src_map` walks `netlist.get_top_inst_list()` recursively
-  to overlay elaborated `file:line` onto compile-log-derived hierarchy
-  nodes; `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
+  `collect_instance_src_map`, overlays elaborated `file:line` onto
+  compile-log-derived hierarchy nodes. Production overlay calls use exact
+  `netlist.get_inst()` lookups over already proved paths; the recursive
+  `get_top_inst_list()` walk remains only as a legacy explicit-call mode.
+  `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
   `source_info_origin` field (`"compile_log"` vs `"npi"`) so consumers can
   tell which provenance produced each `file:line`.
   `load_design == 1` establishes a clean load. `load_design == 0` is accepted
@@ -533,6 +535,20 @@ instance/definition indexes. Its parent links preserve generate-scope path
 atoms and specialization IDs without materializing a second full tree. Stable
 instance IDs are local to one immutable design identity; public hierarchy and
 Source Graph receipt schemas remain unchanged.
+
+The local NPI backend also exposes an explicit, target-bounded semantic
+provider for offline differential evaluation. Before loading a KDB it derives
+at most 256 dotted target prefixes (hard maximum 1,024), then calls only exact
+`netlist.get_inst()` and direct `def_name()`/source accessors. Missing generate
+pseudo-prefixes are safe misses; a later full generated instance path can still
+form a proved ancestor binding. The fragment never enumerates siblings, marks
+direct-child coverage as truncated, and carries
+`npi_hierarchy_fragment_bounded`, so it cannot establish an exhaustive negative
+hierarchy claim. It is not invoked by the ordinary hierarchy build and does not
+change NPI/Source Graph/Static routing. The opt-in
+`scripts/benchmark_hierarchy_provider_soc.py` runs NPI and Slang in fresh
+processes and compares only identity-hashed binding facts plus numeric resource
+measurements.
 
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted

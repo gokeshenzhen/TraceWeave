@@ -1027,16 +1027,27 @@ class _MockInst:
 
 
 class _MockHierarchyInst(_MockInst):
-    def __init__(self, name, *, children=(), **kwargs):
+    def __init__(
+        self,
+        name,
+        *,
+        children=(),
+        definition_name="mock_module",
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._name = name
         self._children = list(children)
+        self._definition_name = definition_name
 
     def full_name(self):
         return self._name
 
     def inst_list(self):
         return list(self._children)
+
+    def def_name(self):
+        return self._definition_name
 
 
 def test_inst_src_info_returns_none_for_none():
@@ -1098,6 +1109,7 @@ def test_collect_instance_src_map_reports_phase_and_walk_metrics(
     assert metrics["instance_visited_count"] == 2
     assert metrics["source_entry_count"] == 2
     assert metrics["design_load_cache_hit"] == 0
+    assert metrics["compile_context_cache_hit"] == 0
     assert metrics["compile_parse_wall_ms"] >= 0
     assert metrics["kdb_probe_wall_ms"] >= 0
     assert metrics["design_load_wall_ms"] >= 0
@@ -1109,6 +1121,7 @@ def test_collect_instance_src_map_reports_phase_and_walk_metrics(
     warm_metrics = backend.instance_src_map_metrics
     assert warm_metrics is not None
     assert warm_metrics["design_load_cache_hit"] == 1
+    assert warm_metrics["compile_context_cache_hit"] == 1
     assert len(npisys.load_calls) == 1
 
 
@@ -1170,6 +1183,37 @@ def test_collect_instance_src_map_queries_only_requested_instance_paths(
     assert metrics["instance_lookup_wall_ms"] >= 0
 
 
+def test_targeted_hierarchy_compile_context_cache_invalidates_on_log_change(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    top = _MockHierarchyInst("top_tb", definition_name="tb")
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, inst_map={"top_tb": top}),
+    )
+
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    first = backend.instance_src_map_metrics
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    warm = backend.instance_src_map_metrics
+    with open(log, "a", encoding="utf-8") as stream:
+        stream.write("\n")
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    changed = backend.instance_src_map_metrics
+
+    assert first is not None and first["compile_context_cache_hit"] == 0
+    assert warm is not None and warm["compile_context_cache_hit"] == 1
+    assert changed is not None and changed["compile_context_cache_hit"] == 0
+
+
 def test_targeted_instance_src_map_never_falls_back_to_full_walk(
     monkeypatch,
     tmp_path,
@@ -1196,6 +1240,122 @@ def test_targeted_instance_src_map_never_falls_back_to_full_walk(
     assert metrics["lookup_mode"] == "target_paths_unavailable"
     assert metrics["instance_visited_count"] == 0
     assert metrics["instance_walk_wall_ms"] == 0.0
+
+
+def test_targeted_npi_hierarchy_provider_resolves_generate_path(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    top = _MockHierarchyInst("top_tb", definition_name="tb")
+    dut = _MockHierarchyInst("top_tb.u_dut", definition_name="dut")
+    leaf = _MockHierarchyInst(
+        "top_tb.u_dut.g_lane[3].u_leaf",
+        definition_name="leaf",
+        file_val="/project/leaf.sv",
+        line_val=41,
+    )
+    netlist_obj = _MockNetlist(
+        {},
+        top_exc=AssertionError("targeted provider must not walk top instances"),
+        inst_map={
+            "top_tb": top,
+            "top_tb.u_dut": dut,
+            "top_tb.u_dut.g_lane[3].u_leaf": leaf,
+        },
+    )
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "top_tb.u_dut.g_lane[3].u_leaf.value",
+        "vcs",
+        top_hint="top_tb",
+    )
+
+    assert provider is not None
+    resolution = provider.resolve_scope(
+        top="top_tb",
+        signal_path="top_tb.u_dut.g_lane[3].u_leaf.value",
+    )
+    assert resolution is not None
+    assert resolution.ancestors == (
+        "top_tb",
+        "top_tb.u_dut",
+        "top_tb.u_dut.g_lane[3].u_leaf",
+    )
+    assert resolution.bindings[-1].definition_name == "leaf"
+    assert resolution.bindings[-1].source_line == 41
+    assert netlist_obj.get_inst_calls == [
+        "top_tb",
+        "top_tb.u_dut",
+        "top_tb.u_dut.g_lane[3]",
+        "top_tb.u_dut.g_lane[3].u_leaf",
+    ]
+    assert len(npisys.load_calls) == 1
+    metrics = backend.hierarchy_provider_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["candidate_path_count"] == 4
+    assert metrics["binding_count"] == 3
+    assert metrics["matched_ancestor_count"] == 3
+    lookup_metrics = backend.instance_src_map_metrics
+    assert lookup_metrics is not None
+    assert lookup_metrics["binding_entry_count"] == 3
+    assert lookup_metrics["binding_lookup_miss_count"] == 1
+    assert lookup_metrics["top_instance_count"] == 0
+
+
+def test_targeted_npi_hierarchy_provider_rejects_depth_before_loading(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    netlist_obj = _MockNetlist({})
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "top_tb.a.b.c.value",
+        "vcs",
+        top_hint="top_tb",
+        max_candidate_paths=2,
+    )
+
+    assert provider is None
+    assert npisys.load_calls == []
+    assert netlist_obj.get_inst_calls == []
+    metrics = backend.hierarchy_provider_metrics
+    assert metrics is not None
+    assert metrics["status"] == "candidate_limit_exceeded"
+
+
+def test_targeted_npi_hierarchy_provider_honors_non_primary_top_hint(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path, top="primary_top")
+    alternate = _MockHierarchyInst("alternate_top", definition_name="alternate")
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, inst_map={"alternate_top": alternate}),
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "alternate_top.value",
+        "vcs",
+        top_hint="alternate_top",
+    )
+
+    assert provider is not None
+    assert npisys.load_calls[0][-2:] == ["-top", "alternate_top"]
 
 
 class _PinWithInst:
