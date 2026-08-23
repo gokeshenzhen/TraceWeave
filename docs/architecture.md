@@ -529,10 +529,28 @@ because the missing header could have changed macro state. An
 `include_evidence_mismatch` is a scoped coverage exclusion and does not erase
 otherwise positive local facts. `build_metrics` reports the fixed-label
 `include_resolution_issue_categories` and `include_context_complete`; individual
-scan records report `hierarchy_evidence_status`. The `component_tree` is the
-stronger proof boundary: a lexical instance candidate is admitted only when its
-type has a scanned module or interface definition. Raw candidates remain in the
-scan metadata for diagnostics.
+scan records report `hierarchy_evidence_status`. Instance candidates additionally
+carry `hierarchy_edge_origin`, `hierarchy_edge_status`, and fixed
+`hierarchy_gap_codes`. The `component_tree` is the stronger proof boundary: only
+`complete` or `positive_local` edges whose type has scanned module/interface
+evidence are admitted. Explicit and implicit generate controls, instance arrays,
+and bind statements remain diagnostic candidates with independent gaps instead
+of being flattened into fictitious instance paths. A parameter override keeps
+the direct edge, but records that the compatibility tree did not materialize a
+specialization. A duplicate module/interface definition admits only the parent
+edge as `hierarchy_definition_status="ambiguous"`, with no guessed source or
+descendants. Raw candidates remain in compact scan metadata for diagnostics.
+
+Source Graph accumulates the gaps on each requested ancestor chain into its
+adapter receipt and coverage boundary. Query-affecting gaps become objective
+exclusions, so they cannot support an exhaustive negative result. Parameter
+specialization is informational at that boundary because the isolated Slang
+frontend performs the actual specialization; generate/array/bind/include/macro
+and duplicate-definition gaps remain exclusions. Bounded bootstrap applies the
+same positive-only edge rule and returns
+`bootstrap_hierarchy_edge_unproved` instead of rebuilding a guessed chain.
+Numeric build metrics expose candidate, unresolved-edge, duplicate-symbol, and
+gap-code counts without source paths or source text.
 
 The preprocessor retains bounded physical-work indexes inside one hierarchy
 build. Its raw/masked source cache remains byte-bounded; positive include
@@ -635,7 +653,10 @@ standalone object-like or function-like macro whose replacement is proved to be
 exactly one HDL instance (maximum 4096 expansions and 16 KiB per retained macro
 body). It never expands `uvm_*` / `m_uvm_*` macros; a compound instance macro or
 an exceeded bound makes bootstrap coverage unproved rather than fabricating a
-tree. It never replays the simulator's full UVM library; a `uvm_pkg` import
+tree. Generate-controlled, arrayed, or bound lexical candidates likewise cannot
+be promoted into a proved ancestor; a direct match returns the fixed
+`bootstrap_hierarchy_edge_unproved` blocker and its privacy-safe hierarchy gap.
+It never replays the simulator's full UVM library; a `uvm_pkg` import
 adds the existing `uvm_dynamic_connectivity` exclusion and lets only unrelated
 IR-proved local positives survive. Bootstrap compile replay retains defines and
 include options but removes broad `-v`/`-y` library search options, recording

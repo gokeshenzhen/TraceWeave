@@ -325,6 +325,10 @@ class TestBuildHierarchy:
         tree = hierarchy["component_tree"]["tb_top"]
         assert set(tree) == {"u_dut", "bus"}
         assert tree["u_dut"]["class"] == "dut"
+        assert tree["u_dut"]["hierarchy_edge_status"] == "positive_local"
+        assert tree["u_dut"]["hierarchy_gap_codes"] == [
+            "hierarchy_include_path_unresolved"
+        ]
         assert tree["bus"]["type"] == "interface"
         assert "u_fpga_stub" not in tree
         assert "u_false_positive" not in tree
@@ -701,7 +705,9 @@ endmodule
             "cloned_children_count": 2,
         }
 
-    def test_parameterized_multiline_instances_build_nested_hierarchy(self, tmp_path):
+    def test_parameterized_instance_array_is_not_flattened_into_false_path(
+        self, tmp_path
+    ):
         source = tmp_path / "soc.sv"
         _write(
             source,
@@ -754,8 +760,22 @@ endmodule
         assert hierarchy["project"]["top_module"] == "tb"
         dut = hierarchy["component_tree"]["tb"]["dut"]
         assert dut["class"] == "soc"
-        assert dut["children"]["u_core"]["class"] == "rv_core"
-        assert "case" not in dut["children"]
+        assert "children" not in dut
+        assert set(dut["hierarchy_gap_codes"]) == {
+            "hierarchy_instance_array_unexpanded",
+            "hierarchy_parameter_specialization_unmodeled",
+        }
+        soc_scan = next(
+            item
+            for item in hierarchy["_scan_results"]
+            if "soc" in item["modules"]
+        )
+        u_core = soc_scan["module_instance_map"]["soc"][0]
+        assert u_core["hierarchy_edge_status"] == "unresolved_semantic"
+        assert set(u_core["hierarchy_gap_codes"]) == {
+            "hierarchy_instance_array_unexpanded",
+            "hierarchy_parameter_specialization_unmodeled",
+        }
 
     def test_common_soc_instance_forms_and_declaration_false_positives(self, tmp_path):
         source = tmp_path / "soc_top.sv"
@@ -806,6 +826,211 @@ endmodule
             {"module_name": "fabric_if", "instance_name": "fabric"},
             {"module_name": "leaf", "instance_name": "u_leaf0"},
             {"module_name": "leaf", "instance_name": "u_leaf1"},
+        ]
+
+    def test_generate_candidates_remain_diagnostic_not_proved_edges(
+        self,
+        tmp_path,
+    ):
+        source = tmp_path / "generate_top.sv"
+        _write(
+            source,
+            """
+module leaf; endmodule
+module parent #(parameter bit ENABLE = 1);
+  generate
+    if (ENABLE) begin : gen_on
+      leaf u_on();
+    end else begin : gen_off
+      leaf u_off();
+    end
+  endgenerate
+  if (ENABLE) begin : implicit_on
+    leaf u_implicit_on();
+  end
+  for (genvar i = 0; i < 2; i++) begin : implicit_loop
+    leaf u_implicit_loop();
+  end
+  if (!ENABLE) leaf u_implicit_single();
+  case (ENABLE)
+    1'b1: leaf u_case_on();
+    default: leaf u_case_off();
+  endcase
+  leaf u_array [4]();
+  leaf u_direct_after();
+endmodule
+module top;
+  parent #(.ENABLE(1)) u_parent_on();
+  parent #(.ENABLE(0)) u_parent_off();
+endmodule
+""",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "rtl", "type": "module"}
+                ]
+            },
+            "primary_top": "top",
+            "top_modules": ["top"],
+            "interfaces": [],
+            "simulator": "vcs",
+            "compile_command": f"vcs -sverilog {source} -top top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        top = hierarchy["component_tree"]["top"]
+        assert set(top) == {"u_parent_on", "u_parent_off"}
+        assert all(
+            set(node["children"]) == {"u_direct_after"}
+            for node in top.values()
+        )
+        assert all(
+            node["children"]["u_direct_after"]["hierarchy_edge_status"]
+            == "complete"
+            for node in top.values()
+        )
+        expected_gaps = {
+            "hierarchy_generate_scope_unmodeled",
+            "hierarchy_instance_array_unexpanded",
+            "hierarchy_parameter_specialization_unmodeled",
+        }
+        assert all(
+            set(node["hierarchy_gap_codes"]) == expected_gaps
+            for node in top.values()
+        )
+        scan = hierarchy["_scan_results"][0]
+        parent_candidates = scan["module_instance_map"]["parent"]
+        assert {item["instance_name"] for item in parent_candidates} == {
+            "u_on",
+            "u_off",
+            "u_implicit_on",
+            "u_implicit_loop",
+            "u_implicit_single",
+            "u_case_on",
+            "u_case_off",
+            "u_array",
+            "u_direct_after",
+        }
+        unresolved = [
+            item
+            for item in parent_candidates
+            if item["instance_name"] != "u_direct_after"
+        ]
+        assert all(
+            item["hierarchy_edge_status"] == "unresolved_semantic"
+            for item in unresolved
+        )
+        direct = next(
+            item
+            for item in parent_candidates
+            if item["instance_name"] == "u_direct_after"
+        )
+        assert direct["hierarchy_edge_status"] == "complete"
+        assert direct["hierarchy_gap_codes"] == []
+        metrics = hierarchy["build_metrics"]
+        assert metrics["hierarchy_edge_candidate_count"] == 11
+        assert metrics["hierarchy_edge_unresolved_count"] == 8
+        assert set(metrics["hierarchy_gap_codes"]) == expected_gaps
+
+    def test_duplicate_child_definition_is_admitted_without_guessed_descendants(
+        self,
+        tmp_path,
+    ):
+        top = tmp_path / "top.sv"
+        duplicate_a = tmp_path / "dup_a.sv"
+        duplicate_b = tmp_path / "dup_b.sv"
+        _write(top, "module top; dup u_dup(); endmodule\n")
+        _write(
+            duplicate_a,
+            "module leaf_a; endmodule\n"
+            "module dup; leaf_a u_leaf_a(); endmodule\n",
+        )
+        _write(
+            duplicate_b,
+            "module leaf_b; endmodule\n"
+            "module dup; leaf_b u_leaf_b(); endmodule\n",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(path), "category": "rtl", "type": "module"}
+                    for path in (top, duplicate_a, duplicate_b)
+                ]
+            },
+            "primary_top": "top",
+            "top_modules": ["top"],
+            "interfaces": [],
+            "simulator": "vcs",
+            "compile_command": (
+                f"vcs -sverilog {top} {duplicate_a} {duplicate_b} -top top"
+            ),
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        node = hierarchy["component_tree"]["top"]["u_dup"]
+        assert node["class"] == "dup"
+        assert node["src"] == ""
+        assert node["hierarchy_definition_status"] == "ambiguous"
+        assert node["hierarchy_gap_codes"] == [
+            "hierarchy_definition_ambiguous"
+        ]
+        assert "children" not in node
+        metrics = hierarchy["build_metrics"]
+        assert metrics["hierarchy_duplicate_definition_symbol_count"] == 1
+        assert "hierarchy_definition_ambiguous" in metrics[
+            "hierarchy_gap_codes"
+        ]
+
+    def test_bind_instance_is_not_attached_to_lexical_parent(self, tmp_path):
+        source = tmp_path / "bind_top.sv"
+        _write(
+            source,
+            """
+module target; endmodule
+interface bound_if; endinterface
+module top;
+  target dut();
+  bind dut bound_if bound();
+endmodule
+""",
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(source), "category": "rtl", "type": "module"}
+                ]
+            },
+            "primary_top": "top",
+            "top_modules": ["top"],
+            "interfaces": ["bound_if"],
+            "simulator": "vcs",
+            "compile_command": f"vcs -sverilog {source} -top top",
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+        assert set(hierarchy["component_tree"]["top"]) == {"dut"}
+        scan = hierarchy["_scan_results"][0]
+        bound = next(
+            item
+            for item in scan["module_instance_map"]["top"]
+            if item["instance_name"] == "bound"
+        )
+        assert bound["hierarchy_edge_status"] == "unresolved_semantic"
+        assert bound["hierarchy_gap_codes"] == [
+            "hierarchy_bind_scope_unmodeled"
+        ]
+        metrics = hierarchy["build_metrics"]
+        assert metrics["hierarchy_edge_candidate_count"] == 2
+        assert metrics["hierarchy_edge_unresolved_count"] == 1
+        assert "hierarchy_bind_scope_unmodeled" in metrics[
+            "hierarchy_gap_codes"
         ]
 
     @pytest.mark.parametrize(
@@ -1124,6 +1349,10 @@ endmodule
             hierarchy["build_metrics"]["include_resolution_issue_count"]
             == expected_issue_count
         )
+        if expected_issue_count:
+            assert "hierarchy_macro_compound_unsupported" in hierarchy[
+                "build_metrics"
+            ]["hierarchy_gap_codes"]
 
 
 # ---------------------------------------------------------------------------

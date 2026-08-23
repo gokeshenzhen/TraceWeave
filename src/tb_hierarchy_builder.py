@@ -157,6 +157,34 @@ _MODULE_INSTANCE_PRECEDING_EXCLUDES = {
 }
 _HIERARCHY_RSS_SAMPLE_STRIDE = 32
 _INTERFACE_REFERENCE_PATTERN_MAX_NAMES = 256
+_PROVED_HIERARCHY_EDGE_STATUSES = frozenset({"complete", "positive_local"})
+_HIERARCHY_PREPROCESSOR_GAP_CODES = {
+    "compile_options_incomplete": "hierarchy_compile_options_incomplete",
+    "conditional_unbalanced": "hierarchy_conditional_unbalanced",
+    "include_cycle": "hierarchy_include_cycle",
+    "include_depth_exceeded": "hierarchy_include_depth_exceeded",
+    "include_evidence_mismatch": "hierarchy_include_evidence_mismatch",
+    "include_expression_unresolved": "hierarchy_include_expression_unresolved",
+    "include_path_unresolved": "hierarchy_include_path_unresolved",
+    "include_unreadable": "hierarchy_include_unreadable",
+    "macro_continuation_unterminated": (
+        "hierarchy_macro_continuation_unterminated"
+    ),
+    "hierarchy_macro_compound_unsupported": (
+        "hierarchy_macro_compound_unsupported"
+    ),
+    "hierarchy_macro_expansion_limit_exceeded": (
+        "hierarchy_macro_expansion_limit_exceeded"
+    ),
+}
+
+
+def hierarchy_edge_is_proved(item: dict) -> bool:
+    """Return whether a lexical hierarchy candidate is safe to materialize."""
+
+    return str(
+        item.get("hierarchy_edge_status") or "complete"
+    ) in _PROVED_HIERARCHY_EDGE_STATUSES
 
 
 def _classify_node(module_name: str, instance_name: str) -> str:
@@ -250,7 +278,9 @@ def _parse_instance_statement(
         return None
 
     cursor = index + 1
+    parameterized = False
     if cursor < len(tokens) and tokens[cursor] == "#":
+        parameterized = True
         cursor = _skip_balanced(tokens, cursor + 1, "(", ")") or -1
         if cursor < 0:
             return None
@@ -264,7 +294,9 @@ def _parse_instance_statement(
         ):
             return None
         cursor += 1
+        instance_array = False
         while cursor < len(tokens) and tokens[cursor] == "[":
+            instance_array = True
             cursor = _skip_balanced(tokens, cursor, "[", "]") or -1
             if cursor < 0:
                 return None
@@ -272,7 +304,12 @@ def _parse_instance_statement(
         if port_end is None:
             return None
         instances.append(
-            {"module_name": module_name, "instance_name": instance_name}
+            {
+                "module_name": module_name,
+                "instance_name": instance_name,
+                "_parameterized_instance": parameterized,
+                "_instance_array": instance_array,
+            }
         )
         cursor = port_end
         if cursor < len(tokens) and tokens[cursor] == ",":
@@ -284,18 +321,124 @@ def _parse_instance_statement(
     return None
 
 
-def _extract_module_instances(text: str) -> tuple[list[dict], dict[str, list[dict]]]:
+def _extract_module_instances(
+    text: str,
+    *,
+    annotate_hierarchy_evidence: bool = False,
+) -> tuple[list[dict], dict[str, list[dict]]]:
     instances: list[dict] = []
     by_module: dict[str, list[dict]] = {}
     for module_name, body in _module_bodies(_sv_tokens(text)):
         module_instances: list[dict] = []
         index = 0
+        explicit_generate_depth = 0
+        implicit_control_pending = False
+        implicit_case_depth = 0
+        implicit_block_stack: list[bool] = []
+        implicit_generate_block_depth = 0
+        bind_statement_pending = False
         while index < len(body):
+            keyword = body[index].lower()
+            if keyword == "generate":
+                explicit_generate_depth += 1
+                index += 1
+                continue
+            if keyword == "endgenerate":
+                explicit_generate_depth = max(explicit_generate_depth - 1, 0)
+                index += 1
+                continue
+            if annotate_hierarchy_evidence:
+                if keyword == "bind":
+                    bind_statement_pending = True
+                    index += 1
+                    continue
+                if keyword in {"if", "for"}:
+                    condition_end = _skip_balanced(body, index + 1, "(", ")")
+                    implicit_control_pending = True
+                    index = condition_end if condition_end is not None else index + 1
+                    continue
+                if keyword in {"case", "casez", "casex"}:
+                    condition_end = _skip_balanced(body, index + 1, "(", ")")
+                    implicit_case_depth += 1
+                    implicit_control_pending = False
+                    index = condition_end if condition_end is not None else index + 1
+                    continue
+                if keyword == "endcase":
+                    implicit_case_depth = max(implicit_case_depth - 1, 0)
+                    index += 1
+                    continue
+                if keyword == "else":
+                    implicit_control_pending = True
+                    index += 1
+                    continue
+                if keyword == "begin":
+                    generated = bool(
+                        implicit_control_pending
+                        or implicit_case_depth
+                        or implicit_generate_block_depth
+                    )
+                    implicit_block_stack.append(generated)
+                    if generated:
+                        implicit_generate_block_depth += 1
+                    implicit_control_pending = False
+                    index += 1
+                    continue
+                if keyword == "end":
+                    if implicit_block_stack:
+                        generated = implicit_block_stack.pop()
+                        if generated:
+                            implicit_generate_block_depth = max(
+                                implicit_generate_block_depth - 1,
+                                0,
+                            )
+                    index += 1
+                    continue
+                if body[index] == ";":
+                    implicit_control_pending = False
+                    bind_statement_pending = False
+                    index += 1
+                    continue
             parsed = _parse_instance_statement(body, index)
             if parsed is None:
                 index += 1
                 continue
+            implicit_generate_context = bool(
+                implicit_control_pending
+                or implicit_case_depth
+                or implicit_generate_block_depth
+            )
             found, index = parsed
+            for item in found:
+                parameterized = bool(item.pop("_parameterized_instance", False))
+                instance_array = bool(item.pop("_instance_array", False))
+                if not annotate_hierarchy_evidence:
+                    continue
+                gap_codes: list[str] = []
+                if parameterized:
+                    gap_codes.append(
+                        "hierarchy_parameter_specialization_unmodeled"
+                    )
+                if explicit_generate_depth or implicit_generate_context:
+                    gap_codes.append("hierarchy_generate_scope_unmodeled")
+                if bind_statement_pending:
+                    gap_codes.append("hierarchy_bind_scope_unmodeled")
+                if instance_array:
+                    gap_codes.append("hierarchy_instance_array_unexpanded")
+                item["hierarchy_edge_status"] = (
+                    "unresolved_semantic"
+                    if (
+                        explicit_generate_depth
+                        or implicit_generate_context
+                        or bind_statement_pending
+                        or instance_array
+                    )
+                    else "complete"
+                )
+                item["hierarchy_gap_codes"] = gap_codes
+            if implicit_control_pending:
+                implicit_control_pending = False
+            if bind_statement_pending:
+                bind_statement_pending = False
             instances.extend(found)
             module_instances.extend(found)
         by_module.setdefault(module_name, []).extend(module_instances)
@@ -308,6 +451,7 @@ def scan_sv_text(
     *,
     retain_source_text: bool = True,
     scan_module_instances: bool = True,
+    annotate_hierarchy_evidence: bool = False,
 ) -> dict:
     """Extract hierarchy metadata from already-loaded SystemVerilog text.
 
@@ -351,7 +495,10 @@ def scan_sv_text(
     ] if "::type_id::create" in lower_text else []
 
     if scan_module_instances and has_module:
-        module_instances, module_instance_map = _extract_module_instances(text)
+        module_instances, module_instance_map = _extract_module_instances(
+            text,
+            annotate_hierarchy_evidence=annotate_hierarchy_evidence,
+        )
     else:
         module_instances, module_instance_map = [], {}
 
@@ -468,6 +615,73 @@ def scan_sv_file(file_path: str, *, retain_source_text: bool = True) -> dict:
     )
 
 
+def _hierarchy_preprocessor_gap_codes(issues: tuple[str, ...]) -> set[str]:
+    return {
+        _HIERARCHY_PREPROCESSOR_GAP_CODES.get(
+            issue,
+            "hierarchy_preprocessor_incomplete",
+        )
+        for issue in issues
+    }
+
+
+def _annotate_preprocessed_hierarchy_evidence(
+    result: dict,
+    source: PreprocessedSource,
+    *,
+    used_preprocessed_view: bool,
+) -> None:
+    context_gap_codes = _hierarchy_preprocessor_gap_codes(source.issues)
+    all_gap_codes = set(context_gap_codes)
+    module_gap_map: dict[str, list[str]] = {}
+    origin = (
+        "preprocessed_positive_local"
+        if not source.complete
+        else ("preprocessed_lexical" if used_preprocessed_view else "root_lexical")
+    )
+    raw_by_module = result.get("module_instance_map")
+    if not isinstance(raw_by_module, dict):
+        raw_by_module = {}
+    for module_name, items in raw_by_module.items():
+        module_gaps = set(context_gap_codes)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_gap_codes = set(item.get("hierarchy_gap_codes") or ())
+            item_gap_codes.update(context_gap_codes)
+            status = str(item.get("hierarchy_edge_status") or "complete")
+            if status in _PROVED_HIERARCHY_EDGE_STATUSES:
+                status = source.hierarchy_evidence_status
+            item["hierarchy_edge_status"] = status
+            item["hierarchy_edge_origin"] = origin
+            item["hierarchy_gap_codes"] = sorted(item_gap_codes)
+            module_gaps.update(item_gap_codes)
+        if module_gaps:
+            module_gap_map[str(module_name)] = sorted(module_gaps)
+            all_gap_codes.update(module_gaps)
+    if context_gap_codes:
+        for module_name in result.get(
+            "structural_modules",
+            result.get("modules", ()),
+        ):
+            module_gap_map.setdefault(
+                str(module_name),
+                sorted(context_gap_codes),
+            )
+        for interface_name in result.get(
+            "structural_interfaces",
+            result.get("interfaces", ()),
+        ):
+            module_gap_map.setdefault(
+                str(interface_name),
+                sorted(context_gap_codes),
+            )
+    result["hierarchy_module_gap_map"] = module_gap_map
+    result["hierarchy_gap_codes"] = sorted(all_gap_codes)
+
+
 def scan_preprocessed_sv(
     file_path: str,
     source: PreprocessedSource,
@@ -496,6 +710,7 @@ def scan_preprocessed_sv(
         scan_module_instances=not (
             replace_root_hierarchy or discard_root_hierarchy
         ),
+        annotate_hierarchy_evidence=True,
     )
     if replace_root_hierarchy:
         structural_text = _strip_comments(hierarchy_text)
@@ -504,7 +719,10 @@ def scan_preprocessed_sv(
             result["module_instances"],
             result["module_instance_map"],
         ) = (
-            _extract_module_instances(structural_text)
+            _extract_module_instances(
+                structural_text,
+                annotate_hierarchy_evidence=True,
+            )
             if "module" in structural_lower
             else ([], {})
         )
@@ -526,6 +744,11 @@ def scan_preprocessed_sv(
         result["module_instance_map"] = {}
         result["structural_modules"] = []
         result["structural_interfaces"] = []
+    _annotate_preprocessed_hierarchy_evidence(
+        result,
+        source,
+        used_preprocessed_view=replace_root_hierarchy,
+    )
     result["include_directives"] = list(source.root_include_directives)
     result["active_include_directives"] = list(
         source.active_include_directives
@@ -630,6 +853,7 @@ def _add_module_children(
     module_name: str,
     design_to_scan: dict,
     definition_kinds: dict[str, str],
+    ambiguous_definitions: set[str],
     seen: set[str],
     *,
     template_cache: dict[tuple[str, frozenset[str]], dict] | None = None,
@@ -661,12 +885,25 @@ def _add_module_children(
         else result.get("module_instances", [])
     )
     for item in items:
+        if not hierarchy_edge_is_proved(item):
+            continue
         child_name = item["module_name"]
         child_scan = design_to_scan.get(child_name)
         child_kind = definition_kinds.get(child_name)
-        if child_scan is None or child_kind is None:
+        child_definition_ambiguous = child_name in ambiguous_definitions
+        if (
+            child_kind is None
+            or (child_scan is None and not child_definition_ambiguous)
+        ):
             continue
-        child_src = child_scan["name"]
+        child_src = child_scan["name"] if child_scan is not None else ""
+        edge_gap_codes = set(item.get("hierarchy_gap_codes") or ())
+        if child_definition_ambiguous:
+            edge_gap_codes.add("hierarchy_definition_ambiguous")
+        elif child_scan is not None:
+            module_gap_map = child_scan.get("hierarchy_module_gap_map")
+            if isinstance(module_gap_map, dict):
+                edge_gap_codes.update(module_gap_map.get(child_name) or ())
         node = {
             "type": child_kind,
             "class": child_name,
@@ -675,16 +912,33 @@ def _add_module_children(
             "source_file": parent_path,
             "source_line": None,
             "source_info_origin": "compile_log" if parent_path else None,
+            "hierarchy_edge_origin": item.get(
+                "hierarchy_edge_origin",
+                "root_lexical",
+            ),
+            "hierarchy_edge_status": item.get(
+                "hierarchy_edge_status",
+                "complete",
+            ),
+            "hierarchy_definition_status": (
+                "ambiguous" if child_definition_ambiguous else "resolved"
+            ),
+            "hierarchy_gap_codes": sorted(edge_gap_codes),
         }
         if metrics is not None:
             metrics["component_template_node_allocation_count"] += 1
-        descendants = _add_module_children(
-            child_name,
-            design_to_scan,
-            definition_kinds,
-            seen,
-            template_cache=template_cache,
-            metrics=metrics,
+        descendants = (
+            {}
+            if child_definition_ambiguous
+            else _add_module_children(
+                child_name,
+                design_to_scan,
+                definition_kinds,
+                ambiguous_definitions,
+                seen,
+                template_cache=template_cache,
+                metrics=metrics,
+            )
         )
         if descendants:
             node["children"] = descendants
@@ -777,6 +1031,7 @@ def _hierarchy_template_metrics_defaults(share_templates: bool) -> dict[str, int
         "hierarchy_node_allocation_count": 0,
         "hierarchy_template_reused_node_count": 0,
         "hierarchy_logical_tree_depth": 0,
+        "hierarchy_duplicate_definition_symbol_count": 0,
     }
 
 
@@ -795,9 +1050,12 @@ def build_component_tree(
     copy-on-write materialization.
     """
 
-    design_to_scan, definition_kinds, class_to_scan = _build_symbol_indexes(
-        scan_results
-    )
+    (
+        design_to_scan,
+        definition_kinds,
+        class_to_scan,
+        ambiguous_definitions,
+    ) = _build_symbol_indexes(scan_results)
 
     build_metrics = metrics if metrics is not None else {}
     build_metrics.update(_hierarchy_template_metrics_defaults(share_templates))
@@ -809,6 +1067,7 @@ def build_component_tree(
         top_module,
         design_to_scan,
         definition_kinds,
+        ambiguous_definitions,
         set(),
         template_cache=component_template_cache,
         metrics=build_metrics,
@@ -835,6 +1094,9 @@ def build_component_tree(
         len(uvm_template_cache) if uvm_template_cache is not None else 0
     )
     build_metrics["hierarchy_template_sharing_enabled"] = int(share_templates)
+    build_metrics["hierarchy_duplicate_definition_symbol_count"] = len(
+        ambiguous_definitions
+    )
     (
         logical_node_count,
         _,
@@ -981,6 +1243,11 @@ def build_hierarchy(
         build_metrics["compile_source_index_disposition"] = (
             source_index_disposition
         )
+    hierarchy_gap_codes = set(build_metrics.get("hierarchy_gap_codes") or ())
+    if build_metrics["hierarchy_duplicate_definition_symbol_count"]:
+        hierarchy_gap_codes.add("hierarchy_definition_ambiguous")
+    build_metrics["hierarchy_gap_codes"] = sorted(hierarchy_gap_codes)
+    build_metrics["hierarchy_gap_code_count"] = len(hierarchy_gap_codes)
 
     return {
         "project": {
@@ -1543,6 +1810,9 @@ def _scan_user_files(
     resolved_ordered_includes: list[dict[str, str]] = []
     resolved_include_paths: set[str] = set()
     include_resolution_issues: set[str] = set()
+    hierarchy_gap_codes: set[str] = set()
+    hierarchy_edge_candidate_count = 0
+    hierarchy_edge_unresolved_count = 0
     for index, entry in enumerate(file_entries):
         check_cancelled()
         path = entry["path"]
@@ -1559,6 +1829,14 @@ def _scan_user_files(
             content_snapshot_builder.mark_issue("compile_source_unavailable")
             continue
         result = scan_preprocessed_sv(path, preprocessed)
+        hierarchy_gap_codes.update(result.get("hierarchy_gap_codes") or ())
+        hierarchy_items = result.get("module_instances") or ()
+        hierarchy_edge_candidate_count += len(hierarchy_items)
+        hierarchy_edge_unresolved_count += sum(
+            not hierarchy_edge_is_proved(item)
+            for item in hierarchy_items
+            if isinstance(item, dict)
+        )
         for parent, children in preprocessed.include_tree.items():
             destination = resolved_include_tree.setdefault(parent, [])
             for child in children:
@@ -1614,6 +1892,10 @@ def _scan_user_files(
                 include_resolution_issues
             ),
             "include_context_complete": not include_resolution_issues,
+            "hierarchy_gap_code_count": len(hierarchy_gap_codes),
+            "hierarchy_gap_codes": sorted(hierarchy_gap_codes),
+            "hierarchy_edge_candidate_count": hierarchy_edge_candidate_count,
+            "hierarchy_edge_unresolved_count": hierarchy_edge_unresolved_count,
             "content_snapshot_file_count": compile_session_snapshot.file_count,
             "content_snapshot_bytes": compile_session_snapshot.total_bytes,
             "content_snapshot_issue_count": len(
@@ -1655,22 +1937,34 @@ def _compute_source_root(file_entries: list[dict]) -> str:
 
 def _build_symbol_indexes(
     scan_results: list[dict],
-) -> tuple[dict[str, dict], dict[str, str], dict[str, dict]]:
-    design_to_scan = {}
+) -> tuple[dict[str, dict], dict[str, str], dict[str, dict], set[str]]:
+    design_candidates: dict[str, list[tuple[dict, str]]] = defaultdict(list)
+    design_to_scan: dict[str, dict] = {}
     definition_kinds: dict[str, str] = {}
     class_to_scan = {}
     for result in scan_results:
         for module_name in result.get("structural_modules", result["modules"]):
-            design_to_scan[module_name] = result
-            definition_kinds[module_name] = "module"
+            design_candidates[module_name].append((result, "module"))
         for interface_name in result.get(
             "structural_interfaces", result["interfaces"]
         ):
-            design_to_scan[interface_name] = result
-            definition_kinds[interface_name] = "interface"
+            design_candidates[interface_name].append((result, "interface"))
         for class_name in result["classes"]:
             class_to_scan[class_name] = result
-    return design_to_scan, definition_kinds, class_to_scan
+    ambiguous_definitions: set[str] = set()
+    for name, candidates in design_candidates.items():
+        kinds = {kind for _, kind in candidates}
+        definition_kinds[name] = next(iter(kinds)) if len(kinds) == 1 else "unknown"
+        if len(candidates) == 1:
+            design_to_scan[name] = candidates[0][0]
+        else:
+            ambiguous_definitions.add(name)
+    return (
+        design_to_scan,
+        definition_kinds,
+        class_to_scan,
+        ambiguous_definitions,
+    )
 
 
 # ---------------------------------------------------------------------------

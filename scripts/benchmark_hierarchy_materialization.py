@@ -78,27 +78,24 @@ def _semantic_digest(component_tree: Mapping[str, Any]) -> str:
     """Hash the logical nested-dict value without serializing it in full."""
 
     children_cache: dict[int, bytes] = {}
-    scalar_cache: dict[tuple[tuple[str, Any], ...], bytes] = {}
+    scalar_cache: dict[bytes, bytes] = {}
 
     def scalar_digest(node: Mapping[str, Any]) -> bytes:
-        key = tuple(
-            sorted(
-                (str(field), value)
+        encoded = json.dumps(
+            {
+                str(field): value
                 for field, value in node.items()
                 if field != "children"
-            )
-        )
-        cached = scalar_cache.get(key)
-        if cached is not None:
-            return cached
-        encoded = json.dumps(
-            dict(key),
+            },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode()
+        cached = scalar_cache.get(encoded)
+        if cached is not None:
+            return cached
         digest = hashlib.sha256(encoded).digest()
-        scalar_cache[key] = digest
+        scalar_cache[encoded] = digest
         return digest
 
     def children_digest(children: Mapping[str, Any]) -> bytes:

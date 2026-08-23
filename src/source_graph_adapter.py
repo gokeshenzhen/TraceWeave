@@ -60,7 +60,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.9"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.10"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _INITIAL_ADJACENT_MAX_NEW_INSTANCES = 32
 _INITIAL_ADJACENT_MAX_ADDED_INPUTS = 24
@@ -77,6 +77,11 @@ _MAX_FILELIST_TOKENS = 1_000_000
 _MAX_ENV_INFERENCE_FILELISTS = 256
 _MAX_ENV_INFERENCE_ROUNDS = 64
 _MANIFEST_CACHE_MAX_ENTRIES = 8
+_HIERARCHY_INFORMATIONAL_GAP_CODES = frozenset({
+    # The hierarchy handle does not materialize specializations, but the Slang
+    # worker does. The instance edge itself remains safe scope evidence.
+    "hierarchy_parameter_specialization_unmodeled",
+})
 
 _BASE_OPTIONS = {
     "vcs": (
@@ -213,6 +218,7 @@ class HierarchyAncestorResolution:
     stop_depth: int | None = None
     candidate_instance_path: str | None = None
     missing_instance_proved: bool = False
+    gap_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         ancestors = tuple(str(path) for path in self.ancestors)
@@ -232,7 +238,11 @@ class HierarchyAncestorResolution:
                 )
             if self.stop_depth < 1:
                 raise ValueError("hierarchy stop depth must be positive")
+        gap_codes = tuple(sorted(set(self.gap_codes)))
+        for code in gap_codes:
+            _fixed_label(code, "hierarchy gap code")
         object.__setattr__(self, "ancestors", ancestors)
+        object.__setattr__(self, "gap_codes", gap_codes)
 
     @property
     def status(self) -> str:
@@ -241,6 +251,14 @@ class HierarchyAncestorResolution:
         if self.missing_instance_proved:
             return "truncated"
         return "deferred"
+
+    @property
+    def coverage_gap_codes(self) -> tuple[str, ...]:
+        return tuple(
+            code
+            for code in self.gap_codes
+            if code not in _HIERARCHY_INFORMATIONAL_GAP_CODES
+        )
 
 
 def _aggregate_hierarchy_resolutions(
@@ -2342,21 +2360,63 @@ def _selected_top(
     return root if root in tops else None
 
 
-def _scan_proves_child_instance(
+def _hierarchy_module_gap_codes(
+    hierarchy_result: Mapping[str, Any],
+    module_name: str,
+) -> tuple[str, ...]:
+    scans = hierarchy_result.get("_scan_results")
+    if not isinstance(scans, Sequence) or isinstance(scans, (str, bytes)):
+        return ()
+    gap_codes: set[str] = set()
+    definition_count = 0
+    for scan in scans:
+        check_cancelled()
+        if not isinstance(scan, Mapping):
+            continue
+        raw_modules = scan.get("structural_modules")
+        if raw_modules is None:
+            raw_modules = scan.get("modules", ())
+        raw_interfaces = scan.get("structural_interfaces")
+        if raw_interfaces is None:
+            raw_interfaces = scan.get("interfaces", ())
+        for raw_definitions in (raw_modules, raw_interfaces):
+            if isinstance(raw_definitions, Sequence) and not isinstance(
+                raw_definitions,
+                (str, bytes),
+            ):
+                definition_count += sum(
+                    str(name) == module_name for name in raw_definitions
+                )
+        module_gap_map = scan.get("hierarchy_module_gap_map")
+        if not isinstance(module_gap_map, Mapping):
+            continue
+        raw_codes = module_gap_map.get(module_name)
+        if isinstance(raw_codes, Sequence) and not isinstance(
+            raw_codes,
+            (str, bytes),
+        ):
+            gap_codes.update(str(code) for code in raw_codes)
+    if definition_count > 1:
+        gap_codes.add("hierarchy_definition_ambiguous")
+    return tuple(sorted(gap_codes))
+
+
+def _scan_child_instance_evidence(
     hierarchy_result: Mapping[str, Any],
     *,
     parent_module: str | None,
     instance_name: str,
-) -> bool:
-    """Return true only for one unambiguous scanned parent definition."""
+) -> tuple[bool, tuple[str, ...]]:
+    """Return proof plus fixed gaps for one scanned child candidate."""
 
     if not parent_module:
-        return False
+        return False, ()
     scans = hierarchy_result.get("_scan_results")
     if not isinstance(scans, Sequence) or isinstance(scans, (str, bytes)):
-        return False
+        return False, ()
     parent_definition_count = 0
     child_proved = False
+    gap_codes = set(_hierarchy_module_gap_codes(hierarchy_result, parent_module))
     for scan in scans:
         check_cancelled()
         if not isinstance(scan, Mapping):
@@ -2368,12 +2428,29 @@ def _scan_proves_child_instance(
         if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
             continue
         parent_definition_count += 1
-        child_proved = child_proved or any(
-            isinstance(item, Mapping)
-            and str(item.get("instance_name") or "") == instance_name
-            for item in items
-        )
-    return parent_definition_count == 1 and child_proved
+        for item in items:
+            if (
+                not isinstance(item, Mapping)
+                or str(item.get("instance_name") or "") != instance_name
+            ):
+                continue
+            raw_codes = item.get("hierarchy_gap_codes")
+            if isinstance(raw_codes, Sequence) and not isinstance(
+                raw_codes,
+                (str, bytes),
+            ):
+                gap_codes.update(str(code) for code in raw_codes)
+            child_proved = child_proved or str(
+                item.get("hierarchy_edge_status") or "complete"
+            ) in {"complete", "positive_local"}
+    if parent_definition_count > 1:
+        gap_codes.add("hierarchy_definition_ambiguous")
+    return (
+        parent_definition_count == 1
+        and child_proved
+        and "hierarchy_definition_ambiguous" not in gap_codes,
+        tuple(sorted(gap_codes)),
+    )
 
 
 def resolve_source_graph_hierarchy_scope(
@@ -2391,6 +2468,9 @@ def resolve_source_graph_hierarchy_scope(
     if len(parts) < 2 or parts[0] != top:
         return None
     ancestors = [top]
+    hierarchy_gap_codes = set(
+        _hierarchy_module_gap_codes(hierarchy_result, top)
+    )
     children = component_tree.get(top)
     parent_module: str | None = top
     index = 1
@@ -2399,6 +2479,12 @@ def resolve_source_graph_hierarchy_scope(
         node = children.get(parts[index])
         if not isinstance(node, Mapping):
             break
+        raw_gap_codes = node.get("hierarchy_gap_codes")
+        if isinstance(raw_gap_codes, Sequence) and not isinstance(
+            raw_gap_codes,
+            (str, bytes),
+        ):
+            hierarchy_gap_codes.update(str(code) for code in raw_gap_codes)
         ancestors.append(".".join(parts[: index + 1]))
         raw_module = node.get("class") or node.get("module")
         parent_module = str(raw_module) if raw_module else None
@@ -2416,17 +2502,22 @@ def resolve_source_graph_hierarchy_scope(
     if index < len(parts) - 1:
         candidate_instance_path = ".".join(parts[: index + 1])
         stop_depth = index
-        missing_instance_proved = _scan_proves_child_instance(
+        (
+            missing_instance_proved,
+            candidate_gap_codes,
+        ) = _scan_child_instance_evidence(
             hierarchy_result,
             parent_module=parent_module,
             instance_name=parts[index],
         )
+        hierarchy_gap_codes.update(candidate_gap_codes)
     return HierarchyAncestorResolution(
         ancestors=tuple(ancestors),
         remaining_path_segment_count=len(parts) - index,
         stop_depth=stop_depth,
         candidate_instance_path=candidate_instance_path,
         missing_instance_proved=missing_instance_proved,
+        gap_codes=tuple(sorted(hierarchy_gap_codes)),
     )
 
 
@@ -2621,6 +2712,10 @@ def build_source_graph_plan(
             fingerprint_cache_disposition=fingerprint_cache_disposition,
             digest_metrics=digest_metrics,
         )
+    gaps = tuple(sorted({*gaps, *hierarchy_resolution.coverage_gap_codes}))
+    exclusions = tuple(
+        sorted({*exclusions, *hierarchy_resolution.coverage_gap_codes})
+    )
     ancestors = hierarchy_resolution.ancestors
     if hierarchy_resolution.missing_instance_proved:
         return _blocked_plan(
@@ -3228,6 +3323,7 @@ def build_source_graph_trace_plan(
     top = request.scope.top
     chains: list[tuple[str, ...]] = []
     hierarchy_resolutions: list[HierarchyAncestorResolution] = []
+    trace_hierarchy_gap_codes: set[str] = set()
     for signal_path in normalized_paths:
         check_cancelled()
         if signal_path.split(".", 1)[0] != top:
@@ -3235,8 +3331,11 @@ def build_source_graph_trace_plan(
                 code="trace_target_top_mismatch",
                 stage="target_scope",
                 manifest=manifest,
-                gaps=base.receipt.gap_codes,
-                exclusions=base.receipt.objective_exclusions,
+                gaps=(*base.receipt.gap_codes, *trace_hierarchy_gap_codes),
+                exclusions=(
+                    *base.receipt.objective_exclusions,
+                    *trace_hierarchy_gap_codes,
+                ),
                 scope_kind=scope_kind,
                 endpoint_count=len(normalized_paths),
             )
@@ -3250,12 +3349,22 @@ def build_source_graph_trace_plan(
                 code="trace_hierarchy_scope_unresolved",
                 stage="target_scope",
                 manifest=manifest,
-                gaps=(*base.receipt.gap_codes, "trace_hierarchy_scope_unresolved"),
-                exclusions=base.receipt.objective_exclusions,
+                gaps=(
+                    *base.receipt.gap_codes,
+                    *trace_hierarchy_gap_codes,
+                    "trace_hierarchy_scope_unresolved",
+                ),
+                exclusions=(
+                    *base.receipt.objective_exclusions,
+                    *trace_hierarchy_gap_codes,
+                ),
                 scope_kind=scope_kind,
                 endpoint_count=len(normalized_paths),
             )
         hierarchy_resolutions.append(hierarchy_resolution)
+        trace_hierarchy_gap_codes.update(
+            hierarchy_resolution.coverage_gap_codes
+        )
         if hierarchy_resolution.missing_instance_proved:
             return _blocked_plan(
                 code="instance_not_in_projected_scope",
@@ -3263,9 +3372,13 @@ def build_source_graph_trace_plan(
                 manifest=manifest,
                 gaps=(
                     *base.receipt.gap_codes,
+                    *trace_hierarchy_gap_codes,
                     "hierarchy_ancestor_chain_truncated",
                 ),
-                exclusions=base.receipt.objective_exclusions,
+                exclusions=(
+                    *base.receipt.objective_exclusions,
+                    *trace_hierarchy_gap_codes,
+                ),
                 scope_kind=scope_kind,
                 endpoint_count=len(normalized_paths),
                 hierarchy_resolutions=tuple(hierarchy_resolutions),
@@ -3290,9 +3403,11 @@ def build_source_graph_trace_plan(
     projected_gaps = set(base.receipt.gap_codes)
     projected_gaps.discard(COMPILE_PROJECTION_GAP)
     projected_gaps.update(compile_projection.gap_codes)
+    projected_gaps.update(trace_hierarchy_gap_codes)
     projected_exclusions = set(base.receipt.objective_exclusions)
     projected_exclusions.discard(COMPILE_PROJECTION_GAP)
     projected_exclusions.update(compile_projection.gap_codes)
+    projected_exclusions.update(trace_hierarchy_gap_codes)
     boundary = CoverageBoundary(
         mode=BoundaryMode.EXPLICIT,
         instance_paths=ancestor_union,
@@ -3314,7 +3429,14 @@ def build_source_graph_trace_plan(
         scope=artifact_scope,
         compile_projection=compile_projection.projection,
     )
-    trace_request = replace(request, artifact=artifact)
+    trace_scope = replace(
+        request.scope,
+        coverage_boundary=replace(
+            request.scope.coverage_boundary,
+            objective_exclusions=tuple(sorted(projected_exclusions)),
+        ),
+    )
+    trace_request = replace(request, scope=trace_scope, artifact=artifact)
     artifact_key = compute_source_graph_artifact_key(artifact)
     query_key = compute_source_graph_query_key(trace_request.query_identity)
     receipt = replace(
@@ -3540,6 +3662,13 @@ def build_source_graph_path_plan(
 
     assert from_resolution is not None and to_resolution is not None
     hierarchy_resolutions = (from_resolution, to_resolution)
+    hierarchy_gap_codes = {
+        code
+        for resolution in hierarchy_resolutions
+        for code in resolution.coverage_gap_codes
+    }
+    gaps = tuple(sorted({*gaps, *hierarchy_gap_codes}))
+    exclusions = tuple(sorted({*exclusions, *hierarchy_gap_codes}))
     if any(item.missing_instance_proved for item in hierarchy_resolutions):
         return _blocked_plan(
             code="instance_not_in_projected_scope",

@@ -180,6 +180,45 @@ def test_trace_plan_keeps_artifact_and_query_identity_separate(tmp_path):
     assert expanded.receipt.endpoint_count == 2
 
 
+def test_trace_plan_unions_hierarchy_gaps_from_every_target(tmp_path):
+    hierarchy = _branch_hierarchy(
+        {
+            "left": {
+                "module": "leaf",
+                "children": {},
+                "hierarchy_gap_codes": [
+                    "hierarchy_instance_array_unexpanded"
+                ],
+            },
+            "right": {
+                "module": "leaf",
+                "children": {},
+                "hierarchy_gap_codes": [
+                    "hierarchy_include_path_unresolved"
+                ],
+            },
+        }
+    )
+
+    plan = _trace_plan(
+        tmp_path,
+        ("tb.dut.left.q", "tb.dut.right.d"),
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    expected = {
+        "hierarchy_instance_array_unexpanded",
+        "hierarchy_include_path_unresolved",
+    }
+    assert expected <= set(plan.receipt.gap_codes)
+    assert expected <= set(plan.receipt.objective_exclusions)
+    assert expected <= set(
+        plan.request.artifact_identity.scope.coverage_boundary.objective_exclusions
+    )
+
+
 def test_trace_plan_blocks_different_top_and_defers_dotted_suffix(tmp_path):
     different_top = _trace_plan(
         tmp_path / "different",

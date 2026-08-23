@@ -28,7 +28,10 @@ from .sv_preprocessor import (
     SystemVerilogPreprocessor,
     merge_resolved_include_evidence,
 )
-from .tb_hierarchy_builder import scan_preprocessed_sv
+from .tb_hierarchy_builder import (
+    hierarchy_edge_is_proved,
+    scan_preprocessed_sv,
+)
 
 
 _HDL_UNIT_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
@@ -40,6 +43,11 @@ _DEFINITION_RE = re.compile(
 )
 _MACRO_DEFINE_RE = re.compile(r"`define\s+([A-Za-z_][A-Za-z0-9_$]*)")
 _INVENTORY_CANCEL_STRIDE = 256
+_HIERARCHY_INFORMATIONAL_GAP_CODES = frozenset({
+    # The bootstrap tree does not materialize specializations, but the Slang
+    # frontend does. A parameter override alone does not invalidate the edge.
+    "hierarchy_parameter_specialization_unmodeled",
+})
 
 
 @dataclass(frozen=True)
@@ -578,6 +586,11 @@ def build_bounded_connectivity_context(
                 preprocessed,
                 retain_source_text=False,
             )
+            objective_exclusions.update(
+                str(code)
+                for code in scan.get("hierarchy_gap_codes") or ()
+                if str(code) not in _HIERARCHY_INFORMATIONAL_GAP_CODES
+            )
             scan_cache[canonical] = scan
             for parent, children in preprocessed.include_tree.items():
                 destination = resolved_include_tree.setdefault(parent, [])
@@ -612,16 +625,41 @@ def build_bounded_connectivity_context(
                 break
             if len(matches) != 1:
                 raise _BootstrapBlocked("bootstrap_instance_ambiguous", "target_scope")
-            child_module = str(matches[0].get("module_name") or "")
+            matched_edge = matches[0]
+            if not hierarchy_edge_is_proved(matched_edge):
+                objective_exclusions.update(
+                    str(code)
+                    for code in matched_edge.get("hierarchy_gap_codes") or ()
+                    if str(code) not in _HIERARCHY_INFORMATIONAL_GAP_CODES
+                )
+                raise _BootstrapBlocked(
+                    "bootstrap_hierarchy_edge_unproved",
+                    "target_scope",
+                )
+            child_module = str(matched_edge.get("module_name") or "")
             if not child_module:
                 raise _BootstrapBlocked("bootstrap_child_type_unresolved", "target_scope")
             child_kind, child_path = unique_design_definition(child_module)
+            edge_gap_codes = sorted(
+                str(code)
+                for code in matched_edge.get("hierarchy_gap_codes") or ()
+            )
             node = {
                 "type": "interface" if child_kind == "interfaces" else "module",
                 "class": child_module,
                 "source_file": current_path,
                 "source_line": None,
                 "source_info_origin": "compile_log",
+                "hierarchy_edge_origin": matched_edge.get(
+                    "hierarchy_edge_origin",
+                    "root_lexical",
+                ),
+                "hierarchy_edge_status": matched_edge.get(
+                    "hierarchy_edge_status",
+                    "complete",
+                ),
+                "hierarchy_definition_status": "resolved",
+                "hierarchy_gap_codes": edge_gap_codes,
             }
             children_cursor[instance_name] = node
             nested: dict[str, dict] = {}

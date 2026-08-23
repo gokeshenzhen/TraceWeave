@@ -500,6 +500,21 @@ plain expansion-line fast path、exact/LRU include resolution 的 hit、miss、e
 eviction；绝不暴露 path、include name、macro 或源码内容。Source Graph manifest receipt
 还会在同一隐私边界下报告摘要复用/读取的文件数、字节数和冲突数。
 
+重复 module/UVM descendants 在内部使用 template object DAG，同时保持原有 nested-dict
+hierarchy 与 handle-tool schema。逻辑统计仍按每条实例路径计数，但 memoized summary 和
+handle 不再为每个 parent 复制相同 subtree。metrics 会区分 logical/physical nodes、allocation、
+cache hit 与 reuse；本地 NPI 写入实例专属 `file:line` 时采用按路径 copy-on-write，不会把一个
+实例的 provenance 串到共享 template 的 sibling。
+
+Hierarchy edge 是正向证据，不是 elaboration 猜测。完整扫描的候选与已接纳节点携带固定的
+origin/status/gap metadata。显式或隐式 generate、实例数组与 bind statement 只保留为诊断候选，
+不会展平成虚假的 child path；duplicate definition 只保留 ambiguous parent edge，不猜 source
+或 descendants。parameter override 的直接 edge 仍可安全保留，同时记录 compatibility tree
+未物化 specialization。Source Graph 会把查询祖先链上的有效 gap 带入 receipt 与 coverage
+boundary，阻止不完整上下文产生 complete negative；parameter-only gap 属于 informational，
+因为 Slang 会自行完成 specialization。build metrics 只用数值和固定 label 报告 candidate、
+unresolved edge 与 duplicate-definition counts。
+
 完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
 不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted
 string；simulator 记录的 include edge 先形成无歧义 basename index，再进入目录搜索。正向
@@ -556,6 +571,8 @@ preprocessor 上下文，对实际选中的每个输入做内容指纹，并从 
 `preprocessor_issue_categories`。若目标实例链在不确定边界之前已被完整证明，则可携带
 `bootstrap_include_context_incomplete` 继续；若未解析上下文可能隐藏剩余实例段，则以
 `bootstrap_include_context_unproved` 停止。回执不会包含路径、宏值或源码片段。若
+目标直接命中 generate/array/bind 候选，也不会把它提升为扁平 ancestor chain，而是以
+`bootstrap_hierarchy_edge_unproved` 和固定 hierarchy coverage exclusion 停止。若
 scope/build/query 无法证明，bootstrap 返回诚实的无事实
 回执，不再启动它原本就是为了避免的全源码 Legacy Static 扫描。正常 full-hierarchy 路径
 仍保持既有的 Source Graph-to-Static fallback。

@@ -237,7 +237,15 @@ def test_include_evidence_mismatch_keeps_positive_hierarchy_evidence(tmp_path):
     assert preprocessed.hierarchy_evidence_status == "positive_local"
     assert "u_leaf" in preprocessed.trusted_hierarchy_text
     assert scan["module_instance_map"]["top"] == [
-        {"module_name": "leaf", "instance_name": "u_leaf"}
+        {
+            "module_name": "leaf",
+            "instance_name": "u_leaf",
+            "hierarchy_edge_status": "positive_local",
+            "hierarchy_gap_codes": [
+                "hierarchy_include_evidence_mismatch"
+            ],
+            "hierarchy_edge_origin": "preprocessed_positive_local",
+        }
     ]
 
 
@@ -264,6 +272,41 @@ def test_incomplete_compile_options_invalidate_conditional_hierarchy(tmp_path):
     assert preprocessed.trusted_hierarchy_text == ""
     assert scan["module_instance_map"] == {}
     assert scan["structural_modules"] == []
+    assert scan["hierarchy_gap_codes"] == [
+        "hierarchy_compile_options_incomplete"
+    ]
+
+
+def test_preprocessor_issues_map_to_distinct_hierarchy_gap_codes():
+    expected = {
+        "compile_options_incomplete": "hierarchy_compile_options_incomplete",
+        "conditional_unbalanced": "hierarchy_conditional_unbalanced",
+        "include_cycle": "hierarchy_include_cycle",
+        "include_depth_exceeded": "hierarchy_include_depth_exceeded",
+        "include_evidence_mismatch": "hierarchy_include_evidence_mismatch",
+        "include_expression_unresolved": (
+            "hierarchy_include_expression_unresolved"
+        ),
+        "include_path_unresolved": "hierarchy_include_path_unresolved",
+        "include_unreadable": "hierarchy_include_unreadable",
+        "macro_continuation_unterminated": (
+            "hierarchy_macro_continuation_unterminated"
+        ),
+        "hierarchy_macro_compound_unsupported": (
+            "hierarchy_macro_compound_unsupported"
+        ),
+        "hierarchy_macro_expansion_limit_exceeded": (
+            "hierarchy_macro_expansion_limit_exceeded"
+        ),
+    }
+
+    for issue, gap_code in expected.items():
+        assert tb_hierarchy_builder._hierarchy_preprocessor_gap_codes(
+            (issue,)
+        ) == {gap_code}
+    assert tb_hierarchy_builder._hierarchy_preprocessor_gap_codes(
+        ("future_unknown_issue",)
+    ) == {"hierarchy_preprocessor_incomplete"}
 
 
 def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch):
@@ -281,10 +324,10 @@ def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch)
     extract_calls = 0
     original = tb_hierarchy_builder._extract_module_instances
 
-    def counted(text: str):
+    def counted(text: str, **kwargs):
         nonlocal extract_calls
         extract_calls += 1
-        return original(text)
+        return original(text, **kwargs)
 
     monkeypatch.setattr(
         tb_hierarchy_builder,
@@ -298,7 +341,13 @@ def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch)
     )
 
     assert result["module_instance_map"]["top"] == [
-        {"module_name": "leaf", "instance_name": "u_leaf"}
+        {
+            "module_name": "leaf",
+            "instance_name": "u_leaf",
+            "hierarchy_edge_status": "complete",
+            "hierarchy_gap_codes": [],
+            "hierarchy_edge_origin": "root_lexical",
+        }
     ]
     assert extract_calls == 1
 
@@ -325,10 +374,10 @@ def test_changed_preprocessed_text_skips_discarded_root_instance_scan(
     extract_calls = 0
     original = tb_hierarchy_builder._extract_module_instances
 
-    def counted(text: str):
+    def counted(text: str, **kwargs):
         nonlocal extract_calls
         extract_calls += 1
-        return original(text)
+        return original(text, **kwargs)
 
     monkeypatch.setattr(
         tb_hierarchy_builder,
@@ -342,7 +391,13 @@ def test_changed_preprocessed_text_skips_discarded_root_instance_scan(
     )
 
     assert result["module_instance_map"]["top"] == [
-        {"module_name": "leaf", "instance_name": "u_leaf"}
+        {
+            "module_name": "leaf",
+            "instance_name": "u_leaf",
+            "hierarchy_edge_status": "complete",
+            "hierarchy_gap_codes": [],
+            "hierarchy_edge_origin": "preprocessed_lexical",
+        }
     ]
     assert extract_calls == 1
 

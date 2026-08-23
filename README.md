@@ -571,6 +571,18 @@ hits, and reused nodes. If local NPI later adds instance-specific `file:line`
 facts, the overlay uses copy-on-write only along annotated paths, so siblings
 sharing one template cannot acquire each other's provenance.
 
+Hierarchy edges are positive evidence, not an elaboration guess. Full-build
+scan records and admitted nodes carry fixed origin/status/gap metadata. Explicit
+or implicit generate controls, instance arrays, and bind statements remain raw
+diagnostic candidates but are not flattened into fictitious child paths;
+duplicate definitions stop at an ambiguous node without guessed descendants.
+Parameter overrides keep their safe direct edge while recording that the public
+compatibility tree did not materialize the specialization. Source Graph carries
+query-relevant hierarchy gaps into its receipt and coverage boundary, preventing
+complete negative claims; the parameter-only gap is informational because Slang
+performs specialization itself. Build metrics include candidate/unresolved and
+duplicate-definition counts using only numeric values and fixed labels.
+
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted
 strings are removed with the same grammar before structural token collection;
@@ -641,7 +653,9 @@ uncertainty boundary may continue with
 `bootstrap_include_context_incomplete`; if the unresolved context could hide a
 remaining instance segment, bootstrap stops with
 `bootstrap_include_context_unproved`. No path, macro value, or source fragment
-is added to the public diagnostic.
+is added to the public diagnostic. A direct generate/array/bind candidate is
+also never promoted into a flat ancestor chain: bootstrap stops with
+`bootstrap_hierarchy_edge_unproved` and a fixed hierarchy coverage exclusion.
 If an exact full-design source index is already active, bootstrap may reuse it;
 on a miss it reports `miss_no_active_session` and keeps its original bounded
 reader instead of initiating a full-project preload.

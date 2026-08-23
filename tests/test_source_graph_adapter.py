@@ -1730,6 +1730,52 @@ def test_path_sibling_scope_uses_only_proved_ancestor_union_and_lca(tmp_path):
     }
 
 
+def test_path_scope_unions_gap_codes_from_both_ancestor_chains(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {
+            "tb": {
+                "left": {
+                    "module": "left",
+                    "children": {},
+                    "hierarchy_gap_codes": [
+                        "hierarchy_include_path_unresolved"
+                    ],
+                },
+                "right": {
+                    "module": "right",
+                    "children": {},
+                    "hierarchy_gap_codes": [
+                        "hierarchy_definition_ambiguous"
+                    ],
+                },
+            }
+        }
+    }
+
+    plan = _path_plan(
+        tmp_path,
+        compile_result,
+        from_signal="tb.left.out",
+        to_signal="tb.right.in",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    expected = {
+        "hierarchy_include_path_unresolved",
+        "hierarchy_definition_ambiguous",
+    }
+    assert expected <= set(plan.receipt.gap_codes)
+    assert expected <= set(plan.receipt.objective_exclusions)
+
+
 def test_single_endpoint_receipt_exposes_deferred_hierarchy_suffix(tmp_path):
     source = tmp_path / "top.sv"
     _write(source, "module tb; endmodule\n")
@@ -1761,6 +1807,170 @@ def test_single_endpoint_receipt_exposes_deferred_hierarchy_suffix(tmp_path):
         "missing_instance_proved": False,
     }
     assert "hierarchy_ancestor_chain_truncated" not in plan.receipt.gap_codes
+
+
+def test_hierarchy_edge_gaps_flow_to_source_graph_coverage(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {
+            "tb": {
+                "dut": {
+                    "module": "dut",
+                    "children": {},
+                    "hierarchy_gap_codes": [
+                        "hierarchy_instance_array_unexpanded",
+                        "hierarchy_parameter_specialization_unmodeled",
+                    ],
+                }
+            }
+        }
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.dut.value",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert "hierarchy_instance_array_unexpanded" in plan.receipt.gap_codes
+    assert "hierarchy_instance_array_unexpanded" in (
+        plan.receipt.objective_exclusions
+    )
+    assert "hierarchy_instance_array_unexpanded" in (
+        plan.request.scope.coverage_boundary.objective_exclusions
+    )
+    assert "hierarchy_parameter_specialization_unmodeled" not in (
+        plan.receipt.gap_codes
+    )
+
+
+def test_root_module_gap_flows_to_source_graph_coverage(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic value; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {"tb": {}},
+        "_scan_results": [
+            {
+                "hierarchy_module_gap_map": {
+                    "tb": ["hierarchy_macro_compound_unsupported"]
+                }
+            }
+        ],
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.value",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert "hierarchy_macro_compound_unsupported" in plan.receipt.gap_codes
+    assert "hierarchy_macro_compound_unsupported" in (
+        plan.receipt.objective_exclusions
+    )
+    assert "hierarchy_macro_compound_unsupported" in (
+        plan.request.scope.coverage_boundary.objective_exclusions
+    )
+
+
+def test_duplicate_top_definition_flows_to_source_graph_coverage(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic value; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {"tb": {}},
+        "_scan_results": [
+            {
+                "structural_modules": ["tb"],
+                "structural_interfaces": [],
+                "module_instance_map": {"tb": []},
+            },
+            {
+                "structural_modules": ["tb"],
+                "structural_interfaces": [],
+                "module_instance_map": {"tb": []},
+            },
+        ],
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.value",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert "hierarchy_definition_ambiguous" in plan.receipt.gap_codes
+    assert "hierarchy_definition_ambiguous" in (
+        plan.receipt.objective_exclusions
+    )
+
+
+def test_unresolved_generate_candidate_is_deferred_not_proved_missing(
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = {
+        "component_tree": {"tb": {}},
+        "_scan_results": [
+            {
+                "module_instance_map": {
+                    "tb": [
+                        {
+                            "module_name": "leaf",
+                            "instance_name": "u_generated",
+                            "hierarchy_edge_status": "unresolved_semantic",
+                            "hierarchy_gap_codes": [
+                                "hierarchy_generate_scope_unmodeled"
+                            ],
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.u_generated.value",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    resolution = plan.receipt.to_dict()["scope"]["hierarchy_resolution"]
+    assert resolution["status"] == "deferred"
+    assert resolution["missing_instance_proved"] is False
+    assert "hierarchy_generate_scope_unmodeled" in plan.receipt.gap_codes
+    assert "hierarchy_generate_scope_unmodeled" in (
+        plan.receipt.objective_exclusions
+    )
 
 
 def test_proved_missing_child_blocks_as_instance_outside_projected_scope(

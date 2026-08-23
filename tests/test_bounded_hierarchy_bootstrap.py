@@ -533,6 +533,86 @@ def test_bootstrap_blocks_ambiguous_module_definition(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("body", "signal_path", "expected_gap"),
+    [
+        (
+            "generate if (ENABLE) begin : gen_on leaf u_leaf(); "
+            "end endgenerate",
+            "top.u_parent.u_leaf.value",
+            "hierarchy_generate_scope_unmodeled",
+        ),
+        (
+            "leaf u_leaf [2]();",
+            "top.u_parent.u_leaf.value",
+            "hierarchy_instance_array_unexpanded",
+        ),
+    ],
+)
+def test_bootstrap_never_promotes_unproved_semantic_edge(
+    tmp_path,
+    body,
+    signal_path,
+    expected_gap,
+):
+    top = tmp_path / "top.sv"
+    parent = tmp_path / "parent.sv"
+    leaf = tmp_path / "leaf.sv"
+    _write(top, "module top; parent u_parent(); endmodule\n")
+    _write(
+        parent,
+        "module parent #(parameter bit ENABLE = 1); "
+        f"{body} "
+        "endmodule\n",
+    )
+    _write(leaf, "module leaf; logic value; endmodule\n")
+    _, compile_result = _vcs_context(tmp_path, [top, parent, leaf])
+
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="3" * 64,
+        signal_path=signal_path,
+        top_hint=None,
+        config=_config(),
+    )
+
+    assert result.status == "blocked"
+    assert result.receipt["blocker"] == {
+        "code": "bootstrap_hierarchy_edge_unproved",
+        "stage": "target_scope",
+    }
+    assert expected_gap in result.receipt["objective_exclusions"]
+
+
+def test_bootstrap_parameter_override_alone_keeps_proved_edge(tmp_path):
+    top = tmp_path / "top.sv"
+    child = tmp_path / "child.sv"
+    _write(top, "module top; child #(.WIDTH(8)) u_child(); endmodule\n")
+    _write(
+        child,
+        "module child #(parameter int WIDTH = 1); logic value; endmodule\n",
+    )
+    _, compile_result = _vcs_context(tmp_path, [top, child])
+
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="4" * 64,
+        signal_path="top.u_child.value",
+        top_hint=None,
+        config=_config(),
+    )
+
+    assert result.status == "ready"
+    assert "hierarchy_parameter_specialization_unmodeled" not in result.receipt[
+        "objective_exclusions"
+    ]
+    node = result.hierarchy_result["component_tree"]["top"]["u_child"]
+    assert node["hierarchy_edge_status"] == "complete"
+    assert node["hierarchy_gap_codes"] == [
+        "hierarchy_parameter_specialization_unmodeled"
+    ]
+
+
 def test_bootstrap_blocks_external_compilation_unit_macro_context(tmp_path):
     macro_owner = tmp_path / "macro_owner.sv"
     top = tmp_path / "top.sv"
