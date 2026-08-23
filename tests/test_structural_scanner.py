@@ -6,7 +6,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from src.structural_scanner import scan_structural_risks
+from src.structural_scanner import (
+    _index_enclosing_brace_spans,
+    scan_structural_risks,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "structural"
@@ -21,6 +24,74 @@ def _compile_result_for(*names: str) -> dict:
 
 
 class TestStructuralScanner:
+    def test_brace_span_index_preserves_innermost_and_balanced_semantics(self):
+        text = "prefix { outer 8'b0 { inner 4'b0 } tail 2'b0 } orphan 1'b0"
+        positions = [
+            text.index("8'b0"),
+            text.index("4'b0"),
+            text.index("2'b0"),
+            text.index("1'b0"),
+        ]
+
+        spans = _index_enclosing_brace_spans(text, positions)
+
+        assert text[slice(*spans[positions[0]])] == (
+            "{ outer 8'b0 { inner 4'b0 } tail 2'b0 }"
+        )
+        assert text[slice(*spans[positions[1]])] == "{ inner 4'b0 }"
+        assert text[slice(*spans[positions[2]])] == (
+            "{ outer 8'b0 { inner 4'b0 } tail 2'b0 }"
+        )
+        assert positions[3] not in spans
+
+    def test_brace_span_index_does_not_publish_unclosed_frames(self):
+        text = "{ outer 8'b0 { inner 4'b0 }"
+        outer = text.index("8'b0")
+        inner = text.index("4'b0")
+
+        spans = _index_enclosing_brace_spans(text, [outer, inner])
+
+        assert outer not in spans
+        assert text[slice(*spans[inner])] == "{ inner 4'b0 }"
+
+    def test_magic_candidate_scan_keeps_multiple_comparisons_on_one_line(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        rtl = tmp_path / "two_magic_compares.sv"
+        rtl.write_text(
+            "module top;\n"
+            "  always_comb if (a == 4'h2 || b != 4'h3) y = 1'b1;\n"
+            "endmodule\n"
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {
+                    "user": [
+                        {
+                            "path": str(rtl),
+                            "type": "module",
+                            "category": "rtl",
+                        }
+                    ]
+                }
+            },
+        )
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            categories=["magic_condition"],
+        )
+
+        assert [risk["line"] for risk in result["risks"]] == [2, 2]
+        assert [risk["detail"] for risk in result["risks"]] == [
+            "Condition compares against magic literal 4'h2",
+            "Condition compares against magic literal 4'h3",
+        ]
+
     def test_detects_slice_overlap_and_gap(self, monkeypatch):
         monkeypatch.setattr(
             "src.structural_scanner.parse_compile_log",

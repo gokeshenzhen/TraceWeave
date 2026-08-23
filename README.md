@@ -654,6 +654,16 @@ python3.11 scripts/benchmark_tb_hierarchy.py \
   --compile-log /path/to/build.log --simulator vcs
 ```
 
+Use the companion structural benchmark to measure the other half of the
+default parallel source-analysis step. It reports no paths or finding text;
+instead it emits wall/RSS, logical source opens and bytes, per-category counts,
+and a hash of the complete result for before/after equivalence checks.
+
+```bash
+python3.11 scripts/benchmark_structural_scan.py \
+  --compile-log /path/to/build.log --simulator vcs
+```
+
 Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top
 and queried region can be elaborated by the Verilog/SystemVerilog frontend.
 VHDL files stay in the content identity but are not passed to Slang; coverage
@@ -931,7 +941,7 @@ Important workflow rules:
 
 - `get_sim_paths`: Discover compile logs, sim logs, waveforms, simulator, and cases. Optional explicit `sim_log` / `wave_file` / `compile_log` overrides win over auto-discovery; omitted fields are still discovered (anchored at the `sim_log`/`wave_file` directory)
 - `build_tb_hierarchy`: Stream compile evidence and build the full testbench hierarchy server-side without retaining raw source bodies; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `build_metrics`, `hierarchy_handle`). For split VCS flows, pass ordered `supplementary_compile_logs` once; later connectivity calls keep using the primary `compile_log`. A configured resource guard returns `build_status="blocked"` and no handle. Full completed data is reachable via the handle tools below.
-- `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
+- `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns in a lock-free cancellable worker; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
 
 ### Hierarchy Handle Tools
 

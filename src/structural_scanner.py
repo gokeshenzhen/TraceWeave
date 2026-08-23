@@ -5,12 +5,15 @@ structural_scanner.py
 
 from __future__ import annotations
 
+from array import array
+from bisect import bisect_left
 from collections import defaultdict
 from dataclasses import dataclass
 import os
 import re
 from typing import Iterable
 
+from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
 
 
@@ -57,6 +60,10 @@ _SEQUENCE_START_RE = re.compile(r"\bsequence\b", re.IGNORECASE)
 _SEQUENCE_END_RE = re.compile(r"\bendsequence\b", re.IGNORECASE)
 _ASSERT_IMPLICATION_RE = re.compile(r"\|->|\|=>")
 _ZERO_LITERAL_RE = re.compile(r"(\d+)'b(0+)", re.IGNORECASE)
+_BRACE_RE = re.compile(r"[{}]")
+_MAGIC_CANDIDATE_RE = re.compile(
+    r"(?:==|!=)[^\r\n]*\d+'[bBhHdDoO]"
+)
 _MODULE_HEADER_RE = re.compile(
     r"^\s*module\s+(?P<name>\w+)(?:\s*#\s*\(.*?\))?\s*\((?P<ports>.*?)\)\s*;",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -85,6 +92,23 @@ class _SliceUse:
     evidence: str
 
 
+class _LineIndex:
+    """Compact file-local offset-to-line mapping."""
+
+    def __init__(self, text: str) -> None:
+        self._newlines = array("Q")
+        offset = text.find("\n")
+        while offset >= 0:
+            if len(self._newlines) % 65_536 == 0:
+                check_cancelled()
+            self._newlines.append(offset)
+            offset = text.find("\n", offset + 1)
+        check_cancelled()
+
+    def line_number(self, offset: int) -> int:
+        return bisect_left(self._newlines, offset) + 1
+
+
 def scan_structural_risks(
     compile_log: str,
     simulator: str,
@@ -96,15 +120,21 @@ def scan_structural_risks(
 
     categories_scanned = _normalize_categories(categories)
     compile_result = parse_compile_log(compile_log, simulator)
+    check_cancelled()
     file_entries = compile_result.get("files", {}).get("user", [])
     eligible_entries = [entry for entry in file_entries if _should_scan_file(entry["path"])]
-    module_port_dirs = _build_module_port_directions(eligible_entries)
+    module_port_dirs = (
+        _build_module_port_directions(eligible_entries)
+        if "slice_overlap" in categories_scanned
+        else {}
+    )
 
     risks: list[_Risk] = []
     skipped_files: list[str] = []
     files_scanned = 0
 
     for entry in eligible_entries:
+        check_cancelled()
         path = entry["path"]
         if not os.path.exists(path):
             skipped_files.append(path)
@@ -182,21 +212,72 @@ def _scan_file(
     categories: list[str],
     module_port_dirs: dict[str, dict[str, str]],
 ) -> list[_Risk]:
+    check_cancelled()
     with open(path, "r", errors="replace") as handle:
         raw_text = handle.read()
+    check_cancelled()
     text = _strip_comments_keep_lines(raw_text)
-    source_lines = raw_text.splitlines()
+    module_categories = {
+        "slice_overlap",
+        "multi_drive",
+        "incomplete_case",
+    }
+    needs_line_index = bool(
+        module_categories.intersection(categories)
+        or "narrow_condition_injection" in categories
+    )
+    line_index = _LineIndex(text) if needs_line_index else None
+    source_lines = (
+        raw_text.splitlines() if "incomplete_case" in categories else []
+    )
 
     risks: list[_Risk] = []
-    for module_name, module_text, module_start_line in _iter_modules(text):
-        if "slice_overlap" in categories:
-            risks.extend(_scan_slice_overlap(path, module_name, module_text, module_start_line, module_port_dirs))
-        if "multi_drive" in categories:
-            risks.extend(_scan_multi_drive(path, module_name, module_text, module_start_line))
-        if "incomplete_case" in categories:
-            risks.extend(_scan_incomplete_case(path, module_name, module_text, module_start_line, source_lines))
+    if module_categories.intersection(categories):
+        assert line_index is not None
+        for (
+            module_name,
+            module_text,
+            module_offset,
+            module_line_bias,
+        ) in _iter_modules(text, line_index):
+            if "slice_overlap" in categories and "[" in module_text:
+                risks.extend(
+                    _scan_slice_overlap(
+                        path,
+                        module_name,
+                        module_text,
+                        module_offset,
+                        module_line_bias,
+                        line_index,
+                        module_port_dirs,
+                    )
+                )
+            if "multi_drive" in categories:
+                risks.extend(
+                    _scan_multi_drive(
+                        path,
+                        module_name,
+                        module_text,
+                        module_offset,
+                        module_line_bias,
+                        line_index,
+                    )
+                )
+            if "incomplete_case" in categories:
+                risks.extend(
+                    _scan_incomplete_case(
+                        path,
+                        module_name,
+                        module_text,
+                        module_offset,
+                        module_line_bias,
+                        line_index,
+                        source_lines,
+                    )
+                )
     if "narrow_condition_injection" in categories:
-        risks.extend(_scan_narrow_condition_injection(path, text))
+        assert line_index is not None
+        risks.extend(_scan_narrow_condition_injection(path, text, line_index))
     if "magic_condition" in categories:
         risks.extend(_scan_magic_condition(path, text))
     return risks
@@ -210,16 +291,23 @@ def _strip_comments_keep_lines(text: str) -> str:
     return re.sub(r"//.*", "", text)
 
 
-def _iter_modules(text: str) -> Iterable[tuple[str, str, int]]:
+def _iter_modules(
+    text: str,
+    line_index: _LineIndex,
+) -> Iterable[tuple[str, str, int, int]]:
     for match in _MODULE_BLOCK_RE.finditer(text):
         module_name = match.group(1)
         module_text = match.group(2)
-        start_line = text.count("\n", 0, match.start()) + 1
-        yield module_name, module_text, start_line
-
-
-def _line_number(text: str, pos: int, base_line: int = 1) -> int:
-    return base_line + text.count("\n", 0, pos)
+        module_offset = match.start(2)
+        # Preserve the historical line attribution. ``_MODULE_BLOCK_RE`` may
+        # consume leading blank lines through its multiline ``^\s*`` prefix,
+        # so the old relative counter used match.start() as its base even
+        # though group 2 begins on the module declaration line.
+        module_line_bias = (
+            line_index.line_number(match.start())
+            - line_index.line_number(module_offset)
+        )
+        yield module_name, module_text, module_offset, module_line_bias
 
 
 def _normalize_slice(a: str, b: str) -> tuple[int, int]:
@@ -232,7 +320,9 @@ def _scan_slice_overlap(
     path: str,
     module_name: str,
     module_text: str,
-    module_start_line: int,
+    module_offset: int,
+    module_line_bias: int,
+    line_index: _LineIndex,
     module_port_dirs: dict[str, dict[str, str]],
 ) -> list[_Risk]:
     slices_by_target: dict[str, list[_SliceUse]] = defaultdict(list)
@@ -244,7 +334,12 @@ def _scan_slice_overlap(
         for match in _INST_PORT_SLICE_RE.finditer(body):
             port_name, target, lhs, rhs = match.groups()
             lo, hi = _normalize_slice(lhs, rhs)
-            line = _line_number(module_text, inst_match.start("body") + match.start(), module_start_line)
+            line = (
+                line_index.line_number(
+                    module_offset + inst_match.start("body") + match.start()
+                )
+                + module_line_bias
+            )
             snippet = match.group(0).strip()
             use = _SliceUse(target, lo, hi, line, f"port {port_name}: {snippet}")
             if port_dirs.get(port_name) == "output":
@@ -254,7 +349,10 @@ def _scan_slice_overlap(
     for match in _ASSIGN_SLICE_RE.finditer(module_text):
         target, lhs, rhs = match.groups()
         lo, hi = _normalize_slice(lhs, rhs)
-        line = _line_number(module_text, match.start(), module_start_line)
+        line = (
+            line_index.line_number(module_offset + match.start())
+            + module_line_bias
+        )
         snippet = match.group(0).strip()
         slices_by_target[target].append(_SliceUse(target, lo, hi, line, f"assign: {snippet}"))
 
@@ -314,14 +412,24 @@ def _scan_slice_overlap(
     return risks
 
 
-def _scan_multi_drive(path: str, module_name: str, module_text: str, module_start_line: int) -> list[_Risk]:
+def _scan_multi_drive(
+    path: str,
+    module_name: str,
+    module_text: str,
+    module_offset: int,
+    module_line_bias: int,
+    line_index: _LineIndex,
+) -> list[_Risk]:
     assigns: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for match in _ASSIGN_FULL_RE.finditer(module_text):
         statement = match.group(0)
         if _ASSIGN_WITH_SLICE_RE.match(statement):
             continue
         signal = match.group(1)
-        line = _line_number(module_text, match.start(), module_start_line)
+        line = (
+            line_index.line_number(module_offset + match.start())
+            + module_line_bias
+        )
         assigns[signal].append((line, statement.strip()))
 
     risks: list[_Risk] = []
@@ -339,7 +447,9 @@ def _scan_incomplete_case(
     path: str,
     module_name: str,
     module_text: str,
-    module_start_line: int,
+    module_offset: int,
+    module_line_bias: int,
+    line_index: _LineIndex,
     source_lines: list[str],
 ) -> list[_Risk]:
     risks: list[_Risk] = []
@@ -351,7 +461,7 @@ def _scan_incomplete_case(
         case_body = module_text[start:end]
         if _DEFAULT_RE.search(case_body):
             continue
-        line = _line_number(module_text, start, module_start_line)
+        line = line_index.line_number(module_offset + start) + module_line_bias
         if _has_full_case_pragma(source_lines, line):
             continue
         detail = f"{match.group(1).lower()} statement has no default branch"
@@ -394,13 +504,28 @@ def _dedupe_case_risks(risks: list[_Risk]) -> list[_Risk]:
     return ordered
 
 
-def _scan_narrow_condition_injection(path: str, text: str) -> list[_Risk]:
+def _scan_narrow_condition_injection(
+    path: str,
+    text: str,
+    line_index: _LineIndex,
+) -> list[_Risk]:
     risks: list[_Risk] = []
-    for match in _ZERO_LITERAL_RE.finditer(text):
+    zero_matches = list(_ZERO_LITERAL_RE.finditer(text))
+    brace_spans = _index_enclosing_brace_spans(
+        text,
+        [match.start() for match in zero_matches],
+    )
+    for match_index, match in enumerate(zero_matches):
+        if match_index % 4_096 == 0:
+            check_cancelled()
         if _line_has_param(text, match.start()):
             continue
-        brace_text, brace_start = _extract_enclosing_braces(text, match.start())
-        if brace_text is None or not _is_assignment_context(text, brace_start):
+        span = brace_spans.get(match.start())
+        if span is None:
+            continue
+        brace_start, brace_end = span
+        brace_text = text[brace_start:brace_end]
+        if not _is_assignment_context(text, brace_start):
             continue
         analysis = _analyze_narrow_injection(brace_text)
         if analysis is None:
@@ -408,7 +533,7 @@ def _scan_narrow_condition_injection(path: str, text: str) -> list[_Risk]:
         if _is_plain_zero_extend_assignment(text, brace_start, brace_text):
             continue
         zero_width, total_width = analysis
-        line = _line_number(text, brace_start)
+        line = line_index.line_number(brace_start)
         detail = f"Concatenation injects a narrow condition with {zero_width} zero-fill bits"
         evidence = [brace_text.strip()]
         if total_width is not None:
@@ -419,35 +544,47 @@ def _scan_narrow_condition_injection(path: str, text: str) -> list[_Risk]:
     return _dedupe_risks(risks)
 
 
-def _extract_enclosing_braces(text: str, pos: int) -> tuple[str | None, int | None]:
-    start = None
-    depth = 0
-    for i in range(pos, -1, -1):
-        char = text[i]
-        if char == "}":
-            depth += 1
-        elif char == "{":
-            if depth == 0:
-                start = i
-                break
-            depth -= 1
-    if start is None:
-        return None, None
+def _index_enclosing_brace_spans(
+    text: str,
+    positions: Iterable[int],
+) -> dict[int, tuple[int, int]]:
+    """Map targets to their innermost balanced ``{...}`` span in one pass.
 
-    end = None
-    depth = 0
-    for i in range(start, len(text)):
-        char = text[i]
+    The old per-target backward/forward walk was quadratic when a large source
+    contained many sized zero literals. A stack preserves the same purely
+    lexical brace semantics while visiting each source character once.
+    """
+
+    targets = sorted(set(positions))
+    if not targets:
+        return {}
+    result: dict[int, tuple[int, int]] = {}
+    # Each frame retains only targets whose innermost open brace is that frame.
+    stack: list[tuple[int, list[int]]] = []
+    target_index = 0
+    for event_index, match in enumerate(_BRACE_RE.finditer(text)):
+        if event_index % 4_096 == 0:
+            check_cancelled()
+        brace_offset = match.start()
+        while (
+            target_index < len(targets)
+            and targets[target_index] < brace_offset
+        ):
+            if stack:
+                stack[-1][1].append(targets[target_index])
+            target_index += 1
+        char = match.group(0)
         if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end is None or not (start <= pos <= end):
-        return None, None
-    return text[start:end + 1], start
+            stack.append((brace_offset, []))
+        elif stack:
+            start, enclosed_targets = stack.pop()
+            end = brace_offset + 1
+            for target in enclosed_targets:
+                result[target] = (start, end)
+        if target_index >= len(targets) and not stack:
+            break
+    check_cancelled()
+    return result
 
 
 def _line_has_param(text: str, pos: int) -> bool:
@@ -616,6 +753,8 @@ def _assertion_line_numbers(text: str) -> set[int]:
     prop_depth = 0
     seq_depth = 0
     for line_no, line in enumerate(text.splitlines(), start=1):
+        if line_no % 4_096 == 0:
+            check_cancelled()
         starts_prop = bool(_PROPERTY_START_RE.search(line))
         ends_prop = bool(_PROPERTY_END_RE.search(line))
         starts_seq = bool(_SEQUENCE_START_RE.search(line))
@@ -644,7 +783,28 @@ def _assertion_line_numbers(text: str) -> set[int]:
 def _scan_magic_condition(path: str, text: str) -> list[_Risk]:
     risks: list[_Risk] = []
     assertion_lines = _assertion_line_numbers(text)
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    line_no = 1
+    line_start = 0
+    count_cursor = 0
+    previous_line_start = -1
+    for candidate_index, candidate in enumerate(
+        _MAGIC_CANDIDATE_RE.finditer(text)
+    ):
+        if candidate_index % 4_096 == 0:
+            check_cancelled()
+        candidate_start = candidate.start()
+        newline_count = text.count("\n", count_cursor, candidate_start)
+        if newline_count:
+            line_no += newline_count
+            line_start = text.rfind("\n", count_cursor, candidate_start) + 1
+        count_cursor = candidate_start
+        if line_start == previous_line_start:
+            continue
+        previous_line_start = line_start
+        line_end = text.find("\n", candidate.end())
+        if line_end < 0:
+            line_end = len(text)
+        line = text[line_start:line_end]
         if _PARAM_LINE_RE.search(line):
             continue
         if _CASE_ITEM_LINE_RE.match(line) or _DEFAULT_LINE_RE.match(line):
@@ -679,6 +839,7 @@ def _is_allowed_literal(literal: str) -> bool:
 def _build_module_port_directions(file_entries: list[dict]) -> dict[str, dict[str, str]]:
     module_port_dirs: dict[str, dict[str, str]] = {}
     for entry in file_entries:
+        check_cancelled()
         path = entry["path"]
         if not os.path.exists(path):
             continue

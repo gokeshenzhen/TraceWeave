@@ -575,6 +575,15 @@ python3.11 scripts/benchmark_tb_hierarchy.py \
   --compile-log /path/to/build.log --simulator vcs
 ```
 
+默认并行源码分析的另一半可用配套 structural benchmark 测量。它不输出路径或 finding 正文，
+只报告 wall/RSS、逻辑源码打开次数与字节数、分类计数，以及用于 before/after 等价校验的完整
+结果哈希。
+
+```bash
+python3.11 scripts/benchmark_structural_scan.py \
+  --compile-log /path/to/build.log --simulator vcs
+```
+
 当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含
 Verilog、SystemVerilog 与 VHDL 的工程仍可进入 Source Graph。VHDL 文件继续参与内容身份，
 但不传给 Slang；coverage 会报告 `opaque_vhdl_boundary`（以及未投影文件计数）。因此 frontend
@@ -811,7 +820,7 @@ partial/inconclusive coverage 下的正结果仍是 partial；只有 complete co
 
 - `get_sim_paths`:发现编译日志、仿真日志、波形、仿真器、case。可选的显式 `sim_log` / `wave_file` / `compile_log` 覆盖优先于自动发现,省略的字段仍会被发现(以 `sim_log`/`wave_file` 所在目录为锚点)
 - `build_tb_hierarchy`:流式读取编译证据并在服务端构建完整 testbench 层次结构，不保留源码正文；返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`build_metrics`、`hierarchy_handle`)。split VCS 流程可在这里一次性传入有序的 `supplementary_compile_logs`;后续 connectivity 查询仍使用 primary `compile_log`。配置的资源 guard 被触发时返回 `build_status="blocked"` 且没有 handle；成功构建的完整数据通过下方 handle 工具按需获取。
-- `scan_structural_risks`:扫描编译过的 RTL/TB 源码中的结构风险模式;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
+- `scan_structural_risks`:在无 waveform lock、可协作取消的 worker 中扫描编译过的 RTL/TB 源码结构风险;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
 
 ### 层次结构 Handle 工具
 

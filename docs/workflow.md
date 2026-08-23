@@ -71,6 +71,9 @@ Step 2 (parallel): build_tb_hierarchy(compile_log, simulator,
 │  locations remain compile-log-derived in LSF mode.
 │
 └─ scan_structural_risks independently scans the compiled RTL/TB source set.
+   Its CPU-bound body runs in a lock-free cancellable worker, so the hierarchy
+   worker and lightweight MCP calls remain schedulable while this scan is in
+   flight.
    Returns source-anchored structural risks (for example overlap, multi-drive,
    incomplete control, or narrow-condition findings). Risks overlapping the
    eventual failing signal/source path are high-priority root-cause candidates,

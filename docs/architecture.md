@@ -129,9 +129,10 @@ Verification
   `trace_x_source` is the deliberate split-phase exception: its async
   orchestrator takes the wave lock only for value reads and upstream-path
   resolution, releases it before every connectivity-backend query, and then
-  merges those facts into the next X/Z frontier. Static source scans run in a
-  lock-free cancellable worker so they do not block the event loop; local NPI
-  retains its existing synchronous execution model, while LSF keeps
+  merges those facts into the next X/Z frontier. Static connectivity scans and
+  `scan_structural_risks` run in lock-free cancellable workers so they do not
+  block the event loop; local NPI retains its existing synchronous execution
+  model, while LSF keeps
   using its existing worker path. If NPI internally falls back on any driver
   lookup, the partial chain is discarded and the whole trace restarts with a
   bounded Source Graph artifact. The same whole-trace restart occurs when a
@@ -374,6 +375,15 @@ Verification
   turn the system into a source-aware debug assistant rather than a parser-only
   tool. `signal_driver` traces back to drivers; `signal_load` finds the
   consumers (fanout) of a signal.
+- `src/structural_scanner.py` performs the independent default-flow structural
+  risk pass. Narrow-condition brace containment is indexed from one lexical
+  brace-event sweep rather than rescanning a file around every zero literal;
+  magic-condition analysis sends only mechanically eligible lines through the
+  unchanged line-local matcher; and a compact file-local newline index serves
+  all source anchors without repeated prefix scans. The scan is offloaded from
+  the event loop and checks cooperative cancellation between files and within
+  its long Python loops. `scripts/benchmark_structural_scan.py` reports
+  privacy-safe timing/RSS/I/O aggregates and a full-result equivalence hash.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or

@@ -112,6 +112,48 @@ class TestCheckCancelled:
 
 @pytest.mark.anyio
 class TestEventLoopNotBlocked:
+    async def test_structural_scan_does_not_block_light_calls(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_scan(**_kwargs):
+            started.set()
+            release.wait(timeout=10)
+            return {
+                "scan_scope": "scope1",
+                "eligible_file_count": 1,
+                "files_scanned": 1,
+                "coverage_status": "complete",
+                "coverage_warnings": [],
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+
+        monkeypatch.setattr(server, "scan_structural_risks", slow_scan)
+        light_elapsed = None
+        try:
+            async with anyio.create_task_group() as tg:
+
+                async def heavy():
+                    await server._dispatch(
+                        "scan_structural_risks",
+                        {"compile_log": "/fake/compile.log", "simulator": "vcs"},
+                    )
+
+                tg.start_soon(heavy)
+                assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+                start = time.perf_counter()
+                result = await server._dispatch("cursor_list", {})
+                light_elapsed = time.perf_counter() - start
+                assert result is not None
+                release.set()
+        finally:
+            release.set()
+
+        assert light_elapsed < 0.5
+
     async def test_sweep_dispatch_uses_background_priority(self, monkeypatch):
         class DispatchReached(Exception):
             pass
@@ -219,6 +261,43 @@ class TestEventLoopNotBlocked:
 
 @pytest.mark.anyio
 class TestCooperativeCancellation:
+    async def test_cancelled_structural_scan_stops_at_checkpoint(
+        self,
+        monkeypatch,
+    ):
+        started = threading.Event()
+        observed_cancel = threading.Event()
+        ran_to_completion = threading.Event()
+
+        def looping_scan(**_kwargs):
+            started.set()
+            deadline = time.monotonic() + 5
+            try:
+                while time.monotonic() < deadline:
+                    cancellation.check_cancelled()
+                    time.sleep(0.01)
+            except OperationCancelled:
+                observed_cancel.set()
+                raise
+            ran_to_completion.set()
+            return {}
+
+        monkeypatch.setattr(server, "scan_structural_risks", looping_scan)
+        async with anyio.create_task_group() as tg:
+
+            async def call():
+                await server._dispatch(
+                    "scan_structural_risks",
+                    {"compile_log": "/fake/compile.log", "simulator": "vcs"},
+                )
+
+            tg.start_soon(call)
+            assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+            tg.cancel_scope.cancel()
+
+        assert await anyio.to_thread.run_sync(_wait_event, observed_cancel, 2)
+        assert not ran_to_completion.is_set()
+
     async def test_cancelled_call_stops_at_next_checkpoint(self, monkeypatch):
         started = threading.Event()
         observed_cancel = threading.Event()

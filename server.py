@@ -1572,10 +1572,10 @@ async def _run_in_cancellable_thread(fn: Callable):
     """Run non-wave blocking work without starving the MCP event loop.
 
     This is the lock-free counterpart to ``_run_in_wave_thread``. It is used
-    by opt-in LSF connectivity calls, Source Graph adapter/query work, and
-    Legacy Static scans: cancellation arms the same cooperative event while no
-    waveform parser lock is taken. Local NPI behavior remains synchronous and
-    unchanged.
+    by source/structural scans, opt-in LSF connectivity calls, Source Graph
+    adapter/query work, and Legacy Static scans: cancellation arms the same
+    cooperative event while no waveform parser lock is taken. Local NPI
+    behavior remains synchronous and unchanged.
     """
 
     cancel_event = threading.Event()
@@ -7086,11 +7086,13 @@ async def _dispatch(name: str, args: dict):
     elif name == "scan_structural_risks":
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
-        result = scan_structural_risks(
-            compile_log=args["compile_log"],
-            simulator=simulator,
-            scan_scope=args.get("scan_scope", "scope1"),
-            categories=args.get("categories"),
+        result = await _run_in_cancellable_thread(
+            lambda: scan_structural_risks(
+                compile_log=args["compile_log"],
+                simulator=simulator,
+                scan_scope=args.get("scan_scope", "scope1"),
+                categories=args.get("categories"),
+            )
         )
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
