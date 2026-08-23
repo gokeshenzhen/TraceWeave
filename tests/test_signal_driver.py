@@ -2,9 +2,12 @@ import os
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import schemas
+from src.cancellation import OperationCancelled
 from src.signal_driver import (
     _find_input_port,
     _find_output_port,
@@ -22,6 +25,23 @@ def _mock_compile(monkeypatch, files, top_module="top_tb"):
         }
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
+
+
+def test_static_driver_scan_propagates_cancellation(monkeypatch, tmp_path):
+    rtl = tmp_path / "dut.sv"
+    rtl.write_text("module top_tb; logic value; endmodule\n")
+    _mock_compile(monkeypatch, [rtl])
+    monkeypatch.setattr(
+        "src.signal_driver.check_cancelled",
+        lambda: (_ for _ in ()).throw(OperationCancelled("cancelled")),
+    )
+
+    with pytest.raises(OperationCancelled):
+        explain_signal_driver(
+            signal_path="top_tb.value",
+            wave_path=str(tmp_path / "wave.vcd"),
+            compile_log=str(tmp_path / "compile.log"),
+        )
 
 
 def test_deep_positional_fixture_remains_a_static_blind_spot(monkeypatch):

@@ -10,6 +10,7 @@ import os
 import re
 from typing import Any
 
+from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
 from .tb_hierarchy_builder import scan_sv_file
 
@@ -65,6 +66,7 @@ def explain_signal_driver(
     max_depth: int = 10,
     simulator: str = 'auto',
 ) -> dict[str, Any]:
+    check_cancelled()
     module_index, top_module = _build_module_index(
         compile_log, top_hint, simulator, signal_path=signal_path,
     )
@@ -81,12 +83,16 @@ def _build_module_index(
 ) -> tuple[dict[str, dict[str, Any]], str]:
     compile_result = parse_compile_log(compile_log, simulator)
     file_entries = compile_result.get("files", {}).get("user", [])
-    scans = [scan_sv_file(entry["path"]) for entry in file_entries if os.path.exists(entry["path"])]
-    module_index = {
-        module_name: scan
-        for scan in scans
-        for module_name in scan["modules"]
-    }
+    scans: list[dict[str, Any]] = []
+    for entry in file_entries:
+        check_cancelled()
+        if os.path.exists(entry["path"]):
+            scans.append(scan_sv_file(entry["path"]))
+    module_index: dict[str, dict[str, Any]] = {}
+    for scan in scans:
+        check_cancelled()
+        for module_name in scan["modules"]:
+            module_index[module_name] = scan
     top_module = _select_top_module(compile_result, top_hint, signal_path)
     return module_index, top_module
 
@@ -210,8 +216,10 @@ def _resolve_instance_module(
         return None
 
     for instance_name in parts[start_idx:-1]:
+        check_cancelled()
         next_module = None
         for item in current_scan["module_instances"]:
+            check_cancelled()
             if item["instance_name"] == instance_name:
                 next_module = item["module_name"]
                 break
@@ -378,6 +386,7 @@ def _trace_driver_chain(
     final_stop: str | None = None
 
     for depth in range(max_depth + 1):
+        check_cancelled()
         visited.add(current_signal)
 
         hop, ctx = _resolve_single_hop(current_signal, top_module, module_index)
@@ -475,9 +484,11 @@ def _traverse_upward(
 
     instance_name = ctx.instance_path.split(".")[-1]
     for inst_match in _INSTANCE_RE.finditer(parent_scan["source_text"]):
+        check_cancelled()
         if inst_match.group("inst") != instance_name:
             continue
         for port_match in _PORT_CONN_RE.finditer(inst_match.group("body")):
+            check_cancelled()
             if port_match.group("port") != signal_name:
                 continue
             expression = port_match.group("expr")
@@ -534,6 +545,7 @@ def _find_local_driver(scan: dict[str, Any], signal_name: str) -> dict[str, Any]
 
     proc_re = re.compile(_ASSIGNMENT_RE_TEMPLATE.format(name=re.escape(signal_name)))
     for block in _ALWAYS_BLOCK_RE.finditer(source):
+        check_cancelled()
         match = proc_re.search(block.group("body"))
         if not match:
             continue
@@ -569,10 +581,12 @@ def _find_input_port(scan: dict[str, Any], signal_name: str) -> dict[str, Any] |
 def _find_port_names(source_text: str, direction: str) -> dict[str, int]:
     result: dict[str, int] = {}
     for match in _PORT_DECL_RE.finditer(source_text):
+        check_cancelled()
         if match.group("dir").lower() != direction:
             continue
         line = _line_of_offset(source_text, match.start())
         for ident in _IDENT_RE.finditer(match.group("rest")):
+            check_cancelled()
             name = ident.group("name")
             if name.lower() in _UPSTREAM_FILTER_KEYWORDS:
                 continue
@@ -588,9 +602,11 @@ def _find_instance_port_driver(
     results: list[dict[str, Any]] = []
     sig_re = re.compile(rf"^{re.escape(signal_name)}(?:\s*\[[^\]]*\])?$")
     for inst_match in _INSTANCE_RE.finditer(scan["source_text"]):
+        check_cancelled()
         child_scan = module_index.get(inst_match.group("module")) if module_index else None
         body = inst_match.group("body")
         for port_match in _PORT_CONN_RE.finditer(body):
+            check_cancelled()
             expr = port_match.group("expr").strip()
             if not sig_re.match(expr):
                 continue
@@ -619,6 +635,7 @@ def _compact_expr(expr: str) -> str:
 def _extract_upstream_signals(expr: str) -> list[str]:
     names: list[str] = []
     for match in _SIGNAL_REF_RE.finditer(expr):
+        check_cancelled()
         token = match.group("ref")
         lower = token.lower()
         if lower in _UPSTREAM_FILTER_KEYWORDS:
@@ -665,6 +682,7 @@ def _decide_next_upstream(hop: dict[str, Any]) -> _TraceDecision:
 def _build_chain_summary(chain: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for hop in chain:
+        check_cancelled()
         sig = hop.get("resolved_rtl_name", hop["signal_path"].split(".")[-1])
         marker = hop.get("stopped_at") or hop.get("driver_kind") or "unknown"
         parts.append(f"{sig} ->[{marker}]")

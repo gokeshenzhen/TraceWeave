@@ -29,9 +29,14 @@ import time
 from typing import Any
 
 from config import NPI_ALLOW_DEGRADED_KDB
-from .cancellation import check_cancelled
+from .cancellation import OperationCancelled, check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
+from .connectivity_limits import (
+    DEFAULT_LOAD_OUTPUT_LIMIT,
+    DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT,
+    DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+)
 from .hierarchy_provider import (
     HierarchyCandidateLimitExceeded,
     NpiHierarchyProvider,
@@ -171,9 +176,6 @@ def _silence_native_stdio():
 # upstream regs; we surface a representative subset so the result stays
 # legible without truncating silently for typical signals.
 _FAN_IN_MAX_BRANCHES = 32
-_FAN_OUT_MAX_BRANCHES = 64
-
-
 def _module_of(hdl: Any) -> str | None:
     """Best-effort lookup of the module *definition* name owning an NPI handle.
 
@@ -195,6 +197,35 @@ def _module_of(hdl: Any) -> str | None:
     except Exception:
         return None
     return name or None
+
+
+def _npi_handle_key(hdl: Any) -> tuple[str, str] | tuple[str, int]:
+    """Return a stable-in-query key without retaining another native handle."""
+
+    try:
+        kind = str(hdl.type()) if hasattr(hdl, "type") else type(hdl).__name__
+        name = hdl.full_name() if hasattr(hdl, "full_name") else None
+    except Exception:
+        return ("object", id(hdl))
+    if isinstance(name, str) and name:
+        return kind, name
+    return ("object", id(hdl))
+
+
+def _is_output_boundary_load(hdl: Any) -> bool:
+    """Whether a reported load is only the module's outward-facing port."""
+
+    if not all(hasattr(hdl, attr) for attr in ("type", "direction", "connected_pin")):
+        return False
+    try:
+        kind = str(hdl.type())
+        direction = str(hdl.direction())
+    except Exception:
+        return False
+    return kind in {"npiNlPort", "npiNlPseudoPort"} and direction in {
+        "npiNlOutput",
+        "npiNlInout",
+    }
 
 
 def _is_boundary_driver(hdl: Any) -> bool:
@@ -382,6 +413,8 @@ class VerdiNpiBackend:
                 signal_path, compile_result, kdb_path, top,
                 include_expr, kind_filter,
             )
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - never crash the MCP server
             _LOG.warning("VerdiNpiBackend.find_loads failed: %s", exc)
             return self._fallback_with_reason(
@@ -1122,76 +1155,161 @@ class VerdiNpiBackend:
             return result
 
         keep = set(kind_filter) if kind_filter else None
-        loads: list[dict[str, Any]] = []
-        for hdl in raw_loads:
+        (
+            direct_handles,
+            boundary_work_truncated,
+            recovery_failed,
+        ) = self._bounded_direct_load_handles(
+            net,
+            raw_loads,
+            handle_limit=DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+            state_limit=DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT,
+        )
+        loads, output_truncated, format_work_truncated, _ = (
+            self._bounded_format_load_handles(
+                direct_handles,
+                include_expr=include_expr,
+                keep=keep,
+                output_limit=DEFAULT_LOAD_OUTPUT_LIMIT,
+                handle_limit=DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+            )
+        )
+        output_limit = DEFAULT_LOAD_OUTPUT_LIMIT
+        work_truncated = boundary_work_truncated or format_work_truncated
+
+        incomplete_reasons: list[str] = []
+        if output_truncated:
+            incomplete_reasons.append("output_limit")
+        if work_truncated:
+            incomplete_reasons.append("work_limit")
+        if recovery_failed:
+            incomplete_reasons.append("coverage_incomplete")
+        if self._loaded_degraded:
+            incomplete_reasons.append("backend_degraded")
+        exhaustive = not incomplete_reasons
+        result["loads"] = loads
+        result["enumeration"] = {
+            "returned_count": len(loads),
+            "output_limit": output_limit,
+            "output_truncated": output_truncated,
+            "search_exhaustive": exhaustive,
+            "incomplete_reasons": incomplete_reasons,
+            "continuation_supported": False,
+        }
+        if not exhaustive:
+            result["completeness"] = "approximate"
+        if recovery_failed:
+            result["stopped_at"] = "npi_boundary_recovery_failed"
+        elif output_truncated:
+            result["stopped_at"] = "npi_load_output_limit"
+        elif work_truncated:
+            result["stopped_at"] = "npi_load_work_limit"
+        if not result["loads"]:
+            result["stopped_at"] = result["stopped_at"] or "no_npi_loads"
+        return result
+
+    def _bounded_direct_load_handles(
+        self,
+        initial_net: Any,
+        initial_handles: list[Any],
+        *,
+        handle_limit: int,
+        state_limit: int,
+    ) -> tuple[list[Any], bool, bool]:
+        """Collect direct consumers while transparently crossing output ports.
+
+        NPI models a child output as a load on the child's local net.  That
+        port is a hierarchy boundary, not the design-level consumer.  Follow
+        only its paired parent net and call ``load_list`` again; never invoke
+        ``fan_out_reg_list``, whose native implementation materialises an
+        unbounded combinational cone before Python can apply a result slice.
+        """
+
+        queue: list[tuple[Any, list[Any] | None]] = [(initial_net, initial_handles)]
+        visited: set[tuple[str, str] | tuple[str, int]] = set()
+        consumers: list[Any] = []
+        inspected = 0
+        work_truncated = False
+        recovery_failed = False
+
+        while queue:
+            check_cancelled()
+            current, supplied_handles = queue.pop(0)
+            state_key = _npi_handle_key(current)
+            if state_key in visited:
+                continue
+            if len(visited) >= state_limit:
+                work_truncated = True
+                break
+            visited.add(state_key)
+            if supplied_handles is None:
+                try:
+                    with _silence_native_stdio():
+                        handles = current.load_list() or []
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("NPI boundary load_list failed: %s", exc)
+                    recovery_failed = True
+                    continue
+            else:
+                handles = supplied_handles
+
+            remaining = handle_limit - inspected
+            if remaining <= 0:
+                work_truncated = True
+                break
+            if len(handles) > remaining:
+                work_truncated = True
+            bounded_handles = handles[:remaining]
+            inspected += len(bounded_handles)
+
+            for hdl in bounded_handles:
+                check_cancelled()
+                if not _is_output_boundary_load(hdl):
+                    consumers.append(hdl)
+                    continue
+                try:
+                    with _silence_native_stdio():
+                        peer = hdl.connected_pin()
+                        parent_net = peer.connected_net() if peer is not None else None
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("NPI output-boundary recovery failed: %s", exc)
+                    recovery_failed = True
+                    continue
+                if parent_net is not None and _npi_handle_key(parent_net) not in visited:
+                    queue.append((parent_net, None))
+
+        return consumers, work_truncated, recovery_failed
+
+    def _bounded_format_load_handles(
+        self,
+        handles: list[Any],
+        *,
+        include_expr: bool,
+        keep: set[str] | None,
+        output_limit: int,
+        handle_limit: int,
+    ) -> tuple[list[dict[str, Any]], bool, bool, int]:
+        """Format a bounded handle prefix and publish every lost-coverage fact."""
+
+        inspected = min(len(handles), handle_limit)
+        formatted: list[dict[str, Any]] = []
+        for hdl in handles[:handle_limit]:
+            check_cancelled()
             entry = self._format_load(hdl, include_expr=include_expr)
             if entry is None:
                 continue
             if keep is not None and entry["kind"] not in keep:
                 continue
-            loads.append(entry)
-
-        # ``load_list`` is the exact direct-consumer API and already covers
-        # the overwhelmingly common case.  ``fan_out_reg_list`` is a full
-        # combinational-cone traversal: on a large global control net it can
-        # materialise the whole design even though we retain only 64 terminal
-        # registers.  Use that expensive boundary-recovery path only when NPI
-        # found no direct handles at all.  A caller-side kind filter must not
-        # turn a proved direct result into an unrelated recursive cone walk.
-        if not raw_loads:
-            fan_out_loads = self._fan_out_loads(
-                net,
-                signal_path,
-                top,
-                include_expr=include_expr,
-                max_branches=_FAN_OUT_MAX_BRANCHES,
-            )
-            if fan_out_loads is not None:
-                for entry in fan_out_loads:
-                    if keep is not None and entry["kind"] not in keep:
-                        continue
-                    loads.append(entry)
-
-        result["loads"] = _dedup(loads)
-        if not result["loads"]:
-            result["stopped_at"] = "no_npi_loads"
-        return result
-
-    def _fan_out_loads(
-        self,
-        net: Any,
-        signal_path: str,
-        top: str,
-        *,
-        include_expr: bool,
-        max_branches: int,
-    ) -> list[dict[str, Any]] | None:
-        """Walk fan-out cone with NPI and format boundary/register loads.
-
-        ``load_list`` reports direct loads only. For module output ports,
-        the useful consumers often live across the parent boundary; Verdi's
-        ``fan_out_reg_list`` is the matching cone traversal API.
-        """
-        if not hasattr(net, "fan_out_reg_list"):
-            return None
-        bound = signal_path.split(".", 1)[0] if "." in signal_path else top
-        try:
-            with _silence_native_stdio():
-                pins = net.fan_out_reg_list(
-                    stop_at_pin=True,
-                    report_primary_port=True,
-                    top_scope_name=bound,
-                ) or []
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("net.fan_out_reg_list failed for %s: %s", signal_path, exc)
-            return None
-
-        loads: list[dict[str, Any]] = []
-        for pin in pins[:max_branches]:
-            entry = self._format_load(pin, include_expr=include_expr)
-            if entry is not None:
-                loads.append(entry)
-        return loads
+            formatted.append(entry)
+        deduped = _dedup(formatted)
+        output_truncated = len(deduped) > output_limit
+        work_truncated = len(handles) > handle_limit
+        return (
+            deduped[:output_limit],
+            output_truncated,
+            work_truncated,
+            inspected,
+        )
 
     def _npi_find_driver(
         self,

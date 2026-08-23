@@ -231,11 +231,18 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │    When: Symmetric to explain_signal_driver — list the consumers (fanout)
    │          of a signal: child instance input ports, RHS in assigns /
    │          procedural assignments, always-block sensitivity lists.
-   │    Output: loads[].{load_path, kind, source_file, source_line, expr}
+   │    Output: loads[].{load_path, kind, source_file, source_line, expr},
+   │            enumeration.{returned_count, output_limit, output_truncated,
+   │            search_exhaustive, incomplete_reasons, continuation_supported}
    │    Notes: Static backend is shallow_only and cannot follow interface
    │           positional bindings or cross-hierarchy fanout — those are
    │           surfaced via stopped_at. NPI backend (when a Verdi KDB is
-   │           present) walks the elaborated netlist and resolves both.
+   │           present) resolves both with direct-load indexes and bounded
+   │           output-port boundary steps; it does not expand a whole fan-out
+   │           cone for a direct-load query. All backends cap output at 256.
+   │           A positive truncated prefix is usable evidence, but only
+   │           search_exhaustive=true means it is the complete list. There is
+   │           currently no resumable pagination token.
    │           Each load carries source_info_origin = "compile_log" or "npi".
    │
    ├─ trace_x_source(signal_path, wave_path, compile_log, time_ps, max_depth?)

@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import schemas
+from src.cancellation import OperationCancelled
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
     _classify_driver_kind,
@@ -119,9 +120,20 @@ def test_classify_load_kind_module_input_vs_rhs():
 
 
 class _MockPin:
-    def __init__(self, name, t="npiNlInstPort"):
+    def __init__(
+        self,
+        name,
+        t="npiNlInstPort",
+        *,
+        direction=None,
+        peer=None,
+        connected_net=None,
+    ):
         self._name = name
         self._t = t
+        self._direction = direction
+        self._peer = peer
+        self._connected_net = connected_net
 
     def full_name(self):
         return self._name
@@ -131,6 +143,15 @@ class _MockPin:
 
     def src_info(self):
         return {}
+
+    def direction(self):
+        return self._direction
+
+    def connected_pin(self):
+        return self._peer
+
+    def connected_net(self):
+        return self._connected_net
 
 
 class _MockNet:
@@ -370,14 +391,32 @@ def test_backend_dedup_keeps_distinct_synthesized_loads(monkeypatch, tmp_path):
     assert len(r["loads"]) == 2
 
 
-def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
+def test_backend_loads_cross_output_boundary_without_full_fanout(
+    monkeypatch,
+    tmp_path,
+):
     log = _make_compile_log(tmp_path)
-    net = _MockNet(
-        loads=[],
-        fan_out=[
-            _MockPin("top_tb.parent.child:Always2#Always0:44:51:Reg.D_count[4:0]"),
+    parent_net = _MockNet(
+        loads=[
+            _MockPin("top_tb.parent.consumer.count"),
             _MockPin("top_tb.parent.count[4:0]", t="npiNlPort"),
         ],
+    )
+    peer = _MockPin(
+        "top_tb.parent.child.count",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    boundary = _MockPin(
+        "top_tb.parent.child.count",
+        t="npiNlPort",
+        direction="npiNlOutput",
+        peer=peer,
+    )
+    net = _MockNet(
+        loads=[boundary],
+        # A recursive cone result would be different; it must never be called.
+        fan_out=[_MockPin("top_tb.parent:Always2:Reg.D_count")],
     )
     netlist_obj = _MockNetlist({"top_tb.parent.child.count": net})
     backend, _, _ = _make_backend_with_mock_npi(
@@ -391,10 +430,11 @@ def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
     assert r["completeness"] == "exact"
     assert r["stopped_at"] is None
     assert {ld["load_path"] for ld in r["loads"]} == {
-        "top_tb.parent.child",
+        "top_tb.parent.consumer.count",
         "top_tb.parent.count[4:0]",
     }
     assert all(ld["backend"] == "verdi_npi" for ld in r["loads"])
+    assert net.fan_out_calls == 0
 
 
 def test_backend_loads_skip_recursive_fan_out_when_direct_handles_exist(
@@ -452,6 +492,215 @@ def test_backend_kind_filter_does_not_trigger_recursive_fan_out(
     assert result["loads"] == []
     assert result["stopped_at"] == "no_npi_loads"
     assert net.fan_out_calls == 0
+
+
+def test_backend_direct_load_output_is_bounded_and_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[_MockPin(f"top_tb.sink_{index}.data") for index in range(300)],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 256
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_output_limit"
+    assert result["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit"],
+        "continuation_supported": False,
+    }
+    assert net.fan_out_calls == 0
+
+
+def test_backend_direct_load_handle_work_limit_is_explicit(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_LOAD_HANDLE_LIMIT",
+        2,
+    )
+    net = _MockNet(
+        loads=[_MockPin(f"top_tb.sink_{index}.data") for index in range(3)],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 2
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_work_limit"
+    assert result["enumeration"]["output_truncated"] is False
+    assert result["enumeration"]["search_exhaustive"] is False
+    assert result["enumeration"]["incomplete_reasons"] == ["work_limit"]
+
+
+def test_backend_direct_load_formatting_propagates_cancellation(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(loads=[_MockPin("top_tb.sink.data")])
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.check_cancelled",
+        lambda: (_ for _ in ()).throw(OperationCancelled("cancelled")),
+    )
+
+    with pytest.raises(OperationCancelled):
+        backend.find_loads(
+            signal_path="top_tb.data",
+            compile_log=log,
+            simulator="vcs",
+        )
+
+
+def test_backend_boundary_recovery_output_limit_is_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    parent_net = _MockNet(
+        loads=[
+            _MockPin(f"top_tb.sink_{index}.data") for index in range(300)
+        ],
+    )
+    peer = _MockPin(
+        "top_tb.child.data",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=peer,
+            )
+        ],
+        fan_out=[_MockPin("top_tb:Always0:Reg.D_data")],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 256
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_output_limit"
+    assert result["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit"],
+        "continuation_supported": False,
+    }
+    assert net.fan_out_calls == 0
+
+
+def test_backend_boundary_recovery_state_limit_is_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT",
+        1,
+    )
+    parent_net = _MockNet(loads=[_MockPin("top_tb.sink.data")])
+    peer = _MockPin(
+        "top_tb.child.data",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=peer,
+            )
+        ],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.child.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.child.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["loads"] == []
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_work_limit"
+    assert result["enumeration"]["incomplete_reasons"] == ["work_limit"]
+
+
+def test_backend_boundary_recovery_failure_is_coverage_incomplete(
+    monkeypatch,
+    tmp_path,
+):
+    class _BrokenPeer:
+        def connected_net(self):
+            raise RuntimeError("broken")
+
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=_BrokenPeer(),
+            )
+        ],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.child.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.child.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["loads"] == []
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_boundary_recovery_failed"
+    assert result["enumeration"]["incomplete_reasons"] == [
+        "coverage_incomplete"
+    ]
 
 
 def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):

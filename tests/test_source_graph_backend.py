@@ -199,6 +199,14 @@ def test_high_fanout_receipts_keep_positive_facts_without_claiming_exhaustive():
     assert loads["completeness"] == "approximate"
     assert loads["stopped_at"] == "source_graph_query_truncated"
     assert loads["unsupported_reason"] is None
+    assert loads["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit", "coverage_incomplete"],
+        "continuation_supported": False,
+    }
     assert driver["driver_status"] == "partial"
     assert len(driver["driver_chain"]) == 256
     assert driver["stopped_at"] == "source_graph_query_truncated"

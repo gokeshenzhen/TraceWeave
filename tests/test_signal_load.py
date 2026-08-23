@@ -1,9 +1,12 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import schemas
+from src.cancellation import OperationCancelled
 from src.signal_load import find_signal_loads
 
 
@@ -278,6 +281,49 @@ endmodule
     assert r["stopped_at"] == "no_static_load_found"
 
 
+def test_static_high_fanout_returns_explicit_bounded_prefix(monkeypatch, tmp_path):
+    rtl = tmp_path / "m.sv"
+    assignments = "\n".join(
+        f"  assign sink_{index} = source;" for index in range(300)
+    )
+    rtl.write_text(
+        "module top_tb; m u0(); endmodule\n"
+        "module m; logic source; logic [299:0] sinks;\n"
+        f"{assignments}\n"
+        "endmodule\n"
+    )
+    _mock_compile(monkeypatch, [rtl])
+
+    result = find_signal_loads(signal_path="top_tb.u0.source", compile_log="x")
+
+    assert len(result["loads"]) == 256
+    assert result["stopped_at"] == "static_load_output_limit"
+    assert result["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit", "coverage_incomplete"],
+        "continuation_supported": False,
+    }
+
+
+def test_static_load_scan_propagates_cancellation(monkeypatch, tmp_path):
+    rtl = tmp_path / "m.sv"
+    rtl.write_text(
+        "module top_tb; m u0(); endmodule\n"
+        "module m; logic source, sink; assign sink = source; endmodule\n"
+    )
+    _mock_compile(monkeypatch, [rtl])
+    monkeypatch.setattr(
+        "src.signal_load.check_cancelled",
+        lambda: (_ for _ in ()).throw(OperationCancelled("cancelled")),
+    )
+
+    with pytest.raises(OperationCancelled):
+        find_signal_loads(signal_path="top_tb.u0.source", compile_log="x")
+
+
 def test_kind_filter(monkeypatch, tmp_path):
     rtl = tmp_path / "m.sv"
     rtl.write_text(
@@ -332,6 +378,9 @@ endmodule
     model = schemas.FindSignalLoadsResult.model_validate(r)
     assert model.completeness == "shallow_only"
     assert model.loads
+    assert model.enumeration is not None
+    assert model.enumeration.search_exhaustive is False
+    assert model.enumeration.continuation_supported is False
     assert model.backend_status.backend == "static"
 
 

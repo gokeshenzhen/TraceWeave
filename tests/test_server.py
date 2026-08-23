@@ -38,6 +38,42 @@ def _prefill_get_sim_paths_state(**overrides):
     server._session_state["get_sim_paths"] = state
 
 
+def test_clean_npi_positive_truncated_load_prefix_remains_usable():
+    result = {
+        "backend": "verdi_npi",
+        "loads": [
+            {
+                "load_path": "top.sink",
+                "kind": "module_input",
+                "backend": "verdi_npi",
+            }
+        ],
+        "completeness": "approximate",
+        "stopped_at": "npi_load_output_limit",
+    }
+
+    assert server._npi_result_usable(
+        result,
+        "loads",
+        kdb_status={"load_quality": "clean"},
+    )
+
+
+def test_clean_npi_empty_truncated_load_prefix_is_not_a_negative_claim():
+    result = {
+        "backend": "verdi_npi",
+        "loads": [],
+        "completeness": "approximate",
+        "stopped_at": "npi_load_work_limit",
+    }
+
+    assert not server._npi_result_usable(
+        result,
+        "loads",
+        kdb_status={"load_quality": "clean"},
+    )
+
+
 def _prefill_build_tb_hierarchy_state(**overrides):
     """预填 build_tb_hierarchy state 以绕过门禁。"""
     state = {

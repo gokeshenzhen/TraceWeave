@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .cancellation import check_cancelled
+from .connectivity_limits import DEFAULT_LOAD_OUTPUT_LIMIT
 from .signal_driver import (
     _ALWAYS_BLOCK_RE,
     _INSTANCE_RE,
@@ -62,6 +64,7 @@ def find_signal_loads(
     transitive walks; the static implementation always behaves as
     depth=1.
     """
+    check_cancelled()
     if max_depth != 1:
         # Reserved; static path is shallow only.
         max_depth = 1
@@ -80,6 +83,14 @@ def find_signal_loads(
         "completeness": "shallow_only",
         "stopped_at": None,
         "unsupported_reason": None,
+        "enumeration": {
+            "returned_count": 0,
+            "output_limit": DEFAULT_LOAD_OUTPUT_LIMIT,
+            "output_truncated": False,
+            "search_exhaustive": False,
+            "incomplete_reasons": ["coverage_incomplete"],
+            "continuation_supported": False,
+        },
     }
 
     if resolved is None:
@@ -113,16 +124,67 @@ def find_signal_loads(
 
     keep_kinds = set(kind_filter) if kind_filter else None
     raw_loads: list[dict[str, Any]] = []
+    work_truncated = False
+    candidate_limit = DEFAULT_LOAD_OUTPUT_LIMIT + 1
     if keep_kinds is None or "module_input" in keep_kinds:
-        raw_loads.extend(
-            _find_instance_input_loads(scan, rtl_name, instance_path, module_index, include_expr)
+        found, truncated = _find_instance_input_loads(
+            scan,
+            rtl_name,
+            instance_path,
+            module_index,
+            include_expr,
+            result_limit=candidate_limit,
         )
-    if keep_kinds is None or "rhs_expr" in keep_kinds:
-        raw_loads.extend(_find_local_rhs_loads(scan, rtl_name, instance_path, include_expr))
-    if keep_kinds is None or "always_sensitivity" in keep_kinds:
-        raw_loads.extend(_find_sensitivity_loads(scan, rtl_name, instance_path, include_expr))
+        raw_loads.extend(found)
+        work_truncated = work_truncated or truncated
+    if (
+        len(_dedup_loads(raw_loads)) <= DEFAULT_LOAD_OUTPUT_LIMIT
+        and (keep_kinds is None or "rhs_expr" in keep_kinds)
+    ):
+        found, truncated = _find_local_rhs_loads(
+            scan,
+            rtl_name,
+            instance_path,
+            include_expr,
+            result_limit=candidate_limit,
+        )
+        raw_loads.extend(found)
+        work_truncated = work_truncated or truncated
+    if (
+        len(_dedup_loads(raw_loads)) <= DEFAULT_LOAD_OUTPUT_LIMIT
+        and (keep_kinds is None or "always_sensitivity" in keep_kinds)
+    ):
+        found, truncated = _find_sensitivity_loads(
+            scan,
+            rtl_name,
+            instance_path,
+            include_expr,
+            result_limit=candidate_limit,
+        )
+        raw_loads.extend(found)
+        work_truncated = work_truncated or truncated
 
-    base["loads"] = _dedup_loads(raw_loads)
+    check_cancelled()
+    deduped = _dedup_loads(raw_loads)
+    output_truncated = len(deduped) > DEFAULT_LOAD_OUTPUT_LIMIT
+    work_truncated = work_truncated and not output_truncated
+    base["loads"] = deduped[:DEFAULT_LOAD_OUTPUT_LIMIT]
+    base["enumeration"] = {
+        "returned_count": len(base["loads"]),
+        "output_limit": DEFAULT_LOAD_OUTPUT_LIMIT,
+        "output_truncated": output_truncated,
+        "search_exhaustive": False,
+        "incomplete_reasons": [
+            *(("output_limit",) if output_truncated else ()),
+            *(("work_limit",) if work_truncated else ()),
+            "coverage_incomplete",
+        ],
+        "continuation_supported": False,
+    }
+    if output_truncated:
+        base["stopped_at"] = "static_load_output_limit"
+    elif work_truncated:
+        base["stopped_at"] = "static_load_work_limit"
     if not base["loads"]:
         # Either signal truly has no static loads, or static path is blind
         # (interface / generate / bind). The dispatch layer surfaces
@@ -144,18 +206,22 @@ def _find_instance_input_loads(
     instance_path: str,
     module_index: dict[str, dict[str, Any]],
     include_expr: bool,
-) -> list[dict[str, Any]]:
+    *,
+    result_limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
     """Signal feeds a child instance's input port within this module."""
     results: list[dict[str, Any]] = []
     sig_re = re.compile(rf"^{re.escape(signal_name)}(?:\s*\[[^\]]*\])?$")
     source = scan["source_text"]
     for inst_match in _INSTANCE_RE.finditer(source):
+        check_cancelled()
         child_module = inst_match.group("module")
         if child_module.lower() in _UPSTREAM_FILTER_KEYWORDS:
             continue
         child_scan = module_index.get(child_module)
         body = inst_match.group("body")
         for port_match in _PORT_CONN_RE.finditer(body):
+            check_cancelled()
             expr = port_match.group("expr").strip()
             if not sig_re.match(expr):
                 continue
@@ -179,7 +245,9 @@ def _find_instance_input_loads(
                     "confidence": "approximate",
                 }
             )
-    return results
+            if len(results) >= result_limit:
+                return results, True
+    return results, False
 
 
 def _find_local_rhs_loads(
@@ -187,7 +255,9 @@ def _find_local_rhs_loads(
     signal_name: str,
     instance_path: str,
     include_expr: bool,
-) -> list[dict[str, Any]]:
+    *,
+    result_limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
     """Signal appears in RHS of an assign or procedural assignment."""
     results: list[dict[str, Any]] = []
     source = scan["source_text"]
@@ -195,6 +265,7 @@ def _find_local_rhs_loads(
 
     # Continuous assigns
     for m in _ASSIGN_STMT_RE.finditer(source):
+        check_cancelled()
         rhs = m.group("rhs")
         if not sig_word_re.search(rhs):
             continue
@@ -214,12 +285,16 @@ def _find_local_rhs_loads(
                 "confidence": "approximate",
             }
         )
+        if len(results) >= result_limit:
+            return results, True
 
     # Procedural assignments inside always blocks
     for block in _ALWAYS_BLOCK_RE.finditer(source):
+        check_cancelled()
         body = block.group("body")
         block_offset = block.start()
         for stmt in _PROC_ASSIGN_RE.finditer(body):
+            check_cancelled()
             rhs = stmt.group("rhs")
             if not sig_word_re.search(rhs):
                 continue
@@ -240,7 +315,9 @@ def _find_local_rhs_loads(
                     "confidence": "approximate",
                 }
             )
-    return results
+            if len(results) >= result_limit:
+                return results, True
+    return results, False
 
 
 def _find_sensitivity_loads(
@@ -248,12 +325,15 @@ def _find_sensitivity_loads(
     signal_name: str,
     instance_path: str,
     include_expr: bool,
-) -> list[dict[str, Any]]:
+    *,
+    result_limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
     """Signal appears in an always block @(...) sensitivity list."""
     results: list[dict[str, Any]] = []
     source = scan["source_text"]
     sig_word_re = re.compile(rf"\b{re.escape(signal_name)}\b")
     for header in _ALWAYS_HEADER_RE.finditer(source):
+        check_cancelled()
         sens = header.group("sens") or ""
         if not sens:
             continue
@@ -272,13 +352,16 @@ def _find_sensitivity_loads(
                 "confidence": "approximate",
             }
         )
-    return results
+        if len(results) >= result_limit:
+            return results, True
+    return results, False
 
 
 def _dedup_loads(loads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str | None, int | None]] = set()
     out: list[dict[str, Any]] = []
     for entry in loads:
+        check_cancelled()
         key = (
             entry["load_path"],
             entry["kind"],

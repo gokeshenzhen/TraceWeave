@@ -468,13 +468,16 @@ Verification
   `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
   `source_info_origin` field (`"compile_log"` vs `"npi"`) so consumers can
   tell which provenance produced each `file:line`.
-- NPI load lookup treats `net.load_list()` as the authoritative direct-load
-  result. It invokes the much broader `fan_out_reg_list()` boundary-recovery
-  walk only when NPI returned no direct handles at all; a `kind_filter` cannot
-  turn a proved direct result into a recursive cone walk. This keeps ordinary
-  high-fanout clock/reset/scan queries proportional to their direct consumers
-  instead of materialising an entire combinational fan-out cone merely to
-  discard all but the bounded terminal-register prefix.
+- NPI load lookup uses `net.load_list()` as its direct-consumer primitive. A
+  child's outward-facing output port is treated as a transparent hierarchy
+  boundary: `connected_pin().connected_net()` steps to the parent net and runs
+  another direct lookup under 64-state / 16,384-handle work limits. It never
+  calls native `fan_out_reg_list()`, which materialises a whole combinational
+  cone before Python can apply an output slice. All backends cap public load
+  output at 256 and populate the backend-neutral `enumeration` receipt;
+  `search_exhaustive=false` and fixed incomplete reasons keep a bounded prefix
+  distinct from a complete list. Continuation is explicitly unsupported until
+  a backend-neutral cursor can preserve artifact/work identity safely.
   `load_design == 1` establishes a clean load. `load_design == 0` is accepted
   only for an error-marked artifact when degraded mode is enabled and a
   non-empty, requested-top-matching top-instance self-check passes. No error

@@ -1757,6 +1757,15 @@ def _npi_result_usable(
             "exact",
             "approximate",
         }
+    if result.get("loads"):
+        return result.get("completeness") in {"exact", "approximate"} and result.get(
+            "stopped_at"
+        ) in {
+            None,
+            "npi_load_output_limit",
+            "npi_load_work_limit",
+            "npi_boundary_recovery_failed",
+        }
     return result.get("completeness") == "exact" and result.get("stopped_at") in {
         None,
         "no_npi_loads",
@@ -5591,8 +5600,11 @@ async def list_tools():
                 "before treating the list as all loads, and negative_claim_allowed is required "
                 "before claiming there are none. A complete Source Graph not_connected is distinct "
                 "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. "
-                "High-fanout Source Graph output is capped with an explicit query_truncated "
-                "receipt; capped positive loads remain usable but are not a complete list. "
+                "Every backend publishes enumeration.{returned_count, output_limit, "
+                "output_truncated, search_exhaustive, incomplete_reasons, "
+                "continuation_supported}. High-fanout output is capped at 256; capped "
+                "positive loads remain usable but are not a complete list, and no backend "
+                "currently promises a continuation token. "
                 "Each load query normalizes trailing numeric selects for Legacy Static matching, while "
                 "Source Graph validates the selected bits against the declaration. Each load "
                 "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "

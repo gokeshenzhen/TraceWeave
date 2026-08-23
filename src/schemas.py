@@ -1116,6 +1116,28 @@ class LoadHop(SchemaModel):
     ] = "approximate"
 
 
+class LoadEnumerationReceipt(SchemaModel):
+    """Backend-neutral bounds and claim strength for a load enumeration."""
+
+    returned_count: int = Field(ge=0)
+    output_limit: int = Field(ge=1)
+    output_truncated: bool = False
+    search_exhaustive: bool = False
+    incomplete_reasons: list[
+        Literal[
+            "output_limit",
+            "work_limit",
+            "depth_limit",
+            "coverage_incomplete",
+            "backend_degraded",
+        ]
+    ] = Field(default_factory=list)
+    # No backend currently has a continuation token that can preserve its
+    # work/coverage identity safely.  Keep the fact explicit instead of
+    # implying that a truncated prefix can be resumed.
+    continuation_supported: Literal[False] = False
+
+
 class FindSignalLoadsResult(SchemaModel):
     signal_path: str
     resolved_rtl_name: str
@@ -1126,6 +1148,7 @@ class FindSignalLoadsResult(SchemaModel):
     stopped_at: str | None = None
     unsupported_reason: str | None = None
     claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    enumeration: LoadEnumerationReceipt | None = None
     backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 

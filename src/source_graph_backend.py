@@ -113,6 +113,31 @@ def _gap_codes(result: ConnectivityQueryResult) -> list[str]:
     return sorted({gap.code for gap in result.unresolved_boundaries})
 
 
+def _load_enumeration_receipt(
+    result: ConnectivityQueryResult,
+    *,
+    claim_semantics: dict[str, Any],
+) -> dict[str, Any]:
+    gap_codes = set(_gap_codes(result))
+    reasons: list[str] = []
+    if result.match_truncated:
+        reasons.append("output_limit")
+    if result.state_truncated or result.edge_truncated or result.frontier_truncated:
+        reasons.append("work_limit")
+    if "query_depth_limit" in gap_codes:
+        reasons.append("depth_limit")
+    if not claim_semantics["exhaustive_search"]:
+        reasons.append("coverage_incomplete")
+    return {
+        "returned_count": len(result.matches),
+        "output_limit": result.match_limit,
+        "output_truncated": result.match_truncated,
+        "search_exhaustive": bool(claim_semantics["exhaustive_search"]),
+        "incomplete_reasons": reasons,
+        "continuation_supported": False,
+    }
+
+
 def _query_receipt(
     result: ConnectivityQueryResult,
     *,
@@ -694,4 +719,8 @@ class SourceGraphConnectivityBackend:
             "stopped_at": stopped_at,
             "unsupported_reason": unsupported_reason,
             "claim_semantics": claim_semantics,
+            "enumeration": _load_enumeration_receipt(
+                query,
+                claim_semantics=claim_semantics,
+            ),
         }
