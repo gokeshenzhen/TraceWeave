@@ -272,6 +272,14 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
                 "query_status": "found",
                 "query_confidence": "partial",
                 "query_match_count": 1,
+                "visited_state_count": 4,
+                "inspected_edge_count": 257,
+                "state_limit": 4096,
+                "edge_limit": 16384,
+                "match_limit": 256,
+                "frontier_limit": 4096,
+                "match_truncated": True,
+                "query_truncated": True,
                 "claim_semantics": {
                     "positive_fact_confidence": "exact",
                     "target_bit_coverage": "complete",
@@ -315,6 +323,11 @@ def test_backend_status_validates_additive_source_graph_route_receipt():
     assert status.source_graph.effective_timeout_sec == 7.5
     assert status.source_graph.claim_semantics.positive_fact_confidence == "exact"
     assert status.source_graph.claim_semantics.exhaustive_search is False
+    assert status.source_graph.visited_state_count == 4
+    assert status.source_graph.inspected_edge_count == 257
+    assert status.source_graph.match_limit == 256
+    assert status.source_graph.match_truncated is True
+    assert status.source_graph.query_truncated is True
     assert status.source_graph.coverage_files_total == 785
     assert status.source_graph.coverage_files_projected == 4
     assert status.source_graph.coverage_diagnostic_count == 29416

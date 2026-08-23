@@ -717,6 +717,26 @@ only possible driver unless `exclusive_driver_proved=true`, and must not turn an
 empty result into a negative conclusion unless `negative_claim_allowed=true`.
 `trace_x_source` preserves the same receipt on each Source Graph chain node.
 
+Warm driver/load graph walks are independently resource-bounded, even after a
+large IR has been built. The fixed defaults admit 4,096 visited states, 16,384
+inspected IR edges, 256 unique matches, and 4,096 expansion frontiers. The
+walk checks cooperative cancellation at state and edge boundaries and sorts
+its indexes before selecting a bounded result, so the same canonical IR yields
+the same retained facts. Hitting any bound sets `query_truncated=true`, the
+specific `*_truncated` flag and `query_*_limit` coverage gap, and forces
+`coverage_status="inconclusive"`. Returned facts remain positively proved, but
+`exhaustive_search=false`, `exclusive_driver_proved=false` for drivers, and
+`negative_claim_allowed=false`; a high-fanout load list must therefore never be
+described as complete. The public MCP inputs are unchanged in this slice.
+
+The synthetic query benchmark runs each mode in a fresh process and reports
+query/serialization time, result bytes, RSS, limits, and stable-result status:
+
+```bash
+python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode bounded
+python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode full
+```
+
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
 

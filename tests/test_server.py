@@ -100,6 +100,35 @@ module_c ERROR unique issue c @ 3 ns
 """
 
 
+@pytest.mark.parametrize(
+    "gap_code",
+    (
+        "query_depth_limit",
+        "query_state_limit",
+        "query_edge_limit",
+        "query_match_limit",
+        "query_frontier_limit",
+    ),
+)
+def test_query_work_limits_block_same_query_scope_expansion(gap_code):
+    assert server._query_gap_blocks_scope_expansion({gap_code}) is True
+    assert (
+        server._query_gap_blocks_scope_expansion(
+            {"hierarchy_projection_scoped", gap_code}
+        )
+        is True
+    )
+
+
+def test_scope_gap_without_query_limit_remains_expandable():
+    assert (
+        server._query_gap_blocks_scope_expansion(
+            {"hierarchy_projection_scoped"}
+        )
+        is False
+    )
+
+
 class TestScanRequiredNextCallHelpers:
     def test_build_scan_required_next_call_returns_none_when_compile_log_missing(self):
         assert server._build_scan_required_next_call(None, "vcs") is None

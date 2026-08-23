@@ -33,7 +33,10 @@ from src.source_graph_contract import (
 )
 from src.source_graph_runtime import SourceGraphCacheEntry
 from tests.connectivity_ir_fixtures import build_hand_ir
-from tests.test_connectivity_query import _build_segmented_binding_ir
+from tests.test_connectivity_query import (
+    _build_high_fanout_ir,
+    _build_segmented_binding_ir,
+)
 
 
 def _entry(ir=None) -> SourceGraphCacheEntry:
@@ -162,6 +165,43 @@ def test_driver_reports_signal_not_declared_as_a_fixed_query_blocker():
         )
 
     assert caught.value.code == "signal_not_declared"
+
+
+def test_high_fanout_receipts_keep_positive_facts_without_claiming_exhaustive():
+    backend = SourceGraphConnectivityBackend(_entry(_build_high_fanout_ir(300)))
+
+    loads = backend.find_loads(
+        signal_path="path_top.source",
+        compile_log="compile.log",
+    )
+    driver = backend.find_driver(
+        signal_path="path_top.sink",
+        wave_path="wave.fsdb",
+        compile_log="compile.log",
+        recursive=True,
+    )
+
+    assert len(loads["loads"]) == 256
+    assert loads["completeness"] == "approximate"
+    assert loads["stopped_at"] == "source_graph_query_truncated"
+    assert loads["unsupported_reason"] is None
+    assert driver["driver_status"] == "partial"
+    assert len(driver["driver_chain"]) == 256
+    assert driver["stopped_at"] == "source_graph_query_truncated"
+    for result in (loads, driver):
+        receipt = result["_source_graph_query_receipt"]
+        assert receipt["status"] == "found"
+        assert receipt["coverage_status"] == "inconclusive"
+        assert receipt["match_count"] == 256
+        assert receipt["inspected_edge_count"] == 257
+        assert receipt["match_limit"] == 256
+        assert receipt["match_truncated"] is True
+        assert receipt["query_truncated"] is True
+        assert receipt["unresolved_boundary_codes"] == ["query_match_limit"]
+        assert result["claim_semantics"]["positive_fact_confidence"] == "exact"
+        assert result["claim_semantics"]["exhaustive_search"] is False
+        assert result["claim_semantics"]["negative_claim_allowed"] is False
+    assert driver["claim_semantics"]["exclusive_driver_proved"] is False
 
 
 def test_driver_distinguishes_unprojected_intermediate_instance_scope():

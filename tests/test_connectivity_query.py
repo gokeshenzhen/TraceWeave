@@ -804,3 +804,134 @@ def test_path_checks_cancellation_during_graph_traversal(monkeypatch):
     with pytest.raises(cancellation.OperationCancelled):
         engine.query_path("path_top.a", "path_top.d")
     assert calls == 4
+
+
+def _build_high_fanout_ir(count: int) -> ConnectivityIR:
+    return _build_scalar_path_ir(
+        *(
+            (f"fanout-{index:05d}", "source", "sink", BoundaryKind.COMBINATIONAL)
+            for index in range(count)
+        )
+    )
+
+
+def test_load_query_default_match_cap_is_stable_and_inconclusive():
+    ir = _build_high_fanout_ir(300)
+    reordered = replace(
+        ir,
+        definitions=(
+            replace(
+                ir.definitions[0],
+                assignments=tuple(reversed(ir.definitions[0].assignments)),
+            ),
+        ),
+    )
+
+    first = ConnectivityQueryEngine(ir).query_loads("path_top.source")
+    second = ConnectivityQueryEngine(reordered).query_loads("path_top.source")
+
+    assert first.status is QueryStatus.FOUND
+    assert first.coverage_status is CoverageStatus.INCONCLUSIVE
+    assert len(first.matches) == 256
+    assert [match.fact_id for match in first.matches] == [
+        match.fact_id for match in second.matches
+    ]
+    assert first.matches[0].fact_id == "fanout-00000"
+    assert first.matches[-1].fact_id == "fanout-00255"
+    assert first.visited_state_count == 1
+    assert first.inspected_edge_count == 257
+    assert first.match_limit == 256
+    assert first.match_truncated is True
+    assert first.truncated is True
+    assert [gap.code for gap in first.unresolved_boundaries] == [
+        "query_match_limit"
+    ]
+    assert all(
+        match.positive_fact_confidence is QueryConfidence.EXACT_SOURCE
+        for match in first.matches
+    )
+    assert all(match.confidence is QueryConfidence.PARTIAL for match in first.matches)
+
+
+def test_driver_and_load_edge_limit_never_produces_complete_enumeration():
+    engine = ConnectivityQueryEngine(_build_high_fanout_ir(8))
+
+    driver = engine.query_driver(
+        "path_top.sink",
+        edge_limit=3,
+        match_limit=8,
+    )
+    loads = engine.query_loads(
+        "path_top.source",
+        edge_limit=3,
+        match_limit=8,
+    )
+
+    for result in (driver, loads):
+        assert result.status is QueryStatus.FOUND
+        assert result.coverage_status is CoverageStatus.INCONCLUSIVE
+        assert len(result.matches) == 3
+        assert result.inspected_edge_count == 3
+        assert result.edge_truncated is True
+        assert result.match_truncated is False
+        assert [gap.code for gap in result.unresolved_boundaries] == [
+            "query_edge_limit"
+        ]
+
+
+def test_driver_and_load_state_limit_is_loud():
+    engine = ConnectivityQueryEngine(build_deep_ir())
+
+    driver = engine.query_driver(DEEP_OUTPUT, state_limit=2)
+    loads = engine.query_loads(DEEP_INPUT, state_limit=2)
+
+    for result in (driver, loads):
+        assert result.status is QueryStatus.INCONCLUSIVE
+        assert result.coverage_status is CoverageStatus.INCONCLUSIVE
+        assert result.matches == ()
+        assert result.visited_state_count == 2
+        assert result.state_truncated is True
+        assert [gap.code for gap in result.unresolved_boundaries] == [
+            "query_state_limit"
+        ]
+
+
+@pytest.mark.parametrize(
+    ("operation", "signal_path"),
+    (("driver", "path_top.sink"), ("loads", "path_top.source")),
+)
+def test_driver_and_load_queries_check_cancellation_during_walk(
+    monkeypatch, operation, signal_path
+):
+    calls = 0
+
+    def cancel_during_walk():
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise cancellation.OperationCancelled("cancelled in connectivity walk")
+
+    monkeypatch.setattr("src.connectivity_query.check_cancelled", cancel_during_walk)
+    engine = ConnectivityQueryEngine(_build_high_fanout_ir(8))
+
+    with pytest.raises(cancellation.OperationCancelled):
+        getattr(engine, f"query_{operation}")(signal_path)
+    assert calls == 4
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    ("state_limit", "edge_limit", "match_limit", "frontier_limit"),
+)
+@pytest.mark.parametrize("invalid", (0, -1, True))
+def test_driver_and_load_query_limits_require_positive_integers(
+    limit_name, invalid
+):
+    engine = ConnectivityQueryEngine(_build_high_fanout_ir(1))
+
+    for operation, signal_path in (
+        (engine.query_driver, "path_top.sink"),
+        (engine.query_loads, "path_top.source"),
+    ):
+        with pytest.raises(ValueError, match=limit_name):
+            operation(signal_path, **{limit_name: invalid})

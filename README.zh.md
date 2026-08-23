@@ -629,6 +629,24 @@ Source Graph 通过新增的 `claim_semantics` 回执显式区分这些语义。
 `negative_claim_allowed=true` 时才能解释为“不存在”。`trace_x_source` 会把同一回执保留在
 每个 Source Graph chain node 上。
 
+即使大型 IR 已经构建完成，warm driver/load 图遍历也有独立资源硬上限。固定默认值为：
+4,096 个 visited states、16,384 条 inspected IR edges、256 个唯一 matches，以及 4,096
+个 expansion frontiers。遍历会在 state 与 edge 边界检查协作式取消，并在选择有界结果前对
+索引做稳定排序，因此同一 canonical IR 会保留同一批 facts。任一上限触发时都会设置
+`query_truncated=true`、对应的 `*_truncated` 标志和 `query_*_limit` coverage gap，并强制
+`coverage_status="inconclusive"`。已经返回的 facts 仍是已证明的正向事实，但
+`exhaustive_search=false`；driver 的 `exclusive_driver_proved=false`，且
+`negative_claim_allowed=false`。因此高 fanout load 列表绝不能被描述为完整枚举。本切片不
+改变公开 MCP 输入。
+
+合成查询 benchmark 会让每种模式运行在独立新进程中，并报告 query/serialization 时间、
+结果字节数、RSS、实际 limits 和结果稳定性：
+
+```bash
+python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode bounded
+python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode full
+```
+
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：
 

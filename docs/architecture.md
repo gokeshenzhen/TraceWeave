@@ -192,6 +192,17 @@ Verification
   evidence is exposed. `trace_x_source` uses the same memory-first artifact
   runtime and optional exact disk tier while retaining split-phase waveform
   locking and whole-trace restart semantics.
+  Driver/load traversal has a second resource boundary independent of artifact
+  preparation: 4,096 states, 16,384 inspected IR edges, 256 unique matches,
+  and 4,096 expansion frontiers by default. Index lists are canonicalized once
+  when the query engine is constructed; state/edge loops contain cooperative
+  cancellation checkpoints. A state, edge, match, or frontier cap adds a
+  fixed `query_*_limit` gap and makes coverage inconclusive. Positive facts
+  survive with their fact confidence, but a capped result is non-exhaustive and
+  cannot prove uniqueness or absence. No work-limit frontier is fed back into
+  scope expansion, preventing a same-artifact rebuild loop. The fixed-budget
+  mapping is versioned independently from artifact identity, so existing IR
+  cache entries remain valid while new query semantics apply consistently.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first

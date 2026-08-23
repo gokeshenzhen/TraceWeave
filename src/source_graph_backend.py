@@ -126,6 +126,17 @@ def _query_receipt(
         "unresolved_boundary_codes": _gap_codes(result),
         "traversed_binding_edges": result.traversed_binding_edges,
         "max_depth": result.max_depth,
+        "visited_state_count": result.visited_state_count,
+        "inspected_edge_count": result.inspected_edge_count,
+        "state_limit": result.state_limit,
+        "edge_limit": result.edge_limit,
+        "match_limit": result.match_limit,
+        "frontier_limit": result.frontier_limit,
+        "state_truncated": result.state_truncated,
+        "edge_truncated": result.edge_truncated,
+        "match_truncated": result.match_truncated,
+        "frontier_truncated": result.frontier_truncated,
+        "query_truncated": result.truncated,
         "queried_bit_count": result.signal.width,
         "resolved_bit_count": len(result.resolved_bits),
         "unresolved_bit_count": len(result.unresolved_bits),
@@ -518,6 +529,10 @@ class SourceGraphConnectivityBackend:
                 driver_status = "partial"
                 stopped_at = "source_graph_bit_provenance_incomplete"
                 unsupported_reason = "source_graph_bit_provenance_incomplete"
+            elif query.truncated:
+                driver_status = "partial"
+                stopped_at = "source_graph_query_truncated"
+                unsupported_reason = None
             else:
                 driver_status = "resolved"
                 stopped_at = None
@@ -652,6 +667,9 @@ class SourceGraphConnectivityBackend:
         elif query.status is QueryStatus.INCONCLUSIVE:
             stopped_at = "source_graph_query_inconclusive"
             unsupported_reason = "source_graph_query_inconclusive"
+        elif query.truncated:
+            stopped_at = "source_graph_query_truncated"
+            unsupported_reason = None
         else:
             stopped_at = None
             unsupported_reason = None

@@ -925,6 +925,16 @@ class SourceGraphBackendReceipt(SchemaModel):
     inconclusive_negative_count: int = 0
     traversed_binding_edges: int = 0
     max_depth: int | None = None
+    inspected_edge_count: int = 0
+    state_limit: int | None = None
+    edge_limit: int | None = None
+    match_limit: int | None = None
+    frontier_limit: int | None = None
+    state_truncated: bool = False
+    edge_truncated: bool = False
+    match_truncated: bool = False
+    frontier_truncated: bool = False
+    query_truncated: bool = False
     queried_bit_count: int = 0
     resolved_bit_count: int = 0
     unresolved_bit_count: int = 0

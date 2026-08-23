@@ -1617,6 +1617,19 @@ _SOURCE_GRAPH_PREPARE_REASONS = {
     PrepareStatus.TIMED_OUT: "source_graph_timed_out",
     PrepareStatus.INVALID_RESPONSE: "source_graph_invalid_response",
 }
+_SOURCE_GRAPH_NON_EXPANDABLE_QUERY_GAPS = frozenset(
+    {
+        "query_depth_limit",
+        "query_state_limit",
+        "query_edge_limit",
+        "query_match_limit",
+        "query_frontier_limit",
+    }
+)
+
+
+def _query_gap_blocks_scope_expansion(gap_codes: set[str]) -> bool:
+    return bool(gap_codes & _SOURCE_GRAPH_NON_EXPANDABLE_QUERY_GAPS)
 
 
 def _sanitize_npi_fallback_reason(value: object) -> str:
@@ -2136,6 +2149,16 @@ def _merge_source_graph_query_receipt(
         "path_edge_count",
         "traversed_edge_count",
         "visited_state_count",
+        "inspected_edge_count",
+        "state_limit",
+        "edge_limit",
+        "match_limit",
+        "frontier_limit",
+        "state_truncated",
+        "edge_truncated",
+        "match_truncated",
+        "frontier_truncated",
+        "query_truncated",
         "traversal_limit",
         "output_limit",
         "traversal_truncated",
@@ -2817,7 +2840,7 @@ async def _route_public_connectivity(
                             and bool(frontiers)
                             and scope_limited
                             and source_provenance_ok
-                            and "query_depth_limit" not in gap_codes
+                            and not _query_gap_blocks_scope_expansion(gap_codes)
                             and (
                                 query_status == "inconclusive"
                                 or needs_more_bits
@@ -5348,6 +5371,9 @@ async def list_tools():
                 "claim_semantics separates positive_fact_confidence and target_bit_coverage "
                 "from global_coverage_status; require exclusive_driver_proved before calling a "
                 "returned driver unique, and negative_claim_allowed before claiming no driver. "
+                "Warm Source Graph traversal is work-bounded; query_truncated and the "
+                "query_*_limit coverage gap mean returned positive facts are usable but "
+                "the driver set is not exhaustive. "
                 "Each driver_chain hop carries source_info_origin "
                 "('compile_log', 'npi', or 'source_graph') "
                 "so consumers can tell which provenance produced its file:line. "
@@ -5402,8 +5428,10 @@ async def list_tools():
                 "positive load facts from whole-artifact coverage; exhaustive_search is required "
                 "before treating the list as all loads, and negative_claim_allowed is required "
                 "before claiming there are none. A complete Source Graph not_connected is distinct "
-                "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. Each load "
-                "query normalizes trailing numeric selects for Legacy Static matching, while "
+                "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. "
+                "High-fanout Source Graph output is capped with an explicit query_truncated "
+                "receipt; capped positive loads remain usable but are not a complete list. "
+                "Each load query normalizes trailing numeric selects for Legacy Static matching, while "
                 "Source Graph validates the selected bits against the declaration. Each load "
                 "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
                 "which provenance produced its file:line."

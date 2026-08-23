@@ -38,6 +38,10 @@ from .connectivity_ir import (
 from .source_graph_contract import (
     DEFAULT_PATH_OUTPUT_LIMIT,
     DEFAULT_PATH_TRAVERSAL_LIMIT,
+    DEFAULT_QUERY_EDGE_LIMIT,
+    DEFAULT_QUERY_FRONTIER_LIMIT,
+    DEFAULT_QUERY_MATCH_LIMIT,
+    DEFAULT_QUERY_STATE_LIMIT,
 )
 
 
@@ -159,6 +163,25 @@ class ConnectivityQueryResult:
     constant_bits: tuple[int, ...] = ()
     multi_driver_bits: tuple[int, ...] = ()
     frontiers: tuple[QueryFrontier, ...] = ()
+    visited_state_count: int = 0
+    inspected_edge_count: int = 0
+    state_limit: int = DEFAULT_QUERY_STATE_LIMIT
+    edge_limit: int = DEFAULT_QUERY_EDGE_LIMIT
+    match_limit: int = DEFAULT_QUERY_MATCH_LIMIT
+    frontier_limit: int = DEFAULT_QUERY_FRONTIER_LIMIT
+    state_truncated: bool = False
+    edge_truncated: bool = False
+    match_truncated: bool = False
+    frontier_truncated: bool = False
+
+    @property
+    def truncated(self) -> bool:
+        return bool(
+            self.state_truncated
+            or self.edge_truncated
+            or self.match_truncated
+            or self.frontier_truncated
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return _enum_values(asdict(self))
@@ -236,6 +259,85 @@ class _PathEdge:
     procedure_kind: str | None = None
 
 
+@dataclass
+class _QueryWorkBudget:
+    """Deterministic work and output bounds for driver/load graph walks."""
+
+    state_limit: int
+    edge_limit: int
+    match_limit: int
+    frontier_limit: int
+    inspected_edge_count: int = 0
+    state_truncated: bool = False
+    edge_truncated: bool = False
+    match_truncated: bool = False
+    frontier_truncated: bool = False
+
+    @property
+    def truncated(self) -> bool:
+        return bool(
+            self.state_truncated
+            or self.edge_truncated
+            or self.match_truncated
+            or self.frontier_truncated
+        )
+
+    def admit_state(self, visited_state_count: int) -> bool:
+        check_cancelled()
+        if visited_state_count >= self.state_limit:
+            self.state_truncated = True
+            return False
+        return True
+
+    def inspect_edge(self) -> bool:
+        check_cancelled()
+        if self.inspected_edge_count >= self.edge_limit:
+            self.edge_truncated = True
+            return False
+        self.inspected_edge_count += 1
+        return True
+
+
+class _BoundedQueryCollector:
+    """Keep deterministic unique matches/frontiers within fixed output caps."""
+
+    def __init__(self, budget: _QueryWorkBudget) -> None:
+        self.budget = budget
+        self._matches: dict[tuple[Any, ...], QueryMatch] = {}
+        self._frontiers: dict[tuple[Any, ...], QueryFrontier] = {}
+
+    @property
+    def matches(self) -> list[QueryMatch]:
+        return list(self._matches.values())
+
+    @property
+    def frontiers(self) -> list[QueryFrontier]:
+        return list(self._frontiers.values())
+
+    def add_match(self, match: QueryMatch) -> bool:
+        key = _query_match_key(match)
+        current = self._matches.get(key)
+        if current is not None:
+            if len(match.traversal) < len(current.traversal):
+                self._matches[key] = match
+            return True
+        if len(self._matches) >= self.budget.match_limit:
+            self.budget.match_truncated = True
+            return False
+        self._matches[key] = match
+        return True
+
+    def add_frontier(self, frontier: QueryFrontier) -> bool:
+        key = (*_state_key(frontier.signal), frontier.query_target.bits)
+        if key in self._frontiers:
+            return True
+        if len(self._frontiers) >= self.budget.frontier_limit:
+            self.budget.frontier_truncated = True
+            return False
+        self._frontiers[key] = frontier
+        return True
+
+
 _TRAILING_SELECT_RE = re.compile(
     r"^(?P<base>.+?)(?:\[(?P<left>-?\d+)(?::(?P<right>-?\d+))?\])?$"
 )
@@ -273,16 +375,30 @@ class ConnectivityQueryEngine:
         *,
         max_depth: int = 64,
         unprojected_instance_candidates: Iterable[str] = (),
+        state_limit: int = DEFAULT_QUERY_STATE_LIMIT,
+        edge_limit: int = DEFAULT_QUERY_EDGE_LIMIT,
+        match_limit: int = DEFAULT_QUERY_MATCH_LIMIT,
+        frontier_limit: int = DEFAULT_QUERY_FRONTIER_LIMIT,
     ) -> ConnectivityQueryResult:
         if max_depth < 0:
             raise ValueError("max_depth must not be negative")
+        state_limit = _positive_query_limit(state_limit, "state_limit")
+        edge_limit = _positive_query_limit(edge_limit, "edge_limit")
+        match_limit = _positive_query_limit(match_limit, "match_limit")
+        frontier_limit = _positive_query_limit(frontier_limit, "frontier_limit")
+        budget = _QueryWorkBudget(
+            state_limit=state_limit,
+            edge_limit=edge_limit,
+            match_limit=match_limit,
+            frontier_limit=frontier_limit,
+        )
+        collector = _BoundedQueryCollector(budget)
+        check_cancelled()
         signal = self.resolve_signal(
             signal_path,
             unprojected_instance_candidates=unprojected_instance_candidates,
         )
-        matches: list[QueryMatch] = []
         visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
-        frontiers: list[QueryFrontier] = []
         query_gaps: list[CoverageGap] = []
         traversed = 0
         depth_limited = False
@@ -295,28 +411,32 @@ class ConnectivityQueryEngine:
             traversal: tuple[TraversalHop, ...],
         ) -> None:
             nonlocal traversed, depth_limited
+            check_cancelled()
+            if budget.truncated:
+                return
             if current.width != query_target.width:
                 raise ValueError("driver traversal lost query-bit alignment")
             state = (*_state_key(current), query_target.bits)
             if state in visited:
                 return
+            if not budget.admit_state(len(visited)):
+                return
             visited.add(state)
             touched_paths.add(current.path())
             covered_positions: set[int] = set()
 
-            assignments = [
-                assignment
-                for assignment in self._writes.get(_endpoint_key(current), ())
-                if _overlaps(assignment.target.bits, current.bits)
-            ]
-            for assignment in assignments:
+            for assignment in self._writes.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
+                if not _overlaps(assignment.target.bits, current.bits):
+                    continue
                 selected, covered, positions = _aligned_overlap(
                     current,
                     query_target,
                     assignment.target.bits,
                 )
                 covered_positions.update(positions)
-                matches.append(
+                if not collector.add_match(
                     self._driver_match(
                         assignment,
                         current.instance_path or "",
@@ -324,9 +444,12 @@ class ConnectivityQueryEngine:
                         covered,
                         traversal,
                     )
-                )
+                ):
+                    return
 
             for terminal in self._constant_incoming.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
                 mapping = terminal.mapping
                 if not _overlaps(mapping.target.bits, current.bits):
                     continue
@@ -336,16 +459,19 @@ class ConnectivityQueryEngine:
                     mapping.target.bits,
                 )
                 covered_positions.update(positions)
-                matches.append(
+                if not collector.add_match(
                     self._constant_driver_match(
                         terminal,
                         selected_target=selected,
                         covered_signal=covered,
                         traversal=traversal,
                     )
-                )
+                ):
+                    return
 
             for terminal in self._unresolved_incoming.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
                 mapping = terminal.mapping
                 if not _overlaps(mapping.target.bits, current.bits):
                     continue
@@ -372,12 +498,11 @@ class ConnectivityQueryEngine:
                     )
                 )
 
-            segments = [
-                segment
-                for segment in self._incoming.get(_endpoint_key(current), ())
-                if _overlaps(segment.target.bits, current.bits)
-            ]
-            for segment in segments:
+            for segment in self._incoming.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
+                if not _overlaps(segment.target.bits, current.bits):
+                    continue
                 selected, covered, positions = _aligned_overlap(
                     current,
                     query_target,
@@ -391,13 +516,16 @@ class ConnectivityQueryEngine:
                 )
                 if depth >= max_depth:
                     depth_limited = True
-                    frontiers.append(
+                    if not collector.add_frontier(
                         QueryFrontier(signal=upstream, query_target=covered)
-                    )
+                    ):
+                        return
                     continue
                 hop = _hop(segment, source=upstream, target=selected)
                 traversed += 1
                 visit(upstream, covered, depth + 1, traversal + (hop,))
+                if budget.truncated:
+                    return
 
             residual = tuple(
                 index
@@ -405,7 +533,7 @@ class ConnectivityQueryEngine:
                 if index not in covered_positions
             )
             if residual:
-                frontiers.append(
+                collector.add_frontier(
                     QueryFrontier(
                         signal=_selection_at_positions(current, residual),
                         query_target=_selection_at_positions(query_target, residual),
@@ -416,13 +544,15 @@ class ConnectivityQueryEngine:
         return self._finish_result(
             operation="driver",
             signal=signal,
-            matches=matches,
+            matches=collector.matches,
             touched_paths=touched_paths,
             traversed=traversed,
             depth_limited=depth_limited,
             max_depth=max_depth,
-            frontiers=frontiers,
+            frontiers=collector.frontiers,
             query_gaps=query_gaps,
+            budget=budget,
+            visited_state_count=len(visited),
         )
 
     def query_loads(
@@ -431,16 +561,30 @@ class ConnectivityQueryEngine:
         *,
         max_depth: int = 64,
         unprojected_instance_candidates: Iterable[str] = (),
+        state_limit: int = DEFAULT_QUERY_STATE_LIMIT,
+        edge_limit: int = DEFAULT_QUERY_EDGE_LIMIT,
+        match_limit: int = DEFAULT_QUERY_MATCH_LIMIT,
+        frontier_limit: int = DEFAULT_QUERY_FRONTIER_LIMIT,
     ) -> ConnectivityQueryResult:
         if max_depth < 0:
             raise ValueError("max_depth must not be negative")
+        state_limit = _positive_query_limit(state_limit, "state_limit")
+        edge_limit = _positive_query_limit(edge_limit, "edge_limit")
+        match_limit = _positive_query_limit(match_limit, "match_limit")
+        frontier_limit = _positive_query_limit(frontier_limit, "frontier_limit")
+        budget = _QueryWorkBudget(
+            state_limit=state_limit,
+            edge_limit=edge_limit,
+            match_limit=match_limit,
+            frontier_limit=frontier_limit,
+        )
+        collector = _BoundedQueryCollector(budget)
+        check_cancelled()
         signal = self.resolve_signal(
             signal_path,
             unprojected_instance_candidates=unprojected_instance_candidates,
         )
-        matches: list[QueryMatch] = []
         visited: set[tuple[str, str, tuple[int, ...], tuple[int, ...]]] = set()
-        frontiers: list[QueryFrontier] = []
         traversed = 0
         depth_limited = False
         touched_paths: set[str] = {signal.path()}
@@ -452,16 +596,23 @@ class ConnectivityQueryEngine:
             traversal: tuple[TraversalHop, ...],
         ) -> None:
             nonlocal traversed, depth_limited
+            check_cancelled()
+            if budget.truncated:
+                return
             if current.width != query_target.width:
                 raise ValueError("load traversal lost query-bit alignment")
             state = (*_state_key(current), query_target.bits)
             if state in visited:
+                return
+            if not budget.admit_state(len(visited)):
                 return
             visited.add(state)
             touched_paths.add(current.path())
             covered_positions: set[int] = set()
 
             for assignment, dependency in self._reads.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
                 if not _overlaps(dependency.source.bits, current.bits):
                     continue
                 selected, covered, positions = _aligned_overlap(
@@ -470,7 +621,7 @@ class ConnectivityQueryEngine:
                     dependency.source.bits,
                 )
                 covered_positions.update(positions)
-                matches.append(
+                if not collector.add_match(
                     self._load_match(
                         assignment,
                         dependency,
@@ -479,14 +630,14 @@ class ConnectivityQueryEngine:
                         covered,
                         traversal,
                     )
-                )
+                ):
+                    return
 
-            segments = [
-                segment
-                for segment in self._outgoing.get(_endpoint_key(current), ())
-                if _overlaps(segment.source.bits, current.bits)
-            ]
-            for segment in segments:
+            for segment in self._outgoing.get(_endpoint_key(current), ()):
+                if not budget.inspect_edge():
+                    return
+                if not _overlaps(segment.source.bits, current.bits):
+                    continue
                 selected, covered, positions = _aligned_overlap(
                     current,
                     query_target,
@@ -500,13 +651,16 @@ class ConnectivityQueryEngine:
                 )
                 if depth >= max_depth:
                     depth_limited = True
-                    frontiers.append(
+                    if not collector.add_frontier(
                         QueryFrontier(signal=downstream, query_target=covered)
-                    )
+                    ):
+                        return
                     continue
                 hop = _hop(segment, source=selected, target=downstream)
                 traversed += 1
                 visit(downstream, covered, depth + 1, traversal + (hop,))
+                if budget.truncated:
+                    return
 
             residual = tuple(
                 index
@@ -514,7 +668,7 @@ class ConnectivityQueryEngine:
                 if index not in covered_positions
             )
             if residual:
-                frontiers.append(
+                collector.add_frontier(
                     QueryFrontier(
                         signal=_selection_at_positions(current, residual),
                         query_target=_selection_at_positions(query_target, residual),
@@ -525,13 +679,15 @@ class ConnectivityQueryEngine:
         return self._finish_result(
             operation="load",
             signal=signal,
-            matches=matches,
+            matches=collector.matches,
             touched_paths=touched_paths,
             traversed=traversed,
             depth_limited=depth_limited,
             max_depth=max_depth,
-            frontiers=frontiers,
+            frontiers=collector.frontiers,
             query_gaps=(),
+            budget=budget,
+            visited_state_count=len(visited),
         )
 
     def query_path(
@@ -952,6 +1108,18 @@ class ConnectivityQueryEngine:
                             procedure_kind=assignment.procedure_kind,
                         )
                     )
+        for segments in self._incoming.values():
+            segments.sort(key=_flow_segment_sort_key)
+        for segments in self._outgoing.values():
+            segments.sort(key=_flow_segment_sort_key)
+        for terminals in self._constant_incoming.values():
+            terminals.sort(key=_terminal_segment_sort_key)
+        for terminals in self._unresolved_incoming.values():
+            terminals.sort(key=_terminal_segment_sort_key)
+        for assignments in self._writes.values():
+            assignments.sort(key=_assignment_sort_key)
+        for dependencies in self._reads.values():
+            dependencies.sort(key=_read_dependency_sort_key)
         for edges in self._path_outgoing.values():
             edges.sort(key=_path_edge_sort_key)
 
@@ -1126,6 +1294,8 @@ class ConnectivityQueryEngine:
         max_depth: int,
         frontiers: list[QueryFrontier],
         query_gaps: Iterable[CoverageGap],
+        budget: _QueryWorkBudget,
+        visited_state_count: int,
     ) -> ConnectivityQueryResult:
         gaps_by_key = {
             _gap_key(gap): gap
@@ -1138,6 +1308,38 @@ class ConnectivityQueryEngine:
             gap = CoverageGap(
                 code="query_depth_limit",
                 message=f"query traversal reached max_depth={max_depth}",
+                impact=CoverageStatus.INCONCLUSIVE,
+                scopes=(signal.path(),),
+            )
+            gaps_by_key[_gap_key(gap)] = gap
+        truncation_gaps = (
+            (
+                budget.state_truncated,
+                "query_state_limit",
+                "query traversal reached the internal state limit",
+            ),
+            (
+                budget.edge_truncated,
+                "query_edge_limit",
+                "query traversal reached the internal inspected-edge limit",
+            ),
+            (
+                budget.match_truncated,
+                "query_match_limit",
+                "query result exceeds the internal match output limit",
+            ),
+            (
+                budget.frontier_truncated,
+                "query_frontier_limit",
+                "query result exceeds the internal expansion-frontier limit",
+            ),
+        )
+        for active, code, message in truncation_gaps:
+            if not active:
+                continue
+            gap = CoverageGap(
+                code=code,
+                message=message,
                 impact=CoverageStatus.INCONCLUSIVE,
                 scopes=(signal.path(),),
             )
@@ -1205,6 +1407,16 @@ class ConnectivityQueryEngine:
                 bit for bit in signal.bits if len(drivers_by_bit.get(bit, ())) > 1
             ),
             frontiers=_dedupe_frontiers(frontiers),
+            visited_state_count=visited_state_count,
+            inspected_edge_count=budget.inspected_edge_count,
+            state_limit=budget.state_limit,
+            edge_limit=budget.edge_limit,
+            match_limit=budget.match_limit,
+            frontier_limit=budget.frontier_limit,
+            state_truncated=budget.state_truncated,
+            edge_truncated=budget.edge_truncated,
+            match_truncated=budget.match_truncated,
+            frontier_truncated=budget.frontier_truncated,
         )
 
 
@@ -1212,6 +1424,12 @@ def _endpoint_key(selection: SignalSelection) -> tuple[str, str]:
     if selection.instance_path is None:
         raise ValueError("query endpoint must be hierarchy-bound")
     return selection.instance_path, selection.symbol
+
+
+def _positive_query_limit(value: int, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
 
 
 def _state_key(selection: SignalSelection) -> tuple[str, str, tuple[int, ...]]:
@@ -1328,6 +1546,51 @@ def _path_edge_sort_key(edge: _PathEdge) -> tuple[Any, ...]:
         edge.source.bits,
         edge.evidence.location.file,
         edge.evidence.location.line,
+    )
+
+
+def _flow_segment_sort_key(segment: _FlowSegment) -> tuple[Any, ...]:
+    return (
+        segment.binding.binding_id,
+        segment.source.instance_path or "",
+        segment.source.symbol,
+        segment.source.bits,
+        segment.target.instance_path or "",
+        segment.target.symbol,
+        segment.target.bits,
+    )
+
+
+def _terminal_segment_sort_key(
+    terminal: _TerminalBindingSegment,
+) -> tuple[Any, ...]:
+    mapping = terminal.mapping
+    return (
+        terminal.binding.binding_id,
+        mapping.target.instance_path or "",
+        mapping.target.symbol,
+        mapping.target.bits,
+        mapping.source_kind.value,
+        mapping.constant_bits,
+        mapping.unresolved_reason or "",
+    )
+
+
+def _assignment_sort_key(assignment: AssignmentFact) -> tuple[Any, ...]:
+    return (assignment.assignment_id,)
+
+
+def _read_dependency_sort_key(
+    item: tuple[AssignmentFact, DependencyFact],
+) -> tuple[Any, ...]:
+    assignment, dependency = item
+    return (
+        *_assignment_sort_key(assignment),
+        dependency.role.value,
+        dependency.source.symbol,
+        dependency.source.bits,
+        dependency.target.symbol,
+        dependency.target.bits,
     )
 
 
@@ -1462,27 +1725,21 @@ def _query_coverage(
     return CoverageStatus.COMPLETE
 
 
+def _query_match_key(match: QueryMatch) -> tuple[Any, ...]:
+    return (
+        match.instance_path,
+        match.fact_id,
+        match.target.symbol,
+        match.target.bits,
+        match.covered_signal.bits,
+        match.dependency_role,
+    )
+
+
 def _dedupe_matches(matches: list[QueryMatch]) -> tuple[QueryMatch, ...]:
-    by_key: dict[
-        tuple[
-            str,
-            str,
-            str,
-            tuple[int, ...],
-            tuple[int, ...],
-            str | None,
-        ],
-        QueryMatch,
-    ] = {}
+    by_key: dict[tuple[Any, ...], QueryMatch] = {}
     for match in matches:
-        key = (
-            match.instance_path,
-            match.fact_id,
-            match.target.symbol,
-            match.target.bits,
-            match.covered_signal.bits,
-            match.dependency_role,
-        )
+        key = _query_match_key(match)
         current = by_key.get(key)
         if current is None or len(match.traversal) < len(current.traversal):
             by_key[key] = match
