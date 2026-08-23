@@ -242,6 +242,42 @@ def get_hierarchy_execution_config() -> HierarchyExecutionConfig:
 
 
 @dataclass(frozen=True)
+class HierarchyNpiOverlayConfig:
+    """Admission policy for optional hierarchy ``file:line`` enrichment.
+
+    ``auto`` admits only clean KDBs whose compile-derived instance set fits
+    the builder's conservative automatic budget. ``force`` is an explicit
+    diagnostic opt-in for degraded or larger designs, while the independent
+    absolute path cap remains in force. Invalid input safely disables the
+    optional overlay without blocking the compile-log hierarchy itself.
+    """
+
+    mode: str = "auto"
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_hierarchy_npi_overlay_config() -> HierarchyNpiOverlayConfig:
+    raw_mode = os.environ.get(
+        "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+        "auto",
+    ).strip().lower()
+    if raw_mode in {"", "auto"}:
+        return HierarchyNpiOverlayConfig()
+    if raw_mode in {"off", "false", "0"}:
+        return HierarchyNpiOverlayConfig(mode="off")
+    if raw_mode in {"force", "on", "true", "1"}:
+        return HierarchyNpiOverlayConfig(mode="force")
+    return HierarchyNpiOverlayConfig(
+        mode="off",
+        error_code="hierarchy_npi_overlay_config_invalid",
+    )
+
+
+@dataclass(frozen=True)
 class BoundedBootstrapConfig:
     """Hard limits for a single-endpoint hierarchy bootstrap."""
 

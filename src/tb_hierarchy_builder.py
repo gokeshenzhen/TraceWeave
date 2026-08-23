@@ -36,13 +36,17 @@ _MACRO_CONDITION_RE = re.compile(
 
 _NPI_SOURCE_MAP_METRIC_KEYS = frozenset({
     "status",
+    "lookup_mode",
     "compile_parse_wall_ms",
     "kdb_probe_wall_ms",
     "design_load_wall_ms",
     "top_list_wall_ms",
     "instance_walk_wall_ms",
+    "instance_lookup_wall_ms",
     "total_wall_ms",
     "top_instance_count",
+    "requested_instance_count",
+    "lookup_error_count",
     "instance_visited_count",
     "source_entry_count",
     "depth_limit_count",
@@ -54,6 +58,8 @@ _NPI_SOURCE_MAP_METRIC_KEYS = frozenset({
     "rss_peak_kib",
     "rss_end_kib",
 })
+_NPI_AUTO_SOURCE_OVERLAY_MAX_PATHS = 4_096
+_NPI_TARGETED_SOURCE_OVERLAY_HARD_MAX_PATHS = 100_000
 
 
 def _source_overlay_metrics(status: str) -> dict:
@@ -64,6 +70,11 @@ def _source_overlay_metrics(status: str) -> dict:
         "backend_select_wall_ms": 0.0,
         "collect_wall_ms": 0.0,
         "merge_wall_ms": 0.0,
+        "policy_mode": "auto",
+        "target_path_collect_wall_ms": 0.0,
+        "target_instance_path_count": 0,
+        "target_path_limit": 0,
+        "target_path_limit_exceeded": 0,
         "npi_map_entry_count": 0,
         "hierarchy_node_count": 0,
         "annotated_node_count": 0,
@@ -864,7 +875,7 @@ def _npi_annotate_component_tree(
         sanitized: dict[str, object] = {}
         for key in _NPI_SOURCE_MAP_METRIC_KEYS:
             value = raw.get(key)
-            if key == "status":
+            if key in {"status", "lookup_mode"}:
                 if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value):
                     sanitized[key] = value
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -881,17 +892,33 @@ def _npi_annotate_component_tree(
             )
 
     try:
-        from config import get_connectivity_route_config  # noqa: PLC0415
+        from config import (  # noqa: PLC0415
+            get_connectivity_route_config,
+            get_hierarchy_npi_overlay_config,
+        )
 
         if get_connectivity_route_config().mode == "source_graph":
             return _finish(
                 "skipped_by_policy",
                 reason="npi_skipped_by_policy",
             )
+        overlay_config = get_hierarchy_npi_overlay_config()
     except Exception:  # noqa: BLE001
-        # Invalid or unavailable route configuration preserves the historical
-        # best-effort NPI overlay behavior.
-        pass
+        return _finish(
+            "skipped_config_unavailable",
+            reason="npi_overlay_config_unavailable",
+        )
+    metrics["policy_mode"] = overlay_config.mode
+    if not overlay_config.valid:
+        return _finish(
+            "skipped_config_invalid",
+            reason="npi_overlay_config_invalid",
+        )
+    if overlay_config.mode == "off":
+        return _finish(
+            "skipped_by_policy",
+            reason="npi_overlay_disabled",
+        )
 
     try:
         from .connectivity_backend import select_backend  # noqa: PLC0415
@@ -915,6 +942,14 @@ def _npi_annotate_component_tree(
     )
     if backend_status.get("kdb_flow", "none") == "none":
         return _finish("skipped_no_kdb")
+    if (
+        overlay_config.mode == "auto"
+        and backend_status.get("kdb_validation_status") == "elaboration_error"
+    ):
+        return _finish(
+            "skipped_degraded_kdb",
+            reason="npi_overlay_degraded_kdb_skipped",
+        )
     phase_started = time.perf_counter()
     try:
         backend = select_backend(backend_status)
@@ -933,10 +968,44 @@ def _npi_annotate_component_tree(
     collector = getattr(backend, "collect_instance_src_map", None)
     if collector is None:
         return _finish("collector_unavailable")
+    if not getattr(backend, "supports_targeted_instance_src_map", False):
+        return _finish(
+            "skipped_targeted_lookup_unavailable",
+            reason="npi_overlay_targeted_lookup_unavailable",
+        )
     simulator = compile_result.get("simulator") or "auto"
+    path_limit = (
+        _NPI_TARGETED_SOURCE_OVERLAY_HARD_MAX_PATHS
+        if overlay_config.mode == "force"
+        else _NPI_AUTO_SOURCE_OVERLAY_MAX_PATHS
+    )
+    metrics["target_path_limit"] = path_limit
+    phase_started = time.perf_counter()
+    instance_paths, path_limit_exceeded = _collect_component_instance_paths(
+        component_tree,
+        top_module,
+        max_paths=path_limit,
+    )
+    metrics["target_path_collect_wall_ms"] = round(
+        (time.perf_counter() - phase_started) * 1000.0,
+        3,
+    )
+    metrics["target_instance_path_count"] = len(instance_paths)
+    metrics["target_path_limit_exceeded"] = int(path_limit_exceeded)
+    if path_limit_exceeded:
+        return _finish(
+            "skipped_path_budget",
+            reason="npi_overlay_path_budget_exceeded",
+        )
+    if not instance_paths:
+        return _finish("empty_target_set")
     phase_started = time.perf_counter()
     try:
-        inst_map = collector(compile_log_path, simulator)
+        inst_map = collector(
+            compile_log_path,
+            simulator,
+            instance_paths=instance_paths,
+        )
     except Exception:  # noqa: BLE001
         metrics["collect_wall_ms"] = round(
             (time.perf_counter() - phase_started) * 1000.0,
@@ -989,6 +1058,41 @@ def _npi_annotate_component_tree(
                 )
             return _finish("completed", overlay="npi")
     return _finish("no_matching_nodes")
+
+
+def _collect_component_instance_paths(
+    component_tree: dict,
+    top_module: str,
+    *,
+    max_paths: int,
+) -> tuple[tuple[str, ...], bool]:
+    """Collect proved component paths without crossing a hard admission cap."""
+
+    children = component_tree.get(top_module)
+    if not isinstance(children, dict):
+        return (), False
+    paths: list[str] = []
+    stack = [
+        (f"{top_module}.{inst_name}", node)
+        for inst_name, node in reversed(children.items())
+        if isinstance(node, dict)
+    ]
+    while stack:
+        full_path, node = stack.pop()
+        paths.append(full_path)
+        if len(paths) > max_paths:
+            return tuple(paths[:max_paths]), True
+        if len(paths) % 1024 == 0:
+            check_cancelled()
+        sub = node.get("children")
+        if not isinstance(sub, dict):
+            continue
+        stack.extend(
+            (f"{full_path}.{inst_name}", child)
+            for inst_name, child in reversed(sub.items())
+            if isinstance(child, dict)
+        )
+    return tuple(paths), False
 
 
 def _overlay_npi_on_subtree(

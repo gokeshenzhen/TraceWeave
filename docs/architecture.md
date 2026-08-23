@@ -443,6 +443,13 @@ Lifecycle:
   returns `build_status="blocked"` plus a fixed-label blocker and never
   registers a partial handle. The already-parsed compact compile context stays
   in a four-entry process cache for an explicitly requested bounded bootstrap.
+- Local NPI `file:line` enrichment has a separate admission boundary. The
+  default `TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY=auto` accepts only clean
+  KDBs with at most 4,096 compile-proved instance paths and queries those paths
+  directly; degraded or larger designs retain compile-log provenance without
+  loading NPI. `force` raises only the automatic admission boundary (the
+  100,000-path hard cap remains), while `off` disables the optional pass.
+  Driver/load/path backend selection is unaffected.
 
 Why this shape:
 

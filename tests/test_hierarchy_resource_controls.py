@@ -5,6 +5,7 @@ import time
 import pytest
 
 import server
+from config import HierarchyNpiOverlayConfig, get_hierarchy_npi_overlay_config
 from src import cancellation
 
 
@@ -13,6 +14,40 @@ def _clean_server_state():
     server.reset_session_state()
     yield
     server.reset_session_state()
+
+
+@pytest.mark.parametrize(
+    ("raw_mode", "expected"),
+    [
+        (None, HierarchyNpiOverlayConfig()),
+        ("auto", HierarchyNpiOverlayConfig()),
+        ("off", HierarchyNpiOverlayConfig(mode="off")),
+        ("force", HierarchyNpiOverlayConfig(mode="force")),
+        (
+            "unexpected",
+            HierarchyNpiOverlayConfig(
+                mode="off",
+                error_code="hierarchy_npi_overlay_config_invalid",
+            ),
+        ),
+    ],
+)
+def test_hierarchy_npi_overlay_config_is_validated(
+    monkeypatch,
+    raw_mode,
+    expected,
+):
+    if raw_mode is None:
+        monkeypatch.delenv(
+            "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+            raising=False,
+        )
+    else:
+        monkeypatch.setenv(
+            "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+            raw_mode,
+        )
+    assert get_hierarchy_npi_overlay_config() == expected
 
 
 @pytest.mark.anyio

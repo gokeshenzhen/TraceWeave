@@ -170,16 +170,29 @@ class _MockNet:
 
 
 class _MockNetlist:
-    def __init__(self, net_map, *, tops=None, top_exc=None):
+    def __init__(
+        self,
+        net_map,
+        *,
+        tops=None,
+        top_exc=None,
+        inst_map=None,
+    ):
         self._net_map = net_map
         self._tops = list(tops or [])
         self._top_exc = top_exc
+        self._inst_map = dict(inst_map or {})
+        self.get_inst_calls: list[str] = []
 
     def get_net(self, name):
         return self._net_map.get(name)
 
     def get_actual_net(self, name):
         return self._net_map.get(name)
+
+    def get_inst(self, name):
+        self.get_inst_calls.append(name)
+        return self._inst_map.get(name)
 
     def get_top_inst_list(self):
         if self._top_exc is not None:
@@ -1097,6 +1110,92 @@ def test_collect_instance_src_map_reports_phase_and_walk_metrics(
     assert warm_metrics is not None
     assert warm_metrics["design_load_cache_hit"] == 1
     assert len(npisys.load_calls) == 1
+
+
+def test_collect_instance_src_map_queries_only_requested_instance_paths(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    dut = _MockHierarchyInst(
+        "top_tb.u_dut",
+        file_val="/project/dut.sv",
+        line_val=23,
+    )
+    leaf = _MockHierarchyInst(
+        "top_tb.u_dut.u_leaf",
+        file_val="/project/leaf.sv",
+        line_val=41,
+    )
+    netlist_obj = _MockNetlist(
+        {},
+        top_exc=AssertionError("targeted lookup must not walk top instances"),
+        inst_map={
+            "top_tb.u_dut": dut,
+            "top_tb.u_dut.u_leaf": leaf,
+        },
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    assert backend.collect_instance_src_map(
+        log,
+        "vcs",
+        instance_paths=(
+            "top_tb.u_dut",
+            "top_tb.u_dut.u_leaf",
+            "top_tb.u_dut",
+            "",
+        ),
+    ) == {
+        "top_tb.u_dut": ("/project/dut.sv", 23),
+        "top_tb.u_dut.u_leaf": ("/project/leaf.sv", 41),
+    }
+    assert netlist_obj.get_inst_calls == [
+        "top_tb.u_dut",
+        "top_tb.u_dut.u_leaf",
+    ]
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["lookup_mode"] == "target_paths"
+    assert metrics["requested_instance_count"] == 2
+    assert metrics["instance_visited_count"] == 2
+    assert metrics["source_entry_count"] == 2
+    assert metrics["lookup_error_count"] == 0
+    assert metrics["top_instance_count"] == 0
+    assert metrics["instance_walk_wall_ms"] == 0.0
+    assert metrics["instance_lookup_wall_ms"] >= 0
+
+
+def test_targeted_instance_src_map_never_falls_back_to_full_walk(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+
+    class _LegacyNetlistWithoutGetInst:
+        def get_top_inst_list(self):
+            raise AssertionError("targeted request must not start a full walk")
+
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_LegacyNetlistWithoutGetInst(),
+    )
+
+    assert backend.collect_instance_src_map(
+        log,
+        "vcs",
+        instance_paths=("top_tb.u_dut",),
+    ) == {}
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "targeted_lookup_unavailable"
+    assert metrics["lookup_mode"] == "target_paths_unavailable"
+    assert metrics["instance_visited_count"] == 0
+    assert metrics["instance_walk_wall_ms"] == 0.0
 
 
 class _PinWithInst:

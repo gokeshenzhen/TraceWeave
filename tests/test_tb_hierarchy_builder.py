@@ -1009,23 +1009,35 @@ Top Level Modules:
 
             class _FakeNpiBackend:
                 name = "verdi_npi"
+                supports_targeted_instance_src_map = True
                 instance_src_map_metrics = {
                     "status": "completed",
+                    "lookup_mode": "target_paths",
                     "design_load_wall_ms": 12.5,
-                    "instance_walk_wall_ms": 3.25,
-                    "instance_visited_count": 2,
+                    "instance_lookup_wall_ms": 3.25,
+                    "requested_instance_count": 1,
+                    "instance_visited_count": 1,
                     "source_entry_count": 1,
                     # Metric forwarding is allowlisted; arbitrary strings
                     # must never enter the public build receipt.
                     "private_path": "/must/not/leak",
                 }
+                received_instance_paths = None
 
-                def collect_instance_src_map(self, compile_log, simulator):
+                def collect_instance_src_map(
+                    self,
+                    compile_log,
+                    simulator,
+                    *,
+                    instance_paths=None,
+                ):
+                    self.received_instance_paths = instance_paths
                     return {"top_tb.dut_i": ("/elaborated/dut.sv", 137)}
 
+            backend = _FakeNpiBackend()
             monkeypatch.setattr(
                 "src.connectivity_backend.select_backend",
-                lambda status: _FakeNpiBackend(),
+                lambda status: backend,
             )
 
             hierarchy = build_hierarchy(
@@ -1044,10 +1056,69 @@ Top Level Modules:
             assert overlay_metrics["hierarchy_node_count"] == 1
             assert overlay_metrics["annotated_node_count"] == 1
             assert overlay_metrics["annotation_coverage_ppm"] == 1_000_000
+            assert overlay_metrics["target_instance_path_count"] == 1
+            assert backend.received_instance_paths == ("top_tb.dut_i",)
             assert overlay_metrics["npi_backend"]["design_load_wall_ms"] == 12.5
+            assert overlay_metrics["npi_backend"]["lookup_mode"] == "target_paths"
             assert "private_path" not in overlay_metrics["npi_backend"]
         finally:
             tmp.cleanup()
+
+    def test_targeted_npi_overlay_skips_before_collection_at_path_cap(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        top_path = tmp_path / "top_tb.sv"
+        _write(
+            top_path,
+            "module dut; endmodule\nmodule top_tb; dut dut_i(); endmodule\n",
+        )
+        log = tmp_path / "comp.log"
+        log.write_text(
+            f"Parsing design file '{top_path}'\n"
+            "Top Level Modules:\n"
+            "       top_tb\n"
+        )
+        monkeypatch.setattr(
+            "src.verdi_backend.probe_verdi_backend",
+            lambda compile_result, compile_log_path=None: {
+                "kdb_flow": "vcs_two_step",
+                "kdb_path": "/fake/kdb",
+            },
+        )
+        monkeypatch.setattr(
+            tb_hierarchy_builder,
+            "_NPI_AUTO_SOURCE_OVERLAY_MAX_PATHS",
+            0,
+        )
+
+        class _TargetedBackend:
+            name = "verdi_npi"
+            supports_targeted_instance_src_map = True
+
+            def collect_instance_src_map(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("path-cap skip must not start NPI collection")
+
+        monkeypatch.setattr(
+            "src.connectivity_backend.select_backend",
+            lambda status: _TargetedBackend(),
+        )
+
+        hierarchy = build_hierarchy(
+            parse_compile_log(str(log), "vcs"),
+            compile_log_path=str(log),
+        )
+
+        overlay_metrics = hierarchy["build_metrics"]["source_overlay_metrics"]
+        assert overlay_metrics["status"] == "skipped_path_budget"
+        assert overlay_metrics["target_instance_path_count"] == 0
+        assert overlay_metrics["target_path_limit_exceeded"] == 1
+        assert hierarchy["project"]["source_info_overlay"] == "compile_log"
+        assert hierarchy["project"]["source_info_overlay_reason"] == (
+            "npi_overlay_path_budget_exceeded"
+        )
 
     def test_degraded_npi_annotation_is_reported_as_partial(self, monkeypatch):
         tmp = tempfile.TemporaryDirectory()
@@ -1062,6 +1133,10 @@ Top Level Modules:
             log.write_text(
                 f"Parsing design file '{top_path}'\nTop Level Modules:\n       top_tb\n"
             )
+            monkeypatch.setenv(
+                "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+                "force",
+            )
             monkeypatch.setattr(
                 "src.verdi_backend.probe_verdi_backend",
                 lambda compile_result, compile_log_path=None: {
@@ -1074,8 +1149,16 @@ Top Level Modules:
             class _DegradedNpiBackend:
                 name = "verdi_npi"
                 kdb_load_quality = "degraded"
+                supports_targeted_instance_src_map = True
 
-                def collect_instance_src_map(self, compile_log, simulator):
+                def collect_instance_src_map(
+                    self,
+                    compile_log,
+                    simulator,
+                    *,
+                    instance_paths=None,
+                ):
+                    assert instance_paths == ("top_tb.dut_i",)
                     return {"top_tb.dut_i": ("/partial/dut.sv", 23)}
 
             monkeypatch.setattr(
@@ -1101,6 +1184,60 @@ Top Level Modules:
             )
         finally:
             tmp.cleanup()
+
+    def test_auto_policy_skips_degraded_npi_source_overlay(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        top_path = tmp_path / "top_tb.sv"
+        _write(
+            top_path,
+            "module dut; endmodule\nmodule top_tb; dut dut_i(); endmodule\n",
+        )
+        log = tmp_path / "comp.log"
+        log.write_text(
+            f"Parsing design file '{top_path}'\n"
+            "Top Level Modules:\n"
+            "       top_tb\n"
+        )
+        monkeypatch.delenv(
+            "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "src.verdi_backend.probe_verdi_backend",
+            lambda compile_result, compile_log_path=None: {
+                "kdb_flow": "vcs_two_step",
+                "kdb_path": "/fake/kdb",
+                "kdb_validation_status": "elaboration_error",
+            },
+        )
+
+        def _must_not_select(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("auto policy must reject degraded KDB before NPI")
+
+        monkeypatch.setattr(
+            "src.connectivity_backend.select_backend",
+            _must_not_select,
+        )
+
+        hierarchy = build_hierarchy(
+            parse_compile_log(str(log), "vcs"),
+            compile_log_path=str(log),
+        )
+
+        node = hierarchy["component_tree"]["top_tb"]["dut_i"]
+        assert node["source_info_origin"] == "compile_log"
+        assert hierarchy["project"]["source_info_overlay"] == "compile_log"
+        assert hierarchy["project"]["source_info_overlay_reason"] == (
+            "npi_overlay_degraded_kdb_skipped"
+        )
+        overlay_metrics = hierarchy["build_metrics"]["source_overlay_metrics"]
+        assert overlay_metrics["status"] == "skipped_degraded_kdb"
+        assert overlay_metrics["policy_mode"] == "auto"
+        assert overlay_metrics["collect_wall_ms"] == 0.0
 
     def test_explicit_source_graph_route_skips_npi_annotation(self, monkeypatch):
         """A pure Source Graph run must not probe or construct NPI during its
@@ -1170,8 +1307,16 @@ Top Level Modules:
 
             class _ExplodingBackend:
                 name = "verdi_npi"
+                supports_targeted_instance_src_map = True
 
-                def collect_instance_src_map(self, compile_log, simulator):
+                def collect_instance_src_map(
+                    self,
+                    compile_log,
+                    simulator,
+                    *,
+                    instance_paths=None,
+                ):
+                    assert instance_paths == ("top_tb.dut_i",)
                     raise RuntimeError("npi broke")
 
             monkeypatch.setattr(

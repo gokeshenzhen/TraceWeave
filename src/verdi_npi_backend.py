@@ -28,6 +28,7 @@ import time
 from typing import Any
 
 from config import NPI_ALLOW_DEGRADED_KDB
+from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
 from .operation_metrics import read_process_rss_kib
@@ -275,6 +276,7 @@ class VerdiNpiBackend:
     name = "verdi_npi"
     execution_mode = "local"
     uses_external_worker = False
+    supports_targeted_instance_src_map = True
 
     def __init__(self, fallback: StaticConnectivityBackend | None = None):
         self._fallback = fallback or StaticConnectivityBackend()
@@ -532,13 +534,18 @@ class VerdiNpiBackend:
         self,
         compile_log: str,
         simulator: str = "auto",
+        *,
+        instance_paths: tuple[str, ...] | None = None,
     ) -> dict[str, tuple[str | None, int | None]]:
-        """Walk the elaborated netlist; return ``full_path -> (file, line)``.
+        """Return ``full_path -> (file, line)`` from the elaborated netlist.
 
         Used by ``build_tb_hierarchy`` to upgrade compile-log-derived
-        source info with NPI's elaborated truth. Returns an empty dict
-        on any failure path so the caller can keep going without
-        annotation. Never raises.
+        source info with NPI's elaborated truth.  When ``instance_paths`` is
+        supplied, query only those already-proved hierarchy paths through
+        ``netlist.get_inst``; the legacy recursive full walk remains available
+        to direct callers that omit it. NPI failures return an empty dict so
+        the caller can keep going without annotation; cooperative cancellation
+        still propagates.
         """
         started = time.perf_counter()
         rss_start_kib = read_process_rss_kib()
@@ -549,6 +556,12 @@ class VerdiNpiBackend:
             "design_load_wall_ms": 0.0,
             "top_list_wall_ms": 0.0,
             "instance_walk_wall_ms": 0.0,
+            "instance_lookup_wall_ms": 0.0,
+            "lookup_mode": (
+                "target_paths" if instance_paths is not None else "full_walk"
+            ),
+            "requested_instance_count": 0,
+            "lookup_error_count": 0,
             "top_instance_count": 0,
             "instance_visited_count": 0,
             "source_entry_count": 0,
@@ -624,6 +637,42 @@ class VerdiNpiBackend:
 
         _, netlist = self._npi_modules  # type: ignore[misc]
         out: dict[str, tuple[str | None, int | None]] = {}
+        if instance_paths is not None and not hasattr(netlist, "get_inst"):
+            metrics["lookup_mode"] = "target_paths_unavailable"
+            _finish("targeted_lookup_unavailable")
+            return {}
+        if instance_paths is not None:
+            ordered_paths = tuple(
+                dict.fromkeys(
+                    path
+                    for path in instance_paths
+                    if isinstance(path, str) and path
+                )
+            )
+            metrics["requested_instance_count"] = len(ordered_paths)
+            phase_started = time.perf_counter()
+            with _silence_native_stdio():
+                for index, path in enumerate(ordered_paths):
+                    if index % 256 == 0:
+                        check_cancelled()
+                    metrics["instance_visited_count"] += 1
+                    try:
+                        inst = netlist.get_inst(path)
+                    except Exception:  # noqa: BLE001
+                        metrics["lookup_error_count"] += 1
+                        continue
+                    file_val, line_val = _inst_src_info(inst)
+                    if file_val is None and line_val is None:
+                        continue
+                    out[path] = (file_val, line_val)
+                    metrics["source_entry_count"] += 1
+            metrics["instance_lookup_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            _finish("completed")
+            return out
+
         try:
             phase_started = time.perf_counter()
             with _silence_native_stdio():
