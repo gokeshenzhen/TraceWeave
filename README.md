@@ -474,12 +474,18 @@ negatives continue to Static's structured unsupported result. `expand_assigns`
 only exposes real IR/source assignment evidence and does not change whether the
 endpoints are connected.
 
-The first request for a hierarchy handle content-hashes every ordered compile
-input. Later requests reuse that bounded in-memory compile-session manifest,
-reported as `fingerprint_cache_disposition=hit_session_snapshot`; a changed
-compile log / refreshed `build_tb_hierarchy` handle invalidates the snapshot.
-If source inputs change, rebuild and refresh the hierarchy before querying so
-Source Graph stays aligned with the simulated compile session.
+While `build_tb_hierarchy` reads sources and resolved includes, it captures a
+private immutable compile-session snapshot containing only content digests,
+stat identities, byte counts, and fixed-label semantic markers--never source
+text. The first Source Graph request reuses every still-current record instead
+of reopening that file, reported as
+`fingerprint_cache_disposition=miss_reused_compile_session`; support inputs not
+seen by hierarchy are still read and hashed normally. Later requests reuse the
+bounded in-memory manifest as `hit_session_snapshot`. Every reused record is
+stat-validated, and a changed source blocks the stale hierarchy/manifest pair
+with `compile_session_snapshot_changed`; rebuild and refresh the hierarchy
+before querying. A changed compile log or refreshed hierarchy handle likewise
+invalidates the snapshot.
 
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and
@@ -507,8 +513,10 @@ Full hierarchy construction remains the default because it is the testbench
 panorama used by hierarchy browsing and whole-design analysis. Compile logs are
 now parsed as streams, and the handle retains compact per-file facts rather than
 raw source bodies. The slim result includes numeric `build_metrics`, including
-source counts/bytes, phase timings, RSS samples, and
-`source_text_bytes_retained=0`.
+source counts/bytes, phase timings, RSS samples, `source_text_bytes_retained=0`,
+and privacy-safe compile-session snapshot counts/bytes/completeness. Source
+Graph manifest receipts expose digest reuse/read counts and bytes plus a
+conflict count, without paths or source content.
 
 Two optional full-build guardrails are disabled by default. Set them below an
 outer MCP watchdog when a site wants a structured blocker instead of an opaque

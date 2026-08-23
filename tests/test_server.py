@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import server
 from config import DEFAULT_EXTRA_TRANSITIONS
+from src.compile_session_snapshot import CompileSessionSnapshot
 from src.schemas import ToolErrorResult
 
 
@@ -367,6 +368,12 @@ class TestStructuralScannerToolContract:
             "vcs",
             supplementary_compile_logs=(str(elaborate_log),),
         )
+        assert context["_hierarchy_snapshot_sha256"] == snapshot
+        content_snapshot = context["_compile_session_snapshot"]
+        assert isinstance(content_snapshot, CompileSessionSnapshot)
+        assert content_snapshot.complete is True
+        assert content_snapshot.current() is True
+        assert content_snapshot.file_count == 1
 
         # Recovery must not depend exclusively on the exact handle surviving
         # in session/provenance. The ordered supplementary logs reproduce the

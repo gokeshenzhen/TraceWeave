@@ -9,6 +9,10 @@ import time
 from collections import defaultdict
 
 from .cancellation import check_cancelled
+from .compile_session_snapshot import (
+    CompileSessionSnapshot,
+    CompileSessionSnapshotBuilder,
+)
 from .operation_metrics import read_process_rss_kib
 from .sv_preprocessor import (
     PreprocessedSource,
@@ -665,6 +669,7 @@ def build_hierarchy(
         scan_metrics,
         resolved_include_tree,
         resolved_ordered_includes,
+        compile_session_snapshot,
     ) = _scan_user_files(file_entries, compile_result)
     effective_compile_result = merge_resolved_include_evidence(
         compile_result,
@@ -765,6 +770,10 @@ def build_hierarchy(
         # build_slim_payload(). Underscore prefix marks it not part of the
         # public schema.
         "_scan_results": scan_results,
+        # Private immutable digest/stat facts captured through the same reads
+        # that produced the hierarchy. Source Graph may reuse them only while
+        # every recorded stat identity remains current.
+        "_compile_session_snapshot": compile_session_snapshot,
     }
 
 
@@ -1143,6 +1152,7 @@ def _scan_user_files(
     dict[str, int],
     dict[str, list[str]],
     list[dict[str, str]],
+    CompileSessionSnapshot,
 ]:
     """Scan every compile input once without retaining its source body.
 
@@ -1163,7 +1173,11 @@ def _scan_user_files(
     source_bytes_scanned = 0
     largest_source_bytes = 0
     rss_peak_kib = read_process_rss_kib() or 0
-    preprocessor = SystemVerilogPreprocessor(compile_result)
+    content_snapshot_builder = CompileSessionSnapshotBuilder()
+    preprocessor = SystemVerilogPreprocessor(
+        compile_result,
+        source_loader=content_snapshot_builder.read_text,
+    )
     resolved_include_tree: dict[str, list[str]] = {}
     resolved_ordered_includes: list[dict[str, str]] = []
     resolved_include_paths: set[str] = set()
@@ -1175,11 +1189,13 @@ def _scan_user_files(
             stat_result = os.stat(path)
         except OSError:
             missing_count += 1
+            content_snapshot_builder.mark_issue("compile_source_unavailable")
             continue
         try:
             preprocessed = preprocessor.preprocess(path)
         except OSError:
             missing_count += 1
+            content_snapshot_builder.mark_issue("compile_source_unavailable")
             continue
         result = scan_preprocessed_sv(path, preprocessed)
         for parent, children in preprocessed.include_tree.items():
@@ -1218,6 +1234,7 @@ def _scan_user_files(
     sampled = read_process_rss_kib()
     if sampled is not None:
         rss_peak_kib = max(rss_peak_kib, sampled)
+    compile_session_snapshot = content_snapshot_builder.finish()
     return (
         scan_results,
         scan_by_path,
@@ -1236,10 +1253,17 @@ def _scan_user_files(
                 include_resolution_issues
             ),
             "include_context_complete": not include_resolution_issues,
+            "content_snapshot_file_count": compile_session_snapshot.file_count,
+            "content_snapshot_bytes": compile_session_snapshot.total_bytes,
+            "content_snapshot_issue_count": len(
+                compile_session_snapshot.issue_codes
+            ),
+            "content_snapshot_complete": compile_session_snapshot.complete,
             "rss_peak_kib": rss_peak_kib,
         },
         resolved_include_tree,
         resolved_ordered_includes,
+        compile_session_snapshot,
     )
 
 

@@ -28,6 +28,11 @@ import threading
 from typing import Any
 
 from .cancellation import check_cancelled
+from .compile_session_snapshot import (
+    CompileSessionSnapshot,
+    FileContentSnapshot,
+    SOURCE_CONTENT_MARKERS,
+)
 from .filelist_tokenizer import tokenize_filelist
 from .slang_connectivity_projector import SLANG_FRONTEND_NAME
 from .source_graph_contract import (
@@ -51,7 +56,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.7"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.8"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
@@ -153,22 +158,7 @@ _SEMANTIC_GAP_OPTIONS = {
     "-disable_sem2009": "pre_2009_semantics",
 }
 
-_SOURCE_MARKERS: tuple[tuple[re.Pattern[bytes], str], ...] = (
-    (re.compile(rb"\b(?:import|export)\s*\"DPI", re.IGNORECASE), "dpi_runtime"),
-    (
-        re.compile(rb"\b(?:force|release)\b", re.IGNORECASE),
-        "procedural_force_release",
-    ),
-    (re.compile(rb"\bbind\b", re.IGNORECASE), "bind_semantics"),
-    (
-        re.compile(rb"(?:`pragma\s+protect|`protect|`protected)", re.IGNORECASE),
-        "protected_region",
-    ),
-    (
-        re.compile(rb"\b(?:uvm_pkg|uvm_[a-z0-9_]+)\b", re.IGNORECASE),
-        "uvm_dynamic_connectivity",
-    ),
-)
+_SOURCE_MARKERS = SOURCE_CONTENT_MARKERS
 _XCELIUM_UVM_RECORD_RE = re.compile(
     r"Compiling UVM packages \((?P<packages>[^)]+)\) using uvmhome "
     r"location (?P<location>[^\r\n]+)"
@@ -299,6 +289,11 @@ class SourceGraphAdapterReceipt:
     query_fingerprint_sha256: str | None = None
     snapshot_identity_complete: bool = False
     fingerprint_cache_disposition: str | None = None
+    content_digest_reuse_count: int = 0
+    content_digest_reuse_bytes: int = 0
+    content_digest_read_count: int = 0
+    content_digest_read_bytes: int = 0
+    content_snapshot_conflict_count: int = 0
     hierarchy_resolutions: tuple[HierarchyAncestorResolution, ...] = ()
     blocker: SourceGraphAdapterBlocker | None = None
 
@@ -335,9 +330,20 @@ class SourceGraphAdapterReceipt:
         if self.fingerprint_cache_disposition not in {
             None,
             "miss",
+            "miss_reused_compile_session",
             "hit_session_snapshot",
         }:
             raise ValueError("invalid fingerprint cache disposition")
+        for field_name in (
+            "content_digest_reuse_count",
+            "content_digest_reuse_bytes",
+            "content_digest_read_count",
+            "content_digest_read_bytes",
+            "content_snapshot_conflict_count",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"invalid {field_name}")
         resolutions = tuple(self.hierarchy_resolutions)
         if any(
             not isinstance(item, HierarchyAncestorResolution) for item in resolutions
@@ -363,6 +369,13 @@ class SourceGraphAdapterReceipt:
                 "complete": self.manifest_complete,
                 "incomplete_reasons": list(self.manifest_incomplete_reasons),
                 "fingerprint_cache_disposition": self.fingerprint_cache_disposition,
+                "content_digest_reuse_count": self.content_digest_reuse_count,
+                "content_digest_reuse_bytes": self.content_digest_reuse_bytes,
+                "content_digest_read_count": self.content_digest_read_count,
+                "content_digest_read_bytes": self.content_digest_read_bytes,
+                "content_snapshot_conflict_count": (
+                    self.content_snapshot_conflict_count
+                ),
             },
             "scope": {
                 "kind": self.scope_kind,
@@ -1501,6 +1514,49 @@ def _hash_file_and_scan(
     return digest.hexdigest(), size
 
 
+def _empty_digest_metrics() -> dict[str, int]:
+    return {
+        "content_digest_reuse_count": 0,
+        "content_digest_reuse_bytes": 0,
+        "content_digest_read_count": 0,
+        "content_digest_read_bytes": 0,
+        "content_snapshot_conflict_count": 0,
+    }
+
+
+def _content_digest_fact(
+    path: Path,
+    exclusions: set[str],
+    *,
+    snapshot_records: Mapping[str, FileContentSnapshot],
+    metrics: dict[str, int],
+    require_snapshot_record: bool = False,
+) -> tuple[str, int] | None:
+    canonical = str(path.resolve(strict=False))
+    record = snapshot_records.get(canonical)
+    if record is not None:
+        if not record.current():
+            metrics["content_snapshot_conflict_count"] += 1
+            return None
+        exclusions.update(record.objective_exclusions)
+        metrics["content_digest_reuse_count"] += 1
+        metrics["content_digest_reuse_bytes"] += record.size
+        return record.sha256, record.size
+    if require_snapshot_record:
+        # Every ordered compile input was consumed by a complete full-hierarchy
+        # scan. A missing record therefore means the compile input identity no
+        # longer names the hierarchy's source (for example, a retargeted
+        # symlink) or the two contexts were mixed. Hashing the new path would
+        # pair fresh source content with stale hierarchy evidence.
+        metrics["content_snapshot_conflict_count"] += 1
+        return None
+    fact = _hash_file_and_scan(path, exclusions)
+    if fact is not None:
+        metrics["content_digest_read_count"] += 1
+        metrics["content_digest_read_bytes"] += fact[1]
+    return fact
+
+
 def _compile_fingerprint(
     *,
     simulator: str,
@@ -1510,12 +1566,21 @@ def _compile_fingerprint(
     tops: Sequence[str],
     support_files: set[Path],
     exclusions: set[str],
+    snapshot_records: Mapping[str, FileContentSnapshot],
+    digest_metrics: dict[str, int],
+    require_input_snapshot_records: bool,
 ) -> tuple[str | None, bool]:
     input_records: list[dict[str, Any]] = []
     readable = True
     for rendered in inputs:
         path = Path(rendered)
-        fact = _hash_file_and_scan(path, exclusions)
+        fact = _content_digest_fact(
+            path,
+            exclusions,
+            snapshot_records=snapshot_records,
+            metrics=digest_metrics,
+            require_snapshot_record=require_input_snapshot_records,
+        )
         if fact is None:
             readable = False
             continue
@@ -1525,13 +1590,22 @@ def _compile_fingerprint(
     support_records: list[dict[str, Any]] = []
     input_paths = {Path(item).resolve(strict=False) for item in inputs}
     for path in sorted(support_files - input_paths, key=lambda item: str(item)):
-        fact = _hash_file_and_scan(path, exclusions)
+        fact = _content_digest_fact(
+            path,
+            exclusions,
+            snapshot_records=snapshot_records,
+            metrics=digest_metrics,
+        )
         if fact is None:
             readable = False
             continue
         digest, size = fact
         support_records.append({"path": str(path), "bytes": size, "sha256": digest})
-    if not readable or len(input_records) != len(inputs):
+    if (
+        not readable
+        or len(input_records) != len(inputs)
+        or digest_metrics["content_snapshot_conflict_count"]
+    ):
         return None, False
     payload = {
         "adapter_version": SOURCE_GRAPH_ADAPTER_VERSION,
@@ -1593,6 +1667,7 @@ def _content_stat_key(
 def _manifest_snapshot_key(
     compile_log: str,
     compile_result: Mapping[str, Any],
+    content_snapshot: CompileSessionSnapshot | None = None,
 ) -> str | None:
     log_path = Path(compile_log).resolve(strict=False)
     log_record = _stat_record(log_path)
@@ -1611,6 +1686,15 @@ def _manifest_snapshot_key(
             for item in user
             if isinstance(item, Mapping)
         ]
+    content_snapshot_current = False
+    if content_snapshot is not None and content_snapshot.current():
+        snapshot_paths = set(content_snapshot.record_map())
+        content_snapshot_current = all(
+            not record["path"]
+            or record["path"] in snapshot_paths
+            or str(Path(record["path"]).resolve(strict=False)) in snapshot_paths
+            for record in user_records
+        )
     payload = {
         "adapter_version": SOURCE_GRAPH_ADAPTER_VERSION,
         "compile_log": log_record,
@@ -1626,7 +1710,14 @@ def _manifest_snapshot_key(
         "filelist_tree": compile_result.get("filelist_tree") or {},
         "compile_evidence": compile_result.get("compile_evidence") or {},
         "parse_warnings": list(compile_result.get("parse_warnings") or ()),
+        "compile_content_snapshot": (
+            content_snapshot.content_fingerprint_sha256
+            if content_snapshot_current
+            else None
+        ),
     }
+    if content_snapshot is not None and payload["compile_content_snapshot"] is None:
+        return None
     try:
         return hashlib.sha256(_canonical_json(payload)).hexdigest()
     except (TypeError, ValueError):
@@ -1661,7 +1752,17 @@ def _reset_source_graph_adapter_cache_for_tests() -> None:
 def _build_compile_manifest(
     compile_log: str,
     compile_result: Mapping[str, Any],
+    *,
+    content_snapshot: CompileSessionSnapshot | None = None,
+    digest_metrics: dict[str, int] | None = None,
 ) -> tuple[CompileInputManifest, tuple[str, ...], tuple[str, ...]]:
+    if digest_metrics is None:
+        digest_metrics = _empty_digest_metrics()
+    snapshot_records = (
+        content_snapshot.record_map()
+        if content_snapshot is not None and content_snapshot.complete
+        else {}
+    )
     simulator = str(compile_result.get("simulator") or "").lower()
     if simulator not in _BASE_OPTIONS:
         simulator = "unknown"
@@ -1669,6 +1770,12 @@ def _build_compile_manifest(
     command_dir = Path(str(raw_cwd)).resolve(strict=False)
     state = _TranslationState(simulator=simulator, command_dir=command_dir)
     state.options.extend(_BASE_OPTIONS.get(simulator, ()))
+    snapshot_incomplete = content_snapshot is not None and not content_snapshot.complete
+    if snapshot_incomplete:
+        # A new hierarchy builder always emits this private snapshot. If its
+        # capture was incomplete, a fresh manifest hash cannot repair the
+        # already-derived hierarchy facts; require a hierarchy rebuild.
+        digest_metrics["content_snapshot_conflict_count"] += 1
     bootstrap = compile_result.get("bootstrap_context")
     bootstrap_used = isinstance(bootstrap, Mapping) and bootstrap.get("used") is True
     if bootstrap_used:
@@ -1976,7 +2083,7 @@ def _build_compile_manifest(
     state.support_files.difference_update(
         Path(path) for path in recorded_instrumentation
     )
-    if tops:
+    if tops and not snapshot_incomplete:
         before_content = _content_stat_key(
             inputs=state.inputs,
             support_files=state.support_files,
@@ -1989,6 +2096,11 @@ def _build_compile_manifest(
             tops=tops,
             support_files=state.support_files,
             exclusions=state.objective_exclusions,
+            snapshot_records=snapshot_records,
+            digest_metrics=digest_metrics,
+            require_input_snapshot_records=(
+                content_snapshot is not None and content_snapshot.complete
+            ),
         )
         after_content = _content_stat_key(
             inputs=state.inputs,
@@ -2000,6 +2112,18 @@ def _build_compile_manifest(
         if not content_complete:
             state.inputs_complete = False
             state.gap_codes.add("compile_content_unavailable")
+        if digest_metrics["content_snapshot_conflict_count"]:
+            state.gap_codes.add("compile_session_snapshot_changed")
+    elif tops:
+        fingerprint = None
+        content_complete = False
+        state.inputs_complete = False
+        state.gap_codes.update(
+            {
+                "compile_content_unavailable",
+                "compile_session_snapshot_changed",
+            }
+        )
     else:
         # A missing elaboration top blocks every Source Graph plan before a
         # reusable artifact can exist. Avoid hashing a potentially huge source
@@ -2028,24 +2152,32 @@ def _build_compile_manifest(
 def _compile_manifest(
     compile_log: str,
     compile_result: Mapping[str, Any],
+    *,
+    content_snapshot: CompileSessionSnapshot | None = None,
 ) -> tuple[
     CompileInputManifest,
     tuple[str, ...],
     tuple[str, ...],
     str,
     str | None,
+    dict[str, int],
 ]:
     """Return a content-hashed manifest for one immutable compile session.
 
     The hierarchy handle and this cache share the same lifetime boundary: the
     compile-log snapshot.  A rebuild changes the log metadata and therefore
     invalidates the memoized manifest.  The first request still hashes every
-    source/support input and rejects a snapshot whose file metadata changes
-    during that scan; later requests reuse that exact process-session snapshot
-    instead of re-walking hundreds of source paths.
+    source/support input unless the hierarchy's immutable compile-session
+    snapshot already captured an exact digest while reading that same file.
+    Every reused record is stat-validated before use. Later requests reuse the
+    exact process-session manifest instead of re-walking hundreds of paths.
     """
 
-    snapshot_key = _manifest_snapshot_key(compile_log, compile_result)
+    snapshot_key = _manifest_snapshot_key(
+        compile_log,
+        compile_result,
+        content_snapshot,
+    )
     cached = _lookup_manifest_cache(snapshot_key)
     if cached is not None:
         return (
@@ -2054,12 +2186,17 @@ def _compile_manifest(
             cached.objective_exclusions,
             "hit_session_snapshot",
             snapshot_key,
+            _empty_digest_metrics(),
         )
 
     while not _MANIFEST_BUILD_LOCK.acquire(timeout=0.05):
         check_cancelled()
     try:
-        snapshot_key = _manifest_snapshot_key(compile_log, compile_result)
+        snapshot_key = _manifest_snapshot_key(
+            compile_log,
+            compile_result,
+            content_snapshot,
+        )
         cached = _lookup_manifest_cache(snapshot_key)
         if cached is not None:
             return (
@@ -2068,11 +2205,20 @@ def _compile_manifest(
                 cached.objective_exclusions,
                 "hit_session_snapshot",
                 snapshot_key,
+                _empty_digest_metrics(),
             )
+        digest_metrics = _empty_digest_metrics()
         manifest, gaps, exclusions = _build_compile_manifest(
-            compile_log, compile_result
+            compile_log,
+            compile_result,
+            content_snapshot=content_snapshot,
+            digest_metrics=digest_metrics,
         )
-        after_key = _manifest_snapshot_key(compile_log, compile_result)
+        after_key = _manifest_snapshot_key(
+            compile_log,
+            compile_result,
+            content_snapshot,
+        )
         if snapshot_key is not None and after_key != snapshot_key:
             manifest = CompileInputManifest(
                 fingerprint=None,
@@ -2098,7 +2244,19 @@ def _compile_manifest(
             if snapshot_key is not None and after_key == snapshot_key
             else None
         )
-        return manifest, gaps, exclusions, "miss", stable_snapshot
+        disposition = (
+            "miss_reused_compile_session"
+            if digest_metrics["content_digest_reuse_count"]
+            else "miss"
+        )
+        return (
+            manifest,
+            gaps,
+            exclusions,
+            disposition,
+            stable_snapshot,
+            digest_metrics,
+        )
     finally:
         _MANIFEST_BUILD_LOCK.release()
 
@@ -2219,6 +2377,22 @@ def resolve_source_graph_hierarchy_ancestors(
     return resolution.ancestors if resolution is not None else None
 
 
+def _validated_compile_session_snapshot(
+    hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
+) -> CompileSessionSnapshot | None:
+    snapshot = hierarchy_result.get("_compile_session_snapshot")
+    recorded_hierarchy_snapshot = hierarchy_result.get(
+        "_hierarchy_snapshot_sha256"
+    )
+    if (
+        not isinstance(snapshot, CompileSessionSnapshot)
+        or recorded_hierarchy_snapshot != hierarchy_snapshot_sha256
+    ):
+        return None
+    return snapshot
+
+
 def _blocked_plan(
     *,
     code: str,
@@ -2229,7 +2403,10 @@ def _blocked_plan(
     scope_kind: str = "single_endpoint",
     endpoint_count: int = 1,
     hierarchy_resolutions: Sequence[HierarchyAncestorResolution] = (),
+    fingerprint_cache_disposition: str | None = None,
+    digest_metrics: Mapping[str, int] | None = None,
 ) -> SourceGraphBuildPlan:
+    digest_metrics = digest_metrics or _empty_digest_metrics()
     blocker = SourceGraphAdapterBlocker(code=code, stage=stage)
     receipt = SourceGraphAdapterReceipt(
         status=AdapterStatus.BLOCKED,
@@ -2242,6 +2419,18 @@ def _blocked_plan(
         objective_exclusions=tuple(exclusions),
         scope_kind=scope_kind,
         endpoint_count=endpoint_count,
+        fingerprint_cache_disposition=fingerprint_cache_disposition,
+        content_digest_reuse_count=digest_metrics[
+            "content_digest_reuse_count"
+        ],
+        content_digest_reuse_bytes=digest_metrics[
+            "content_digest_reuse_bytes"
+        ],
+        content_digest_read_count=digest_metrics["content_digest_read_count"],
+        content_digest_read_bytes=digest_metrics["content_digest_read_bytes"],
+        content_snapshot_conflict_count=digest_metrics[
+            "content_snapshot_conflict_count"
+        ],
         hierarchy_resolutions=tuple(hierarchy_resolutions),
         blocker=blocker,
     )
@@ -2291,7 +2480,25 @@ def build_source_graph_plan(
         exclusions,
         fingerprint_cache_disposition,
         compile_snapshot,
-    ) = _compile_manifest(compile_log, compile_result)
+        digest_metrics,
+    ) = _compile_manifest(
+        compile_log,
+        compile_result,
+        content_snapshot=_validated_compile_session_snapshot(
+            hierarchy_result,
+            normalized_hierarchy_snapshot,
+        ),
+    )
+    if "compile_session_snapshot_changed" in gaps:
+        return _blocked_plan(
+            code="compile_session_snapshot_changed",
+            stage="compile_manifest",
+            manifest=manifest,
+            gaps=gaps,
+            exclusions=exclusions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
+        )
     if not manifest.complete:
         exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     if not manifest.ordered_inputs:
@@ -2301,6 +2508,8 @@ def build_source_graph_plan(
             manifest=manifest,
             gaps=gaps,
             exclusions=exclusions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
     if not manifest.ordered_tops:
         return _blocked_plan(
@@ -2309,6 +2518,8 @@ def build_source_graph_plan(
             manifest=manifest,
             gaps=gaps,
             exclusions=exclusions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
 
     top = _selected_top(
@@ -2323,6 +2534,8 @@ def build_source_graph_plan(
             manifest=manifest,
             gaps=gaps,
             exclusions=exclusions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
     hierarchy_resolution = resolve_source_graph_hierarchy_scope(
         hierarchy_result=hierarchy_result,
@@ -2336,6 +2549,8 @@ def build_source_graph_plan(
             manifest=manifest,
             gaps=(*gaps, "hierarchy_scope_unresolved"),
             exclusions=exclusions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
     ancestors = hierarchy_resolution.ancestors
     if hierarchy_resolution.missing_instance_proved:
@@ -2346,6 +2561,8 @@ def build_source_graph_plan(
             gaps=(*gaps, "hierarchy_ancestor_chain_truncated"),
             exclusions=exclusions,
             hierarchy_resolutions=(hierarchy_resolution,),
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
 
     target = ConnectivityTarget(
@@ -2440,6 +2657,17 @@ def build_source_graph_plan(
         query_fingerprint_sha256=query_key.digest,
         snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
+        content_digest_reuse_count=digest_metrics[
+            "content_digest_reuse_count"
+        ],
+        content_digest_reuse_bytes=digest_metrics[
+            "content_digest_reuse_bytes"
+        ],
+        content_digest_read_count=digest_metrics["content_digest_read_count"],
+        content_digest_read_bytes=digest_metrics["content_digest_read_bytes"],
+        content_snapshot_conflict_count=digest_metrics[
+            "content_snapshot_conflict_count"
+        ],
         hierarchy_resolutions=(hierarchy_resolution,),
     )
     return SourceGraphBuildPlan(
@@ -2910,7 +3138,27 @@ def build_source_graph_path_plan(
         exclusions,
         fingerprint_cache_disposition,
         compile_snapshot,
-    ) = _compile_manifest(compile_log, compile_result)
+        digest_metrics,
+    ) = _compile_manifest(
+        compile_log,
+        compile_result,
+        content_snapshot=_validated_compile_session_snapshot(
+            hierarchy_result,
+            normalized_hierarchy_snapshot,
+        ),
+    )
+    if "compile_session_snapshot_changed" in gaps:
+        return _blocked_plan(
+            code="compile_session_snapshot_changed",
+            stage="compile_manifest",
+            manifest=manifest,
+            gaps=gaps,
+            exclusions=exclusions,
+            scope_kind=scope_kind,
+            endpoint_count=endpoint_count,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
+        )
     if not manifest.complete:
         exclusions = tuple(sorted({*exclusions, "compile_manifest_incomplete"}))
     blocker_kwargs = {
@@ -2919,6 +3167,8 @@ def build_source_graph_path_plan(
         "exclusions": exclusions,
         "scope_kind": scope_kind,
         "endpoint_count": endpoint_count,
+        "fingerprint_cache_disposition": fingerprint_cache_disposition,
+        "digest_metrics": digest_metrics,
     }
     if not manifest.ordered_inputs:
         return _blocked_plan(
@@ -2988,6 +3238,8 @@ def build_source_graph_path_plan(
             exclusions=exclusions,
             scope_kind=scope_kind,
             endpoint_count=endpoint_count,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
 
     assert from_resolution is not None and to_resolution is not None
@@ -3002,6 +3254,8 @@ def build_source_graph_path_plan(
             scope_kind=scope_kind,
             endpoint_count=endpoint_count,
             hierarchy_resolutions=hierarchy_resolutions,
+            fingerprint_cache_disposition=fingerprint_cache_disposition,
+            digest_metrics=digest_metrics,
         )
     from_ancestors = from_resolution.ancestors
     to_ancestors = to_resolution.ancestors
@@ -3102,6 +3356,17 @@ def build_source_graph_path_plan(
         query_fingerprint_sha256=query_key.digest,
         snapshot_identity_complete=artifact_identity.snapshots_complete,
         fingerprint_cache_disposition=fingerprint_cache_disposition,
+        content_digest_reuse_count=digest_metrics[
+            "content_digest_reuse_count"
+        ],
+        content_digest_reuse_bytes=digest_metrics[
+            "content_digest_reuse_bytes"
+        ],
+        content_digest_read_count=digest_metrics["content_digest_read_count"],
+        content_digest_read_bytes=digest_metrics["content_digest_read_bytes"],
+        content_snapshot_conflict_count=digest_metrics[
+            "content_snapshot_conflict_count"
+        ],
         hierarchy_resolutions=hierarchy_resolutions,
     )
     return SourceGraphBuildPlan(

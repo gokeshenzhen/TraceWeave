@@ -431,11 +431,15 @@ partial；只有 coverage-complete 的负结果才是 `not_connected`，inconclu
 负结果会继续回退到 Static 的结构化 unsupported。`expand_assigns` 只控制是否展示真实的
 IR/source assignment evidence，不改变端点是否连通。
 
-同一 hierarchy handle 的首个请求会对全部有序 compile inputs 做内容哈希；后续请求复用
-容量有界的进程内 compile-session manifest，并在回执中标记
-`fingerprint_cache_disposition=hit_session_snapshot`。compile log 变化并重新运行
-`build_tb_hierarchy` 后该 snapshot 会失效。若源码发生变化，应先重新编译并刷新 hierarchy，
-使 Source Graph 与实际仿真 compile session 保持一致。
+`build_tb_hierarchy` 读取源码与已解析 include 时，会同步捕获一份私有、不可变的
+compile-session snapshot；其中只包含内容摘要、stat identity、字节数和固定标签语义
+marker，绝不保留源码正文。Source Graph 首次请求会复用所有仍然 current 的记录而不再打开
+对应文件，并在回执中标记
+`fingerprint_cache_disposition=miss_reused_compile_session`；hierarchy 没有读到的 support
+input 仍按原路径读取并哈希。后续请求复用容量有界的进程内 manifest，并标记
+`hit_session_snapshot`。每条复用记录都会重新校验 stat；若源码已变化，旧 hierarchy 与
+manifest 的组合会以 `compile_session_snapshot_changed` 阻断，必须先重新编译并刷新
+hierarchy。compile log 变化或 hierarchy handle 刷新也会使 snapshot 失效。
 
 对于 source compile 与 elaboration 分属多个日志的 VCS 流程，可以显式构造同一个上下文。
 建议把包含源文件顺序的 compile log 保持为 primary（结构扫描也使用它），再按 build 顺序
@@ -458,8 +462,10 @@ warning，manifest 会保持保守/incomplete，不会拼出一个并不存在�
 
 完整 hierarchy 仍是默认路径，因为 hierarchy 浏览与全设计分析需要这张 testbench 全景图。
 现在 compile log 采用流式解析；handle 只保留每个文件的紧凑扫描事实，不再保存源码正文。
-精简结果新增数值型 `build_metrics`，包括源码文件数/字节数、各阶段耗时、RSS 采样，以及
-`source_text_bytes_retained=0`。
+精简结果新增数值型 `build_metrics`，包括源码文件数/字节数、各阶段耗时、RSS 采样、
+`source_text_bytes_retained=0`，以及隐私安全的 compile-session snapshot
+文件数/字节数/完整性。Source Graph manifest receipt 还会报告摘要复用/读取的文件数、
+字节数和冲突数，不暴露路径或源码内容。
 
 完整构建有两个默认关闭的可选 guardrail。若站点外层 MCP watchdog 为固定时限，可以把
 内部阈值设得更早，从而收到结构化 blocker，而不是只看到 client/process 被终止：

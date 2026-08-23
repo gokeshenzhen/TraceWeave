@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import threading
 
@@ -16,6 +17,7 @@ from src.source_graph_adapter import (
     build_source_graph_path_plan,
     build_source_graph_plan,
 )
+from src.tb_hierarchy_builder import build_hierarchy
 from src.source_graph_contract import (
     ConnectivityPathTarget,
     QueryOperation,
@@ -1012,6 +1014,248 @@ def test_content_fingerprint_cache_hits_and_invalidates_on_rebuild(
         third.request.identity.compile_inputs.fingerprint
         != first.request.identity.compile_inputs.fingerprint
     )
+
+
+def test_manifest_reuses_hierarchy_compile_session_content(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    include = tmp_path / "defs.svh"
+    _write(
+        include,
+        "task automatic drive_q; force q = 1'b1; release q; endtask\n",
+    )
+    _write(
+        source,
+        'module tb; import "DPI-C" function void f(); logic q;\n'
+        '`include "defs.svh"\n'
+        "endmodule\n",
+    )
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = build_hierarchy(
+        compile_result,
+        apply_source_overlay=False,
+    )
+    compile_result = hierarchy["compile_result"]
+    baseline = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+    )
+    assert baseline.request is not None
+    baseline_fingerprint = baseline.request.identity.compile_inputs.fingerprint
+    baseline_exclusions = baseline.receipt.objective_exclusions
+    source_graph_adapter._reset_source_graph_adapter_cache_for_tests()
+    hierarchy_snapshot = compute_snapshot_fingerprint(
+        str(tmp_path / "compile.log"),
+        "xcelium",
+    )
+    hierarchy["_hierarchy_snapshot_sha256"] = hierarchy_snapshot
+
+    calls = 0
+    original = source_graph_adapter._hash_file_and_scan
+
+    def tracked_hash(path, exclusions):
+        nonlocal calls
+        calls += 1
+        return original(path, exclusions)
+
+    monkeypatch.setattr(source_graph_adapter, "_hash_file_and_scan", tracked_hash)
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.request.identity.compile_inputs.fingerprint == baseline_fingerprint
+    assert plan.receipt.objective_exclusions == baseline_exclusions
+    assert calls == 0
+    assert plan.receipt.fingerprint_cache_disposition == (
+        "miss_reused_compile_session"
+    )
+    assert plan.receipt.content_digest_reuse_count == 2
+    assert plan.receipt.content_digest_reuse_bytes == (
+        source.stat().st_size + include.stat().st_size
+    )
+    assert plan.receipt.content_digest_read_count == 0
+    assert plan.receipt.content_digest_read_bytes == 0
+    assert plan.receipt.content_snapshot_conflict_count == 0
+    assert "dpi_runtime" in plan.receipt.objective_exclusions
+    assert "procedural_force_release" in plan.receipt.objective_exclusions
+    manifest_receipt = plan.receipt.to_dict()["manifest"]
+    assert manifest_receipt["content_digest_reuse_count"] == 2
+    assert manifest_receipt["content_digest_read_count"] == 0
+
+
+def test_manifest_blocks_when_hierarchy_content_snapshot_is_stale(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = build_hierarchy(
+        compile_result,
+        apply_source_overlay=False,
+    )
+    hierarchy_snapshot = compute_snapshot_fingerprint(
+        str(tmp_path / "compile.log"),
+        "xcelium",
+    )
+    hierarchy["_hierarchy_snapshot_sha256"] = hierarchy_snapshot
+    _write(source, "module tb; logic q; assign q = 1'b1; endmodule\n")
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "compile_session_snapshot_changed"
+    assert plan.receipt.blocker.stage == "compile_manifest"
+    assert "compile_session_snapshot_changed" in plan.receipt.gap_codes
+    assert plan.receipt.content_snapshot_conflict_count == 1
+
+    path_plan = _path_plan(
+        tmp_path,
+        compile_result,
+        hierarchy=hierarchy,
+    )
+    assert path_plan.status is AdapterStatus.BLOCKED
+    assert path_plan.receipt.blocker is not None
+    assert path_plan.receipt.blocker.code == "compile_session_snapshot_changed"
+    assert path_plan.receipt.scope_kind == "dual_endpoint_path"
+    assert path_plan.receipt.endpoint_count == 2
+    assert path_plan.receipt.content_snapshot_conflict_count == 1
+
+
+def test_manifest_blocks_incomplete_hierarchy_content_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+    hierarchy_snapshot = compute_snapshot_fingerprint(
+        str(tmp_path / "compile.log"),
+        "xcelium",
+    )
+    hierarchy["_hierarchy_snapshot_sha256"] = hierarchy_snapshot
+    content_snapshot = hierarchy["_compile_session_snapshot"]
+    hierarchy["_compile_session_snapshot"] = replace(
+        content_snapshot,
+        complete=False,
+        issue_codes=("compile_content_changed_during_scan",),
+    )
+    calls = 0
+
+    def unexpected_hash(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("an incomplete hierarchy snapshot must rebuild hierarchy")
+
+    monkeypatch.setattr(
+        source_graph_adapter,
+        "_hash_file_and_scan",
+        unexpected_hash,
+    )
+
+    plan = _plan(
+        tmp_path,
+        hierarchy["compile_result"],
+        signal_path="tb.q",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "compile_session_snapshot_changed"
+    assert plan.receipt.content_snapshot_conflict_count == 1
+    assert plan.receipt.content_digest_reuse_count == 0
+    assert plan.receipt.content_digest_read_count == 0
+    assert calls == 0
+
+
+def test_manifest_blocks_retargeted_compile_input_symlink(tmp_path):
+    original = tmp_path / "original.sv"
+    replacement = tmp_path / "replacement.sv"
+    source_link = tmp_path / "top.sv"
+    _write(original, "module tb; logic q; endmodule\n")
+    _write(replacement, "module tb; logic q; assign q = 1'b1; endmodule\n")
+    source_link.symlink_to(original)
+    _write(tmp_path / "compile.log", "xrun top.sv -top tb\n")
+    compile_result = {
+        "simulator": "xcelium",
+        "compile_cwd": str(tmp_path),
+        "compile_command": "xrun top.sv -top tb",
+        "top_modules": ["tb"],
+        "files": {
+            "user": [
+                {
+                    "path": str(source_link),
+                    "type": "module",
+                    "category": "rtl",
+                }
+            ],
+            "filtered_count": 0,
+        },
+        "include_tree": {},
+        "filelist_tree": {},
+        "interfaces": [],
+        "parse_warnings": [],
+    }
+    hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+    hierarchy_snapshot = compute_snapshot_fingerprint(
+        str(tmp_path / "compile.log"),
+        "xcelium",
+    )
+    hierarchy["_hierarchy_snapshot_sha256"] = hierarchy_snapshot
+    content_snapshot = hierarchy["_compile_session_snapshot"]
+    assert content_snapshot.current() is True
+
+    first = _plan(
+        tmp_path,
+        hierarchy["compile_result"],
+        signal_path="tb.q",
+        hierarchy=hierarchy,
+    )
+    assert first.status is AdapterStatus.READY
+    assert first.receipt.fingerprint_cache_disposition == (
+        "miss_reused_compile_session"
+    )
+
+    source_link.unlink()
+    source_link.symlink_to(replacement)
+    assert content_snapshot.current() is True
+
+    plan = _plan(
+        tmp_path,
+        hierarchy["compile_result"],
+        signal_path="tb.q",
+        hierarchy=hierarchy,
+    )
+
+    assert plan.status is AdapterStatus.BLOCKED
+    assert plan.receipt.blocker is not None
+    assert plan.receipt.blocker.code == "compile_session_snapshot_changed"
+    assert plan.receipt.content_snapshot_conflict_count == 1
 
 
 def test_unclassified_option_forbids_cross_request_exact_reuse(tmp_path):

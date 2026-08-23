@@ -182,13 +182,18 @@ Verification
   evidence is exposed. `trace_x_source` uses the same memory-first artifact
   runtime and optional exact disk tier while retaining split-phase waveform
   locking and whole-trace restart semantics.
-  The adapter content-hashes every ordered source/support input on the first
-  request for a hierarchy handle. A bounded process-memory manifest cache then
-  reuses that immutable compile-session snapshot; its key includes compile-log
-  metadata and normalized parser output, matching the handle's rebuild
-  boundary. Re-running the compile and `build_tb_hierarchy` invalidates it.
-  The initial scan compares all input metadata before and after hashing and
-  refuses a reusable key if the snapshot changes mid-scan.
+  While hierarchy preprocessing already has source/include bytes open, it
+  captures a private immutable compile-session snapshot of digest, stat, size,
+  and fixed-label marker facts; source bodies are not retained. On the first
+  request for that hierarchy handle, the adapter reuses records whose full stat
+  identity is still current and hashes only unseen support inputs. A bounded
+  process-memory manifest cache then serves later requests. Its key includes
+  compile-log metadata, normalized parser output, and the hierarchy content
+  snapshot fingerprint, matching the handle's rebuild boundary. Re-running the
+  compile and `build_tb_hierarchy` invalidates it. Metadata is checked around
+  both capture and manifest construction. A changed record produces the fixed
+  `compile_session_snapshot_changed` blocker rather than mixing a stale
+  hierarchy with fresh source content.
   A split VCS build may add ordered `supplementary_compile_logs` at the
   hierarchy boundary. Parse results are merged with separate phase commands;
   the handle/snapshot identity covers every log while one-log callers retain
@@ -392,15 +397,17 @@ Verification
 
 `build_tb_hierarchy` generates a full hierarchy result server-side (project
 metadata, grouped file list, complete `component_tree`, `class_hierarchy`,
-raw `compile_result`, compact per-file scan results) but returns only a **slim
-payload** to the LLM: project, stats, depth-2 `tree_skeleton`, interfaces,
-`ambiguous_basenames`, numeric `build_metrics`, and a content-addressed
-`hierarchy_handle`. Compile transcripts are consumed as streams. A source body
-exists only while its file is being scanned; cross-file facts are derived at
-that point and `source_text` is removed before the result enters the handle
-store. Retained hierarchy memory therefore scales with extracted metadata, not
-the sum of source bytes. The full result is registered in an in-process `HandleStore`
-(`src/hierarchy_handles.py`) keyed by the handle.
+raw `compile_result`, compact per-file scan results, and a private immutable
+content snapshot) but returns only a **slim payload** to the LLM: project,
+stats, depth-2 `tree_skeleton`, interfaces, `ambiguous_basenames`, numeric
+`build_metrics`, and a content-addressed `hierarchy_handle`. Compile transcripts
+are consumed as streams. A source body exists only while its file is being
+scanned; cross-file facts plus digest/stat/marker records are derived at that
+point and `source_text` is removed before the result enters the handle store.
+Retained hierarchy memory therefore scales with extracted metadata and one
+fixed-size record per file, not the sum of source bytes. The full result is
+registered in an in-process `HandleStore` (`src/hierarchy_handles.py`) keyed by
+the handle.
 
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import tb_hierarchy_builder
+from src.compile_session_snapshot import CompileSessionSnapshot
 from src.compile_log_parser import parse_compile_log
 from src.tb_hierarchy_builder import build_hierarchy, scan_sv_file, scan_sv_text
 
@@ -488,6 +489,41 @@ Top Level Modules:
             assert metrics["source_text_bytes_retained"] == 0
             assert metrics["source_bytes_scanned"] > 0
             assert metrics["source_file_count_scanned"] == len(scans)
+        finally:
+            tmp.cleanup()
+
+    def test_full_hierarchy_captures_private_immutable_content_snapshot(self):
+        tmp, root = _make_project()
+        try:
+            log = root / "comp.log"
+            log.write_text(
+                f"Parsing design file '{root / 'tb' / 'top_tb.sv'}'\n"
+                f"Parsing design file '{root / 'dut' / 'dut.sv'}'\n"
+                "Top Level Modules:\n"
+                "       top_tb\n"
+            )
+
+            hierarchy = build_hierarchy(
+                parse_compile_log(str(log), "vcs"),
+                apply_source_overlay=False,
+            )
+
+            snapshot = hierarchy["_compile_session_snapshot"]
+            assert isinstance(snapshot, CompileSessionSnapshot)
+            assert snapshot.complete is True
+            assert snapshot.file_count == 2
+            assert snapshot.total_bytes == sum(
+                (root / path).stat().st_size
+                for path in ("tb/top_tb.sv", "dut/dut.sv")
+            )
+            assert len(snapshot.content_fingerprint_sha256) == 64
+            assert all(len(record.sha256) == 64 for record in snapshot.records)
+            assert all(not hasattr(record, "source_text") for record in snapshot.records)
+            metrics = hierarchy["build_metrics"]
+            assert metrics["content_snapshot_complete"] is True
+            assert metrics["content_snapshot_file_count"] == 2
+            assert metrics["content_snapshot_bytes"] == snapshot.total_bytes
+            assert metrics["content_snapshot_issue_count"] == 0
         finally:
             tmp.cleanup()
 
