@@ -138,6 +138,40 @@ def _load_enumeration_receipt(
     }
 
 
+def _driver_traversal_receipt(
+    result: ConnectivityQueryResult,
+    *,
+    claim_semantics: dict[str, Any],
+) -> dict[str, Any]:
+    gap_codes = set(_gap_codes(result))
+    reasons: list[str] = []
+    if result.match_truncated:
+        reasons.append("output_limit")
+    if result.state_truncated or result.edge_truncated or result.frontier_truncated:
+        reasons.append("work_limit")
+    if "query_depth_limit" in gap_codes:
+        reasons.append("depth_limit")
+    if not claim_semantics["exhaustive_search"]:
+        reasons.append("coverage_incomplete")
+    return {
+        "returned_fact_count": len(result.matches),
+        "output_limit": result.match_limit,
+        "output_truncated": result.match_truncated,
+        "visited_state_count": result.visited_state_count,
+        "state_limit": result.state_limit,
+        "state_truncated": bool(
+            result.state_truncated
+            or result.edge_truncated
+            or result.frontier_truncated
+        ),
+        "search_exhaustive": bool(
+            claim_semantics["exhaustive_search"] and not reasons
+        ),
+        "incomplete_reasons": reasons,
+        "continuation_supported": False,
+    }
+
+
 def _query_receipt(
     result: ConnectivityQueryResult,
     *,
@@ -629,6 +663,10 @@ class SourceGraphConnectivityBackend:
             "recursive": recursive,
             "driver_chain": None,
             "chain_summary": None,
+            "traversal": _driver_traversal_receipt(
+                query,
+                claim_semantics=claim_semantics,
+            ),
             "backend": "source_graph",
             "claim_semantics": claim_semantics,
         }

@@ -123,6 +123,11 @@ def test_driver_mapping_uses_only_ir_source_facts():
     assert result["expression_summary"] is None
     assert {hop["backend"] for hop in result["driver_chain"]} == {"source_graph"}
     assert result["_source_graph_query_receipt"]["status"] == "found"
+    assert result["traversal"]["returned_fact_count"] == len(
+        result["driver_chain"]
+    )
+    assert result["traversal"]["search_exhaustive"] is True
+    assert result["traversal"]["incomplete_reasons"] == []
 
 
 def test_segmented_driver_mapping_reports_composite_bit_provenance():
@@ -210,6 +215,13 @@ def test_high_fanout_receipts_keep_positive_facts_without_claiming_exhaustive():
     assert driver["driver_status"] == "partial"
     assert len(driver["driver_chain"]) == 256
     assert driver["stopped_at"] == "source_graph_query_truncated"
+    assert driver["traversal"]["returned_fact_count"] == 256
+    assert driver["traversal"]["output_truncated"] is True
+    assert driver["traversal"]["search_exhaustive"] is False
+    assert driver["traversal"]["incomplete_reasons"] == [
+        "output_limit",
+        "coverage_incomplete",
+    ]
     for result in (loads, driver):
         receipt = result["_source_graph_query_receipt"]
         assert receipt["status"] == "found"

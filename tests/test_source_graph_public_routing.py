@@ -713,6 +713,120 @@ async def test_npi_success_skips_source_graph_and_static(monkeypatch, tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "kdb_status",
+    [None, {"load_quality": "degraded", "error_count": 8}],
+)
+async def test_npi_bounded_partial_driver_facts_remain_authoritative(
+    monkeypatch,
+    tmp_path,
+    kdb_status,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "resolved_rtl_name": "q",
+            "resolved_module": "dut",
+            "resolved_instance_path": "sg_top",
+            "driver_status": "partial",
+            "driver_kind": "always_ff",
+            "source_file": "rtl/dut.sv",
+            "source_line": 12,
+            "upstream_signals": [],
+            "confidence": "partial",
+            "stopped_at": "npi_driver_traversal_incomplete",
+            "recursive": True,
+            "driver_chain": None,
+            "chain_summary": None,
+            "traversal": {
+                "returned_fact_count": 1,
+                "output_limit": 32,
+                "output_truncated": False,
+                "visited_state_count": 4096,
+                "state_limit": 4096,
+                "state_truncated": True,
+                "callback_observed_count": 4097,
+                "callback_pruned_count": 1,
+                "search_exhaustive": False,
+                "incomplete_reasons": ["work_limit"],
+                "continuation_supported": False,
+            },
+            "backend": "verdi_npi",
+        },
+        kdb_status=kdb_status,
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=None,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log)
+    )
+
+    assert result.backend == "verdi_npi"
+    assert result.driver_status == "partial"
+    assert result.traversal.search_exhaustive is False
+    assert result.backend_status.attempted_backends[0].coverage_status == "partial"
+    assert result.backend_status.source_graph is None
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
+async def test_npi_partial_driver_without_returned_fact_routes_onward(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    runtime = SourceGraphRuntime(ReadyWorker())
+    static = TrackingStaticBackend()
+    npi = FakeNpiBackend(
+        {
+            "resolved_rtl_name": "lane_data",
+            "resolved_module": "sg_top",
+            "resolved_instance_path": "sg_top",
+            "driver_status": "partial",
+            "driver_kind": "instance_port",
+            "confidence": "partial",
+            "recursive": True,
+            "traversal": {
+                "returned_fact_count": 0,
+                "output_limit": 32,
+                "output_truncated": False,
+                "visited_state_count": 0,
+                "state_limit": 4096,
+                "state_truncated": False,
+                "search_exhaustive": False,
+                "incomplete_reasons": ["coverage_incomplete"],
+                "continuation_supported": False,
+            },
+            "backend": "verdi_npi",
+        }
+    )
+    _patch_common(
+        monkeypatch,
+        runtime=runtime,
+        static=static,
+        npi_backend=npi,
+        with_kdb=True,
+    )
+
+    result = await server._dispatch(
+        "explain_signal_driver", _driver_args(compile_log)
+    )
+
+    assert result.backend == "source_graph"
+    npi_attempt = result.backend_status.attempted_backends[0]
+    assert npi_attempt.status == "inconclusive"
+    assert npi_attempt.coverage_status == "partial"
+    assert static.driver_calls == 0
+
+
+@pytest.mark.anyio
 async def test_npi_load_success_skips_source_graph_and_static(monkeypatch, tmp_path):
     compile_log, _ = _install_source_context(tmp_path)
     static = TrackingStaticBackend()

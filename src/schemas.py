@@ -677,6 +677,30 @@ class DriverBitProvenanceSegment(SchemaModel):
     multiple_driver: bool = False
 
 
+class DriverTraversalReceipt(SchemaModel):
+    """Resource and completeness boundary for driver fact traversal."""
+
+    returned_fact_count: int = Field(ge=0)
+    output_limit: int = Field(ge=1)
+    output_truncated: bool
+    visited_state_count: int = Field(ge=0)
+    state_limit: int = Field(ge=1)
+    state_truncated: bool
+    callback_observed_count: int | None = Field(default=None, ge=0)
+    callback_pruned_count: int | None = Field(default=None, ge=0)
+    search_exhaustive: bool
+    incomplete_reasons: list[
+        Literal[
+            "output_limit",
+            "work_limit",
+            "depth_limit",
+            "coverage_incomplete",
+            "backend_degraded",
+        ]
+    ] = Field(default_factory=list)
+    continuation_supported: Literal[False] = False
+
+
 class SourceGraphClaimSemanticsReceipt(SchemaModel):
     """Orthogonal meaning of a Source Graph query result.
 
@@ -719,6 +743,7 @@ class ExplainDriverResult(SchemaModel):
     recursive: bool = False
     driver_chain: list[DriverChainHop] | None = None
     chain_summary: str | None = None
+    traversal: DriverTraversalReceipt | None = None
     cross_check: DriverLoadCrossCheck | None = None
     backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus | None = None
@@ -1223,6 +1248,7 @@ class TraceChainNode(SchemaModel):
     driver_expression: str | None = None
     driver_confidence: str | None = None
     claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    traversal: DriverTraversalReceipt | None = None
     unsupported_reason: str | None = None
     cross_check: DriverLoadCrossCheck | None = None
     instance_port_connections: list[dict[str, Any]] | None = None

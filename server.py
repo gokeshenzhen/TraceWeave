@@ -1344,8 +1344,10 @@ Waveform debug workflow:
 
 8. Use deep-dive tools when needed:
    - analyze_failure_event for failure-centric instance/source correlation
-   - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
-   - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps
+   - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup;
+     read traversal.search_exhaustive before treating returned facts as the complete
+     or exclusive driver set. A bounded partial positive is evidence, not a negative.
+   - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps; driver_traversal_incomplete preserves positive candidates but is not an exclusive root-cause verdict
    - get_signals_by_cycle for clock-aligned cycle-level signal value tables; ideal for state machines, pipelines, and algorithm core round-by-round comparison
    - get_error_context for other groups
    - get_signal_transitions for longer history
@@ -1747,9 +1749,10 @@ def _npi_result_usable(
         return False
     degraded = _npi_kdb_degraded(kdb_status=kdb_status)
     if operation == "driver":
+        positive_driver = _npi_driver_result_has_positive_fact(result)
         if degraded:
-            return result.get("driver_status") == "resolved"
-        return result.get("driver_status") in {"resolved", "testbench_driven"}
+            return positive_driver
+        return positive_driver or result.get("driver_status") == "testbench_driven"
     if degraded:
         # A returned load is positive evidence.  An empty list is an exhaustive
         # negative claim, which a partial elaboration cannot support.
@@ -1770,6 +1773,46 @@ def _npi_result_usable(
         None,
         "no_npi_loads",
     }
+
+
+def _npi_driver_result_has_positive_fact(result: dict) -> bool:
+    status = result.get("driver_status")
+    if status == "resolved":
+        return True
+    if status != "partial" or result.get("driver_kind") is None:
+        return False
+    traversal = result.get("traversal")
+    returned = (
+        traversal.get("returned_fact_count")
+        if isinstance(traversal, dict)
+        else None
+    )
+    return bool(
+        isinstance(returned, int)
+        and not isinstance(returned, bool)
+        and returned > 0
+    )
+
+
+def _npi_result_coverage_partial(
+    result: dict,
+    *,
+    operation: str,
+    kdb_status: dict | None,
+) -> bool:
+    if _npi_kdb_degraded(kdb_status=kdb_status):
+        return True
+    if operation == "driver":
+        traversal = result.get("traversal")
+        return bool(
+            isinstance(traversal, dict)
+            and traversal.get("search_exhaustive") is False
+        )
+    enumeration = result.get("enumeration")
+    return bool(
+        isinstance(enumeration, dict)
+        and enumeration.get("search_exhaustive") is False
+    )
 
 
 def _npi_kdb_status(
@@ -2700,7 +2743,11 @@ async def _route_public_connectivity(
                         "success",
                         coverage_status=(
                             "partial"
-                            if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                            if _npi_result_coverage_partial(
+                                npi_result,
+                                operation=operation,
+                                kdb_status=npi_kdb_status,
+                            )
                             else None
                         ),
                     )
@@ -2732,7 +2779,11 @@ async def _route_public_connectivity(
                     reason=fallback_reason,
                     coverage_status=(
                         "partial"
-                        if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                        if _npi_result_coverage_partial(
+                            npi_result,
+                            operation=operation,
+                            kdb_status=npi_kdb_status,
+                        )
                         else None
                     ),
                 )
@@ -3976,7 +4027,7 @@ async def _run_trace_x_attempt(
         degraded_inconclusive = (
             abort_on_backend_fallback
             and _npi_kdb_degraded(kdb_status=current_kdb_status)
-            and raw.get("driver_status") != "resolved"
+            and not _npi_driver_result_has_positive_fact(raw)
         )
         if abort_on_backend_fallback and (
             fallback_reason
@@ -5518,7 +5569,11 @@ async def list_tools():
                 "Set recursive=true to walk multiple hops upstream across instance boundaries. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and walks "
                 "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
-                "the static source-regex backend cannot reach. If NPI is unavailable or "
+                "the static source-regex backend cannot reach. Recursive NPI fan-in is admitted "
+                "inside the native traversal (4,096 states, 32 returned facts); Source Graph and "
+                "NPI both publish traversal counts, limits, truncation, exhaustive-search, and "
+                "fixed incomplete reasons. A partial positive prefix is usable evidence but not "
+                "a complete or exclusive driver-set claim. If NPI is unavailable or "
                 "cannot return a trustworthy result, TraceWeave next attempts a bounded, "
                 "on-demand Source Graph projection; Legacy Static remains the normal final fallback. "
                 "The explicit allow_bounded_bootstrap path is the resource-bounded exception: "

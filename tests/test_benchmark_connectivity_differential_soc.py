@@ -157,6 +157,54 @@ def test_normalized_result_contains_no_raw_signal_source_or_scope():
     assert len(normalized["source_file_sha256"]) == 1
 
 
+def test_normalized_npi_driver_uses_traversal_completeness():
+    query = {
+        "operation": "driver",
+        "signal_path": "tb.dut.q",
+        "recursive": True,
+        "max_depth": 8,
+    }
+    raw = {
+        "driver_status": "partial",
+        "driver_kind": "always_ff",
+        "resolved_instance_path": "tb.dut",
+        "traversal": {
+            "returned_fact_count": 1,
+            "output_limit": 32,
+            "output_truncated": False,
+            "visited_state_count": 4096,
+            "state_limit": 4096,
+            "state_truncated": True,
+            "callback_observed_count": 4100,
+            "callback_pruned_count": 4,
+            "search_exhaustive": False,
+            "incomplete_reasons": ["work_limit", "private-unexpected-label"],
+        },
+    }
+
+    normalized = benchmark.normalize_query_result(
+        "npi", query, raw, npi_load_quality="clean"
+    )
+
+    assert normalized["status"] == "found_partial"
+    assert normalized["positive"] is True
+    assert normalized["search_exhaustive"] is False
+    assert normalized["coverage_status"] == "partial"
+    assert normalized["resource_bounds"] == {
+        "kind": "driver_traversal",
+        "returned_fact_count": 1,
+        "output_limit": 32,
+        "visited_state_count": 4096,
+        "state_limit": 4096,
+        "callback_observed_count": 4100,
+        "callback_pruned_count": 4,
+        "output_truncated": False,
+        "state_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["work_limit"],
+    }
+
+
 def test_comparison_separates_coverage_explained_and_unexpected_npi_facts():
     npi = {
         "queries": [

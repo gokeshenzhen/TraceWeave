@@ -116,11 +116,20 @@ async def trace_x_source(
 
         driver_status = driver.get("driver_status")
         if driver_status != "resolved":
-            node["trace_stop_reason"] = (
-                "testbench_driven"
-                if driver_status == "testbench_driven"
-                else "driver_unresolved"
+            traversal = driver.get("traversal")
+            partial_fact = bool(
+                driver_status == "partial"
+                and isinstance(traversal, dict)
+                and isinstance(traversal.get("returned_fact_count"), int)
+                and not isinstance(traversal.get("returned_fact_count"), bool)
+                and traversal["returned_fact_count"] > 0
             )
+            if driver_status == "testbench_driven":
+                node["trace_stop_reason"] = "testbench_driven"
+            elif partial_fact:
+                node["trace_stop_reason"] = "driver_traversal_incomplete"
+            else:
+                node["trace_stop_reason"] = "driver_unresolved"
             continue
 
         if driver.get("driver_kind") == "instance_ports":
@@ -278,6 +287,7 @@ def _build_chain_node(
         "driver_expression": driver.get("expression_summary"),
         "driver_confidence": driver.get("confidence"),
         "claim_semantics": driver.get("claim_semantics"),
+        "traversal": driver.get("traversal"),
         "unsupported_reason": driver.get("unsupported_reason"),
     }
     if driver.get("instance_port_connections"):
@@ -385,6 +395,8 @@ def _determine_trace_status(chain: list[dict[str, Any]], start_signal: str) -> s
         return "depth_limit_reached"
     if last.get("trace_stop_reason") == "driver_unresolved":
         return "driver_unresolved"
+    if last.get("trace_stop_reason") == "driver_traversal_incomplete":
+        return "driver_traversal_incomplete"
     if last.get("trace_stop_reason") == "traced_to_clean_leaf":
         return "traced_to_clean_leaf"
     if any(item.get("signal_path") == start_signal for item in chain):
@@ -396,6 +408,7 @@ def _identify_root_cause(chain: list[dict[str, Any]]) -> dict[str, Any] | None:
     for node in reversed(chain):
         if node.get("trace_stop_reason") in {
             "instance_ports_listed",
+            "driver_traversal_incomplete",
             "driver_unresolved",
             "testbench_driven",
         }:
@@ -431,6 +444,12 @@ def _generate_analysis_guide(
         return {
             "step1": "The selected connectivity backend could not resolve a traceable driver for this node.",
             "step2": "Inspect unsupported_reason/source evidence, then retry from a more local signal if needed.",
+        }
+
+    if last.get("trace_stop_reason") == "driver_traversal_incomplete":
+        return {
+            "step1": "The backend returned positive driver facts, but its bounded traversal did not prove the complete driver set.",
+            "step2": "Use the reported source facts as candidates; do not treat the first one as an exclusive root cause.",
         }
 
     if last.get("trace_stop_reason") == "testbench_driven":

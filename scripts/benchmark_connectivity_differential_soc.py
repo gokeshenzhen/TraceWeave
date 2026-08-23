@@ -37,6 +37,13 @@ MAX_CORPUS_QUERIES = 64
 MAX_QUERY_DEPTH = 64
 MAX_SIGNAL_PATH_CHARS = 4096
 _NPI_OVERLAY_ENV = "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY"
+_INCOMPLETE_REASON_LABELS = {
+    "output_limit",
+    "work_limit",
+    "depth_limit",
+    "coverage_incomplete",
+    "backend_degraded",
+}
 
 
 class BenchmarkInputError(ValueError):
@@ -364,6 +371,51 @@ def _fixed_query_status(
     return "inconclusive"
 
 
+def _resource_bounds(
+    operation: str,
+    result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Copy only privacy-safe numeric/fixed-label query-bound facts."""
+
+    if operation == "driver":
+        raw = result.get("traversal")
+        count_key = "returned_fact_count"
+        kind = "driver_traversal"
+    elif operation == "loads":
+        raw = result.get("enumeration")
+        count_key = "returned_count"
+        kind = "load_enumeration"
+    else:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+
+    receipt: dict[str, Any] = {"kind": kind}
+    for key in (
+        count_key,
+        "output_limit",
+        "visited_state_count",
+        "state_limit",
+        "callback_observed_count",
+        "callback_pruned_count",
+    ):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            receipt[key] = value
+    for key in ("output_truncated", "state_truncated", "search_exhaustive"):
+        value = raw.get(key)
+        if isinstance(value, bool):
+            receipt[key] = value
+    reasons = raw.get("incomplete_reasons")
+    if isinstance(reasons, Sequence) and not isinstance(reasons, (str, bytes)):
+        receipt["incomplete_reasons"] = [
+            reason
+            for reason in reasons
+            if isinstance(reason, str) and reason in _INCOMPLETE_REASON_LABELS
+        ]
+    return receipt
+
+
 def normalize_query_result(
     provider: str,
     query: Mapping[str, Any],
@@ -381,6 +433,8 @@ def normalize_query_result(
     claim = claim if isinstance(claim, Mapping) else {}
     enumeration = result.get("enumeration")
     enumeration = enumeration if isinstance(enumeration, Mapping) else {}
+    traversal = result.get("traversal")
+    traversal = traversal if isinstance(traversal, Mapping) else {}
     if provider == "source_graph":
         exhaustive = bool(claim.get("exhaustive_search"))
         coverage = str(
@@ -391,6 +445,8 @@ def normalize_query_result(
     else:
         if operation == "loads":
             exhaustive = bool(enumeration.get("search_exhaustive"))
+        elif operation == "driver":
+            exhaustive = bool(traversal.get("search_exhaustive"))
         elif operation == "path":
             exhaustive = bool(
                 result.get("unsupported_reason") == "not_connected"
@@ -398,7 +454,11 @@ def normalize_query_result(
             )
         else:
             exhaustive = False
-        coverage = "degraded" if npi_load_quality == "degraded" else "complete"
+        coverage = (
+            "degraded"
+            if npi_load_quality == "degraded"
+            else "complete" if exhaustive else "partial"
+        )
 
     if operation == "driver":
         rows = _driver_rows(result)
@@ -444,6 +504,7 @@ def normalize_query_result(
         "scope_evidence_count": evidence_counts["scope"],
         "search_exhaustive": exhaustive,
         "coverage_status": coverage,
+        "resource_bounds": _resource_bounds(operation, result),
         "path_hops": (
             int(result.get("hops", 0))
             if operation == "path" and isinstance(result.get("hops", 0), int)
@@ -472,6 +533,7 @@ def _empty_query_summary(
         "scope_evidence_count": 0,
         "search_exhaustive": False,
         "coverage_status": coverage_status,
+        "resource_bounds": None,
         "path_hops": None,
     }
 

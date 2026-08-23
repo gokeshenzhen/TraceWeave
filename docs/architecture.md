@@ -583,7 +583,8 @@ remain measurable as incomplete coverage.
 Provider payloads are reduced before leaving each child. The report contains a
 query digest, positive/fixed status, exact source-line-and-kind fact digests,
 coarser evidence-location and source-file digests, fact counts, coverage and
-exhaustiveness labels, prepare/query timing, cache aggregates, and RSS. It
+exhaustiveness labels, numeric/fixed-label driver/load resource bounds,
+prepare/query timing, cache aggregates, and RSS. It
 contains no signal, instance, source, expression, KDB, or compile-log path.
 Driver/load comparison partitions NPI-only facts according to Source Graph
 exhaustiveness (`coverage_explained` versus `unexpected`) and keeps Source
@@ -789,10 +790,13 @@ VerdiNpiBackend.find_driver / find_loads / find_path
     │       → driver_status="testbench_driven"  (keyed on driver_list, BEFORE fan-in → covers recursive=True)
     │         (if a genuine RTL driver remains among the candidates → promote it to head, continue)
     ├── boundary-only drivers OR recursive=True
+    │       → serialize/register official FAN_IN callback
     │       → net.fan_in_reg_list(stop_at_pin, report_primary_port, top_scope_name)
-    │       ├── fan_in succeeds       → build driver_chain (+ 2nd load-alias check on the fan-in head)
-    │       └── fan_in raises         → fall through to single-hop formatting (still NPI)
-    └── normal driver                 → single-hop format
+    │       ├── admit ≤ 4,096 native states; return ≤ 32 terminal facts
+    │       ├── fan_in succeeds       → exact or partial driver_chain + traversal receipt
+    │       └── callback absent/register/fan_in failure
+    │                                 → never run unbounded; direct facts are coverage-incomplete
+    └── normal driver                 → bounded single-hop format + traversal receipt
 ```
 
 The injected fallback is Source-Graph-deferred in the production server and
@@ -801,9 +805,9 @@ Static for direct/library callers that do not supply one.
 Public route after an NPI query:
 
 ```text
-clean NPI usable result                         → return NPI
-degraded resolved driver / non-empty loads /
-degraded found path                            → return NPI, coverage=partial
+clean NPI exact or bounded-positive result      → return NPI
+degraded resolved/bounded-positive driver /
+degraded non-empty loads / found path           → return NPI, coverage=partial
 degraded incomplete or negative result         → Source Graph → Static
 NPI load/query/worker failure                   → Source Graph → Static
 no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positive
@@ -845,6 +849,15 @@ no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positiv
 - `top_scope_name` for fan-in is derived from `signal_path.split(".", 1)[0]`
   — driven by the query, not by project-specific config — so the bound is
   correct across designs without hardcoding any top name.
+- Recursive fan-in is bounded *inside* native traversal, before terminal
+  materialization. The official `FAN_IN` callback admits 4,096 states and
+  prunes later branches; public output is capped at 32 facts. The callback is
+  reset in success, failure, and cancellation paths, while a process lock
+  protects pynpi's global callback slot. Missing callback support is a safe
+  partial result, never permission to restore the whole-cone call. NPI and
+  Source Graph both expose a backend-neutral `traversal` receipt. A positive
+  bounded prefix is usable evidence, but only `search_exhaustive=true` supports
+  a complete or exclusive driver-set claim; no continuation token is promised.
 - **Driver-vs-loads cross-check.** A net cannot be both driven by and read
   into the same elaborated pin, so when the reported driver's raw identity
   (modulo bit-indexing) is byte-identical to one of the net's own loads, that

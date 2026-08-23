@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -33,7 +34,9 @@ from .cancellation import OperationCancelled, check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
 from .connectivity_limits import (
+    DEFAULT_DRIVER_OUTPUT_LIMIT,
     DEFAULT_LOAD_OUTPUT_LIMIT,
+    DEFAULT_NPI_DRIVER_STATE_LIMIT,
     DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT,
     DEFAULT_NPI_LOAD_HANDLE_LIMIT,
 )
@@ -61,6 +64,7 @@ _LOG = logging.getLogger(__name__)
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
 _BANNER_SILENCER_INSTALLED = False
+_NPI_FAN_IN_CALLBACK_LOCK = threading.Lock()
 
 
 def _simflow_dbdir(kdb_path: str) -> str:
@@ -171,11 +175,6 @@ def _silence_native_stdio():
         os.close(saved_err)
         sink.close()
 
-# Cap how many fan-in boundary points we materialise into a chain. A
-# combinational cone of a wide bus can legitimately produce dozens of
-# upstream regs; we surface a representative subset so the result stays
-# legible without truncating silently for typical signals.
-_FAN_IN_MAX_BRANCHES = 32
 def _module_of(hdl: Any) -> str | None:
     """Best-effort lookup of the module *definition* name owning an NPI handle.
 
@@ -370,8 +369,13 @@ class VerdiNpiBackend:
                 return result
             self._record_query_kdb_status()
             return self._npi_find_driver(
-                signal_path, wave_path, top, recursive=recursive,
+                signal_path,
+                wave_path,
+                top,
+                recursive=recursive,
             )
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
             result = self._fallback.find_driver(
@@ -1346,6 +1350,7 @@ class VerdiNpiBackend:
             "recursive": recursive,
             "driver_chain": None,
             "chain_summary": None,
+            "traversal": None,
             "backend": "verdi_npi",
         }
 
@@ -1370,6 +1375,9 @@ class VerdiNpiBackend:
             base["unsupported_reason"] = "no_npi_drivers"
             base["stopped_at"] = "no_npi_drivers"
             return base
+
+        direct_work_truncated = len(drivers) > DEFAULT_NPI_DRIVER_STATE_LIMIT
+        drivers = drivers[:DEFAULT_NPI_DRIVER_STATE_LIMIT]
 
         # The net's own loads, used to detect the misattribution where NPI
         # reports a LOAD (or an interface-slice alias of a load) as the driver:
@@ -1396,7 +1404,7 @@ class VerdiNpiBackend:
         ]
         if driver_pairs:
             pre = self._loadcheck_head([f for _, f in driver_pairs], load_raws)
-            if pre == "testbench":
+            if pre == "testbench" and not direct_work_truncated:
                 return self._apply_testbench_driven(
                     base, _testbench_verdict(driver_pairs[0][1]),
                 )
@@ -1414,15 +1422,34 @@ class VerdiNpiBackend:
         # strictly more useful than reporting the port-as-self.
         boundary_only = all(_is_boundary_driver(d) for d in drivers)
         if recursive or boundary_only:
-            chain = self._fan_in_chain(
-                net, signal_path, top, max_branches=_FAN_IN_MAX_BRANCHES,
+            chain, traversal = self._bounded_fan_in_chain(
+                net,
+                signal_path,
+                top,
+                state_limit=DEFAULT_NPI_DRIVER_STATE_LIMIT,
+                output_limit=DEFAULT_DRIVER_OUTPUT_LIMIT,
+                initial_work_truncated=direct_work_truncated,
             )
+            base["traversal"] = traversal
             if chain is not None:
                 decision = self._loadcheck_head(chain, load_raws)
                 if decision == "testbench":
-                    return self._apply_testbench_driven(
-                        base, _testbench_verdict(chain[0]),
-                    )
+                    if traversal["search_exhaustive"]:
+                        return self._apply_testbench_driven(
+                            base, _testbench_verdict(chain[0]),
+                        )
+                    # The observed head is definitely a LOAD alias, but a
+                    # bounded/degraded traversal cannot prove that no genuine
+                    # driver exists beyond its coverage. Never return the
+                    # contradicted load as a positive driver fact.
+                    traversal["returned_fact_count"] = 0
+                    base.update({
+                        "driver_status": "partial",
+                        "confidence": "partial",
+                        "unsupported_reason": "npi_driver_load_alias_inconclusive",
+                        "stopped_at": "npi_driver_traversal_incomplete",
+                    })
+                    return base
                 if isinstance(decision, int):
                     chain = [chain[decision]] + chain[:decision] + chain[decision + 1:]
                 return self._apply_chain(base, chain, signal_path, recursive)
@@ -1440,16 +1467,65 @@ class VerdiNpiBackend:
         # ``formatted`` here just re-formats the same, possibly-reordered drivers,
         # so its head is already the promoted genuine driver. Only drop the
         # cross-check scratch field before the hops enter the result schema.
-        formatted = [_strip_npi_raw(d) for d in formatted]
+        direct_output_truncated = len(formatted) > DEFAULT_DRIVER_OUTPUT_LIMIT
+        formatted = [
+            _strip_npi_raw(d) for d in formatted[:DEFAULT_DRIVER_OUTPUT_LIMIT]
+        ]
+        if base["traversal"] is None:
+            base["traversal"] = self._driver_traversal_receipt(
+                returned_fact_count=len(formatted),
+                output_truncated=direct_output_truncated,
+                visited_state_count=min(
+                    len(drivers), DEFAULT_NPI_DRIVER_STATE_LIMIT
+                ),
+                state_truncated=direct_work_truncated,
+            )
+        else:
+            # The bounded native fan-in path was unavailable or failed, so the
+            # surfaced facts come from the already materialized direct-driver
+            # list. Keep the fan-in diagnostics but make the public count and
+            # truncation fields describe the facts actually returned.
+            traversal = dict(base["traversal"])
+            traversal["returned_fact_count"] = len(formatted)
+            traversal["output_truncated"] = bool(
+                traversal.get("output_truncated") or direct_output_truncated
+            )
+            traversal["visited_state_count"] = max(
+                int(traversal.get("visited_state_count", 0)),
+                min(len(drivers), DEFAULT_NPI_DRIVER_STATE_LIMIT),
+            )
+            traversal["state_truncated"] = bool(
+                traversal.get("state_truncated") or direct_work_truncated
+            )
+            reasons = list(traversal.get("incomplete_reasons") or [])
+            if direct_output_truncated and "output_limit" not in reasons:
+                reasons.insert(0, "output_limit")
+            if direct_work_truncated and "work_limit" not in reasons:
+                insert_at = 1 if reasons[:1] == ["output_limit"] else 0
+                reasons.insert(insert_at, "work_limit")
+            traversal["incomplete_reasons"] = reasons
+            traversal["search_exhaustive"] = False
+            base["traversal"] = traversal
 
         head = formatted[0]
         base.update({
-            "driver_status": "resolved",
+            "driver_status": (
+                "resolved"
+                if base["traversal"]["search_exhaustive"]
+                else "partial"
+            ),
             "driver_kind": head["driver_kind"],
             "source_file": head["source_file"],
             "source_line": head["source_line"],
             "expression_summary": head["expression_summary"],
+            "confidence": (
+                "exact"
+                if base["traversal"]["search_exhaustive"]
+                else "partial"
+            ),
         })
+        if not base["traversal"]["search_exhaustive"]:
+            base["stopped_at"] = "npi_driver_traversal_incomplete"
         if len(formatted) > 1:
             # Multi-driven net (rare but real): expose all candidates as
             # depth-0 chain entries so the caller can see the conflict.
@@ -1478,43 +1554,197 @@ class VerdiNpiBackend:
             )
         return base
 
-    def _fan_in_chain(
+    def _driver_traversal_receipt(
+        self,
+        *,
+        returned_fact_count: int,
+        output_truncated: bool,
+        visited_state_count: int,
+        state_truncated: bool,
+        callback_observed_count: int | None = None,
+        callback_pruned_count: int | None = None,
+        coverage_incomplete: bool = False,
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        if output_truncated:
+            reasons.append("output_limit")
+        if state_truncated:
+            reasons.append("work_limit")
+        if coverage_incomplete:
+            reasons.append("coverage_incomplete")
+        if self._loaded_degraded:
+            reasons.append("backend_degraded")
+        result: dict[str, Any] = {
+            "returned_fact_count": returned_fact_count,
+            "output_limit": DEFAULT_DRIVER_OUTPUT_LIMIT,
+            "output_truncated": output_truncated,
+            "visited_state_count": visited_state_count,
+            "state_limit": DEFAULT_NPI_DRIVER_STATE_LIMIT,
+            "state_truncated": state_truncated,
+            "search_exhaustive": not reasons,
+            "incomplete_reasons": reasons,
+            "continuation_supported": False,
+        }
+        if callback_observed_count is not None:
+            result["callback_observed_count"] = callback_observed_count
+        if callback_pruned_count is not None:
+            result["callback_pruned_count"] = callback_pruned_count
+        return result
+
+    def _bounded_fan_in_chain(
         self,
         net: Any,
         signal_path: str,
         top: str,
         *,
-        max_branches: int,
-    ) -> list[dict[str, Any]] | None:
-        """Walk fan-in cone with NPI; return a list of formatted hops.
+        state_limit: int,
+        output_limit: int,
+        initial_work_truncated: bool,
+    ) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
+        """Run native fan-in with callback admission before materialization.
 
-        Returns None if fan_in_reg_list isn't available on this net or
-        raised — caller can then fall back to single-hop formatting.
-        Returns [] if fan_in succeeded but reported no boundary points.
+        ``fan_in_reg_list`` normally traverses the entire combinational cone
+        before Python can slice its returned list. Official pynpi FAN_IN
+        callbacks run during that traversal; returning ``False`` prunes the
+        current branch. Admit a bounded prefix and reject every later state,
+        preserving NPI's endpoint semantics without unbounded native work.
+
+        Older wrappers without callback registration never invoke the unsafe
+        whole-cone call. They return a coverage-incomplete receipt and let the
+        caller expose only its already available direct driver facts.
         """
-        if not hasattr(net, "fan_in_reg_list"):
-            return None
+        _, netlist = self._npi_modules  # type: ignore[misc]
+        callback_api_ready = bool(
+            callable(getattr(net, "fan_in_reg_list", None))
+            and callable(getattr(netlist, "register_cb", None))
+            and callable(getattr(netlist, "reset_cb", None))
+            and hasattr(netlist, "FuncType")
+            and hasattr(netlist.FuncType, "FAN_IN")
+        )
+        if not callback_api_ready:
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=0,
+                state_truncated=initial_work_truncated,
+                coverage_incomplete=True,
+            )
+
         # Bound the traversal at the signal's own top-level scope so
         # fan-in does not wander into unrelated design hierarchies.
         # Falling back to the loaded ``top`` keeps behaviour sensible
         # for single-segment signal paths.
         bound = signal_path.split(".", 1)[0] if "." in signal_path else top
+        callback_state = {
+            "admitted": 0,
+            "observed": 0,
+            "pruned": 0,
+            "cancelled": False,
+        }
+
+        def _admit_fan_in_state(unused_hdl: Any, state: dict[str, Any]) -> bool:
+            del unused_hdl
+            state["observed"] += 1
+            if state["cancelled"] or state["admitted"] >= state_limit:
+                state["pruned"] += 1
+                return False
+            try:
+                check_cancelled()
+            except OperationCancelled:
+                state["cancelled"] = True
+                state["pruned"] += 1
+                return False
+            state["admitted"] += 1
+            return True
+
+        registered = False
+        registration_attempted = False
+        reset_failed = False
+        lock_acquired = False
         try:
-            with _silence_native_stdio():
-                pins = net.fan_in_reg_list(
-                    stop_at_pin=True,
-                    report_primary_port=True,
-                    top_scope_name=bound,
-                ) or []
+            while not lock_acquired:
+                check_cancelled()
+                lock_acquired = _NPI_FAN_IN_CALLBACK_LOCK.acquire(timeout=0.05)
+            try:
+                check_cancelled()
+                registration_attempted = True
+                with _silence_native_stdio():
+                    registered = bool(
+                        netlist.register_cb(
+                            netlist.FuncType.FAN_IN,
+                            _admit_fan_in_state,
+                            callback_state,
+                        )
+                    )
+                if registered:
+                    with _silence_native_stdio():
+                        pins = net.fan_in_reg_list(
+                            stop_at_pin=True,
+                            report_primary_port=True,
+                            top_scope_name=bound,
+                        ) or []
+                else:
+                    pins = []
+            finally:
+                if registration_attempted:
+                    try:
+                        with _silence_native_stdio():
+                            netlist.reset_cb()
+                    except Exception as exc:  # noqa: BLE001
+                        reset_failed = True
+                        _LOG.warning("NPI fan-in callback reset failed: %s", exc)
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.fan_in_reg_list failed for %s: %s", signal_path, exc)
-            return None
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=int(callback_state["admitted"]),
+                state_truncated=bool(
+                    initial_work_truncated or callback_state["pruned"]
+                ),
+                callback_observed_count=int(callback_state["observed"]),
+                callback_pruned_count=int(callback_state["pruned"]),
+                coverage_incomplete=True,
+            )
+        finally:
+            if lock_acquired:
+                _NPI_FAN_IN_CALLBACK_LOCK.release()
+        if not registered:
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=0,
+                state_truncated=initial_work_truncated,
+                coverage_incomplete=True,
+            )
+        if callback_state["cancelled"]:
+            raise OperationCancelled("NPI fan-in traversal cancelled")
+
+        output_truncated = len(pins) > output_limit
         hops: list[dict[str, Any]] = []
-        for pin in pins[:max_branches]:
+        formatting_incomplete = False
+        for pin in pins[:output_limit]:
+            check_cancelled()
             entry = self._format_fan_in_pin(pin)
-            if entry is not None:
-                hops.append(entry)
-        return hops
+            if entry is None:
+                formatting_incomplete = True
+                continue
+            hops.append(entry)
+        state_truncated = bool(
+            initial_work_truncated or callback_state["pruned"]
+        )
+        receipt = self._driver_traversal_receipt(
+            returned_fact_count=len(hops),
+            output_truncated=output_truncated,
+            visited_state_count=int(callback_state["admitted"]),
+            state_truncated=state_truncated,
+            callback_observed_count=int(callback_state["observed"]),
+            callback_pruned_count=int(callback_state["pruned"]),
+            coverage_incomplete=bool(formatting_incomplete or reset_failed),
+        )
+        return hops, receipt
 
     def _net_load_raws(self, net: Any) -> list[str] | None:
         """Raw NPI full-names of every load of ``net`` (for the driver-vs-load
@@ -1607,12 +1837,21 @@ class VerdiNpiBackend:
         # (the schema forbids extra fields).
         hops = [_strip_npi_raw(hop) for hop in hops]
         head = hops[0]
+        traversal = base.get("traversal")
+        exhaustive = bool(
+            isinstance(traversal, dict)
+            and traversal.get("search_exhaustive") is True
+        )
         base.update({
-            "driver_status": "resolved",
+            "driver_status": "resolved" if exhaustive else "partial",
             "driver_kind": head["driver_kind"],
             "source_file": head["source_file"],
             "source_line": head["source_line"],
             "expression_summary": head["expression_summary"],
+            "confidence": "exact" if exhaustive else "partial",
+            "stopped_at": (
+                None if exhaustive else "npi_driver_traversal_incomplete"
+            ),
         })
         if recursive:
             # depth-0 entry represents the queried net itself; fan-in

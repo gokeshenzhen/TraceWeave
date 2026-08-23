@@ -638,7 +638,9 @@ query attempt; an incomplete projection remains an explicit coverage fact
 rather than being hidden by dynamic expansion or Static output. Reports omit
 query text, signal/scope/source paths, and expressions. They contain only
 SHA-256 evidence anchors, counts, fixed statuses, timings, cache metrics, and
-RSS. NPI-only facts are classified as coverage-explained while Source Graph is
+RSS; driver/load rows also retain their numeric, fixed-label resource-bound
+receipt so truncation is measurable without exposing design identity. NPI-only
+facts are classified as coverage-explained while Source Graph is
 non-exhaustive and as unexpected only under exhaustive Source Graph coverage;
 Source Graph-only facts and path reachability differences remain separate
 categories because NPI is a reference, not an infallible oracle.
@@ -1149,6 +1151,23 @@ returned prefix. Narrow the time window for a complete targeted check.
 
 `explain_signal_driver`, `find_signal_loads`, `trace_signal_path`, and `trace_x_source` automatically engage a Verdi NPI backend when a KDB is detected. A trustworthy NPI result wins; otherwise TraceWeave tries the bounded on-demand Source Graph before recomputing the whole result or trace with Legacy Static. Static still has no honest `sig_to_sig_conn_list` equivalent, so an inconclusive Source Graph path ends as structured unsupported rather than an approximation. X-trace backend/artifact changes always restart from the original signal. NPI remains the deepest path: it walks the elaborated netlist with `fan_in_reg_list` / `sig_to_sig_conn_list`, so it can cross instance port boundaries, interface positional bindings, and assign chains beyond the Source Graph's explicitly projected scope. In **local NPI execution mode**, `build_tb_hierarchy` can also enrich component-tree `source_file` / `source_line` fields from elaborated NPI evidence. This optional enrichment is separately resource-admitted: the default `auto` policy accepts only a clean KDB and at most 4,096 compile-proved instance paths, then calls `netlist.get_inst()` only for those paths. A degraded KDB or larger design keeps compile-log provenance and reports a fixed skip reason without loading NPI. Set `TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY=force` to opt into targeted enrichment for degraded/larger designs (still capped at 100,000 paths), or `off` to disable it. This setting does not change NPI priority for driver/load/path queries. The initial LSF scope deliberately does not submit an implicit batch job from `build_tb_hierarchy`, so in LSF mode hierarchy source information remains compile-log-derived. Affected hops in `find_driver` / `find_loads` results carry `source_info_origin: "npi"` or `"source_graph"`, while Static remains compile-log-derived; Source Graph path hops likewise carry only IR-backed scope/source/edge evidence. The result envelope carries a `backend_status` block with the selected/attempted/actual backend, ordered fallback chain, Source Graph coverage/build receipt, KDB flow, and per-simulator `kdb_hint`. NPI is deep but not infallible: when the *only* driver it can report for a net is also a LOAD of that net (an interface-slice alias, or a register that reads the net), there is no RTL driver and the real driver is testbench/behavioral — a UVM driver writing through a virtual interface + clocking block, which RTL register fan-in cannot see. `explain_signal_driver` detects this contradiction with a driver-vs-loads cross-check and returns `driver_status="testbench_driven"` (with a `cross_check.conflict` receipt) instead of naming the load as an "exact" driver — so an AHB master's HTRANS/HADDR points you at the TB driver/BFM, not at a DUT interconnect register that merely reads the bus.
 
+Recursive NPI driver queries retain native Verdi semantics without allowing
+`fan_in_reg_list()` to materialize an unbounded cone. TraceWeave registers the
+official `FAN_IN` callback before traversal, admits at most 4,096 native states,
+and caps the public result at 32 driver facts. NPI and Source Graph driver
+results expose the same backend-neutral `traversal` receipt: returned/output
+counts, visited/state limits, callback counts when available, truncation,
+`search_exhaustive`, fixed `incomplete_reasons`, and
+`continuation_supported=false`. A bounded positive prefix remains usable and is
+reported as `driver_status="partial"`; only `search_exhaustive=true` supports a
+complete driver-set claim. If callback registration is unavailable or fails,
+TraceWeave does not silently run the whole native cone: it returns any direct
+driver facts as coverage-incomplete. Callback reset runs on success, failure,
+and cancellation, and callback registration is serialized because pynpi stores
+it globally. `trace_x_source` preserves this receipt on its terminal node and
+uses `driver_traversal_incomplete`, rather than promoting one bounded candidate
+to an exclusive root-cause verdict.
+
 For load queries, NPI uses `net.load_list()` direct consumers and crosses an
 outward-facing child output only through its paired parent net. It never starts
 the native whole-cone `fan_out_reg_list()` walk. Every backend caps public load
@@ -1166,7 +1185,8 @@ inspectable. Other return codes, an empty/mismatched top list, a corrupt KDB,
 or a license/import failure still fall through normally.
 
 Degraded mode trusts positive evidence, not exhaustive negative claims. A
-resolved driver, non-empty load list, or found path can return from NPI; the
+resolved driver, bounded partial driver with a returned fact, non-empty load
+list, or found path can return from NPI; the
 attempt reports `coverage_status="partial"`, and load-list completeness is
 `approximate` even though each returned hop may still have exact NPI
 confidence. An unresolved driver, empty load list, `testbench_driven` claim, or

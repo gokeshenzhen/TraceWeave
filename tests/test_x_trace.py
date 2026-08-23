@@ -140,6 +140,47 @@ async def test_trace_x_source_unresolved_leaf_returns_driver_unresolved():
 
 
 @pytest.mark.anyio
+async def test_trace_x_source_preserves_bounded_partial_driver_fact():
+    parser = FakeParser()
+    traversal = {
+        "returned_fact_count": 32,
+        "output_limit": 32,
+        "output_truncated": True,
+        "visited_state_count": 4096,
+        "state_limit": 4096,
+        "state_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit", "work_limit"],
+        "continuation_supported": False,
+    }
+
+    result = await trace_x_source(
+        wave_path="/tmp/a.vcd",
+        signal_path="top_tb.dut.out_sig",
+        time_ps=0,
+        compile_log="/tmp/compile.log",
+        parser=parser,
+        driver_lookup=lambda signal_path: {
+            "driver_status": "partial",
+            "driver_kind": "always_ff",
+            "resolved_module": "dut",
+            "source_file": "/tmp/dut.sv",
+            "source_line": 12,
+            "confidence": "partial",
+            "upstream_signals": [],
+            "traversal": traversal,
+        },
+    )
+
+    assert result["trace_status"] == "driver_traversal_incomplete"
+    node = result["propagation_chain"][0]
+    assert node["trace_stop_reason"] == "driver_traversal_incomplete"
+    assert node["traversal"] == traversal
+    assert result["root_cause"]["stop_reason"] == "driver_traversal_incomplete"
+    assert "exclusive root cause" in result["analysis_guide"]["step2"]
+
+
+@pytest.mark.anyio
 async def test_trace_x_source_clean_leaf_returns_traced_to_clean_leaf():
     parser = FakeParser()
 

@@ -559,7 +559,8 @@ driver/load/path corpus 对比 direct NPI 与 Source Graph。两侧分别运行�
 中，且都不能进入生产 fallback chain。Source Graph 每个 query attempt 只准备一个 bounded
 artifact；projection 不完整时保留明确 coverage fact，不通过 dynamic expansion 或 Static
 结果掩盖。报告不包含 query 原文、signal/scope/source path 或 expression，只输出 SHA-256
-evidence anchor、count、固定 status、timing、cache metric 与 RSS。Source Graph 非穷尽时，
+evidence anchor、count、固定 status、timing、cache metric 与 RSS；driver/load 行还会保留
+纯数字和固定标签的资源边界回执，使截断可测但不泄露设计身份。Source Graph 非穷尽时，
 NPI-only facts 归类为 coverage-explained；只有 Source Graph coverage 穷尽时才归类为
 unexpected。Source Graph-only facts 与 path reachability 差异单独保留，因为 NPI 是重要参考，
 不是绝对正确的 oracle。
@@ -997,6 +998,18 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 
 当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。可信 NPI 结果保持最高优先级；否则 TraceWeave 会先尝试 bounded on-demand Source Graph，再由 Legacy Static 整体重算 fallback 结果或 trace。Static 没有诚实的 `sig_to_sig_conn_list` 等价实现，因此 inconclusive Source Graph path 最终会返回结构化 unsupported，而不会给出近似结论。X-trace 在 backend 或 artifact 改变时始终从原始 signal 重跑。NPI 仍是更深的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越 Source Graph 明确投影范围之外的实例端口边界、interface 位置绑定与 assign 链。在 **local NPI execution mode** 下，`build_tb_hierarchy` 也可以用 elaborated NPI 证据增强 component-tree 的 `source_file` / `source_line`。这项可选增强有独立资源门禁：默认 `auto` 只接受 clean KDB 且 compile 已证明的实例路径不超过 4,096 条，并只对这些路径调用 `netlist.get_inst()`；degraded KDB 或更大设计保留 compile-log provenance，以固定原因跳过，且不会加载 NPI。设置 `TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY=force` 可显式对 degraded/更大设计启用定向增强（仍有 100,000 路径硬上限），设置为 `off` 可完全关闭。这一设置不改变 driver/load/path 查询的 NPI 优先级。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 或 `"source_graph"`，Static 则保持 compile-log-derived；Source Graph path hop 同样只携带 IR 支持的 scope/source/edge evidence。结果信封里的 `backend_status` 会给出 selected/attempted/actual backend、有序 fallback 链、Source Graph coverage/build回执、KDB 流程与按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 
+recursive NPI driver 查询保留 Verdi 原生语义，但不再允许
+`fan_in_reg_list()` 物化无界组合锥。TraceWeave 在遍历前注册官方 `FAN_IN`
+callback，最多准入 4,096 个 native state，并把公开结果限制为 32 条 driver fact。
+NPI 与 Source Graph driver 统一返回 backend-neutral `traversal` 回执：returned/output
+count、visited/state limit、可用时的 callback count、截断、`search_exhaustive`、固定
+`incomplete_reasons` 与 `continuation_supported=false`。有界正向前缀仍可使用，但会标成
+`driver_status="partial"`；只有 `search_exhaustive=true` 才能支持完整 driver-set 结论。
+callback API 不可用或注册失败时不会偷偷恢复 whole-cone 调用，而是把已有 direct driver
+fact 标成 coverage-incomplete。成功、失败和取消路径都会 reset callback；由于 pynpi 的
+callback 是全局状态，注册与遍历会串行化。`trace_x_source` 会在终止节点保留该回执，并用
+`driver_traversal_incomplete` 停止，而不是把某一个有界候选提升为排他根因。
+
 对 load 查询，NPI 使用 `net.load_list()` 的直接消费者；遇到向外的 child output 时，
 只通过成对 parent net 跨越层次，不再调用会先物化整个组合锥的 native
 `fan_out_reg_list()`。所有 backend 的公开 load 输出统一最多 256 项，并返回
@@ -1010,8 +1023,9 @@ KDB 时会作为 degraded NPI candidate。error 数量不是阈值：TraceWeave 
 top 的情况下接受 partial netlist。其他返回码、空或 top 不匹配的 netlist、损坏
 KDB、license/import 失败仍按正常 fallback 处理。
 
-degraded 模式只信正向证据，不信穷尽性的负结论。找到明确 driver、非空 loads
-或 found path 时可以返回 NPI；attempt 会标记 `coverage_status="partial"`，loads
+degraded 模式只信正向证据，不信穷尽性的负结论。找到明确 driver、有返回事实的 bounded
+partial driver、非空 loads 或 found path 时可以返回 NPI；attempt 会标记
+`coverage_status="partial"`，loads
 整体 completeness 为 `approximate`，即使每个已返回 hop 仍可保持 exact NPI
 confidence。driver 未解析、空 loads、`testbench_driven` 判断以及
 not-found/not-connected path 会继续进入 Source Graph，再到 Legacy Static。

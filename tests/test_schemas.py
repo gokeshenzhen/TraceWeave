@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from src.schemas import (
     BackendStatus,
     ErrorContextResult,
+    ExplainDriverResult,
     GetSignalsByCycleResult,
     ParseSimLogResult,
     ProblemHints,
@@ -486,6 +487,38 @@ def test_trace_signal_path_validates_additive_source_graph_path_evidence():
     assert result.backend_status.source_graph.path_edge_count == 1
     assert result.backend_status.source_graph.claim_semantics == result.claim_semantics
     assert result.backend_status.source_graph.traversal_limit == 4096
+
+
+def test_explain_driver_validates_bounded_traversal_receipt():
+    result = ExplainDriverResult.model_validate(
+        {
+            "signal_path": "top.dut.q",
+            "wave_path": "wave.fsdb",
+            "resolved_rtl_name": "q",
+            "driver_status": "partial",
+            "driver_kind": "always_ff",
+            "recursive": True,
+            "confidence": "partial",
+            "traversal": {
+                "returned_fact_count": 32,
+                "output_limit": 32,
+                "output_truncated": True,
+                "visited_state_count": 4096,
+                "state_limit": 4096,
+                "state_truncated": True,
+                "callback_observed_count": 4265,
+                "callback_pruned_count": 169,
+                "search_exhaustive": False,
+                "incomplete_reasons": ["output_limit", "work_limit"],
+                "continuation_supported": False,
+            },
+            "backend": "verdi_npi",
+        }
+    )
+
+    assert result.traversal.returned_fact_count == 32
+    assert result.traversal.callback_pruned_count == 169
+    assert result.traversal.search_exhaustive is False
 
 
 def test_trace_x_source_result_carries_backend_consistency_receipt():

@@ -205,7 +205,10 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │
    ├─ explain_signal_driver(signal_path, wave_path, compile_log, top_hint?)
    │    When: Waveform shows a suspicious signal and the agent needs the likely RTL driver
-   │    Output: driver_status, driver_kind, source_file, source_line, expression_summary
+   │    Output: driver_status, driver_kind, source_file, source_line, expression_summary,
+   │            traversal.{returned_fact_count, output_limit, output_truncated,
+   │            visited_state_count, state_limit, state_truncated,
+   │            search_exhaustive, incomplete_reasons, continuation_supported}
    │    Notes: For deeper / cross-hierarchy traces a Verdi KDB enables the NPI
    │           backend, which can cross instance port boundaries. If the
    │           simulator is Xcelium and no KDB exists yet, get_diagnostic_snapshot
@@ -219,6 +222,14 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │           backend_status.execution_mode / scheduler_status / worker_status /
    │           fallback_reason: a failed worker means the parent result came from
    │           local Static fallback, not exact NPI.
+   │           Recursive NPI fan-in admits at most 4,096 native states and
+   │           returns at most 32 driver facts. A positive bounded prefix has
+   │           driver_status="partial" and remains useful, but it is not an
+   │           exclusive or complete driver-set claim. Read traversal instead
+   │           of inferring completeness from a non-empty driver_chain.
+   │           trace_x_source preserves this receipt and stops with
+   │           driver_traversal_incomplete instead of naming one bounded
+   │           candidate as an exclusive root cause.
    │           driver_status="testbench_driven" (cross_check.conflict) means NPI
    │           found NO RTL driver — its only candidate is also a LOAD of the net
    │           (interface-slice alias / a register reading the net), so the real
@@ -425,7 +436,8 @@ environment, `scripts/benchmark_connectivity_differential_soc.py` can execute a
 bounded driver/load/path corpus in separate NPI and Source Graph processes. It
 never invokes the production fallback chain and emits only identity hashes,
 counts, fixed coverage/status labels, timings, cache metrics, and RSS. A
-Source Graph miss is unexpected only when its own search was exhaustive;
+driver/load row also retains its numeric and fixed-label resource-bound receipt.
+A Source Graph miss is unexpected only when its own search was exhaustive;
 otherwise the result records a coverage-explained NPI-only fact. Conversely, a
 Source Graph-only fact is not automatically accepted merely because NPI is
 present. Investigate serious differences with source/elaboration evidence and,
