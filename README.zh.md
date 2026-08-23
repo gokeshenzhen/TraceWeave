@@ -489,8 +489,19 @@ warning，manifest 会保持保守/incomplete，不会拼出一个并不存在�
 现在 compile log 采用流式解析；handle 只保留每个文件的紧凑扫描事实，不再保存源码正文。
 精简结果新增数值型 `build_metrics`，包括源码文件数/字节数、各阶段耗时、RSS 采样、
 `source_text_bytes_retained=0`，以及隐私安全的 compile-session snapshot
-文件数/字节数/完整性。Source Graph manifest receipt 还会报告摘要复用/读取的文件数、
-字节数和冲突数，不暴露路径或源码内容。
+文件数/字节数/完整性和有界 preprocessor counters。这些计数会区分 physical source load、
+source/masked-text cache hit 与 bytes、logical expansion、comment-mask fast path，以及
+exact/LRU include resolution 的 hit、miss、entry 和 eviction；绝不暴露 path、include name、
+macro 或源码内容。Source Graph manifest receipt 还会在同一隐私边界下报告摘要复用/读取的
+文件数、字节数和冲突数。
+
+完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
+不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted
+string；simulator 记录的 include edge 先形成无歧义 basename index，再进入目录搜索。正向
+include resolution 进入 4,096-entry LRU，未解析 include 从不缓存。definition regex 只接受
+水平缩进，避免 `^\s*` 在展开 header 的数千空行之间反复回溯。basename 有歧义时仍按原
+include-dir 顺序解析；所有优化都保持每个 compilation unit 独立 macro state、cancellation
+checkpoint、compact snapshot 与公开 hierarchy schema。
 
 完整构建有两个默认关闭的可选 guardrail。若站点外层 MCP watchdog 为固定时限，可以把
 内部阈值设得更早，从而收到结构化 blocker，而不是只看到 client/process 被终止：
@@ -548,6 +559,17 @@ export TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH=256
 ```bash
 python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode hierarchy
 python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode bootstrap
+```
+
+要在真实 compile log 上执行同形 before/after 测量，可使用下面的 compile-log-only benchmark。
+它默认关闭可选 NPI source overlay，输出中不含路径，并报告 structural result hash、hierarchy
+计数、phase timing、RSS 与 preprocessor counters。split compile/elaboration flow 可重复传入
+`--supplementary-compile-log`；只有专门测量独立 licensed overlay 时才使用
+`--npi-source-overlay`。
+
+```bash
+python3.11 scripts/benchmark_tb_hierarchy.py \
+  --compile-log /path/to/build.log --simulator vcs
 ```
 
 当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含

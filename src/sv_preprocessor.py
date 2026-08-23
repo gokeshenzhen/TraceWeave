@@ -45,6 +45,7 @@ _HIERARCHY_MACRO_INSTANCE_RE = re.compile(
 _MAX_FILELIST_DEPTH = 32
 _MAX_FILELIST_TOKENS = 200_000
 _DEFAULT_SOURCE_CACHE_BYTES = 16 * 1024 * 1024
+_DEFAULT_INCLUDE_RESOLUTION_CACHE_ENTRIES = 4096
 _MAX_HIERARCHY_MACRO_EXPANSIONS = 4096
 _MAX_HIERARCHY_MACRO_BODY_BYTES = 16 * 1024
 
@@ -435,6 +436,11 @@ def extract_preprocessor_options(
 
 
 def _mask_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
+    # A comment can only begin with '/'. Most directive-bearing source lines
+    # contain no slash at all, so avoid allocating and walking a character
+    # list when the current line cannot change block-comment state.
+    if not in_block_comment and "/" not in line:
+        return line, False
     output = list(line)
     index = 0
     in_string = False
@@ -754,6 +760,9 @@ class SystemVerilogPreprocessor:
         source_loader: Callable[[str], str] | None = None,
         max_include_depth: int = 64,
         source_cache_bytes: int = _DEFAULT_SOURCE_CACHE_BYTES,
+        include_resolution_cache_entries: int = (
+            _DEFAULT_INCLUDE_RESOLUTION_CACHE_ENTRIES
+        ),
     ) -> None:
         self._compile_result = compile_result
         self._source_loader = source_loader or self._read_source
@@ -762,6 +771,9 @@ class SystemVerilogPreprocessor:
         self._cache_limit = max(0, int(source_cache_bytes))
         self._cache: OrderedDict[str, _SourceCacheEntry] = OrderedDict()
         self._cache_bytes = 0
+        self._cache_peak_bytes = 0
+        self._source_cache_hit_count = 0
+        self._source_load_count = 0
         self._canonical_cache: dict[str, str] = {}
         self._context_index = _CommandContextIndex(
             compile_result,
@@ -771,6 +783,23 @@ class SystemVerilogPreprocessor:
             tuple[tuple[str, str], ...], PreprocessorOptions
         ] = {}
         self._exact_includes = self._build_exact_include_map(compile_result)
+        self._exact_include_by_basename = self._build_exact_basename_index(
+            self._exact_includes
+        )
+        self._include_resolution_cache_limit = max(
+            0, int(include_resolution_cache_entries)
+        )
+        self._include_resolution_cache: OrderedDict[
+            tuple[str, str, tuple[str, ...]], str
+        ] = OrderedDict()
+        self._include_resolution_cache_hit_count = 0
+        self._include_resolution_cache_miss_count = 0
+        self._include_resolution_cache_eviction_count = 0
+        self._exact_include_resolution_count = 0
+        self._logical_file_expansion_count = 0
+        self._comment_mask_line_count = 0
+        self._comment_mask_fast_path_count = 0
+        self._masked_text_cache_hit_count = 0
 
     def _canonical_path(self, path: str | os.PathLike[str]) -> str:
         raw = os.fspath(path)
@@ -827,13 +856,35 @@ class SystemVerilogPreprocessor:
                         destination.append(canonical)
         return result
 
+    @staticmethod
+    def _build_exact_basename_index(
+        exact_includes: Mapping[str, Sequence[str]],
+    ) -> dict[str, dict[str, str]]:
+        """Index only unambiguous simulator-recorded include basenames."""
+
+        result: dict[str, dict[str, str]] = {}
+        for parent, children in exact_includes.items():
+            by_name: dict[str, list[str]] = {}
+            for child in children:
+                paths = by_name.setdefault(os.path.basename(child), [])
+                if child not in paths:
+                    paths.append(child)
+            unique = {
+                name: paths[0] for name, paths in by_name.items() if len(paths) == 1
+            }
+            if unique:
+                result[parent] = unique
+        return result
+
     def _load(self, path: str) -> str:
         canonical = self._canonical_path(path)
         cached = self._cache.get(canonical)
         if cached is not None:
+            self._source_cache_hit_count += 1
             self._cache.move_to_end(canonical)
             return cached.raw
         check_cancelled()
+        self._source_load_count += 1
         raw = self._source_loader(canonical)
         check_cancelled()
         self._store_cache_entry(canonical, _SourceCacheEntry(raw=raw))
@@ -854,7 +905,48 @@ class SystemVerilogPreprocessor:
             self._cache_bytes -= removed.size
         self._cache[canonical] = entry
         self._cache_bytes += entry.size
+        self._cache_peak_bytes = max(self._cache_peak_bytes, self._cache_bytes)
         return True
+
+    def metrics_snapshot(self) -> dict[str, int]:
+        """Return privacy-safe aggregate preprocessing counters."""
+
+        return {
+            "preprocessor_logical_file_expansion_count": (
+                self._logical_file_expansion_count
+            ),
+            "preprocessor_comment_mask_line_count": self._comment_mask_line_count,
+            "preprocessor_comment_mask_fast_path_count": (
+                self._comment_mask_fast_path_count
+            ),
+            "preprocessor_masked_text_cache_hit_count": (
+                self._masked_text_cache_hit_count
+            ),
+            "preprocessor_source_load_count": self._source_load_count,
+            "preprocessor_source_cache_hit_count": self._source_cache_hit_count,
+            "preprocessor_source_cache_entry_count": len(self._cache),
+            "preprocessor_source_cache_bytes": self._cache_bytes,
+            "preprocessor_source_cache_peak_bytes": self._cache_peak_bytes,
+            "preprocessor_source_cache_limit_bytes": self._cache_limit,
+            "preprocessor_include_resolution_cache_hit_count": (
+                self._include_resolution_cache_hit_count
+            ),
+            "preprocessor_include_resolution_cache_miss_count": (
+                self._include_resolution_cache_miss_count
+            ),
+            "preprocessor_include_resolution_cache_eviction_count": (
+                self._include_resolution_cache_eviction_count
+            ),
+            "preprocessor_exact_include_resolution_count": (
+                self._exact_include_resolution_count
+            ),
+            "preprocessor_include_resolution_cache_entry_count": len(
+                self._include_resolution_cache
+            ),
+            "preprocessor_include_resolution_cache_limit_entries": (
+                self._include_resolution_cache_limit
+            ),
+        }
 
     def _cached_masked_text(self, canonical: str, raw: str) -> str | None:
         cached = self._cache.get(canonical)
@@ -888,32 +980,72 @@ class SystemVerilogPreprocessor:
         raw_name: str,
         include_dirs: Sequence[str],
     ) -> str | None:
-        parent_dir = str(Path(parent).parent)
+        cache_key = (parent, raw_name, tuple(include_dirs))
+        cached = self._include_resolution_cache.get(cache_key)
+        if cached is not None:
+            self._include_resolution_cache_hit_count += 1
+            self._include_resolution_cache.move_to_end(cache_key)
+            return cached
+        self._include_resolution_cache_miss_count += 1
+        exact = self._exact_includes.get(parent, [])
+        exact_candidate = self._exact_include_by_basename.get(parent, {}).get(
+            os.path.basename(raw_name)
+        )
+        if exact_candidate is not None and os.path.isfile(exact_candidate):
+            self._exact_include_resolution_count += 1
+            return self._remember_include_resolution(cache_key, exact_candidate)
+
+        parent_dir = os.path.dirname(parent)
         search_candidates: list[str] = []
+        seen_candidates: set[str] = set()
         if os.path.isabs(raw_name):
-            search_candidates.append(self._canonical_path(raw_name))
+            candidate = self._canonical_path(raw_name)
+            search_candidates.append(candidate)
+            seen_candidates.add(candidate)
         else:
             for base in (parent_dir, *include_dirs):
-                candidate = self._canonical_path(Path(base) / raw_name)
-                if candidate not in search_candidates:
+                candidate = self._canonical_path(os.path.join(base, raw_name))
+                if candidate not in seen_candidates:
                     search_candidates.append(candidate)
+                    seen_candidates.add(candidate)
 
-        exact = self._exact_includes.get(parent, [])
         for candidate in search_candidates:
             if candidate in exact and os.path.isfile(candidate):
-                return candidate
+                return self._remember_include_resolution(cache_key, candidate)
         basename_matches = [
             candidate
             for candidate in exact
-            if Path(candidate).name == Path(raw_name).name
+            if os.path.basename(candidate) == os.path.basename(raw_name)
             and os.path.isfile(candidate)
         ]
         if len(dict.fromkeys(basename_matches)) == 1:
-            return basename_matches[0]
+            return self._remember_include_resolution(
+                cache_key, basename_matches[0]
+            )
         for candidate in search_candidates:
             if os.path.isfile(candidate):
-                return candidate
+                return self._remember_include_resolution(cache_key, candidate)
         return None
+
+    def _remember_include_resolution(
+        self,
+        key: tuple[str, str, tuple[str, ...]],
+        resolved: str,
+    ) -> str:
+        """Publish one positive resolution into the bounded process-local LRU."""
+
+        if not self._include_resolution_cache_limit:
+            return resolved
+        previous = self._include_resolution_cache.pop(key, None)
+        if previous is None:
+            while (
+                len(self._include_resolution_cache)
+                >= self._include_resolution_cache_limit
+            ):
+                self._include_resolution_cache.popitem(last=False)
+                self._include_resolution_cache_eviction_count += 1
+        self._include_resolution_cache[key] = resolved
+        return resolved
 
     def preprocess(self, source_path: str) -> PreprocessedSource:
         root = self._canonical_path(source_path)
@@ -997,6 +1129,7 @@ class SystemVerilogPreprocessor:
         depth: int,
         stack: tuple[str, ...],
     ) -> str:
+        self._logical_file_expansion_count += 1
         canonical = self._canonical_path(path)
         state.visited_paths.add(canonical)
         if depth > self._max_include_depth:
@@ -1037,6 +1170,8 @@ class SystemVerilogPreprocessor:
         continued_define: list[str] | None = None
         continued_define_active = False
         cached_masked = self._cached_masked_text(canonical, raw)
+        if cached_masked is not None:
+            self._masked_text_cache_hit_count += 1
         masked_offset = 0
         collect_masked = (
             cached_masked is None
@@ -1048,6 +1183,9 @@ class SystemVerilogPreprocessor:
         for line in raw.splitlines(keepends=True):
             check_cancelled()
             if cached_masked is None:
+                self._comment_mask_line_count += 1
+                if not in_block_comment and "/" not in line:
+                    self._comment_mask_fast_path_count += 1
                 masked, in_block_comment = _mask_comments(
                     line,
                     in_block_comment,

@@ -432,3 +432,152 @@ def test_source_cache_lru_accounts_for_raw_and_masked_text(tmp_path):
 
     assert list(preprocessor._cache) == ["first", "third"]
     assert preprocessor._cache_bytes == 8
+
+
+def test_comment_mask_fast_path_is_counted_for_slash_free_directive_lines(
+    tmp_path,
+):
+    source = tmp_path / "conditional.sv"
+    source.write_text(
+        "`ifdef ENABLED\n"
+        "module selected; endmodule\n"
+        "`endif\n"
+    )
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs +define+ENABLED {source}",
+        }
+    )
+
+    result = preprocessor.preprocess(str(source))
+    metrics = preprocessor.metrics_snapshot()
+
+    assert "module selected" in result.text
+    assert metrics["preprocessor_comment_mask_line_count"] == 3
+    assert metrics["preprocessor_comment_mask_fast_path_count"] == 3
+    assert metrics["preprocessor_logical_file_expansion_count"] == 1
+
+
+def test_nested_include_resolution_cache_is_bounded_and_reused(tmp_path):
+    shared = tmp_path / "shared.svh"
+    wrapper = tmp_path / "wrapper.svh"
+    roots = [tmp_path / "first.sv", tmp_path / "second.sv"]
+    shared.write_text("leaf u_leaf();\n")
+    wrapper.write_text('`include "shared.svh"\n')
+    for index, root in enumerate(roots):
+        root.write_text(
+            '`include "wrapper.svh"\n'
+            f"module root_{index}; endmodule\n"
+        )
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": (
+                f"vcs +incdir+{tmp_path} "
+                + " ".join(str(root) for root in roots)
+            ),
+        },
+        include_resolution_cache_entries=2,
+    )
+
+    results = [preprocessor.preprocess(str(root)) for root in roots]
+    metrics = preprocessor.metrics_snapshot()
+
+    assert all("leaf u_leaf" in result.text for result in results)
+    assert metrics["preprocessor_include_resolution_cache_hit_count"] == 1
+    assert metrics["preprocessor_include_resolution_cache_miss_count"] == 3
+    assert metrics["preprocessor_include_resolution_cache_eviction_count"] == 1
+    assert metrics["preprocessor_include_resolution_cache_entry_count"] == 2
+    assert metrics["preprocessor_include_resolution_cache_limit_entries"] == 2
+
+
+def test_missing_include_resolution_is_not_cached(tmp_path):
+    source = tmp_path / "top.sv"
+    header = tmp_path / "late.svh"
+    source.write_text('`include "late.svh"\nmodule top; endmodule\n')
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs +incdir+{tmp_path} {source}",
+        }
+    )
+
+    before = preprocessor.preprocess(str(source))
+    header.write_text("leaf u_leaf();\n")
+    after = preprocessor.preprocess(str(source))
+    metrics = preprocessor.metrics_snapshot()
+
+    assert before.issues == ("include_path_unresolved",)
+    assert after.complete is True
+    assert "leaf u_leaf" in after.text
+    assert metrics["preprocessor_include_resolution_cache_hit_count"] == 0
+    assert metrics["preprocessor_include_resolution_cache_miss_count"] == 2
+    assert metrics["preprocessor_include_resolution_cache_entry_count"] == 1
+
+
+def test_unique_recorded_include_basename_skips_directory_search(tmp_path):
+    source = tmp_path / "top.sv"
+    recorded_dir = tmp_path / "recorded"
+    recorded_dir.mkdir()
+    recorded = recorded_dir / "defs.svh"
+    recorded.write_text("leaf u_leaf();\n")
+    source.write_text('`include "defs.svh"\nmodule top; endmodule\n')
+    nonexistent_dirs = [tmp_path / f"missing_{index}" for index in range(64)]
+    compile_result = {
+        "compile_cwd": str(tmp_path),
+        "compile_command": (
+            "vcs "
+            + "+incdir+"
+            + "+".join(str(path) for path in nonexistent_dirs)
+            + f" {source}"
+        ),
+        "compile_evidence": {
+            "ordered_includes": [
+                {"parent": str(source), "path": str(recorded)}
+            ]
+        },
+    }
+    preprocessor = SystemVerilogPreprocessor(compile_result)
+
+    result = preprocessor.preprocess(str(source))
+    metrics = preprocessor.metrics_snapshot()
+
+    assert result.complete is True
+    assert "leaf u_leaf" in result.text
+    assert metrics["preprocessor_exact_include_resolution_count"] == 1
+    assert metrics["preprocessor_include_resolution_cache_miss_count"] == 1
+
+
+def test_ambiguous_recorded_basename_preserves_include_dir_order(tmp_path):
+    source = tmp_path / "top.sv"
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = first_dir / "defs.svh"
+    second = second_dir / "defs.svh"
+    first.write_text("leaf u_first();\n")
+    second.write_text("leaf u_second();\n")
+    source.write_text('`include "defs.svh"\nmodule top; endmodule\n')
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": (
+                f"vcs +incdir+{first_dir}+{second_dir} {source}"
+            ),
+            "compile_evidence": {
+                "ordered_includes": [
+                    {"parent": str(source), "path": str(first)},
+                    {"parent": str(source), "path": str(second)},
+                ]
+            },
+        }
+    )
+
+    result = preprocessor.preprocess(str(source))
+    metrics = preprocessor.metrics_snapshot()
+
+    assert "u_first" in result.text
+    assert "u_second" not in result.text
+    assert metrics["preprocessor_exact_include_resolution_count"] == 0

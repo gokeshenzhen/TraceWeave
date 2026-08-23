@@ -548,9 +548,25 @@ panorama used by hierarchy browsing and whole-design analysis. Compile logs are
 now parsed as streams, and the handle retains compact per-file facts rather than
 raw source bodies. The slim result includes numeric `build_metrics`, including
 source counts/bytes, phase timings, RSS samples, `source_text_bytes_retained=0`,
-and privacy-safe compile-session snapshot counts/bytes/completeness. Source
-Graph manifest receipts expose digest reuse/read counts and bytes plus a
-conflict count, without paths or source content.
+privacy-safe compile-session snapshot counts/bytes/completeness, and bounded
+preprocessor counters. Those counters distinguish physical source loads,
+source/masked-text cache hits and bytes, logical expansions, comment-mask fast
+paths, and exact/LRU include-resolution hits, misses, entries, and evictions;
+they never expose paths, include names, macros, or source content. Source Graph
+manifest receipts expose digest reuse/read counts and bytes plus a conflict
+count under the same privacy boundary.
+
+The full scanner avoids repeated work without weakening preprocessing proof.
+Slash-free lines outside a block comment bypass the character masker; quoted
+strings are removed with the same grammar before structural token collection;
+and simulator-recorded include edges provide an unambiguous basename index
+before directory search. Positive include resolutions then enter a 4,096-entry
+LRU, while unresolved includes are never cached. Definition regexes accept only
+horizontal indentation, so `^\s*` cannot backtrack across thousands of blank
+lines in expanded headers. Ambiguous include basenames retain ordered include
+directory resolution, and all optimizations preserve per-compilation-unit macro
+state, cancellation checkpoints, compact snapshots, and the public hierarchy
+schema.
 
 Two optional full-build guardrails are disabled by default. Set them below an
 outer MCP watchdog when a site wants a structured blocker instead of an opaque
@@ -619,6 +635,19 @@ Run the reproducible reported-scale benchmark with:
 ```bash
 python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode hierarchy
 python3.11 scripts/benchmark_hierarchy_bootstrap.py --mode bootstrap
+```
+
+For the same before/after measurement on a real compile log, use the
+compile-log-only benchmark below. It disables the optional NPI source overlay
+by default, omits paths from its output, and reports the structural result hash,
+hierarchy counts, phase timing, RSS, and preprocessor counters. Repeat
+`--supplementary-compile-log` for split compile/elaboration flows; use
+`--npi-source-overlay` only when that separately licensed overlay is the target
+of the measurement.
+
+```bash
+python3.11 scripts/benchmark_tb_hierarchy.py \
+  --compile-log /path/to/build.log --simulator vcs
 ```
 
 Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top

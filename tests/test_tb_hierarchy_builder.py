@@ -524,6 +524,13 @@ Top Level Modules:
             assert metrics["content_snapshot_file_count"] == 2
             assert metrics["content_snapshot_bytes"] == snapshot.total_bytes
             assert metrics["content_snapshot_issue_count"] == 0
+            assert metrics["preprocessor_logical_file_expansion_count"] == 2
+            assert metrics["preprocessor_source_load_count"] == 2
+            assert metrics["preprocessor_source_cache_limit_bytes"] > 0
+            assert (
+                metrics["preprocessor_include_resolution_cache_limit_entries"]
+                == 4096
+            )
         finally:
             tmp.cleanup()
 
@@ -733,6 +740,22 @@ endmodule
         assert scanned["module_instance_map"]["audit_top"] == [
             {"module_name": "real_mod", "instance_name": "u_real"}
         ]
+
+    def test_definition_scans_treat_only_horizontal_space_as_line_indent(self):
+        scanned = scan_sv_text(
+            "blank_lines.sv",
+            "\n" * 1024
+            + "\tmodule leaf; endmodule\n"
+            + "\n" * 1024
+            + "  interface bus_if; endinterface\n"
+            + "\n" * 1024
+            + " package defs; endpackage\n",
+            retain_source_text=False,
+        )
+
+        assert scanned["modules"] == ["leaf"]
+        assert scanned["interfaces"] == ["bus_if"]
+        assert scanned["packages"] == ["defs"]
 
     @pytest.mark.parametrize(
         ("definition", "invocation", "expected_instance"),

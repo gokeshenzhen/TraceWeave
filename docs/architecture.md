@@ -500,6 +500,22 @@ stronger proof boundary: a lexical instance candidate is admitted only when its
 type has a scanned module or interface definition. Raw candidates remain in the
 scan metadata for diagnostics.
 
+The preprocessor retains bounded physical-work indexes inside one hierarchy
+build. Its raw/masked source cache remains byte-bounded; positive include
+resolution adds a separate 4,096-entry LRU keyed by parent, literal/macro-
+resolved name, and ordered include directories. Missing includes are not
+cached. Simulator-recorded include edges also form a unique-basename index;
+ambiguous names deliberately fall through to the historical ordered directory
+search. Comment masking has a strict slash-free-line fast path, structural
+tokenization removes strings with the same lexical grammar before one token
+`findall`, and definition patterns use horizontal indentation rather than
+cross-line `\s*`. These are compilation-unit-local execution optimizations:
+macro/conditional state is still replayed independently, incomplete evidence
+retains the same proof boundary, and no preprocessed text enters the handle.
+`build_metrics` exposes only numeric cache/load/expansion/mask counts and fixed
+limits so physical versus logical work is attributable without revealing paths,
+include names, macros, or source content.
+
 Six handle tools (`src/handle_tools.py`) resolve a handle and return
 targeted slices:
 

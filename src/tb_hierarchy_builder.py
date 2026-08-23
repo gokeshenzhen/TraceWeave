@@ -23,9 +23,11 @@ from .sv_preprocessor import (
 
 _CLASS_EXTENDS_RE = re.compile(r"\bclass\s+(\w+)\s+extends\s+(\w+)", re.IGNORECASE)
 _CLASS_RE = re.compile(r"\bclass\s+(\w+)(?:\s+extends\s+\w+)?", re.IGNORECASE)
-_MODULE_RE = re.compile(r"^\s*module\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
-_INTERFACE_RE = re.compile(r"^\s*interface\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
-_PACKAGE_RE = re.compile(r"^\s*package\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
+_MODULE_RE = re.compile(r"^[ \t]*module\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
+_INTERFACE_RE = re.compile(
+    r"^[ \t]*interface\s+(\w+)\b", re.IGNORECASE | re.MULTILINE
+)
+_PACKAGE_RE = re.compile(r"^[ \t]*package\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
 _PACKAGE_IMPORT_RE = re.compile(
     r"\bimport\s+([A-Za-z_][A-Za-z0-9_$]*)\s*::", re.IGNORECASE
 )
@@ -120,13 +122,14 @@ _CREATE_RE = re.compile(r'(\w+)\s*=\s*(\w+)::type_id::create\s*\(\s*"([^"]+)"', 
 _VIRTUAL_IF_RE = re.compile(r"\bvirtual\s+(\w+)\s+(\w+)", re.IGNORECASE)
 _UVM_IMPORT_RE = re.compile(r"\bimport\s+uvm_pkg\s*::", re.IGNORECASE)
 _UVM_EXTENDS_RE = re.compile(r"\bextends\s+uvm_\w+", re.IGNORECASE)
+_SV_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 _SV_TOKEN_RE = re.compile(
     # Keep every non-whitespace delimiter instead of silently dropping
     # operators.  The instance recognizer relies on adjacency: collapsing
     # ``lhs = func(...)`` into ``lhs func(...)`` makes an assignment look
     # exactly like ``module_type instance_name(...)``.  Multi-character scope
     # tokens stay grouped; all remaining punctuation is intentionally opaque.
-    r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_$]*|::|\S'
+    r"[A-Za-z_][A-Za-z0-9_$]*|::|\S"
 )
 _SV_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 
@@ -167,11 +170,11 @@ def _strip_comments(text: str) -> str:
 
 
 def _sv_tokens(text: str) -> list[str]:
-    return [
-        token
-        for token in _SV_TOKEN_RE.findall(text)
-        if not token.startswith('"')
-    ]
+    # The old combined regex returned every token and then rejected quoted
+    # strings in Python. Replacing the same string grammar with one whitespace
+    # character preserves token boundaries while allowing one C-level findall
+    # to return only structural tokens.
+    return _SV_TOKEN_RE.findall(_SV_STRING_RE.sub(" ", text))
 
 
 def _skip_balanced(
@@ -1274,6 +1277,7 @@ def _scan_user_files(
                 compile_session_snapshot.issue_codes
             ),
             "content_snapshot_complete": compile_session_snapshot.complete,
+            **preprocessor.metrics_snapshot(),
             "rss_peak_kib": rss_peak_kib,
         },
         resolved_include_tree,
