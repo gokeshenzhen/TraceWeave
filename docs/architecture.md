@@ -989,11 +989,13 @@ verbatim instead of suggesting `build_kdb`.
 
 ## Usage Telemetry (`src/usage_telemetry.py`)
 
-Passive, local-only instrumentation built to answer two operational questions
+Passive, local-only instrumentation built to answer three operational questions
 with data rather than guesses: *how often are the shipped primitives actually
 used on real workloads?* and *does opt-in Source Graph disk reuse produce exact
 cross-process hits and frontend build skips often enough to justify its lookup,
-validation, and storage cost?*
+validation, and storage cost?* The third is whether metric-bearing Source Graph
+calls repeat within one case and the default 60-second idle window often enough
+to justify retaining a semantic-session frontend process.
 
 - `server.call_tool` is the single choke point every tool call passes
   through. It wraps `_dispatch` in a `finally` that calls
@@ -1032,7 +1034,12 @@ validation, and storage cost?*
   sessions with metrics, tier counts and p50/p90/p95/max call latency, exact
   hit rate (`hit / (hit + miss)`), validation outcomes, build skips and
   frontend launches, bytes/entries/evictions, internal timing distributions,
-  and per-tool tier summaries. Zero placeholders for stages that were not
+  per-tool tier summaries, calls-per-case distribution, and the count of
+  adjacent same-case calls within the default 60-second reuse window. The last
+  number is explicitly an upper bound: a common case/session does not prove the
+  same bounded semantic context is eligible. Missing/invalid timestamps reduce
+  and are reported as pair coverage rather than silently becoming misses.
+  Zero placeholders for stages that were not
   entered are excluded from timing distributions. The report reads only the
   append-only JSONL file and never discovers or scans artifact-cache entries.
 

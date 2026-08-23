@@ -8,6 +8,10 @@ distributions, and a focused block on the auto-debug v2 primitives
 sessions in which each was used at least once. When Source Graph diagnostics
 are present, it also reports cache tiers, exact disk hit rate, validation
 outcomes, build skips, capacity/evictions, and p50/p95 latency by tier.
+It also reports the distribution of metric-bearing Source Graph calls per case
+and an upper bound on semantic-session reuse opportunities: adjacent calls in
+the same case within the default 60-second idle window. This does not prove the
+calls share an eligible semantic context.
 
 This is an offline analysis tool, deliberately NOT an MCP tool: it answers the
 "do the primitives earn their tool-surface slot" question with real numbers,
@@ -86,10 +90,12 @@ def render(report: dict) -> str:
 
     source_graph = report.get("source_graph", {})
     lines.append("")
+    # Keep the original heading stable for report consumers and the Phase 3D
+    # telemetry self-check; query-frequency facts extend this section.
     lines.append("Source Graph disk cache — operational telemetry")
     lines.append("-" * 60)
     if not source_graph.get("calls_with_metrics"):
-        lines.append("  no Source Graph cache metrics recorded")
+        lines.append("  no Source Graph metrics recorded")
     else:
         disk = source_graph["disk"]
         execution = source_graph["execution"]
@@ -97,6 +103,33 @@ def render(report: dict) -> str:
         lines.append(
             "  calls/sessions       "
             f"{source_graph['calls_with_metrics']}/{source_graph['sessions_with_metrics']}"
+        )
+        frequency = source_graph["query_frequency"]
+        calls_per_session = frequency["calls_per_session"]
+        lines.append(
+            "  calls per session    "
+            f"median={_fmt_int(calls_per_session['median'])}  "
+            f"p95={_fmt_int(calls_per_session['p95'])}  "
+            f"max={_fmt_int(calls_per_session['max'])}"
+        )
+        lines.append(
+            "  repeated sessions    "
+            f"{frequency['sessions_with_multiple_calls']}/"
+            f"{source_graph['sessions_with_metrics']}  "
+            f"({frequency['multiple_call_session_presence'] * 100:.1f}%)"
+        )
+        pair_coverage = (
+            f"{frequency['timestamp_pair_coverage'] * 100:.1f}%"
+            if frequency["adjacent_call_pairs"]
+            else "n/a"
+        )
+        reuse_window_seconds = _fmt_int(frequency["reuse_window_seconds"])
+        lines.append(
+            f"  <={reuse_window_seconds}s reuse upper    "
+            f"sessions={frequency['sessions_with_reuse_opportunity']}  "
+            f"pairs={frequency['pairs_within_reuse_window']}/"
+            f"{frequency['timestamped_adjacent_call_pairs']}  "
+            f"pair-ts-coverage={pair_coverage}"
         )
         lines.append(
             "  cache tier calls     "

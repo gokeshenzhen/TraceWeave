@@ -565,6 +565,15 @@ def test_aggregate_source_graph_operational_cache_metrics():
     assert source_graph["sessions_with_metrics"] == 3
     assert source_graph["sessions_with_disk_hit"] == 1
     assert source_graph["disk_hit_session_presence"] == 0.333333
+    frequency = source_graph["query_frequency"]
+    assert frequency["calls_per_session"]["min"] == 1
+    assert frequency["calls_per_session"]["max"] == 2
+    assert frequency["sessions_with_multiple_calls"] == 1
+    assert frequency["multiple_call_session_presence"] == 0.333333
+    assert frequency["timestamp_call_coverage"] == 0.0
+    assert frequency["adjacent_call_pairs"] == 1
+    assert frequency["timestamped_adjacent_call_pairs"] == 0
+    assert frequency["pairs_within_reuse_window"] == 0
     assert source_graph["cache_tiers"]["memory"]["calls"] == 1
     assert source_graph["cache_tiers"]["disk"]["calls"] == 1
     assert source_graph["cache_tiers"]["build"]["calls"] == 2
@@ -634,7 +643,68 @@ def test_telemetry_report_renders_source_graph_operational_section():
 
     text = render(report)
     assert "Source Graph disk cache — operational telemetry" in text
+    assert "calls per session" in text
+    assert "<=60s reuse upper" in text
     assert "memory=0  disk=1  build=0  handoff=0" in text
     assert "hit=1  miss=0  corrupt=0  hit-rate=100.0%" in text
     assert "semantic session" in text
     assert "explain_signal_driver" in text
+
+
+def test_source_graph_query_frequency_counts_only_timestamped_adjacent_pairs():
+    def record(session_id: str, timestamp: str | None) -> dict:
+        value = {
+            "session_id": session_id,
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "result_bytes": 1,
+            "diagnostics": {"source_graph_phase": "complete"},
+        }
+        if timestamp is not None:
+            value["ts"] = timestamp
+        return value
+
+    records = [
+        record("within", "2026-08-23T10:00:00.000+00:00"),
+        record("within", "2026-08-23T10:00:30.000+00:00"),
+        record("outside", "2026-08-23T10:00:00.000+00:00"),
+        record("outside", "2026-08-23T10:01:01.000+00:00"),
+        record("missing", "2026-08-23T10:00:00.000+00:00"),
+        record("missing", None),
+        record("single", "2026-08-23T10:00:00.000+00:00"),
+    ]
+
+    frequency = ut.aggregate(records)["source_graph"]["query_frequency"]
+
+    assert frequency["calls_per_session"]["n"] == 4
+    assert frequency["calls_per_session"]["max"] == 2
+    assert frequency["sessions_with_multiple_calls"] == 3
+    assert frequency["adjacent_call_pairs"] == 3
+    assert frequency["timestamped_adjacent_call_pairs"] == 2
+    assert frequency["timestamp_pair_coverage"] == 0.666667
+    assert frequency["pairs_within_reuse_window"] == 1
+    assert frequency["within_window_pair_rate"] == 0.5
+    assert frequency["sessions_with_reuse_opportunity"] == 1
+    assert frequency["reuse_opportunity_session_presence"] == 0.25
+    assert frequency["inter_call_gap_ms"]["min"] == 30_000
+    assert frequency["inter_call_gap_ms"]["max"] == 61_000
+    assert "2026-08-23" not in json.dumps(frequency)
+
+
+def test_source_graph_query_frequency_does_not_merge_missing_session_ids():
+    records = [
+        {
+            "tool": "explain_signal_driver",
+            "ok": True,
+            "result_bytes": 1,
+            "ts": f"2026-08-23T10:00:0{index}.000+00:00",
+            "diagnostics": {"source_graph_phase": "complete"},
+        }
+        for index in range(2)
+    ]
+
+    source_graph = ut.aggregate(records)["source_graph"]
+
+    assert source_graph["sessions_with_metrics"] == 2
+    assert source_graph["query_frequency"]["sessions_with_multiple_calls"] == 0
+    assert source_graph["query_frequency"]["adjacent_call_pairs"] == 0

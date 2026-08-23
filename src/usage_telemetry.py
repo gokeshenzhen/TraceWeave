@@ -13,7 +13,11 @@ records one line per MCP tool call so we can later answer, with data:
   * in what fraction of debug *sessions* each one shows up at least once
     (the "does it earn its tool-surface slot" number), and
   * whether opt-in Source Graph disk reuse produces enough exact hits and
-    frontend build skips to justify its miss, validation, and storage cost.
+    frontend build skips to justify its miss, validation, and storage cost,
+    and
+  * whether Source Graph calls actually repeat inside one case and the default
+    60-second semantic-session reuse window often enough to justify retaining
+    a frontend process.
 
 Design constraints
 ------------------
@@ -254,6 +258,7 @@ _SOURCE_GRAPH_TIMING_FIELDS = {
     "disk_eviction": "source_graph_disk_eviction_ms",
 }
 _SOURCE_GRAPH_TIERS = ("memory", "disk", "build", "handoff")
+_SOURCE_GRAPH_REUSE_WINDOW_SECONDS = 60.0
 _SOURCE_GRAPH_SUM_FIELDS = {
     "actual_build_count": "source_graph_actual_build_count",
     "frontend_launch_count": "source_graph_frontend_launch_count",
@@ -502,6 +507,19 @@ def _new_source_graph_tool_bucket() -> dict[str, Any]:
     }
 
 
+def _timestamp_seconds(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        timestamp = parsed.timestamp()
+    except (OSError, OverflowError, ValueError):
+        return None
+    return timestamp if math.isfinite(timestamp) else None
+
+
 def _source_graph_operational_report(records: list[dict]) -> dict:
     source_calls = 0
     source_sessions: set[str] = set()
@@ -516,6 +534,8 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
     sums: dict[str, int | float] = {name: 0 for name in _SOURCE_GRAPH_SUM_FIELDS}
     maxima: dict[str, int | float] = {name: 0 for name in _SOURCE_GRAPH_MAX_FIELDS}
     per_tool: dict[str, dict[str, Any]] = {}
+    session_call_times: dict[str, list[float | None]] = {}
+    timestamped_call_count = 0
 
     for rec in records:
         raw_diagnostics = rec.get("diagnostics")
@@ -526,8 +546,17 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
             continue
 
         source_calls += 1
-        sid = str(rec.get("session_id") or "(none)")
+        raw_session_id = rec.get("session_id")
+        sid = (
+            str(raw_session_id)
+            if raw_session_id
+            else f"(unscoped-{source_calls})"
+        )
         source_sessions.add(sid)
+        timestamp = _timestamp_seconds(rec.get("ts"))
+        session_call_times.setdefault(sid, []).append(timestamp)
+        if timestamp is not None:
+            timestamped_call_count += 1
         tool = str(rec.get("tool") or "(unknown)")
         tool_bucket = per_tool.setdefault(tool, _new_source_graph_tool_bucket())
         tool_bucket["calls"] += 1
@@ -586,6 +615,23 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
             disk_hit_sessions.add(sid)
 
     disk_lookup_count = sums["disk_hit_count"] + sums["disk_miss_count"]
+    calls_per_session = [len(times) for times in session_call_times.values()]
+    multi_call_sessions = sum(count >= 2 for count in calls_per_session)
+    adjacent_pair_count = sum(max(count - 1, 0) for count in calls_per_session)
+    timestamped_pair_count = 0
+    within_window_pair_count = 0
+    within_window_sessions: set[str] = set()
+    inter_call_gap_ms: list[float] = []
+    for sid, call_times in session_call_times.items():
+        for before, after in zip(call_times, call_times[1:]):
+            if before is None or after is None or after < before:
+                continue
+            timestamped_pair_count += 1
+            gap_seconds = after - before
+            inter_call_gap_ms.append(gap_seconds * 1000.0)
+            if gap_seconds <= _SOURCE_GRAPH_REUSE_WINDOW_SECONDS:
+                within_window_pair_count += 1
+                within_window_sessions.add(sid)
     tier_report = {
         tier: {
             "calls": tier_calls[tier],
@@ -622,6 +668,30 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
         "disk_hit_session_presence": _rate(
             len(disk_hit_sessions), len(source_sessions)
         ),
+        "query_frequency": {
+            "calls_per_session": _dist(calls_per_session),
+            "sessions_with_multiple_calls": multi_call_sessions,
+            "multiple_call_session_presence": _rate(
+                multi_call_sessions, len(source_sessions)
+            ),
+            "timestamped_calls": timestamped_call_count,
+            "timestamp_call_coverage": _rate(timestamped_call_count, source_calls),
+            "reuse_window_seconds": _SOURCE_GRAPH_REUSE_WINDOW_SECONDS,
+            "adjacent_call_pairs": adjacent_pair_count,
+            "timestamped_adjacent_call_pairs": timestamped_pair_count,
+            "timestamp_pair_coverage": _rate(
+                timestamped_pair_count, adjacent_pair_count
+            ),
+            "pairs_within_reuse_window": within_window_pair_count,
+            "within_window_pair_rate": _rate(
+                within_window_pair_count, timestamped_pair_count
+            ),
+            "sessions_with_reuse_opportunity": len(within_window_sessions),
+            "reuse_opportunity_session_presence": _rate(
+                len(within_window_sessions), len(source_sessions)
+            ),
+            "inter_call_gap_ms": _dist(inter_call_gap_ms),
+        },
         "phases": dict(sorted(phases.items())),
         "validation_outcomes": dict(sorted(validation_outcomes.items())),
         "cache_tiers": tier_report,
