@@ -554,6 +554,19 @@ never enters the MCP process or disk. Additive numeric receipts report session
 hits, misses, restarts, evictions, and frontend launches. Requests that lack a
 complete bounded context retain the default one-shot behavior.
 
+Use `scripts/soak_source_graph_semantic_session.py` before changing that
+default. It accepts an external list of 20--100 unique exact deep driver/load
+queries and compares the current one-shot lifecycle with the production
+persistent runner in two fresh processes. The aggregate-only report checks
+fact/status/coverage equivalence, launch and reuse counts, sequence and first-
+query latency, break-even ordinal, tail latency, RSS cap/growth, failures, and
+evictions. A passing single-design run still sets `default_on_authorized=false`;
+representative eligible designs and real query-frequency evidence are required
+to justify retaining the frontend process. If bounded adjacent expansion
+already produces one reusable compact artifact, the workload is reported as
+`not_needed_existing_artifact_scope` instead of counting memory-cache hits as
+semantic-session hits. Run the script with `--help` for its full invocation.
+
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and
 use it for the structural scan), then supply the other source/elaboration logs

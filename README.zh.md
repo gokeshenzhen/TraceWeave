@@ -494,6 +494,16 @@ memory 或可选 disk cache；Slang state 不进入 MCP 进程，也不落盘。
 hit/miss/restart/eviction 与 frontend launch。无法取得完整 bounded context 的请求继续使用默认
 one-shot 行为。
 
+改变默认策略前应运行 `scripts/soak_source_graph_semantic_session.py`。它接收外部提供的
+20--100 条互不重复的精确深层 driver/load 查询，在两个 fresh process 中对比当前 one-shot
+lifecycle 与生产 persistent runner。仅含聚合信息的报告会校验 fact/status/coverage 等价性、
+launch/reuse count、整段与首查询 latency、break-even 序号、tail latency、RSS 上限/增长、失败与
+eviction。单个设计即使通过，仍会输出 `default_on_authorized=false`；只有多个有代表性的适用设计
+及真实查询频率证据，才足以承担常驻 frontend 进程。如果 bounded adjacent expansion 已经生成
+一个可复用 compact artifact，workload 会被标为
+`not_needed_existing_artifact_scope`，不会把普通 memory-cache hit 冒充 semantic-session hit。
+完整调用参数见脚本的 `--help`。
+
 对于 source compile 与 elaboration 分属多个日志的 VCS 流程，可以显式构造同一个上下文。
 建议把包含源文件顺序的 compile log 保持为 primary（结构扫描也使用它），再按 build 顺序
 提供其余 source/elaboration 日志：

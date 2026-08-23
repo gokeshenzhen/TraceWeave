@@ -170,6 +170,16 @@ Verification
   never bypasses fresh adapter content validation. A verified hit constructs
   an independent query engine; corruption is a safe miss and failed/cancelled
   builds are never published.
+  `scripts/soak_source_graph_semantic_session.py` exercises this lifecycle with
+  20--100 external exact deep queries in fresh one-shot and persistent child
+  processes. It admits default-on evidence only when every query selects one
+  semantic context, facts/status/coverage remain equal, one frontend launch
+  serves the sequence without restart/eviction/failure, latency gates pass,
+  and RSS remains bounded. Its report contains only hashes, fixed labels, and
+  numeric aggregates. Existing adjacent-artifact reuse is classified as
+  `not_needed_existing_artifact_scope`, not as a session hit. Even a passing
+  per-design implementation gate cannot authorize default-on without
+  representative eligible-design and operational query-frequency evidence.
   In-memory dominance is proved across dependency-closure identities when the
   immutable full design identity is exact, the available ordered projection
   inputs contain the requested projection, and the available explicit
