@@ -20,7 +20,9 @@ from src.source_graph_contract import (
     ConnectivityTarget,
     CoverageBoundary,
     QueryOperation,
+    ScopeRelation,
     RequestedCone,
+    SOURCE_GRAPH_COMPILE_PROJECTION_GAP,
     SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     SourceGraphArtifactIdentity,
     SourceGraphArtifactScopeReceipt,
@@ -59,6 +61,7 @@ def _scope(
     max_hops: int = 2,
     cone_paths=("sg_top",),
     boundary_paths=("sg_top",),
+    exclusions=(),
 ) -> SourceGraphBuildScope:
     return SourceGraphBuildScope(
         design="hand_runtime_fixture",
@@ -76,6 +79,7 @@ def _scope(
         coverage_boundary=CoverageBoundary(
             mode=BoundaryMode.EXPLICIT,
             instance_paths=tuple(boundary_paths),
+            objective_exclusions=tuple(exclusions),
         ),
     )
 
@@ -127,9 +131,30 @@ def _request(
 
 def _ready_result(request: SourceGraphBuildRequest) -> WorkerBuildResult:
     ir = build_hand_ir()
+    gap_codes: tuple[str, ...] = ()
+    if (
+        SOURCE_GRAPH_COMPILE_PROJECTION_GAP
+        in request.scope.coverage_boundary.objective_exclusions
+    ):
+        gap = CoverageGap(
+            code=SOURCE_GRAPH_COMPILE_PROJECTION_GAP,
+            message="fixture compile projection omits unrelated inputs",
+            impact=CoverageStatus.INCONCLUSIVE,
+        )
+        ir = replace(
+            ir,
+            coverage=CoverageReport(
+                status=CoverageStatus.INCONCLUSIVE,
+                files_total=4,
+                files_projected=3,
+                gaps=(gap,),
+            ),
+        )
+        gap_codes = (SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)
     receipt = SourceGraphScopeReceipt(
         scope=request.scope,
         coverage_status=ir.coverage.status,
+        gap_codes=gap_codes,
     )
     payload = ir.to_json_bytes()
     return WorkerBuildResult.ready(
@@ -171,7 +196,9 @@ def test_worker_replays_all_ordered_tops_from_compile_manifest():
 
 
 def test_worker_replays_projected_inputs_and_only_the_proved_scope_top():
-    request = _request()
+    request = _request(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,))
+    )
     source = replace(
         request.identity,
         compile_inputs=replace(
@@ -377,6 +404,102 @@ async def test_proven_superset_hits_but_subset_builds_again():
     assert hit.metrics.cache_disposition is CacheDisposition.HIT_SUPERSET
     assert hit.cache_lookup_reason is CacheLookupReason.DOMINATING_ARTIFACT
     assert hit.scope_match.relation.value == "superset"
+    assert miss.metrics.cache_disposition is CacheDisposition.MISS
+    assert miss.cache_lookup_reason is CacheLookupReason.CACHED_SCOPE_NOT_DOMINATING
+    assert worker.count == 2
+
+
+@pytest.mark.anyio
+async def test_compile_projection_superset_reuses_dominating_scope_artifact():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+    full_inputs = tuple(f"rtl/input_{index}.sv" for index in range(4))
+    superset_scope = _scope(
+        signal_path="sg_top.u_bridge.q",
+        ancestors=("sg_top", "sg_top.u_bridge"),
+        max_hops=4,
+        cone_paths=("sg_top", "sg_top.u_bridge"),
+        boundary_paths=("sg_top", "sg_top.u_bridge"),
+        exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,),
+    )
+    available = _request(scope=superset_scope)
+    requested = _request(
+        scope=_scope(
+            max_hops=2,
+            exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,),
+        )
+    )
+    source = replace(
+        available.identity,
+        compile_inputs=replace(
+            available.identity.compile_inputs,
+            ordered_inputs=full_inputs,
+        ),
+    )
+
+    def projected(request, count):
+        artifact = replace(
+            request.artifact_identity,
+            source=source,
+            compile_projection=SourceGraphCompileProjection(
+                mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+                ordered_inputs=full_inputs[:count],
+                full_input_count=len(full_inputs),
+            ),
+        )
+        return replace(request, identity=source, artifact=artifact)
+
+    available = projected(available, 3)
+    requested = projected(requested, 2)
+
+    cold = await runtime.prepare(available)
+    hit = await runtime.prepare(requested)
+
+    assert cold.entry.artifact_identity == available.artifact_identity
+    with pytest.raises(ValueError, match="same scope"):
+        replace(cold.entry, artifact_identity=requested.artifact_identity)
+    assert hit.status is PrepareStatus.READY
+    assert hit.metrics.cache_disposition is CacheDisposition.HIT_SUPERSET
+    assert hit.cache_lookup_reason is CacheLookupReason.DOMINATING_ARTIFACT
+    assert hit.scope_match.relation is ScopeRelation.SUPERSET
+    assert hit.entry is cold.entry
+    assert worker.count == 1
+
+
+@pytest.mark.anyio
+async def test_compile_projection_subset_cannot_dominate_larger_request():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+    full_inputs = tuple(f"rtl/input_{index}.sv" for index in range(4))
+    request = _request(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,))
+    )
+    source = replace(
+        request.identity,
+        compile_inputs=replace(
+            request.identity.compile_inputs,
+            ordered_inputs=full_inputs,
+        ),
+    )
+
+    def projected(count):
+        return replace(
+            request,
+            identity=source,
+            artifact=replace(
+                request.artifact_identity,
+                source=source,
+                compile_projection=SourceGraphCompileProjection(
+                    mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+                    ordered_inputs=full_inputs[:count],
+                    full_input_count=len(full_inputs),
+                ),
+            ),
+        )
+
+    await runtime.prepare(projected(2))
+    miss = await runtime.prepare(projected(3))
+
     assert miss.metrics.cache_disposition is CacheDisposition.MISS
     assert miss.cache_lookup_reason is CacheLookupReason.CACHED_SCOPE_NOT_DOMINATING
     assert worker.count == 2

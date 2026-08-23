@@ -681,6 +681,21 @@ verified hit 会跳过 frontend worker、创建新的 query engine，并进入 m
 截断、损坏或版本不匹配的 entry 都只产生固定原因 safe miss，随后走正常 cold build；不会被
 解释为 connectivity negative 或 Static 结果。
 
+memory-level dominating reuse 可以跨越两个不同的 dependency closure，但必须同时满足明确的
+fail-closed 包含关系证明：完整 compile manifest、options、tops、frontend/schema version
+以及 compile/hierarchy snapshot 全部精确相同；cached ordered input set 必须包含本次请求的
+全部 inputs；其已证明 hierarchy scope 与 objective exclusions 也必须支配本次请求。反向 subset、
+source/snapshot/version 变化、重复输入 manifest 或不受支配的 sibling scope 都继续 miss。
+返回 payload 仍只来自一个 cached artifact。每个 projected artifact 在契约层都必须标记
+`compile_projection_pruned_inputs`，所以 coverage 始终保持 inconclusive，只有已证明的 positive
+fact 可以复用；disk lookup 仍保持 exact-only。可通过以下命令
+复现双 scope orchestration benchmark：
+
+```bash
+python3.11 scripts/benchmark_source_graph_scope_reuse.py \
+  --delay-ms 50 --repeats 5
+```
+
 若要在任意 SoC 目录结构上做可复现的跨重启观察，可使用
 `scripts/soak_source_graph_soc.py`。它显式接收 verification root、compile log、sim log、
 waveform、top，以及外部 JSON 格式的 public driver/load/path 查询列表，不内置 DVSim、FuseSoC

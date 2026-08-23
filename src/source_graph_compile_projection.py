@@ -20,11 +20,12 @@ from .cancellation import check_cancelled
 from .source_graph_contract import (
     CompileInputManifest,
     CompileProjectionMode,
+    SOURCE_GRAPH_COMPILE_PROJECTION_GAP,
     SourceGraphCompileProjection,
 )
 
 
-COMPILE_PROJECTION_GAP = "compile_projection_pruned_inputs"
+COMPILE_PROJECTION_GAP = SOURCE_GRAPH_COMPILE_PROJECTION_GAP
 _MIN_FULL_INPUT_COUNT = 64
 _MIN_EXCLUDED_INPUT_COUNT = 32
 _MAX_PROJECTED_INPUT_COUNT = 512

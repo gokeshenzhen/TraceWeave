@@ -33,10 +33,13 @@ from .source_graph_contract import (
     ScopeRelation,
     ScopeReuseDecision,
     SourceGraphArtifactScopeReceipt,
+    SourceGraphArtifactIdentity,
     SourceGraphBuildKey,
     SourceGraphBuildRequest,
     SourceGraphScopeReceipt,
     compute_source_graph_build_key,
+    source_graph_artifact_design_matches,
+    source_graph_artifact_identity_covers,
 )
 from .source_graph_disk_cache import (
     DiskArtifact,
@@ -642,6 +645,17 @@ class SourceGraphCacheEntry:
     ir_fingerprint_sha256: str
     ir_bytes: int
     cache_bytes: int
+    artifact_identity: SourceGraphArtifactIdentity | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.artifact_identity is not None
+            and self.artifact_identity.scope != self.artifact_scope_receipt.scope
+        ):
+            raise ValueError(
+                "cache artifact identity and scope receipt must describe "
+                "the same scope"
+            )
 
     @property
     def coverage_status(self) -> CoverageStatus:
@@ -1001,7 +1015,10 @@ class SourceGraphRuntime:
                         effective_timeout_sec,
                     )
                 cache_disposition = CacheDisposition.MISS
-                cache_lookup_reason = self._cache_miss_reason_locked(build_key)
+                cache_lookup_reason = self._cache_miss_reason_locked(
+                    request,
+                    build_key,
+                )
                 self._stats["cache_miss_count"] += 1
             else:
                 cache_disposition = CacheDisposition.BYPASS_INCOMPLETE_KEY
@@ -1477,6 +1494,7 @@ class SourceGraphRuntime:
             ir_fingerprint_sha256=artifact.ir_fingerprint_sha256,
             ir_bytes=artifact.ir_bytes,
             cache_bytes=artifact.ir_bytes,
+            artifact_identity=artifact.identity,
         )
 
     async def _publish_disk_entry(
@@ -1690,6 +1708,7 @@ class SourceGraphRuntime:
             ir_fingerprint_sha256=fingerprint,
             ir_bytes=len(worker.ir_json_bytes),
             cache_bytes=len(worker.ir_json_bytes),
+            artifact_identity=artifact_identity,
         )
 
     async def wait_idle(self) -> None:
@@ -1770,19 +1789,32 @@ class SourceGraphRuntime:
                 self._cache.move_to_end(build_key.digest)
                 return exact, CacheDisposition.HIT_EXACT, match
         candidates: list[
-            tuple[int, int, str, SourceGraphCacheEntry, ScopeReuseDecision]
+            tuple[int, int, int, str, SourceGraphCacheEntry, ScopeReuseDecision]
         ] = []
         for entry in self._cache.values():
-            if entry.build_key.design_digest != build_key.design_digest:
-                continue
+            same_build_semantics = (
+                entry.build_key.design_digest == build_key.design_digest
+            )
+            if not same_build_semantics:
+                if entry.artifact_identity is None or not (
+                    source_graph_artifact_identity_covers(
+                        entry.artifact_identity,
+                        request.artifact_identity,
+                    )
+                ):
+                    continue
             match = entry.artifact_scope_receipt.reuse_for(
                 request.artifact_identity.scope
             )
-            if match.relation is not ScopeRelation.SUPERSET or not match.reusable:
+            if (
+                match.relation not in {ScopeRelation.EXACT, ScopeRelation.SUPERSET}
+                or not match.reusable
+            ):
                 continue
             scope = entry.artifact_scope_receipt.scope
             candidates.append(
                 (
+                    0 if match.relation is ScopeRelation.EXACT else 1,
                     len(scope.projection_instance_paths),
                     len(scope.coverage_boundary.instance_paths),
                     entry.build_key.digest,
@@ -1792,17 +1824,26 @@ class SourceGraphRuntime:
             )
         if not candidates:
             return None
-        _, _, _, entry, match = min(candidates, key=lambda item: item[:3])
+        _, _, _, _, entry, match = min(candidates, key=lambda item: item[:4])
         self._cache.move_to_end(entry.build_key.digest)
         return entry, CacheDisposition.HIT_SUPERSET, match
 
     def _cache_miss_reason_locked(
-        self, build_key: SourceGraphBuildKey
+        self,
+        request: SourceGraphBuildRequest,
+        build_key: SourceGraphBuildKey,
     ) -> CacheLookupReason:
         if not self._cache:
             return CacheLookupReason.NO_CACHED_ARTIFACT
         if any(
             entry.build_key.design_digest == build_key.design_digest
+            or (
+                entry.artifact_identity is not None
+                and source_graph_artifact_design_matches(
+                    entry.artifact_identity,
+                    request.artifact_identity,
+                )
+            )
             for entry in self._cache.values()
         ):
             return CacheLookupReason.CACHED_SCOPE_NOT_DOMINATING

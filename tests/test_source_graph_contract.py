@@ -16,6 +16,7 @@ from src.source_graph_contract import (
     PathHierarchyScope,
     QueryOperation,
     RequestedCone,
+    SOURCE_GRAPH_COMPILE_PROJECTION_GAP,
     SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     ScopeRelation,
     SourceGraphArtifactIdentity,
@@ -32,6 +33,8 @@ from src.source_graph_contract import (
     compute_source_graph_artifact_key,
     compute_source_graph_build_key,
     compute_source_graph_query_key,
+    source_graph_artifact_design_matches,
+    source_graph_artifact_identity_covers,
 )
 
 
@@ -155,7 +158,10 @@ def test_compile_projection_round_trips_and_changes_artifact_identity():
     manifest = _manifest(
         ordered_inputs=("rtl/pkg.sv", "rtl/leaf.sv", "rtl/top.sv")
     )
-    baseline = _artifact_identity(manifest=manifest)
+    baseline = _artifact_identity(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+        manifest=manifest,
+    )
     projection = SourceGraphCompileProjection(
         mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
         ordered_inputs=("rtl/pkg.sv", "rtl/top.sv"),
@@ -183,7 +189,171 @@ def test_compile_projection_must_preserve_manifest_order():
     )
 
     with pytest.raises(ValueError, match="ordered manifest subsequence"):
+        replace(
+            _artifact_identity(
+                scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+                manifest=manifest,
+            ),
+            compile_projection=projection,
+        )
+
+
+def test_compile_projection_requires_explicit_coverage_exclusion():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/leaf.sv", "rtl/top.sv")
+    )
+    projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/top.sv"),
+        full_input_count=3,
+    )
+
+    with pytest.raises(ValueError, match="coverage objective exclusion"):
         replace(_artifact_identity(manifest=manifest), compile_projection=projection)
+
+
+def test_artifact_identity_dominates_ordered_compile_projection_subset():
+    manifest = _manifest(
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "rtl/common.sv",
+            "rtl/left.sv",
+            "rtl/right.sv",
+        )
+    )
+    path_scope = _artifact_scope(
+        _path_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,))
+    )
+    single_scope = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("top", "top.u_left"),),
+        proved_lcas=("top.u_left",),
+        projection_instance_paths=("top.u_left",),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+            objective_exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,),
+        ),
+    )
+    base = _artifact_identity(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+        manifest=manifest,
+    )
+    available = replace(
+        base,
+        scope=path_scope,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=manifest.ordered_inputs[:3],
+            full_input_count=4,
+        ),
+    )
+    requested = replace(
+        base,
+        scope=single_scope,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=manifest.ordered_inputs[:2],
+            full_input_count=4,
+        ),
+    )
+
+    assert source_graph_artifact_design_matches(available, requested) is True
+    assert source_graph_artifact_identity_covers(available, requested) is True
+    assert source_graph_artifact_identity_covers(requested, available) is False
+
+
+def test_artifact_identity_projection_dominance_is_fail_closed():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv", "rtl/right.sv")
+    )
+    base = _artifact_identity(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+        manifest=manifest,
+    )
+    projected = replace(
+        base,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=manifest.ordered_inputs[:2],
+            full_input_count=3,
+        ),
+    )
+
+    assert source_graph_artifact_identity_covers(base, projected) is True
+    assert source_graph_artifact_identity_covers(projected, base) is False
+    assert source_graph_artifact_design_matches(
+        projected,
+        replace(projected, compile_snapshot_sha256=_fingerprint("changed")),
+    ) is False
+    assert source_graph_artifact_design_matches(
+        projected,
+        replace(
+            projected,
+            source=replace(
+                projected.source,
+                frontend_version="different_frontend",
+            ),
+        ),
+    ) is False
+
+
+def test_artifact_identity_projection_dominance_rejects_ambiguous_manifest():
+    manifest = _manifest(
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "rtl/duplicate.sv",
+            "rtl/duplicate.sv",
+            "rtl/top.sv",
+        )
+    )
+    base = _artifact_identity(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+        manifest=manifest,
+    )
+    available = replace(
+        base,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=manifest.ordered_inputs[:3],
+            full_input_count=4,
+        ),
+    )
+    requested = replace(
+        base,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=manifest.ordered_inputs[:1],
+            full_input_count=4,
+        ),
+    )
+
+    assert source_graph_artifact_identity_covers(available, requested) is False
+
+
+def test_artifact_identity_projection_dominance_requires_same_exclusions():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv", "rtl/right.sv")
+    )
+    available = _artifact_identity(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)),
+        manifest=manifest,
+    )
+    requested = replace(
+        available,
+        scope=_artifact_scope(
+            _scope(
+                exclusions=(
+                    SOURCE_GRAPH_COMPILE_PROJECTION_GAP,
+                    "protected_region",
+                )
+            )
+        ),
+    )
+
+    assert source_graph_artifact_identity_covers(available, requested) is False
 
 
 def _path_scope(
@@ -195,6 +365,7 @@ def _path_scope(
     expand_assigns: bool = False,
     traversal_limit: int = 4096,
     output_limit: int = 256,
+    exclusions=(),
 ) -> SourceGraphBuildScope:
     from_chain = ("top", from_instance)
     to_chain = ("top", to_instance)
@@ -229,6 +400,7 @@ def _path_scope(
         coverage_boundary=CoverageBoundary(
             mode=BoundaryMode.EXPLICIT,
             instance_paths=union,
+            objective_exclusions=tuple(exclusions),
         ),
         path_hierarchy=path_hierarchy,
     )

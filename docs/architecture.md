@@ -160,6 +160,16 @@ Verification
   never bypasses fresh adapter content validation. A verified hit constructs
   an independent query engine; corruption is a safe miss and failed/cancelled
   builds are never published.
+  In-memory dominance is proved across dependency-closure identities when the
+  immutable full design identity is exact, the available ordered projection
+  inputs contain the requested projection, and the available explicit
+  hierarchy scope dominates the requested scope with identical objective
+  exclusions. This is one-artifact reuse, not IR composition: no facts from two
+  builds are merged. A projection subset cannot dominate a larger request, and
+  an artifact with a compile projection must carry the
+  `compile_projection_pruned_inputs` exclusion. Its coverage therefore remains
+  inconclusive and reuse is limited to proved positive facts. Disk lookup stays
+  exact-only with no index scan.
   Exact overlapping preparations use a process-local flight identity over the
   artifact digest and effective worker timeout. This also coalesces an
   incomplete/non-cacheable identity while the worker is live, without upgrading

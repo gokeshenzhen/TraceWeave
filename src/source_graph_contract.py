@@ -32,6 +32,7 @@ SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.4"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_MAPPING_VERSION = "1.1"
+SOURCE_GRAPH_COMPILE_PROJECTION_GAP = "compile_projection_pruned_inputs"
 DEFAULT_QUERY_STATE_LIMIT = 4096
 DEFAULT_QUERY_EDGE_LIMIT = 16384
 DEFAULT_QUERY_MATCH_LIMIT = 256
@@ -1072,6 +1073,14 @@ class SourceGraphArtifactIdentity:
         if projection is not None:
             if not isinstance(projection, SourceGraphCompileProjection):
                 raise ValueError("artifact compile_projection is invalid")
+            if (
+                SOURCE_GRAPH_COMPILE_PROJECTION_GAP
+                not in self.scope.coverage_boundary.objective_exclusions
+            ):
+                raise ValueError(
+                    "compile projection must declare its coverage objective "
+                    "exclusion"
+                )
             full_inputs = self.source.compile_inputs.ordered_inputs
             selected_paths = set(projection.ordered_inputs)
             expected_order = tuple(
@@ -1494,6 +1503,76 @@ def _artifact_scope_covers(
     return all(
         _chain_covered_by(available.proved_ancestor_chains, requested_chain)
         for requested_chain in requested.proved_ancestor_chains
+    )
+
+
+def source_graph_artifact_design_matches(
+    available: SourceGraphArtifactIdentity,
+    requested: SourceGraphArtifactIdentity,
+) -> bool:
+    """Return whether two artifacts share one immutable design snapshot.
+
+    Compile projections and hierarchy cones are intentionally excluded here;
+    they are independently ordered-subset and scope-coverage proofs. Every
+    source, option, top, frontend, schema, snapshot, and contract input remains
+    exact.
+    """
+
+    return bool(
+        available.snapshots_complete
+        and requested.snapshots_complete
+        and available.source == requested.source
+        and available.compile_snapshot_sha256
+        == requested.compile_snapshot_sha256
+        and available.adapter_version == requested.adapter_version
+        and available.worker_protocol_version
+        == requested.worker_protocol_version
+        and available.identity_version == requested.identity_version
+        and available.build_contract_version
+        == requested.build_contract_version
+        and available.scope.design == requested.scope.design
+        and available.scope.top == requested.scope.top
+        and available.scope.hierarchy_snapshot_sha256
+        == requested.scope.hierarchy_snapshot_sha256
+    )
+
+
+def _compile_projection_covers(
+    available: SourceGraphCompileProjection | None,
+    requested: SourceGraphCompileProjection | None,
+    *,
+    manifest: CompileInputManifest,
+) -> bool:
+    # No projection means exact replay of the full ordered manifest, which can
+    # dominate any proved subset. A subset can never stand in for full replay.
+    if available is None:
+        return True
+    if requested is None:
+        return False
+    if (
+        available.mode is not requested.mode
+        or available.full_input_count != requested.full_input_count
+        or available.full_input_count != len(manifest.ordered_inputs)
+        or len(set(manifest.ordered_inputs)) != len(manifest.ordered_inputs)
+    ):
+        return False
+    return set(requested.ordered_inputs).issubset(available.ordered_inputs)
+
+
+def source_graph_artifact_identity_covers(
+    available: SourceGraphArtifactIdentity,
+    requested: SourceGraphArtifactIdentity,
+) -> bool:
+    """Prove one artifact can answer a differently projected scoped request."""
+
+    return bool(
+        source_graph_artifact_design_matches(available, requested)
+        and _compile_projection_covers(
+            available.compile_projection,
+            requested.compile_projection,
+            manifest=available.source.compile_inputs,
+        )
+        and _artifact_scope_covers(available.scope, requested.scope)
     )
 
 

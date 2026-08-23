@@ -776,6 +776,24 @@ new query engine, and enters the memory cache. Unknown, truncated, corrupt, or
 version-mismatched entries are fixed-reason misses followed by the normal cold
 build; they are never connectivity negatives or Static results.
 
+Memory-level dominating reuse can cross two different dependency closures, but
+only through explicit fail-closed containment proofs: the full compile
+manifest, options, tops, frontend/schema versions, and compile/hierarchy
+snapshots must match exactly; the cached ordered input set must contain every
+requested input; and its proved hierarchy scope plus objective exclusions must
+dominate the request.
+The reverse subset direction, changed source/snapshot/version, duplicate-input
+manifest, or non-dominating sibling remains a miss. The selected payload still
+comes from one cached artifact. Every projected artifact is contractually marked
+`compile_projection_pruned_inputs`, so coverage stays inconclusive and only
+proved positive facts are reusable. Disk lookup remains exact-only. A
+reproducible two-scope orchestration benchmark is available as:
+
+```bash
+python3.11 scripts/benchmark_source_graph_scope_reuse.py \
+  --delay-ms 50 --repeats 5
+```
+
 For a reproducible cross-restart observation on any SoC layout, use
 `scripts/soak_source_graph_soc.py`. It takes an explicit verification root,
 compile log, simulation log, waveform, top, and an external JSON list of public
