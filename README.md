@@ -630,6 +630,42 @@ rather than signal/source/instance names. It is opt-in development tooling: it
 does not run from `build_tb_hierarchy` and does not change production backend
 routing.
 
+The companion `scripts/benchmark_connectivity_differential_soc.py` compares a
+bounded driver/load/path corpus against direct NPI and Source Graph execution.
+Each provider runs in a fresh process, and neither arm may enter the production
+fallback chain. The Source Graph arm prepares exactly one bounded artifact per
+query attempt; an incomplete projection remains an explicit coverage fact
+rather than being hidden by dynamic expansion or Static output. Reports omit
+query text, signal/scope/source paths, and expressions. They contain only
+SHA-256 evidence anchors, counts, fixed statuses, timings, cache metrics, and
+RSS. NPI-only facts are classified as coverage-explained while Source Graph is
+non-exhaustive and as unexpected only under exhaustive Source Graph coverage;
+Source Graph-only facts and path reachability differences remain separate
+categories because NPI is a reference, not an infallible oracle.
+
+The input is a bounded JSON corpus (at most 64 semantic queries):
+
+```json
+{
+  "schema_version": "1.0",
+  "queries": [
+    {"operation": "driver", "signal_path": "tb.dut.result", "recursive": true},
+    {"operation": "loads", "signal_path": "tb.dut.request", "max_depth": 1},
+    {"operation": "path", "from_signal": "tb.dut.a", "to_signal": "tb.dut.b"}
+  ]
+}
+```
+
+Run it only on an authorized licensed development host:
+
+```bash
+python3.11 scripts/benchmark_connectivity_differential_soc.py \
+  --compile-log <compile.log> --corpus <queries.json> --top <top>
+```
+
+This benchmark is development tooling only. It is not called by an MCP tool
+and does not select, promote, or suppress a production backend.
+
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted
 strings are removed with the same grammar before structural token collection;

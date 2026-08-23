@@ -554,6 +554,39 @@ oracle；两侧在独立 fresh process 中运行。NPI 侧只对目标的 dotted
 不输出 signal/source/instance 名。这只是 opt-in 开发工具，不会由 `build_tb_hierarchy`
 调用，也不改变生产 backend route。
 
+配套的 `scripts/benchmark_connectivity_differential_soc.py` 用一份有界
+driver/load/path corpus 对比 direct NPI 与 Source Graph。两侧分别运行在 fresh process
+中，且都不能进入生产 fallback chain。Source Graph 每个 query attempt 只准备一个 bounded
+artifact；projection 不完整时保留明确 coverage fact，不通过 dynamic expansion 或 Static
+结果掩盖。报告不包含 query 原文、signal/scope/source path 或 expression，只输出 SHA-256
+evidence anchor、count、固定 status、timing、cache metric 与 RSS。Source Graph 非穷尽时，
+NPI-only facts 归类为 coverage-explained；只有 Source Graph coverage 穷尽时才归类为
+unexpected。Source Graph-only facts 与 path reachability 差异单独保留，因为 NPI 是重要参考，
+不是绝对正确的 oracle。
+
+输入是一份最多 64 个语义查询的 bounded JSON corpus：
+
+```json
+{
+  "schema_version": "1.0",
+  "queries": [
+    {"operation": "driver", "signal_path": "tb.dut.result", "recursive": true},
+    {"operation": "loads", "signal_path": "tb.dut.request", "max_depth": 1},
+    {"operation": "path", "from_signal": "tb.dut.a", "to_signal": "tb.dut.b"}
+  ]
+}
+```
+
+只在已授权且有 license 的开发机上运行：
+
+```bash
+python3.11 scripts/benchmark_connectivity_differential_soc.py \
+  --compile-log <compile.log> --corpus <queries.json> --top <top>
+```
+
+该 benchmark 只用于开发验证，不会由 MCP tool 调用，也不会选择、提升或压制任何生产
+backend。
+
 完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
 不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted
 string；simulator 记录的 include edge 先形成无歧义 basename index，再进入目录搜索。正向

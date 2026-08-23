@@ -569,6 +569,29 @@ change NPI/Source Graph/Static routing. The opt-in
 processes and compares only identity-hashed binding facts plus numeric resource
 measurements.
 
+Connectivity semantics have a separate opt-in differential harness,
+`scripts/benchmark_connectivity_differential_soc.py`. A schema-validated corpus
+contains at most 64 exact driver/load/path queries. Compare mode launches one
+fresh NPI child and one fresh Source Graph child. The NPI child calls the loaded
+KDB core directly, so an internal Static fallback cannot make the oracle arm
+look successful. The Source Graph child disables the hierarchy NPI overlay,
+builds compile context once, and evaluates each query against exactly one
+bounded prepared artifact. It deliberately does not copy production frontier
+or fallback orchestration: a missing fact under incomplete projection must
+remain measurable as incomplete coverage.
+
+Provider payloads are reduced before leaving each child. The report contains a
+query digest, positive/fixed status, exact source-line-and-kind fact digests,
+coarser evidence-location and source-file digests, fact counts, coverage and
+exhaustiveness labels, prepare/query timing, cache aggregates, and RSS. It
+contains no signal, instance, source, expression, KDB, or compile-log path.
+Driver/load comparison partitions NPI-only facts according to Source Graph
+exhaustiveness (`coverage_explained` versus `unexpected`) and keeps Source
+Graph-only facts independent. Path comparison uses reachability and hop count,
+because internal hop identities are representation-specific. These are offline
+measurements only: they neither adjudicate NPI as universally correct nor alter
+the trusted-NPI → Source Graph → Static route.
+
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted
 before that uncertainty boundary remain available, while later text is excluded

@@ -417,6 +417,21 @@ analyze_failures(group_index=0) → findings → need more signals?
 
 ## Notes
 
+### Development-only connectivity differential
+
+Do not run provider differential benchmarks as part of an ordinary failure
+debug flow. For release validation on an authorized host with a local NPI/KDB
+environment, `scripts/benchmark_connectivity_differential_soc.py` can execute a
+bounded driver/load/path corpus in separate NPI and Source Graph processes. It
+never invokes the production fallback chain and emits only identity hashes,
+counts, fixed coverage/status labels, timings, cache metrics, and RSS. A
+Source Graph miss is unexpected only when its own search was exhaustive;
+otherwise the result records a coverage-explained NPI-only fact. Conversely, a
+Source Graph-only fact is not automatically accepted merely because NPI is
+present. Investigate serious differences with source/elaboration evidence and,
+for a behavioral root-cause claim, the same two-hypothesis waveform discipline
+used above.
+
 This document explains the recommended debug flow and the reasoning behind it.
 It is intentionally not a second copy of the runtime `Server(instructions=...)`
 text in `server.py`.
