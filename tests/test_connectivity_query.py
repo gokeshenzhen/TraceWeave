@@ -34,7 +34,9 @@ from src.connectivity_query import (
     PathQueryStatus,
     QueryConfidence,
     QueryStatus,
+    _longest_instance_prefix,
 )
+from scripts.benchmark_connectivity_query_indexes import build_wide_load_ir
 from tests.connectivity_ir_fixtures import build_deep_ir, build_hand_ir
 
 
@@ -71,6 +73,62 @@ def test_packed_member_resolution_preserves_ascending_field_indices():
 
     assert resolved.symbol == "lane_data"
     assert resolved.bits == (15, 14, 13, 12)
+
+
+def test_instance_prefix_lookup_probes_path_depth_not_design_size():
+    class CountingPaths:
+        def __init__(self):
+            self.paths = {"top", *(f"top.u{index:05d}" for index in range(30_000))}
+            self.probes: list[str] = []
+
+        def __contains__(self, candidate: object) -> bool:
+            assert isinstance(candidate, str)
+            self.probes.append(candidate)
+            return candidate in self.paths
+
+    paths = CountingPaths()
+
+    resolved = _longest_instance_prefix(
+        "top.u12345.bus.payload.member",
+        paths,
+    )
+
+    assert resolved == "top.u12345"
+    assert paths.probes == [
+        "top.u12345.bus.payload",
+        "top.u12345.bus",
+        "top.u12345",
+    ]
+
+
+def test_instance_prefix_lookup_preserves_trailing_separator_rejection():
+    assert _longest_instance_prefix("top.", {"top"}) is None
+    assert _longest_instance_prefix("top.u.", {"top", "top.u"}) == "top"
+
+
+def test_instance_prefix_resolution_keeps_dotted_symbols_below_deep_instance():
+    resolved = ConnectivityQueryEngine(build_hand_ir()).resolve_signal(
+        "sg_top.u_bridge.gen_lanes[0].u_lane.u_named.data_i"
+    )
+
+    assert resolved.instance_path == (
+        "sg_top.u_bridge.gen_lanes[0].u_lane.u_named"
+    )
+    assert resolved.symbol == "data_i"
+
+
+def test_wide_load_query_preserves_ordered_bit_mapping():
+    result = ConnectivityQueryEngine(build_wide_load_ir(4_096)).query_loads(
+        "top.payload"
+    )
+
+    expected_bits = tuple(range(4_095, -1, -1))
+    assert result.status is QueryStatus.FOUND
+    assert result.coverage_status is CoverageStatus.COMPLETE
+    assert result.resolved_bits == expected_bits
+    assert len(result.matches) == 1
+    assert result.matches[0].source.bits == expected_bits
+    assert result.matches[0].covered_signal.bits == expected_bits
 
 
 def _build_scalar_path_ir(

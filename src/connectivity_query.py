@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from enum import Enum
 import re
-from typing import Any, Iterable
+from typing import Any, Container, Iterable
 
 from .cancellation import check_cancelled
 from .connectivity_ir import (
@@ -350,7 +350,6 @@ class ConnectivityQueryEngine:
         self.ir = ir
         self._definitions = ir.definition_index
         self._instances = ir.instance_index
-        self._instance_paths = sorted(self._instances, key=len, reverse=True)
         self._incoming: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
         self._outgoing: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
         self._constant_incoming: dict[
@@ -956,14 +955,7 @@ class ConnectivityQueryEngine:
                 f"invalid signal path {signal_path!r}",
             )
         base = match.group("base")
-        instance_path = next(
-            (
-                path
-                for path in self._instance_paths
-                if base.startswith(f"{path}.") and len(base) > len(path) + 1
-            ),
-            None,
-        )
+        instance_path = _longest_instance_prefix(base, self._instances)
         if instance_path is None:
             raise SignalInstanceUnresolved(
                 signal_path,
@@ -1256,8 +1248,9 @@ class ConnectivityQueryEngine:
         traversal: tuple[TraversalHop, ...],
     ) -> QueryMatch:
         bound = _bound_dependency(dependency, instance_path)
+        selected_source_bits = set(selected_source.bits)
         source_bits = tuple(
-            bit for bit in bound.source.bits if bit in set(selected_source.bits)
+            bit for bit in bound.source.bits if bit in selected_source_bits
         )
         source = SignalSelection(
             instance_path=instance_path,
@@ -1424,6 +1417,21 @@ def _endpoint_key(selection: SignalSelection) -> tuple[str, str]:
     if selection.instance_path is None:
         raise ValueError("query endpoint must be hierarchy-bound")
     return selection.instance_path, selection.symbol
+
+
+def _longest_instance_prefix(
+    signal_base: str,
+    instance_paths: Container[str],
+) -> str | None:
+    """Resolve the longest dotted instance prefix without scanning the design."""
+
+    boundary = signal_base.rfind(".")
+    while boundary > 0:
+        candidate = signal_base[:boundary]
+        if boundary < len(signal_base) - 1 and candidate in instance_paths:
+            return candidate
+        boundary = signal_base.rfind(".", 0, boundary)
+    return None
 
 
 def _positive_query_limit(value: int, label: str) -> int:

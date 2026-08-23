@@ -737,6 +737,25 @@ python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode bounded
 python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode full
 ```
 
+Signal-to-instance resolution is also indexed independently of design size:
+the query engine probes dotted hierarchy prefixes from deepest to shallowest
+against the instance table instead of sorting and scanning every instance.
+Wide-load matching constructs a requested-bit membership set once per match,
+while retaining the ordered bit tuples required for ascending ranges and concat
+mappings. These are internal changes; public paths, bit ordering, receipts, and
+schemas are unchanged. Reproduce the 30k-instance and 4,096-bit workloads with:
+
+```bash
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload instance-resolution --size 30000 --repeats 100
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload wide-load --size 4096 --repeats 100
+```
+
+The IR still uses explicit ordered bit tuples. A wider interval/segment rewrite
+is deliberately deferred until a measured workload justifies its schema,
+cache-version, and correctness cost.
+
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
 

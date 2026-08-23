@@ -203,6 +203,14 @@ Verification
   scope expansion, preventing a same-artifact rebuild loop. The fixed-budget
   mapping is versioned independently from artifact identity, so existing IR
   cache entries remain valid while new query semantics apply consistently.
+  Hierarchical endpoint resolution walks dotted prefixes right-to-left and
+  probes the instance dictionary, making lookup proportional to path depth
+  rather than projected instance count. Ordered wide-bit mappings remain
+  tuples for exact ascending-range/concat semantics, but per-match membership
+  indexes are built once instead of once per candidate bit. Neither optimization
+  changes the IR or public result schema; interval/segment storage remains a
+  separately measured future migration rather than a prerequisite for indexed
+  warm queries.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first

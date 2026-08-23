@@ -647,6 +647,22 @@ python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode bounded
 python3.11 scripts/benchmark_source_graph_query.py --fanout 50000 --mode full
 ```
 
+signal 到 instance 的解析也已与设计总规模解耦：query engine 从最深到最浅检查 dotted
+hierarchy prefix，并直接查询 instance table，不再先排序再扫描全设计实例。宽总线 load
+匹配则为每个 match 只构造一次请求 bit membership set，同时继续保留 ascending range 与
+concat mapping 所需的有序 bit tuple。以上都是内部改动，公开 path、bit 顺序、回执和 schema
+均不变。以下命令可复现 30k-instance 与 4,096-bit workload：
+
+```bash
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload instance-resolution --size 30000 --repeats 100
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload wide-load --size 4096 --repeats 100
+```
+
+IR 当前仍使用显式有序 bit tuple。更大范围的 interval/segment 重写会涉及 schema、cache
+version 与正确性成本，因此留到真实 workload 证明仍有必要时再实施。
+
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：
 
