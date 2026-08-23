@@ -624,8 +624,16 @@ export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 the validated value as `source_graph.effective_timeout_sec`. Exact overlapping
 builds share one live worker even when the compile manifest is incomplete, but
 an incomplete artifact is still never inserted into the memory or disk cache.
-Once that flight ends, a later request builds again. Cancelling one waiter
-leaves the worker alive for the others; cancelling all waiters terminates it.
+After a successful content-anchored incomplete build, the runtime may retain one
+bounded, one-shot session handoff for the next exact artifact request (including
+the same effective timeout): at most one entry, 512 MiB, and 60 seconds. The
+consumer removes it immediately; it is never searched by dominating scope and
+still reports `cache_disposition="bypass_incomplete_key"`, with
+`artifact_reuse="session_handoff"` and `cache_tier="handoff"`. Missing content
+identity, incomplete snapshots, implicit scope, oversize artifacts, expiry, and
+failed/timed-out/cancelled builds all rebuild normally. Cancelling one live
+waiter leaves the worker alive for the others; cancelling all waiters terminates
+it.
 
 When a usable KDB is present but you specifically need to exercise Source Graph
 for a driver, load, path, or X-trace test, select it explicitly:
@@ -733,10 +741,11 @@ an exact compile/hierarchy handle. `backend_status` then reports
 `selected_backend`, `attempted_backend`, `actual_backend`, the ordered
 `attempted_backends` chain, and a Source Graph receipt containing fixed blocker
 labels, coverage, build/compile/IR fingerprints, cache disposition, and numeric
-resource metrics. Additive fixed labels distinguish `memory`, `disk`, and
-`build` tiers plus the disk validation outcome; receipts never expose cache
-paths or entry names. Positive results under partial or inconclusive coverage stay
-partial; only complete coverage can establish `not_connected`. On this normal
+resource metrics. Additive fixed labels distinguish `memory`, `disk`, `build`,
+and one-shot `handoff` tiers plus the disk validation outcome; receipts never
+expose cache paths or entry names. Positive results under partial or
+inconclusive coverage stay partial; only complete coverage can establish
+`not_connected`. On this normal
 full-hierarchy route, a fallback recomputes the whole result with Legacy Static,
 so payload provenance is never mixed. The explicit bootstrap-only exception is
 documented above: it suppresses that unbounded Static rescan and cannot make a
@@ -880,7 +889,7 @@ For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` —
 
 When enabled, TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. The telemetry directory and JSONL are tightened to owner-only `0700`/`0600` on every append, including an existing file created under a permissive umask. The normal user default is that `TRACEWEAVE_TELEMETRY` is absent; recording is then disabled and no telemetry file is written. To opt in, set `TRACEWEAVE_TELEMETRY=1` before starting the MCP server, then restart or reconnect it after changing the value.
 
-When the opt-in Source Graph disk cache is also enabled, the same record carries a second independently validated allowlist of numeric/fixed-label diagnostics: `memory`/`disk`/`build` tier, exact disk hit/miss/corrupt/build-skip counts, frontend launches, lookup/read/validate/write/publish/eviction timings, artifact bytes/entry counts, and process resource aggregates. It never persists artifact fingerprints, cache/source/wave paths, signal/scope/value content, diagnostics, or exception text. `python3.11 scripts/telemetry_report.py` reports per-tool and per-session usage plus Source Graph tier counts, exact disk hit rate, validation outcomes, builds/skips, bytes/entries/evictions, and p50/p95 latency by tier; add `--json` for machine-readable output. Use a fresh private `TRACEWEAVE_CACHE_DIR` when an operational soak needs an isolated observation window.
+Source Graph calls use a second independently validated allowlist of numeric/fixed-label diagnostics, including `memory`/`disk`/`build`/`handoff` tier and process resource aggregates. When the opt-in disk cache is enabled, it additionally carries exact disk hit/miss/corrupt/build-skip counts, frontend launches, lookup/read/validate/write/publish/eviction timings, and artifact bytes/entry counts. It never persists artifact fingerprints, cache/source/wave paths, signal/scope/value content, diagnostics, or exception text. `python3.11 scripts/telemetry_report.py` reports per-tool and per-session usage plus Source Graph tier counts, exact disk hit rate, validation outcomes, builds/skips, bytes/entries/evictions, and p50/p95 latency by tier; add `--json` for machine-readable output. Use a fresh private `TRACEWEAVE_CACHE_DIR` when an operational soak needs an isolated observation window.
 
 ## Testing
 

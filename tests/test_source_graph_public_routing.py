@@ -2013,6 +2013,71 @@ async def test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact(
 
 
 @pytest.mark.anyio
+async def test_incomplete_driver_then_load_uses_one_session_handoff(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log, _ = _install_source_context(tmp_path)
+    handle = server.compute_handle(compile_log, "xcelium")
+    hierarchy = server._handle_store.resolve(handle)
+    assert hierarchy is not None
+    hierarchy["compile_result"]["parse_warnings"] = [
+        "compile command evidence is incomplete"
+    ]
+    gap = CoverageGap(
+        code="compile_log_parse_warning",
+        message="compile options are not exhaustive",
+        impact=CoverageStatus.INCONCLUSIVE,
+        constructs=("compile_options",),
+        scopes=("*",),
+    )
+    coverage = CoverageReport(
+        status=CoverageStatus.INCONCLUSIVE,
+        files_total=1,
+        files_projected=1,
+        gaps=(gap,),
+    )
+    worker = ReadyWorker(ir=_production_ir(coverage=coverage))
+    runtime = SourceGraphRuntime(worker)
+    static = TrackingStaticBackend()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    signal = "sg_top.u_producer.seed[7:0]"
+
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        driver = await server._dispatch(
+            "explain_signal_driver",
+            _driver_args(compile_log, signal),
+        )
+        load_args = _load_args(compile_log)
+        load_args["signal_path"] = signal
+        loads = await server._dispatch("find_signal_loads", load_args)
+    finally:
+        operation_metrics.pop(token)
+
+    assert driver.backend == "source_graph"
+    assert loads.backend == "source_graph"
+    assert worker.calls == 1
+    first = driver.backend_status.source_graph
+    second = loads.backend_status.source_graph
+    assert first.artifact_reuse == "bypass_incomplete"
+    assert first.cache_disposition == "bypass_incomplete_key"
+    assert second.artifact_reuse == "session_handoff"
+    assert second.cache_disposition == "bypass_incomplete_key"
+    assert second.cache_tier == "handoff"
+    assert second.cache_lookup_reason == "same_artifact_session_handoff"
+    assert second.metrics.actual_build_count == 0
+    assert second.scope_match.relation == "exact"
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 0
+    assert static.driver_calls + static.load_calls == 0
+    metrics_snapshot = operation_metrics.snapshot(metrics)
+    assert metrics_snapshot["source_graph_cache_tier"] == "handoff"
+    assert all("signal" not in key and "path" not in key for key in metrics_snapshot)
+
+
+@pytest.mark.anyio
 async def test_cancelled_cached_query_does_not_fallback_or_pollute_artifact(
     monkeypatch, tmp_path
 ):

@@ -150,7 +150,7 @@ _SOURCE_GRAPH_PHASES = {
     "complete",
     "cancelled",
 }
-_SOURCE_GRAPH_CACHE_TIERS = {"memory", "disk", "build"}
+_SOURCE_GRAPH_CACHE_TIERS = {"memory", "disk", "build", "handoff"}
 _SOURCE_GRAPH_DISK_OUTCOMES = {
     "disabled",
     "not_checked",

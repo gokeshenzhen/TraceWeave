@@ -53,8 +53,12 @@ from .source_graph_disk_cache import (
 _PROCESS_COLD_BUILD_LOCK = threading.Lock()
 DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES = 8
 DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_MAX_ENTRIES = 1
+DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_TTL_SECONDS = 60.0
 MIN_SOURCE_GRAPH_TIMEOUT_SECONDS = 0.001
 MAX_SOURCE_GRAPH_TIMEOUT_SECONDS = 86_400.0
+MAX_SOURCE_GRAPH_INCOMPLETE_HANDOFF_TTL_SECONDS = 3_600.0
 
 
 class PrepareStatus(str, Enum):
@@ -85,6 +89,7 @@ class CacheTier(str, Enum):
     MEMORY = "memory"
     DISK = "disk"
     BUILD = "build"
+    HANDOFF = "handoff"
 
 
 class CacheLookupReason(str, Enum):
@@ -95,6 +100,7 @@ class CacheLookupReason(str, Enum):
     CACHED_SCOPE_NOT_DOMINATING = "cached_scope_not_dominating"
     IDENTITY_NOT_REUSABLE = "identity_not_reusable"
     SAME_ARTIFACT_INFLIGHT = "same_artifact_inflight"
+    SAME_ARTIFACT_SESSION_HANDOFF = "same_artifact_session_handoff"
     ARTIFACT_EXCEEDS_CACHE_CAPACITY = "artifact_exceeds_cache_capacity"
     CANCELLED_BEFORE_LOOKUP = "cancelled_before_lookup"
 
@@ -827,6 +833,14 @@ class _Flight:
     disk_eviction_count: int = 0
 
 
+@dataclass
+class _IncompleteHandoff:
+    flight_key: str
+    entry: SourceGraphCacheEntry
+    expires_at: float
+    expiry_handle: asyncio.TimerHandle | None = None
+
+
 class SourceGraphRuntime:
     """Process-session Source Graph cache and cold-build coordinator."""
 
@@ -836,6 +850,15 @@ class SourceGraphRuntime:
         *,
         max_cache_entries: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_ENTRIES,
         max_cache_bytes: int = DEFAULT_SOURCE_GRAPH_CACHE_MAX_BYTES,
+        incomplete_handoff_max_entries: int = (
+            DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_MAX_ENTRIES
+        ),
+        incomplete_handoff_max_bytes: int = (
+            DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_MAX_BYTES
+        ),
+        incomplete_handoff_ttl_seconds: float = (
+            DEFAULT_SOURCE_GRAPH_INCOMPLETE_HANDOFF_TTL_SECONDS
+        ),
         disk_cache: SourceGraphDiskCache | None = None,
     ) -> None:
         if (
@@ -850,11 +873,51 @@ class SourceGraphRuntime:
             or max_cache_bytes < 1
         ):
             raise ValueError("max_cache_bytes must be a positive integer")
+        if (
+            not isinstance(incomplete_handoff_max_entries, int)
+            or isinstance(incomplete_handoff_max_entries, bool)
+            or incomplete_handoff_max_entries < 1
+        ):
+            raise ValueError(
+                "incomplete_handoff_max_entries must be a positive integer"
+            )
+        if (
+            not isinstance(incomplete_handoff_max_bytes, int)
+            or isinstance(incomplete_handoff_max_bytes, bool)
+            or incomplete_handoff_max_bytes < 1
+        ):
+            raise ValueError(
+                "incomplete_handoff_max_bytes must be a positive integer"
+            )
+        if isinstance(incomplete_handoff_ttl_seconds, bool):
+            raise ValueError(
+                "incomplete_handoff_ttl_seconds must be a finite number"
+            )
+        try:
+            handoff_ttl = float(incomplete_handoff_ttl_seconds)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "incomplete_handoff_ttl_seconds must be a finite number"
+            ) from None
+        if (
+            not math.isfinite(handoff_ttl)
+            or handoff_ttl < MIN_SOURCE_GRAPH_TIMEOUT_SECONDS
+            or handoff_ttl > MAX_SOURCE_GRAPH_INCOMPLETE_HANDOFF_TTL_SECONDS
+        ):
+            raise ValueError(
+                "incomplete_handoff_ttl_seconds must be between 0.001 and 3600 seconds"
+            )
         self._worker_runner = worker_runner
         self._disk_cache = disk_cache
         self._max_cache_entries = max_cache_entries
         self._max_cache_bytes = max_cache_bytes
+        self._incomplete_handoff_max_entries = incomplete_handoff_max_entries
+        self._incomplete_handoff_max_bytes = incomplete_handoff_max_bytes
+        self._incomplete_handoff_ttl_seconds = handoff_ttl
         self._cache: OrderedDict[str, SourceGraphCacheEntry] = OrderedDict()
+        self._incomplete_handoffs: OrderedDict[str, _IncompleteHandoff] = (
+            OrderedDict()
+        )
         self._inflight: dict[str, _Flight] = {}
         self._state_lock = asyncio.Lock()
         self._stats: dict[str, int | float] = {
@@ -868,6 +931,14 @@ class SourceGraphRuntime:
             "cache_peak_entry_count": 0,
             "cache_peak_bytes": 0,
             "coalesced_waiter_count": 0,
+            "incomplete_handoff_publish_count": 0,
+            "incomplete_handoff_hit_count": 0,
+            "incomplete_handoff_expiration_count": 0,
+            "incomplete_handoff_eviction_count": 0,
+            "incomplete_handoff_capacity_bypass_count": 0,
+            "incomplete_handoff_ineligible_count": 0,
+            "incomplete_handoff_peak_entry_count": 0,
+            "incomplete_handoff_peak_bytes": 0,
             "cancelled_waiter_count": 0,
             "timeout_count": 0,
             "worker_failure_count": 0,
@@ -937,14 +1008,32 @@ class SourceGraphRuntime:
                 cache_lookup_reason = CacheLookupReason.IDENTITY_NOT_REUSABLE
                 self._stats["cache_bypass_count"] += 1
 
-            # Incomplete identities remain ineligible for memory/disk reuse,
-            # but exact overlapping requests may share only the live worker.
-            # A completed flight is removed immediately and cannot serve a
-            # later request as a cache hit.
+            # Incomplete identities remain ineligible for memory/disk reuse.
+            # Exact overlapping requests share the live worker. A successful
+            # content-anchored incomplete build may additionally publish one
+            # short-lived, one-shot session handoff for the immediately
+            # following exact artifact request; it is never searched by scope
+            # dominance and never becomes a persistent cache entry.
             flight_key = _exact_flight_key(
                 build_key,
                 effective_timeout_sec,
             )
+
+            if not build_key.cross_request_reusable:
+                handoff = self._take_incomplete_handoff_locked(
+                    flight_key,
+                    request,
+                    build_key,
+                )
+                if handoff is not None:
+                    entry, scope_match = handoff
+                    return self._incomplete_handoff_hit_outcome(
+                        build_key,
+                        entry,
+                        scope_match,
+                        started,
+                        effective_timeout_sec,
+                    )
 
             flight = self._inflight.get(flight_key)
             if flight is not None and flight.task is not None and flight.task.done():
@@ -1197,6 +1286,15 @@ class SourceGraphRuntime:
                     self._stats["cache_oversize_bypass_count"] += 1
                 else:
                     self._publish_cache_entry_locked(key.digest, entry)
+        else:
+            async with self._state_lock:
+                if self._incomplete_handoff_eligible(request, key):
+                    self._publish_incomplete_handoff_locked(
+                        flight.flight_key,
+                        entry,
+                    )
+                else:
+                    self._stats["incomplete_handoff_ineligible_count"] += 1
         scope_match = entry.artifact_scope_receipt.reuse_for(
             request.artifact_identity.scope
         )
@@ -1433,6 +1531,113 @@ class SourceGraphRuntime:
             else:
                 self._stats["disk_publish_failure_count"] += 1
 
+    @staticmethod
+    def _incomplete_handoff_eligible(
+        request: SourceGraphBuildRequest,
+        key: SourceGraphBuildKey,
+    ) -> bool:
+        """Admit only exact identities anchored by source and snapshots."""
+
+        identity = request.artifact_identity
+        return bool(
+            not key.cross_request_reusable
+            and request.identity.compile_inputs.fingerprint is not None
+            and identity.snapshots_complete
+            and identity.scope.coverage_boundary.explicit
+        )
+
+    def _publish_incomplete_handoff_locked(
+        self,
+        flight_key: str,
+        entry: SourceGraphCacheEntry,
+    ) -> None:
+        if entry.cache_bytes > self._incomplete_handoff_max_bytes:
+            self._stats["incomplete_handoff_capacity_bypass_count"] += 1
+            return
+
+        previous = self._incomplete_handoffs.pop(flight_key, None)
+        if previous is not None and previous.expiry_handle is not None:
+            previous.expiry_handle.cancel()
+
+        while self._incomplete_handoffs and (
+            len(self._incomplete_handoffs)
+            >= self._incomplete_handoff_max_entries
+            or self._incomplete_handoff_bytes_locked() + entry.cache_bytes
+            > self._incomplete_handoff_max_bytes
+        ):
+            _, evicted = self._incomplete_handoffs.popitem(last=False)
+            if evicted.expiry_handle is not None:
+                evicted.expiry_handle.cancel()
+            self._stats["incomplete_handoff_eviction_count"] += 1
+
+        loop = asyncio.get_running_loop()
+        handoff = _IncompleteHandoff(
+            flight_key=flight_key,
+            entry=entry,
+            expires_at=loop.time() + self._incomplete_handoff_ttl_seconds,
+        )
+        handoff.expiry_handle = loop.call_later(
+            self._incomplete_handoff_ttl_seconds,
+            self._expire_incomplete_handoff,
+            flight_key,
+            handoff,
+        )
+        self._incomplete_handoffs[flight_key] = handoff
+        self._stats["incomplete_handoff_publish_count"] += 1
+        entry_count = len(self._incomplete_handoffs)
+        retained_bytes = self._incomplete_handoff_bytes_locked()
+        self._stats["incomplete_handoff_peak_entry_count"] = max(
+            int(self._stats["incomplete_handoff_peak_entry_count"]),
+            entry_count,
+        )
+        self._stats["incomplete_handoff_peak_bytes"] = max(
+            int(self._stats["incomplete_handoff_peak_bytes"]),
+            retained_bytes,
+        )
+
+    def _take_incomplete_handoff_locked(
+        self,
+        flight_key: str,
+        request: SourceGraphBuildRequest,
+        key: SourceGraphBuildKey,
+    ) -> tuple[SourceGraphCacheEntry, ScopeReuseDecision] | None:
+        handoff = self._incomplete_handoffs.pop(flight_key, None)
+        if handoff is None:
+            return None
+        if handoff.expiry_handle is not None:
+            handoff.expiry_handle.cancel()
+        if asyncio.get_running_loop().time() >= handoff.expires_at:
+            self._stats["incomplete_handoff_expiration_count"] += 1
+            return None
+        if handoff.entry.build_key != key:
+            self._stats["incomplete_handoff_eviction_count"] += 1
+            return None
+        scope_match = handoff.entry.artifact_scope_receipt.reuse_for(
+            request.artifact_identity.scope
+        )
+        if scope_match.relation is not ScopeRelation.EXACT or not scope_match.reusable:
+            self._stats["incomplete_handoff_eviction_count"] += 1
+            return None
+        self._stats["incomplete_handoff_hit_count"] += 1
+        return handoff.entry, scope_match
+
+    def _expire_incomplete_handoff(
+        self,
+        flight_key: str,
+        expected: _IncompleteHandoff,
+    ) -> None:
+        # Timer callbacks run on the same event loop as prepare(); mutation is
+        # atomic between await points and cannot overlap a locked code block.
+        current = self._incomplete_handoffs.get(flight_key)
+        if current is expected:
+            self._incomplete_handoffs.pop(flight_key, None)
+            self._stats["incomplete_handoff_expiration_count"] += 1
+
+    def _incomplete_handoff_bytes_locked(self) -> int:
+        return sum(
+            item.entry.cache_bytes for item in self._incomplete_handoffs.values()
+        )
+
     async def _remove_flight(self, flight: _Flight) -> None:
         async with self._state_lock:
             if self._inflight.get(flight.flight_key) is flight:
@@ -1506,8 +1711,23 @@ class SourceGraphRuntime:
         result["cache_entry_count"] = len(self._cache)
         result["cache_bytes"] = sum(entry.cache_bytes for entry in self._cache.values())
         result["inflight_count"] = len(self._inflight)
+        result["incomplete_handoff_entry_count"] = len(
+            self._incomplete_handoffs
+        )
+        result["incomplete_handoff_bytes"] = (
+            self._incomplete_handoff_bytes_locked()
+        )
         result["cache_max_entries"] = self._max_cache_entries
         result["cache_max_bytes"] = self._max_cache_bytes
+        result["incomplete_handoff_max_entries"] = (
+            self._incomplete_handoff_max_entries
+        )
+        result["incomplete_handoff_max_bytes"] = (
+            self._incomplete_handoff_max_bytes
+        )
+        result["incomplete_handoff_ttl_seconds"] = (
+            self._incomplete_handoff_ttl_seconds
+        )
         result["disk_cache_max_entries"] = (
             self._disk_cache.max_entries if self._disk_cache is not None else 0
         )
@@ -1614,6 +1834,37 @@ class SourceGraphRuntime:
                 total_wall_ms=(time.perf_counter() - started) * 1000,
                 cache_tier=CacheTier.MEMORY,
                 disk_validation_outcome="not_checked",
+                ir_bytes=entry.ir_bytes,
+                cache_bytes=entry.cache_bytes,
+                **self._cache_metric_fields(),
+            ),
+        )
+
+    def _incomplete_handoff_hit_outcome(
+        self,
+        build_key: SourceGraphBuildKey,
+        entry: SourceGraphCacheEntry,
+        match: ScopeReuseDecision,
+        started: float,
+        effective_timeout_sec: float,
+    ) -> SourceGraphPrepareOutcome:
+        return SourceGraphPrepareOutcome(
+            status=PrepareStatus.READY,
+            build_key=build_key,
+            cache_lookup_reason=(
+                CacheLookupReason.SAME_ARTIFACT_SESSION_HANDOFF
+            ),
+            effective_timeout_sec=effective_timeout_sec,
+            entry=entry,
+            scope_match=match,
+            metrics=SourceGraphPrepareMetrics(
+                # Preserve the central honesty invariant: the incomplete
+                # identity did not become memory/disk cacheable.
+                cache_disposition=CacheDisposition.BYPASS_INCOMPLETE_KEY,
+                flight_disposition=FlightDisposition.NONE,
+                total_wall_ms=(time.perf_counter() - started) * 1000,
+                cache_tier=CacheTier.HANDOFF,
+                disk_validation_outcome="disabled",
                 ir_bytes=entry.ir_bytes,
                 cache_bytes=entry.cache_bytes,
                 **self._cache_metric_fields(),

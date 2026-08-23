@@ -557,8 +557,13 @@ export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 `0.001..86400`），默认值仍为 120。每次实际进入 prepare 的回执都会以
 `source_graph.effective_timeout_sec` 报告校验后的有效值。即使 compile manifest
 不完整，精确相同且时间重叠的 build 也只共享当前正在运行的 worker；该 artifact 仍不会写入
-内存或磁盘 cache，flight 结束后的后续请求会重新构建。取消一个 waiter 不会影响其他
-waiter；全部 waiter 都取消时才终止 worker。
+内存或磁盘 cache。成功且具备内容锚点的不完整 build 可以为下一个精确相同的 artifact 请求
+保留一次有界 session handoff（包括相同的有效 timeout）：最多 1 个 entry、512 MiB、60 秒，
+命中后立即移除，不做 dominating-scope 搜索。它仍报告
+`cache_disposition="bypass_incomplete_key"`，并以
+`artifact_reuse="session_handoff"`、`cache_tier="handoff"` 明确区分。缺少内容身份、snapshot
+不完整、scope 非显式、artifact 超限、过期，以及 failed/timed-out/cancelled build 都会正常
+重建。取消一个仍在运行的 waiter 不会影响其他 waiter；全部 waiter 都取消时才终止 worker。
 
 当已有可用 KDB，但需要专门验证 Source Graph 的 driver、load、path 或 X-trace
 路径时，可以显式选择：
@@ -645,7 +650,8 @@ opt-in cache 放在不可信或共享文件系统。failed、timed-out 或 cance
 `backend_status` 会报告 `selected_backend`、`attempted_backend`、
 `actual_backend`、有序 `attempted_backends` 链，以及包含固定 blocker label、coverage、
 build/compile/IR fingerprint、cache disposition 和数值资源指标的 Source Graph 回执。
-新增的固定 label 会区分 `memory`、`disk`、`build` tier 和 disk validation outcome；
+新增的固定 label 会区分 `memory`、`disk`、`build`、一次性 `handoff` tier 和 disk
+validation outcome；
 回执不会暴露 cache path 或 entry name。
 partial/inconclusive coverage 下的正结果仍是 partial；只有 complete coverage 才能确定
 `not_connected`。正常 full-hierarchy 路径的 fallback 会由 Legacy Static 整体重算结果，
@@ -785,7 +791,7 @@ export TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB=0
 
 启用后，TraceWeave 会为每次工具调用向 `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`(默认 `~/.cache/traceweave/telemetry/`)追加一行 JSONL —— 工具名、参数的 *键* 与少量标量 flag(绝不记参数值或路径)、结果大小、延迟、锚定到每次 `get_sim_paths` case 的 session id,以及失败调用的分类 `error_code`(错误码或异常类名,绝不记错误消息)。**仅本地**(不发送到任何地方),用于量化哪些工具真正被用到。每次追加都会把 telemetry 目录/JSONL 收紧为 owner-only `0700`/`0600`，包括先前受宽松 umask 影响的已有文件。普通用户默认没有设置 `TRACEWEAVE_TELEMETRY`,此时记录功能关闭,也不会创建 telemetry 文件。需要主动开启时,应在 MCP server 启动前设置 `TRACEWEAVE_TELEMETRY=1`;修改变量后需重启或重新连接 MCP server。
 
-同时启用 opt-in Source Graph disk cache 后，同一条记录会通过第二层独立校验的 numeric/fixed-label allowlist 持久化 `memory`/`disk`/`build` tier、exact disk hit/miss/corrupt/build-skip、frontend launch、lookup/read/validate/write/publish/eviction timing、artifact bytes/entry count 与 process resource aggregates。它绝不持久化 artifact fingerprint、cache/source/wave path、signal/scope/value、diagnostic 或 exception text。运行 `python3.11 scripts/telemetry_report.py` 可查看按 tool/session 的使用率，以及 Source Graph tier count、exact disk hit rate、validation outcome、build/skip、bytes/entries/evictions 和各 tier latency p50/p95；加 `--json` 输出机器可读结果。正式 operational soak 应使用新的 private `TRACEWEAVE_CACHE_DIR` 获得隔离的观察窗口。
+Source Graph 调用会通过第二层独立校验的 numeric/fixed-label allowlist 持久化 `memory`/`disk`/`build`/`handoff` tier 与 process resource aggregates。启用 opt-in disk cache 后，同一条记录还会包含 exact disk hit/miss/corrupt/build-skip、frontend launch、lookup/read/validate/write/publish/eviction timing 和 artifact bytes/entry count。它绝不持久化 artifact fingerprint、cache/source/wave path、signal/scope/value、diagnostic 或 exception text。运行 `python3.11 scripts/telemetry_report.py` 可查看按 tool/session 的使用率，以及 Source Graph tier count、exact disk hit rate、validation outcome、build/skip、bytes/entries/evictions 和各 tier latency p50/p95；加 `--json` 输出机器可读结果。正式 operational soak 应使用新的 private `TRACEWEAVE_CACHE_DIR` 获得隔离的观察窗口。
 
 ## 测试
 

@@ -159,9 +159,15 @@ Verification
   Exact overlapping preparations use a process-local flight identity over the
   artifact digest and effective worker timeout. This also coalesces an
   incomplete/non-cacheable identity while the worker is live, without upgrading
-  it to memory or disk reuse; the flight is removed on success, failure,
-  timeout, or final-waiter cancellation. One waiter cannot cancel a worker still
-  needed by another. The finite validated timeout remains configurable through
+  it to memory or disk reuse. A successful content-anchored incomplete result
+  may publish one exact, one-shot session handoff for the next request; the
+  handoff is consumed on lookup, is never considered for dominating-scope reuse,
+  expires after 60 seconds, and is bounded to one entry and 512 MiB. It retains
+  `bypass_incomplete_key` semantics and is identified separately as the
+  `handoff` tier. Missing/changed identity evidence, unsafe scope, capacity,
+  failure, timeout, and cancellation cannot publish it. The flight itself is
+  removed on success, failure, timeout, or final-waiter cancellation. One waiter
+  cannot cancel a worker still needed by another. The finite validated timeout remains configurable through
   `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` and is echoed numerically as
   `source_graph.effective_timeout_sec`.
   Adapter and graph queries use the
@@ -751,7 +757,7 @@ validation, and storage cost?*
   discovery phase durations, and preemption-to-cancel latency.
 - Source Graph calls use a second, independently enforced persistent allowlist.
   It accepts only finite non-negative numeric aggregates plus fixed phase,
-  `memory`/`disk`/`build` tier, and disk-validation labels. Numeric fields cover
+  `memory`/`disk`/`build`/`handoff` tier, and disk-validation labels. Numeric fields cover
   adapter/prepare/build/load/query and disk lookup/read/validate/write/publish/
   eviction timing; exact hit/miss/corrupt/build-skip and frontend-launch counts;
   IR/cache/disk bytes, entries and evictions; bounded resource peaks; and

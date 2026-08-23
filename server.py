@@ -1839,6 +1839,11 @@ def _record_source_graph_prepare_metrics(outcome) -> None:
     ):
         if value is not None:
             operation_metrics.set_value(field, value)
+    if metrics.cache_tier.value != "build":
+        operation_metrics.set_value(
+            "source_graph_cache_tier",
+            metrics.cache_tier.value,
+        )
     if metrics.disk_validation_outcome != "disabled":
         for field, value in (
             ("source_graph_frontend_launch_count", metrics.frontend_launch_count),
@@ -1859,7 +1864,6 @@ def _record_source_graph_prepare_metrics(outcome) -> None:
             ("source_graph_disk_eviction_count", metrics.disk_eviction_count),
         ):
             operation_metrics.set_value(field, value)
-        operation_metrics.set_value("source_graph_cache_tier", metrics.cache_tier.value)
         operation_metrics.set_value(
             "source_graph_disk_validation_outcome",
             metrics.disk_validation_outcome,
@@ -2069,14 +2073,20 @@ def _source_graph_receipt_from_prepare(
         ),
         "fallback_used": False,
     }
+    if (
+        outcome.metrics.disk_validation_outcome != "disabled"
+        or outcome.metrics.cache_tier.value != "build"
+    ):
+        receipt["cache_tier"] = outcome.metrics.cache_tier.value
     if outcome.metrics.disk_validation_outcome != "disabled":
         receipt.update(
             {
-                "cache_tier": outcome.metrics.cache_tier.value,
                 "disk_validation_outcome": outcome.metrics.disk_validation_outcome,
             }
         )
-    if outcome.metrics.cache_tier.value == "disk":
+    if outcome.metrics.cache_tier.value == "handoff":
+        receipt["artifact_reuse"] = "session_handoff"
+    elif outcome.metrics.cache_tier.value == "disk":
         receipt["artifact_reuse"] = "disk_exact_hit"
     elif outcome.metrics.cache_disposition.value == "hit_exact":
         receipt["artifact_reuse"] = "exact_hit"

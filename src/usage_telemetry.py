@@ -201,7 +201,7 @@ _DIAGNOSTIC_FIXED_LABELS = {
         "complete",
         "cancelled",
     },
-    "source_graph_cache_tier": {"memory", "disk", "build"},
+    "source_graph_cache_tier": {"memory", "disk", "build", "handoff"},
     "source_graph_disk_validation_outcome": {
         "disabled",
         "not_checked",
@@ -249,7 +249,7 @@ _SOURCE_GRAPH_TIMING_FIELDS = {
     "disk_write": "source_graph_disk_write_ms",
     "disk_eviction": "source_graph_disk_eviction_ms",
 }
-_SOURCE_GRAPH_TIERS = ("memory", "disk", "build")
+_SOURCE_GRAPH_TIERS = ("memory", "disk", "build", "handoff")
 _SOURCE_GRAPH_SUM_FIELDS = {
     "actual_build_count": "source_graph_actual_build_count",
     "frontend_launch_count": "source_graph_frontend_launch_count",

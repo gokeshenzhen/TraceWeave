@@ -294,6 +294,43 @@ def test_source_graph_persistent_allowlist_matches_operation_metrics_contract():
     )
 
 
+def test_source_graph_handoff_tier_is_persisted_and_aggregated(
+    tmp_path, monkeypatch
+):
+    log = tmp_path / "telemetry" / "usage.jsonl"
+    monkeypatch.setattr(config, "TELEMETRY_ENABLED", True)
+    monkeypatch.setattr(config, "telemetry_log_path", lambda: log)
+    mod = _reset_module()
+
+    mod.record_call(
+        "find_signal_loads",
+        {"signal_path": "top.secret"},
+        result_bytes=100,
+        ok=True,
+        diagnostics={
+            "source_graph_phase": "complete",
+            "source_graph_cache_tier": "handoff",
+            "source_graph_actual_build_count": 0,
+        },
+    )
+
+    record = json.loads(log.read_text())
+    assert record["diagnostics"] == {
+        "source_graph_phase": "complete",
+        "source_graph_cache_tier": "handoff",
+        "source_graph_actual_build_count": 0,
+    }
+    assert "top.secret" not in log.read_text()
+    source_graph = mod.aggregate([record])["source_graph"]
+    assert source_graph["cache_tiers"]["handoff"]["calls"] == 1
+    assert source_graph["by_tool"]["find_signal_loads"]["cache_tiers"] == {
+        "memory": 0,
+        "disk": 0,
+        "build": 0,
+        "handoff": 1,
+    }
+
+
 def test_source_graph_non_fixed_labels_are_not_persisted_or_aggregated(
     tmp_path, monkeypatch
 ):
@@ -548,7 +585,12 @@ def test_aggregate_source_graph_operational_cache_metrics():
     }
 
     driver = source_graph["by_tool"]["explain_signal_driver"]
-    assert driver["cache_tiers"] == {"memory": 0, "disk": 1, "build": 1}
+    assert driver["cache_tiers"] == {
+        "memory": 0,
+        "disk": 1,
+        "build": 1,
+        "handoff": 0,
+    }
     assert driver["disk_lookup_count"] == 2
     assert driver["disk_exact_hit_rate"] == 0.5
     assert source_graph["by_tool"]["find_signal_loads"]["disk_lookup_count"] == 0
@@ -578,6 +620,6 @@ def test_telemetry_report_renders_source_graph_operational_section():
 
     text = render(report)
     assert "Source Graph disk cache — operational telemetry" in text
-    assert "memory=0  disk=1  build=0" in text
+    assert "memory=0  disk=1  build=0  handoff=0" in text
     assert "hit=1  miss=0  corrupt=0  hit-rate=100.0%" in text
     assert "explain_signal_driver" in text

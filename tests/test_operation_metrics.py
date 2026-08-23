@@ -68,6 +68,14 @@ def test_source_graph_metrics_accept_only_numeric_values_and_fixed_labels():
     assert "source_graph_disk_validation_outcome" not in snapshot
     assert "source_graph_disk_lookup_ms" not in snapshot
 
+    handoff_metrics = operation_metrics.OperationMetrics()
+    operation_metrics.set_value(
+        "source_graph_cache_tier", "handoff", handoff_metrics
+    )
+    assert operation_metrics.snapshot(handoff_metrics) == {
+        "source_graph_cache_tier": "handoff"
+    }
+
 
 def test_search_aggregate_has_count_total_and_max_only():
     metrics = operation_metrics.OperationMetrics()

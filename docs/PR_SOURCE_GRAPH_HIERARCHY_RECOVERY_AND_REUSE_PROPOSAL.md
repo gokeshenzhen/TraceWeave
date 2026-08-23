@@ -780,9 +780,15 @@ instead of being rejected solely because its valid hierarchy evidence was lost.
 
 Exact in-flight coalescing is implemented, including for non-cacheable
 incomplete identities. Overlapping driver/load preparations for the same exact
-artifact share one live worker. Waiter-aware cancellation and deterministic
-cleanup after failure or timeout are preserved, and the completed incomplete
-artifact is not published to the process-memory or disk caches.
+artifact share one live worker. A successful content-anchored incomplete build
+now also publishes one bounded, one-shot session handoff for the next exact
+artifact request: at most one entry, 512 MiB, and 60 seconds. The handoff is
+consumed immediately, cannot satisfy a dominating-scope request, retains
+`bypass_incomplete_key`, and is reported separately as
+`artifact_reuse=session_handoff` / `cache_tier=handoff`. It never enters the
+process-memory or disk caches. Missing content identity, incomplete snapshots,
+implicit scope, oversize artifacts, failure, timeout, and cancellation are
+ineligible. Waiter-aware cancellation and deterministic cleanup are preserved.
 
 The Source Graph worker timeout is strictly validated, remains bounded and
 configurable through `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT`, and is reported as
@@ -790,11 +796,13 @@ configurable through `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT`, and is reported as
 may allow a near-boundary build to finish, but it does not itself reduce build
 time, CPU use, or peak RSS.
 
-The original driver performance problem is therefore **not fully resolved**:
+The original driver performance problem is therefore **improved but not fully
+resolved**:
 
-- sequential `load -> driver` calls still start two workers when the compile
-  manifest is incomplete, because a completed incomplete artifact is removed
-  immediately and cannot serve a later request;
+- sequential `load -> driver` calls with the same exact, content-anchored
+  incomplete identity can now share the completed artifact once instead of
+  starting a second worker; identities that fail the admission checks still
+  rebuild;
 - a single cold driver preparation can still exceed the 120-second default;
 - the multi-GiB peak-memory behavior observed on the reported workload has not
   been shown to improve;
@@ -803,9 +811,9 @@ The original driver performance problem is therefore **not fully resolved**:
   peak RSS, success/timeout rate, cancellation latency, and admission wait has
   not yet been completed.
 
-Accordingly, the implementation may claim that duplicate **overlapping** work
-is eliminated, but it must not yet claim that the reported end-to-end driver
-timeout is solved. Closing the performance project requires benchmark evidence
-and either safe bounded handoff/reuse for sequential same-session preparations,
-a proven smaller source closure, or another measured reduction in cold-build
-cost.
+Accordingly, the implementation may claim that duplicate overlapping work and
+one immediate sequential same-artifact build are eliminated under the stated
+admission bounds. It must not yet claim that the reported cold end-to-end driver
+timeout or memory peak is solved. Closing the performance project still requires
+representative benchmark evidence and a proven smaller source closure or another
+measured reduction in cold-build cost.

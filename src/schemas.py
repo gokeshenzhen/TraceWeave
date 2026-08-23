@@ -855,7 +855,7 @@ class SourceGraphBackendReceipt(SchemaModel):
         ]
         | None
     ) = None
-    cache_tier: Literal["memory", "disk", "build"] | None = None
+    cache_tier: Literal["memory", "disk", "build", "handoff"] | None = None
     disk_validation_outcome: (
         Literal[
             "disabled",
@@ -956,6 +956,7 @@ class SourceGraphBackendReceipt(SchemaModel):
             "exact_hit",
             "dominating_hit",
             "coalesced_build",
+            "session_handoff",
             "bypass_incomplete",
             "bypass_capacity",
             "disk_exact_hit",
@@ -971,6 +972,7 @@ class SourceGraphBackendReceipt(SchemaModel):
             "cached_scope_not_dominating",
             "identity_not_reusable",
             "same_artifact_inflight",
+            "same_artifact_session_handoff",
             "artifact_exceeds_cache_capacity",
             "cancelled_before_lookup",
         ]

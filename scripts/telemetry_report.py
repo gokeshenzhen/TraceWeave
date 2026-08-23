@@ -101,7 +101,7 @@ def render(report: dict) -> str:
         lines.append(
             "  cache tier calls     "
             f"memory={tiers['memory']['calls']}  disk={tiers['disk']['calls']}  "
-            f"build={tiers['build']['calls']}"
+            f"build={tiers['build']['calls']}  handoff={tiers['handoff']['calls']}"
         )
         lines.append(
             "  exact disk lookup    "
@@ -135,7 +135,7 @@ def render(report: dict) -> str:
         lines.append("")
         lines.append("  Tier call latency (ms)")
         lines.append(f"  {'tier':<10} {'n':>5} {'p50':>10} {'p95':>10} {'max':>10}")
-        for tier in ("memory", "disk", "build"):
+        for tier in ("memory", "disk", "build", "handoff"):
             dist = tiers[tier]["call_latency_ms"]
             lines.append(
                 f"  {tier:<10} {dist['n']:>5} {_fmt_ms(dist['median']):>10} "
@@ -148,14 +148,14 @@ def render(report: dict) -> str:
             lines.append("  By tool")
             lines.append(
                 f"  {'tool':<30} {'calls':>5} {'mem':>5} {'disk':>5} "
-                f"{'build':>5} {'hit%':>6}"
+                f"{'build':>5} {'hand':>5} {'hit%':>6}"
             )
             for tool, values in by_tool.items():
                 cache_tiers = values["cache_tiers"]
                 lines.append(
                     f"  {tool:<30} {values['calls']:>5} "
                     f"{cache_tiers['memory']:>5} {cache_tiers['disk']:>5} "
-                    f"{cache_tiers['build']:>5} "
+                    f"{cache_tiers['build']:>5} {cache_tiers['handoff']:>5} "
                     f"{values['disk_exact_hit_rate'] * 100:>5.1f}%"
                 )
 

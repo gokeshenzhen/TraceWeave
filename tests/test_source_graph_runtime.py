@@ -242,6 +242,24 @@ class ControlledWorker:
             await asyncio.gather(release_wait, cancel_wait, return_exceptions=True)
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"incomplete_handoff_max_entries": 0},
+        {"incomplete_handoff_max_entries": True},
+        {"incomplete_handoff_max_bytes": 0},
+        {"incomplete_handoff_max_bytes": True},
+        {"incomplete_handoff_ttl_seconds": 0},
+        {"incomplete_handoff_ttl_seconds": True},
+        {"incomplete_handoff_ttl_seconds": float("nan")},
+        {"incomplete_handoff_ttl_seconds": 3_600.1},
+    ),
+)
+def test_incomplete_handoff_bounds_are_strict(kwargs):
+    with pytest.raises(ValueError):
+        SourceGraphRuntime(ImmediateWorker(), **kwargs)
+
+
 @pytest.mark.anyio
 async def test_cold_prepare_then_exact_memory_hit_builds_once():
     worker = ImmediateWorker()
@@ -322,7 +340,7 @@ async def test_proven_superset_hits_but_subset_builds_again():
 
 
 @pytest.mark.anyio
-async def test_incomplete_key_bypasses_cache_between_sequential_requests():
+async def test_incomplete_key_uses_one_bounded_sequential_handoff():
     worker = ImmediateWorker()
     runtime = SourceGraphRuntime(worker)
     request = _request(complete=False)
@@ -335,12 +353,125 @@ async def test_incomplete_key_bypasses_cache_between_sequential_requests():
     assert first.build_key.cross_request_reusable is False
     assert first.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
     assert second.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
+    assert first.metrics.cache_tier is CacheTier.BUILD
+    assert second.metrics.cache_tier is CacheTier.HANDOFF
+    assert second.metrics.flight_disposition is FlightDisposition.NONE
+    assert second.cache_lookup_reason is (
+        CacheLookupReason.SAME_ARTIFACT_SESSION_HANDOFF
+    )
+    assert worker.count == 1
+    assert runtime.stats_snapshot()["cache_entry_count"] == 0
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 0
+    assert runtime.stats_snapshot()["incomplete_handoff_publish_count"] == 1
+    assert runtime.stats_snapshot()["incomplete_handoff_hit_count"] == 1
+
+    third = await runtime.prepare(request)
+    fourth = await runtime.prepare(request)
+    assert third.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert fourth.metrics.cache_tier is CacheTier.HANDOFF
     assert worker.count == 2
     assert runtime.stats_snapshot()["cache_entry_count"] == 0
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 0
 
 
 @pytest.mark.anyio
-async def test_concurrent_incomplete_key_coalesces_only_live_flight():
+async def test_incomplete_handoff_expires_and_rebuilds():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(
+        worker,
+        incomplete_handoff_ttl_seconds=0.01,
+    )
+    request = _request(complete=False)
+
+    await runtime.prepare(request)
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 1
+    await asyncio.sleep(0.02)
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 0
+
+    rebuilt = await runtime.prepare(request)
+    stats = runtime.stats_snapshot()
+    assert rebuilt.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert worker.count == 2
+    assert stats["incomplete_handoff_expiration_count"] == 1
+    assert stats["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_handoff_respects_byte_capacity():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(
+        worker,
+        incomplete_handoff_max_bytes=1,
+    )
+    request = _request(complete=False)
+
+    first = await runtime.prepare(request)
+    second = await runtime.prepare(request)
+    stats = runtime.stats_snapshot()
+
+    assert first.status is PrepareStatus.READY
+    assert second.status is PrepareStatus.READY
+    assert worker.count == 2
+    assert stats["incomplete_handoff_capacity_bypass_count"] == 2
+    assert stats["incomplete_handoff_entry_count"] == 0
+    assert stats["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_handoff_requires_content_anchored_identity():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+    request = _request(complete=False)
+    incomplete_inputs = replace(
+        request.identity.compile_inputs,
+        fingerprint=None,
+    )
+    incomplete_identity = replace(
+        request.identity,
+        compile_inputs=incomplete_inputs,
+    )
+    request = replace(
+        request,
+        identity=incomplete_identity,
+        artifact=replace(
+            request.artifact_identity,
+            source=incomplete_identity,
+        ),
+    )
+
+    await runtime.prepare(request)
+    await runtime.prepare(request)
+    stats = runtime.stats_snapshot()
+
+    assert worker.count == 2
+    assert stats["incomplete_handoff_ineligible_count"] == 2
+    assert stats["incomplete_handoff_publish_count"] == 0
+    assert stats["incomplete_handoff_entry_count"] == 0
+    assert stats["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_incomplete_handoff_evicts_oldest_identity_at_entry_bound():
+    worker = ImmediateWorker()
+    runtime = SourceGraphRuntime(worker)
+    first_request = _request(label="first", complete=False)
+    second_request = _request(label="second", complete=False)
+
+    await runtime.prepare(first_request)
+    await runtime.prepare(second_request)
+    rebuilt = await runtime.prepare(first_request)
+    stats = runtime.stats_snapshot()
+
+    assert rebuilt.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert worker.count == 3
+    assert stats["incomplete_handoff_eviction_count"] == 2
+    assert stats["incomplete_handoff_entry_count"] == 1
+    assert stats["incomplete_handoff_peak_entry_count"] == 1
+    assert stats["cache_entry_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_concurrent_incomplete_key_coalesces_then_leaves_one_handoff():
     worker = ControlledWorker()
     runtime = SourceGraphRuntime(worker)
     request = _request(complete=False)
@@ -366,10 +497,17 @@ async def test_concurrent_incomplete_key_coalesces_only_live_flight():
     assert stats["coalesced_waiter_count"] == 1
     assert stats["cache_entry_count"] == 0
     assert stats["inflight_count"] == 0
+    assert stats["incomplete_handoff_entry_count"] == 1
 
     later = await runtime.prepare(request)
-    assert later.metrics.flight_disposition is FlightDisposition.BUILDER
+    assert later.metrics.flight_disposition is FlightDisposition.NONE
     assert later.metrics.cache_disposition is CacheDisposition.BYPASS_INCOMPLETE_KEY
+    assert later.metrics.cache_tier is CacheTier.HANDOFF
+    assert worker.count == 1
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 0
+
+    rebuilt = await runtime.prepare(request)
+    assert rebuilt.metrics.flight_disposition is FlightDisposition.BUILDER
     assert worker.count == 2
     assert runtime.stats_snapshot()["cache_entry_count"] == 0
 
@@ -402,6 +540,7 @@ async def test_incomplete_driver_and_load_share_exact_artifact_flight():
     assert second.metrics.flight_disposition is FlightDisposition.COALESCED
     assert second.cache_lookup_reason is CacheLookupReason.SAME_ARTIFACT_INFLIGHT
     assert runtime.stats_snapshot()["cache_entry_count"] == 0
+    assert runtime.stats_snapshot()["incomplete_handoff_entry_count"] == 1
 
 
 @pytest.mark.anyio
