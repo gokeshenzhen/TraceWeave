@@ -27,6 +27,7 @@ from src.source_graph_contract import (
     SourceGraphCompileProjection,
     SourceGraphIdentity,
     SourceGraphQueryIdentity,
+    SourceGraphSemanticContext,
     SourceGraphScopeReceipt,
     compare_source_graph_artifact_scopes,
     compare_source_graph_scopes,
@@ -210,6 +211,106 @@ def test_compile_projection_requires_explicit_coverage_exclusion():
 
     with pytest.raises(ValueError, match="coverage objective exclusion"):
         replace(_artifact_identity(manifest=manifest), compile_projection=projection)
+
+
+def test_semantic_context_round_trips_and_enters_artifact_build_identity():
+    manifest = _manifest(
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "rtl/left.sv",
+            "rtl/right.sv",
+            "rtl/top.sv",
+        )
+    )
+    exclusion = (SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)
+    narrow_scope = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("top", "top.u_left"),),
+        proved_lcas=("top.u_left",),
+        projection_instance_paths=("top", "top.u_left"),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+            objective_exclusions=exclusion,
+        ),
+        capabilities=(QueryOperation.DRIVER,),
+    )
+    broad_scope = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(
+            ("top", "top.u_left"),
+            ("top", "top.u_right"),
+        ),
+        proved_lcas=("top",),
+        projection_instance_paths=("top", "top.u_left", "top.u_right"),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left", "top.u_right"),
+            objective_exclusions=exclusion,
+        ),
+        capabilities=(QueryOperation.DRIVER,),
+    )
+    narrow_projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv"),
+        full_input_count=4,
+    )
+    broad_projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv", "rtl/right.sv"),
+        full_input_count=4,
+    )
+    baseline = replace(
+        _artifact_identity(manifest=manifest),
+        scope=narrow_scope,
+        compile_projection=narrow_projection,
+    )
+    contextual = replace(
+        baseline,
+        semantic_context=SourceGraphSemanticContext(
+            scope=broad_scope,
+            compile_projection=broad_projection,
+        ),
+    )
+
+    assert SourceGraphArtifactIdentity.from_dict(contextual.to_dict()) == contextual
+    assert compute_source_graph_artifact_key(contextual) != (
+        compute_source_graph_artifact_key(baseline)
+    )
+    assert source_graph_artifact_design_matches(contextual, baseline) is False
+
+
+def test_semantic_context_must_cover_artifact_scope_and_compile_projection():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv", "rtl/top.sv")
+    )
+    exclusion = (SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)
+    artifact = replace(
+        _artifact_identity(
+            scope=_scope(exclusions=exclusion),
+            manifest=manifest,
+        ),
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=("rtl/pkg.sv", "rtl/left.sv"),
+            full_input_count=3,
+        ),
+    )
+    context = SourceGraphSemanticContext(
+        scope=artifact.scope,
+        compile_projection=SourceGraphCompileProjection(
+            mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+            ordered_inputs=("rtl/pkg.sv",),
+            full_input_count=3,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="compile projection must cover"):
+        replace(artifact, semantic_context=context)
 
 
 def test_artifact_identity_dominates_ordered_compile_projection_subset():

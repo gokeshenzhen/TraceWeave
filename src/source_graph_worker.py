@@ -122,7 +122,12 @@ def _frontend_args(
         if isinstance(request, SourceGraphBuildRequest)
         else request.identity
     )
-    compile_projection = artifact_identity.compile_projection
+    semantic_context = artifact_identity.semantic_context
+    compile_projection = (
+        semantic_context.compile_projection
+        if semantic_context is not None
+        else artifact_identity.compile_projection
+    )
     ordered_inputs = (
         compile_projection.ordered_inputs
         if compile_projection is not None
@@ -283,7 +288,12 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         diagnostic_payload = _diagnostics_payload(driver, diagnostics)
         source_root = Path.cwd()
         manifest = identity.compile_inputs
-        compile_projection = request.identity.compile_projection
+        semantic_context = request.identity.semantic_context
+        compile_projection = (
+            semantic_context.compile_projection
+            if semantic_context is not None
+            else request.identity.compile_projection
+        )
         projected_inputs = (
             compile_projection.ordered_inputs
             if compile_projection is not None
@@ -299,6 +309,13 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
             for path in manifest.ordered_inputs
             if Path(path).suffix.lower() in _VHDL_SUFFIXES
         )
+        exclusion_codes = set(
+            request.scope.coverage_boundary.objective_exclusions
+        )
+        if semantic_context is not None:
+            exclusion_codes.update(
+                semantic_context.scope.coverage_boundary.objective_exclusions
+            )
         exclusions = tuple(
             ProjectionExclusion(
                 code=code,
@@ -307,7 +324,7 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
                 scopes=("*",),
                 constructs=(code,),
             )
-            for code in request.scope.coverage_boundary.objective_exclusions
+            for code in sorted(exclusion_codes)
         )
         if vhdl_inputs and "opaque_vhdl_boundary" not in {
             item.code for item in exclusions
@@ -345,7 +362,14 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
                 focus_instance_paths=request.scope.coverage_boundary.instance_paths,
                 assignment_instance_paths=request.scope.projection_instance_paths,
                 metadata=(
-                    ("runtime", "phase3b_bounded_artifact"),
+                    (
+                        "runtime",
+                        (
+                            "phase5_semantic_context"
+                            if semantic_context is not None
+                            else "phase3b_bounded_artifact"
+                        ),
+                    ),
                     ("scope_contract", request.contract_version),
                 ),
             ),

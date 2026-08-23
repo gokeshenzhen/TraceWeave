@@ -60,17 +60,20 @@ from .source_graph_contract import (
     SourceGraphBuildScope,
     SourceGraphIdentity,
     SourceGraphQueryIdentity,
+    SourceGraphSemanticContext,
     compute_source_graph_artifact_key,
     compute_source_graph_query_key,
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.10"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.11"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _INITIAL_ADJACENT_MAX_NEW_INSTANCES = 32
 _INITIAL_ADJACENT_MAX_ADDED_INPUTS = 24
 _INITIAL_ADJACENT_INPUT_RATIO_NUMERATOR = 5
 _INITIAL_ADJACENT_INPUT_RATIO_DENOMINATOR = 4
+DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INSTANCES = 64
+DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INPUTS = 256
 _FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
 _HDL_SUFFIXES = _FRONTEND_HDL_SUFFIXES | _OPAQUE_HDL_SUFFIXES
@@ -266,6 +269,9 @@ class SourceGraphAdapterReceipt:
     compile_projection_seed_symbol_count: int = 0
     compile_projection_dependency_symbol_count: int = 0
     compile_projection_fallback_reason: str | None = None
+    semantic_context_status: str = "not_requested"
+    semantic_context_instance_count: int = 0
+    semantic_context_input_count: int = 0
     hierarchy_resolutions: tuple[HierarchyAncestorResolution, ...] = ()
     blocker: SourceGraphAdapterBlocker | None = None
 
@@ -316,6 +322,7 @@ class SourceGraphAdapterReceipt:
                 self.compile_projection_fallback_reason,
                 "compile_projection_fallback_reason",
             )
+        _fixed_label(self.semantic_context_status, "semantic_context_status")
         for field_name in (
             "content_digest_reuse_count",
             "content_digest_reuse_bytes",
@@ -326,6 +333,8 @@ class SourceGraphAdapterReceipt:
             "compile_projection_excluded_input_count",
             "compile_projection_seed_symbol_count",
             "compile_projection_dependency_symbol_count",
+            "semantic_context_instance_count",
+            "semantic_context_input_count",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -391,6 +400,11 @@ class SourceGraphAdapterReceipt:
             "artifact_fingerprint_sha256": self.artifact_fingerprint_sha256,
             "query_fingerprint_sha256": self.query_fingerprint_sha256,
             "snapshot_identity_complete": self.snapshot_identity_complete,
+            "semantic_context": {
+                "status": self.semantic_context_status,
+                "instance_count": self.semantic_context_instance_count,
+                "input_count": self.semantic_context_input_count,
+            },
         }
         hierarchy_resolution = _aggregate_hierarchy_resolutions(
             self.hierarchy_resolutions
@@ -2738,7 +2752,18 @@ def _expanded_single_endpoint_plan(
         scope=artifact_scope,
         compile_projection=compile_projection.projection,
     )
-    expanded_request = replace(request, artifact=artifact)
+    expanded_scope = replace(
+        request.scope,
+        coverage_boundary=replace(
+            request.scope.coverage_boundary,
+            objective_exclusions=tuple(sorted(projected_exclusions)),
+        ),
+    )
+    expanded_request = replace(
+        request,
+        scope=expanded_scope,
+        artifact=artifact,
+    )
     artifact_key = compute_source_graph_artifact_key(artifact)
     query_key = compute_source_graph_query_key(expanded_request.query_identity)
     return SourceGraphBuildPlan(
@@ -2899,6 +2924,60 @@ def _artifact_compile_inputs(plan: SourceGraphBuildPlan) -> tuple[str, ...]:
     return artifact.source.compile_inputs.ordered_inputs
 
 
+def _with_semantic_context(
+    *,
+    base: SourceGraphBuildPlan,
+    expanded: SourceGraphBuildPlan,
+) -> SourceGraphBuildPlan:
+    """Attach a broader proved frontend context without widening the artifact."""
+
+    assert base.request is not None
+    assert expanded.request is not None
+    expanded_artifact = expanded.request.artifact_identity
+    context = SourceGraphSemanticContext(
+        scope=expanded_artifact.scope,
+        compile_projection=expanded_artifact.compile_projection,
+    )
+    artifact = replace(
+        base.request.artifact_identity,
+        semantic_context=context,
+    )
+    request = replace(base.request, artifact=artifact)
+    artifact_key = compute_source_graph_artifact_key(artifact)
+    return replace(
+        base,
+        request=request,
+        receipt=replace(
+            base.receipt,
+            semantic_context_status="selected",
+            semantic_context_instance_count=len(
+                context.scope.projection_instance_paths
+            ),
+            semantic_context_input_count=len(_artifact_compile_inputs(expanded)),
+            cross_request_reusable=artifact_key.cross_request_reusable,
+            artifact_fingerprint_sha256=artifact_key.digest,
+        ),
+    )
+
+
+def _with_semantic_context_status(
+    plan: SourceGraphBuildPlan,
+    status: str,
+    *,
+    instance_count: int = 0,
+    input_count: int = 0,
+) -> SourceGraphBuildPlan:
+    return replace(
+        plan,
+        receipt=replace(
+            plan.receipt,
+            semantic_context_status=status,
+            semantic_context_instance_count=instance_count,
+            semantic_context_input_count=input_count,
+        ),
+    )
+
+
 def build_source_graph_initial_plan(
     *,
     compile_log: str,
@@ -2915,6 +2994,11 @@ def build_source_graph_initial_plan(
     kind_filter: Sequence[str] = (),
     max_instances: int = DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT,
     allow_adjacent: bool = True,
+    enable_semantic_context: bool = False,
+    semantic_context_max_instances: int = (
+        DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INSTANCES
+    ),
+    semantic_context_max_inputs: int = DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INPUTS,
 ) -> SourceGraphBuildPlan:
     """Select a bounded first artifact for an interactive driver/load query.
 
@@ -2942,6 +3026,19 @@ def build_source_graph_initial_plan(
     if base.status is AdapterStatus.BLOCKED:
         return base
     assert base.request is not None
+    if not enable_semantic_context:
+        base = _with_semantic_context_status(base, "disabled")
+    elif (
+        not isinstance(semantic_context_max_instances, int)
+        or isinstance(semantic_context_max_instances, bool)
+        or not 1 <= semantic_context_max_instances <= 256
+        or not isinstance(semantic_context_max_inputs, int)
+        or isinstance(semantic_context_max_inputs, bool)
+        or not 1 <= semantic_context_max_inputs <= 1024
+    ):
+        base = _with_semantic_context_status(base, "budget_invalid")
+        enable_semantic_context = False
+    inactive_semantic_status = base.receipt.semantic_context_status
     requested_operation = base.request.scope.requested_cone.operation
     deep_query = (
         requested_operation is QueryOperation.DRIVER and recursive
@@ -2954,11 +3051,25 @@ def build_source_graph_initial_plan(
         or isinstance(max_instances, bool)
         or max_instances < 1
     ):
-        return base
+        return _with_semantic_context_status(
+            base,
+            (
+                "query_ineligible"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+        )
 
     ancestors = base.request.scope.hierarchy_ancestors
     if len(ancestors) < 2:
-        return base
+        return _with_semantic_context_status(
+            base,
+            (
+                "parent_unavailable"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+        )
     parent_chain = ancestors[:-1]
     parent_path = parent_chain[-1]
     children = resolve_source_graph_direct_children(
@@ -2967,16 +3078,41 @@ def build_source_graph_initial_plan(
         instance_path=parent_path,
     )
     if children is None or len(children) > max_instances:
-        return base
+        return _with_semantic_context_status(
+            base,
+            (
+                "children_unavailable"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+        )
     base_scope_paths = set(
         base.request.artifact_identity.scope.projection_instance_paths
     )
     new_instance_count = len(set(children) - base_scope_paths)
-    if (
-        new_instance_count < 1
-        or new_instance_count > _INITIAL_ADJACENT_MAX_NEW_INSTANCES
-    ):
-        return base
+    compact_candidate = (
+        1 <= new_instance_count <= _INITIAL_ADJACENT_MAX_NEW_INSTANCES
+    )
+    semantic_candidate = (
+        enable_semantic_context
+        and 1 <= new_instance_count
+        and len(children) <= semantic_context_max_instances
+        and base.request.artifact_identity.snapshots_complete
+    )
+    if not compact_candidate and not semantic_candidate:
+        if not enable_semantic_context:
+            status = inactive_semantic_status
+        elif not base.request.artifact_identity.snapshots_complete:
+            status = "snapshot_incomplete"
+        elif len(children) > semantic_context_max_instances:
+            status = "instance_limit"
+        else:
+            status = "context_unavailable"
+        return _with_semantic_context_status(
+            base,
+            status,
+            instance_count=len(children),
+        )
 
     anchor = f"{parent_path}.__traceweave_initial_scope__"
     try:
@@ -2990,15 +3126,32 @@ def build_source_graph_initial_plan(
     except ValueError:
         # Proactive enlargement is optional. Any contract/cost shape it cannot
         # prove falls back to the already valid exact-ancestor request.
-        return base
+        return _with_semantic_context_status(
+            base,
+            (
+                "context_unavailable"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+            instance_count=len(children),
+        )
 
     assert expanded.request is not None
     base_inputs = _artifact_compile_inputs(base)
     expanded_inputs = _artifact_compile_inputs(expanded)
     if not set(base_inputs).issubset(expanded_inputs):
-        return base
+        return _with_semantic_context_status(
+            base,
+            (
+                "context_unavailable"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+            instance_count=len(children),
+            input_count=len(expanded_inputs),
+        )
     added_inputs = len(expanded_inputs) - len(base_inputs)
-    if (
+    compact_cost_admitted = not (
         added_inputs < 0
         or added_inputs > _INITIAL_ADJACENT_MAX_ADDED_INPUTS
         or (
@@ -3006,9 +3159,36 @@ def build_source_graph_initial_plan(
             and len(expanded_inputs) * _INITIAL_ADJACENT_INPUT_RATIO_DENOMINATOR
             > len(base_inputs) * _INITIAL_ADJACENT_INPUT_RATIO_NUMERATOR
         )
-    ):
-        return base
-    return expanded
+    )
+    if compact_candidate and compact_cost_admitted:
+        return _with_semantic_context_status(
+            expanded,
+            (
+                "artifact_scope_sufficient"
+                if enable_semantic_context
+                else inactive_semantic_status
+            ),
+            instance_count=len(
+                expanded.request.artifact_identity.scope.projection_instance_paths
+            ),
+            input_count=len(expanded_inputs),
+        )
+    if semantic_candidate and len(expanded_inputs) <= semantic_context_max_inputs:
+        try:
+            return _with_semantic_context(base=base, expanded=expanded)
+        except ValueError:
+            return _with_semantic_context_status(
+                base,
+                "context_unavailable",
+                instance_count=len(children),
+                input_count=len(expanded_inputs),
+            )
+    return _with_semantic_context_status(
+        base,
+        "input_limit" if enable_semantic_context else inactive_semantic_status,
+        instance_count=len(children),
+        input_count=len(expanded_inputs),
+    )
 
 
 def _trace_scope_lca(chains: Sequence[tuple[str, ...]]) -> str:

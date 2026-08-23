@@ -185,6 +185,9 @@ def _large_adjacent_plan(
     max_hops: int = 8,
     operation: QueryOperation = QueryOperation.DRIVER,
     allow_adjacent: bool = True,
+    enable_semantic_context: bool = False,
+    semantic_context_max_instances: int = 64,
+    semantic_context_max_inputs: int = 256,
 ):
     leaf = tmp_path / "leaf.sv"
     dut = tmp_path / "dut.sv"
@@ -241,6 +244,9 @@ def _large_adjacent_plan(
         frontend_version="11.0.0",
         recursive=recursive,
         allow_adjacent=allow_adjacent,
+        enable_semantic_context=enable_semantic_context,
+        semantic_context_max_instances=semantic_context_max_instances,
+        semantic_context_max_inputs=semantic_context_max_inputs,
     )
 
 
@@ -755,6 +761,54 @@ def test_large_deep_query_rejects_costly_adjacent_compile_growth(tmp_path):
     assert projection is not None
     assert len(projection.ordered_inputs) == 3
     assert plan.scope_expansion_anchors == ()
+
+
+def test_large_deep_query_attaches_bounded_semantic_context(tmp_path):
+    plan = _large_adjacent_plan(
+        tmp_path,
+        producer_count=36,
+        enable_semantic_context=True,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    artifact = plan.request.artifact_identity
+    context = artifact.semantic_context
+    assert context is not None
+    assert artifact.scope.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+    assert len(context.scope.projection_instance_paths) == 39
+    assert context.compile_projection is not None
+    assert len(context.compile_projection.ordered_inputs) == 39
+    assert plan.receipt.semantic_context_status == "selected"
+    assert plan.receipt.semantic_context_instance_count == 39
+    assert plan.receipt.semantic_context_input_count == 39
+    assert plan.scope_expansion_anchors == ()
+
+
+def test_semantic_context_respects_instance_and_input_budgets(tmp_path):
+    instance_limited = _large_adjacent_plan(
+        tmp_path,
+        producer_count=40,
+        enable_semantic_context=True,
+        semantic_context_max_instances=32,
+    )
+    input_limited = _large_adjacent_plan(
+        tmp_path,
+        producer_count=25,
+        enable_semantic_context=True,
+        semantic_context_max_inputs=20,
+    )
+
+    assert instance_limited.request is not None
+    assert instance_limited.request.artifact_identity.semantic_context is None
+    assert instance_limited.receipt.semantic_context_status == "instance_limit"
+    assert input_limited.request is not None
+    assert input_limited.request.artifact_identity.semantic_context is None
+    assert input_limited.receipt.semantic_context_status == "input_limit"
 
 
 def test_native_xrun_replay_avoids_filelist_echo_duplication_and_resolves_uvmhome(

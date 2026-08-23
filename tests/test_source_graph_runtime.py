@@ -32,6 +32,7 @@ from src.source_graph_contract import (
     SourceGraphCompileProjection,
     SourceGraphIdentity,
     SourceGraphQueryIdentity,
+    SourceGraphSemanticContext,
     SourceGraphScopeReceipt,
 )
 from src.source_graph_runtime import (
@@ -232,6 +233,61 @@ def test_worker_replays_projected_inputs_and_only_the_proved_scope_top():
         "--compat",
         "all",
         "rtl/pkg.sv",
+        "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+        "--top",
+        "sg_top",
+    ]
+
+
+def test_worker_replays_semantic_context_instead_of_narrow_artifact_projection():
+    request = _request(
+        scope=_scope(exclusions=(SOURCE_GRAPH_COMPILE_PROJECTION_GAP,))
+    )
+    source = replace(
+        request.identity,
+        compile_inputs=replace(
+            request.identity.compile_inputs,
+            ordered_inputs=(
+                "rtl/pkg.sv",
+                "rtl/left.sv",
+                "rtl/right.sv",
+                "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+            ),
+        ),
+    )
+    narrow = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+        ),
+        full_input_count=4,
+    )
+    context_projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "rtl/right.sv",
+            "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+        ),
+        full_input_count=4,
+    )
+    artifact = replace(
+        request.artifact_identity,
+        source=source,
+        compile_projection=narrow,
+        semantic_context=SourceGraphSemanticContext(
+            scope=request.artifact_identity.scope,
+            compile_projection=context_projection,
+        ),
+    )
+    request = replace(request, identity=source, artifact=artifact)
+
+    assert _frontend_args(request) == [
+        "--compat",
+        "all",
+        "rtl/pkg.sv",
+        "rtl/right.sv",
         "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
         "--top",
         "sg_top",

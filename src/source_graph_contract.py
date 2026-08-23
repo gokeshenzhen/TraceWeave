@@ -25,11 +25,12 @@ from typing import Any, Mapping, Sequence
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 
 
-SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.0"
-SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.0"
+SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.1"
+SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.1"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
 SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.4"
-SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.0"
+SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.1"
+SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_MAPPING_VERSION = "1.1"
 SOURCE_GRAPH_COMPILE_PROJECTION_GAP = "compile_projection_pruned_inputs"
@@ -1028,6 +1029,59 @@ class SourceGraphArtifactScope:
 
 
 @dataclass(frozen=True)
+class SourceGraphSemanticContext:
+    """Bounded frontend context shared by several scoped artifacts.
+
+    The context carries only hierarchy-proved scope and compile projection
+    facts.  Source content, options, top, frontend, snapshot, and contract
+    identity remain owned by the containing artifact identity.  Keeping this
+    object inside artifact build semantics makes a persistent-session build
+    byte-for-byte equivalent to a session-aware one-shot build.
+    """
+
+    scope: SourceGraphArtifactScope
+    compile_projection: SourceGraphCompileProjection | None = None
+    context_version: str = SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION
+
+    def __post_init__(self) -> None:
+        version = _required_text(self.context_version, "semantic context version")
+        if version != SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION:
+            raise ValueError("unsupported Source Graph semantic context version")
+        if not self.scope.coverage_boundary.explicit:
+            raise ValueError("semantic context requires an explicit bounded scope")
+        object.__setattr__(self, "context_version", version)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "context_version": self.context_version,
+            "scope": self.scope.to_dict(),
+        }
+        if self.compile_projection is not None:
+            result["compile_projection"] = self.compile_projection.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> SourceGraphSemanticContext:
+        scope = value.get("scope")
+        if not isinstance(scope, Mapping):
+            raise ValueError("semantic context scope must be an object")
+        projection = value.get("compile_projection")
+        if projection is not None and not isinstance(projection, Mapping):
+            raise ValueError("semantic context compile projection must be an object")
+        return cls(
+            scope=SourceGraphArtifactScope.from_dict(scope),
+            compile_projection=(
+                SourceGraphCompileProjection.from_dict(projection)
+                if isinstance(projection, Mapping)
+                else None
+            ),
+            context_version=value.get(
+                "context_version", SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SourceGraphArtifactIdentity:
     """All inputs that can change a prepared Source Graph artifact."""
 
@@ -1038,6 +1092,7 @@ class SourceGraphArtifactIdentity:
     worker_protocol_version: str
     snapshots_complete: bool = True
     compile_projection: SourceGraphCompileProjection | None = None
+    semantic_context: SourceGraphSemanticContext | None = None
     identity_version: str = SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION
     build_contract_version: str = SOURCE_GRAPH_BUILD_CONTRACT_VERSION
 
@@ -1094,6 +1149,22 @@ class SourceGraphArtifactIdentity:
                 raise ValueError(
                     "compile projection must be an ordered manifest subsequence"
                 )
+        context = self.semantic_context
+        if context is not None:
+            if not isinstance(context, SourceGraphSemanticContext):
+                raise ValueError("artifact semantic_context is invalid")
+            if not _semantic_context_scope_covers(context.scope, self.scope):
+                raise ValueError(
+                    "semantic context scope must cover the artifact scope"
+                )
+            if not _compile_projection_covers(
+                context.compile_projection,
+                projection,
+                manifest=self.source.compile_inputs,
+            ):
+                raise ValueError(
+                    "semantic context compile projection must cover the artifact"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -1108,6 +1179,8 @@ class SourceGraphArtifactIdentity:
         }
         if self.compile_projection is not None:
             result["compile_projection"] = self.compile_projection.to_dict()
+        if self.semantic_context is not None:
+            result["semantic_context"] = self.semantic_context.to_dict()
         return result
 
     @classmethod
@@ -1119,6 +1192,11 @@ class SourceGraphArtifactIdentity:
         projection = value.get("compile_projection")
         if projection is not None and not isinstance(projection, Mapping):
             raise ValueError("artifact compile_projection must be an object")
+        semantic_context = value.get("semantic_context")
+        if semantic_context is not None and not isinstance(
+            semantic_context, Mapping
+        ):
+            raise ValueError("artifact semantic_context must be an object")
         return cls(
             source=SourceGraphIdentity.from_dict(source),
             scope=SourceGraphArtifactScope.from_dict(scope),
@@ -1129,6 +1207,11 @@ class SourceGraphArtifactIdentity:
             compile_projection=(
                 SourceGraphCompileProjection.from_dict(projection)
                 if isinstance(projection, Mapping)
+                else None
+            ),
+            semantic_context=(
+                SourceGraphSemanticContext.from_dict(semantic_context)
+                if isinstance(semantic_context, Mapping)
                 else None
             ),
             identity_version=value.get(
@@ -1426,6 +1509,11 @@ def compute_source_graph_artifact_key(
                 if identity.compile_projection is not None
                 else None
             ),
+            "semantic_context": (
+                identity.semantic_context.to_dict()
+                if identity.semantic_context is not None
+                else None
+            ),
         }
     )
     scope_digest = _sha256(identity.scope.to_dict())
@@ -1506,6 +1594,46 @@ def _artifact_scope_covers(
     )
 
 
+def _semantic_context_scope_covers(
+    available: SourceGraphArtifactScope,
+    requested: SourceGraphArtifactScope,
+) -> bool:
+    """Prove frontend reachability without equating coverage exclusions.
+
+    A broader compilation context can remove a narrow projection exclusion or
+    add a conservative sibling diagnostic.  Those context exclusions enter
+    artifact build identity and the worker unions them into the final receipt;
+    they do not prevent the semantic root from projecting the requested scope.
+    """
+
+    if (
+        available.design != requested.design
+        or available.top != requested.top
+        or available.hierarchy_snapshot_sha256
+        != requested.hierarchy_snapshot_sha256
+        or not available.coverage_boundary.explicit
+        or not requested.coverage_boundary.explicit
+        or not set(requested.capabilities).issubset(available.capabilities)
+        or not set(requested.projection_instance_paths).issubset(
+            available.projection_instance_paths
+        )
+        or not set(requested.coverage_boundary.instance_paths).issubset(
+            available.coverage_boundary.instance_paths
+        )
+    ):
+        return False
+    available_chain_atoms = set().union(
+        *(set(chain) for chain in available.proved_ancestor_chains)
+    )
+    return bool(
+        set(requested.proved_lcas).issubset(available_chain_atoms)
+        and all(
+            _chain_covered_by(available.proved_ancestor_chains, requested_chain)
+            for requested_chain in requested.proved_ancestor_chains
+        )
+    )
+
+
 def source_graph_artifact_design_matches(
     available: SourceGraphArtifactIdentity,
     requested: SourceGraphArtifactIdentity,
@@ -1530,6 +1658,7 @@ def source_graph_artifact_design_matches(
         and available.identity_version == requested.identity_version
         and available.build_contract_version
         == requested.build_contract_version
+        and available.semantic_context == requested.semantic_context
         and available.scope.design == requested.scope.design
         and available.scope.top == requested.scope.top
         and available.scope.hierarchy_snapshot_sha256
