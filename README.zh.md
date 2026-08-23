@@ -821,10 +821,16 @@ python3.11 scripts/benchmark_connectivity_query_indexes.py \
   --workload instance-resolution --size 30000 --repeats 100
 python3.11 scripts/benchmark_connectivity_query_indexes.py \
   --workload wide-load --size 4096 --repeats 100
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload path-chain --size 4096 --repeats 10
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload path-comb --size 4096 --repeats 10
 ```
 
 IR 当前仍使用显式有序 bit tuple。更大范围的 interval/segment 重写会涉及 schema、cache
-version 与正确性成本，因此留到真实 workload 证明仍有必要时再实施。
+version 与正确性成本，因此留到真实 workload 证明仍有必要时再实施。两个 path workload
+分别暴露深路径 CPU 成本和队列共享前缀的内存放大，因此 path search 的存储优化可以与
+instance 或 packed-bit 表示解耦评估。
 
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：

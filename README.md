@@ -957,11 +957,17 @@ python3.11 scripts/benchmark_connectivity_query_indexes.py \
   --workload instance-resolution --size 30000 --repeats 100
 python3.11 scripts/benchmark_connectivity_query_indexes.py \
   --workload wide-load --size 4096 --repeats 100
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload path-chain --size 4096 --repeats 10
+python3.11 scripts/benchmark_connectivity_query_indexes.py \
+  --workload path-comb --size 4096 --repeats 10
 ```
 
 The IR still uses explicit ordered bit tuples. A wider interval/segment rewrite
 is deliberately deferred until a measured workload justifies its schema,
-cache-version, and correctness cost.
+cache-version, and correctness cost. The path workloads independently expose
+deep-path CPU cost and queued shared-prefix memory, so path-search storage can
+be optimized without conflating it with instance or packed-bit representation.
 
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
