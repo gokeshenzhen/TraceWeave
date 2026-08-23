@@ -1,6 +1,8 @@
 # PR Proposal: Full-Hierarchy Recovery Across Imperfect Include Contexts, Safe Instance Admission, and Source Graph Build Reuse
 
-**Status:** Detailed maintainers' review proposal
+**Status:** Implemented and validated as of 2026-08-23; the original hierarchy
+failure and cold-build timeout are resolved, while persistent semantic-session
+reuse remains a guarded opt-in pending broader operational evidence.
 
 **Scope:** TraceWeave hierarchy construction and Source Graph production routing
 
@@ -482,7 +484,11 @@ Observed result:
 
 ### Full-suite note
 
-A broad suite was also attempted. Some failures were attributable to pre-existing environment/historical fixture assumptions, including unavailable historical benchmark revisions and optional frontend environment expectations. Those conditions are not evidence against this patch. Reviewers should run the complete suite in their normal CI environment and evaluate any failure against the changed files and expected fixture prerequisites.
+The original correctness slice had environment-sensitive broad-suite gaps, but
+the completed recovery/reuse program has since been validated by the full local
+suite: **1,842 passed, 38 skipped**. The skipped tests retain their explicit
+optional native-tool/fixture prerequisites. Scoped Ruff checks and
+`git diff --check` also pass.
 
 ---
 
@@ -560,7 +566,11 @@ Static fallback then could not resolve the deeply dotted/aggregate target and re
 
 ---
 
-## 8. Source Graph driver timeout: analysis
+## 8. Historical Source Graph driver-timeout baseline
+
+> This section preserves the baseline that motivated the performance work. The
+> current implementation no longer has this cold-build shape on the reported
+> workload; see Section 14 for the measured resolution.
 
 ### 8.1 What was observed
 
@@ -589,9 +599,12 @@ The issue is not that incomplete artifacts should become globally cacheable. The
 
 ---
 
-## 9. Follow-up performance proposal (separate PR)
+## 9. Historical follow-up performance proposal
 
-The hierarchy fixes above should be reviewed and landed independently from performance changes. They are correctness fixes with focused unit/regression coverage. The following work changes scheduling, caching, and timeout behavior and needs its own benchmark-backed PR.
+At proposal time, the hierarchy fixes needed to land independently from the
+following scheduling, caching, and timeout work. Those follow-ups were later
+implemented as separate benchmark-backed commits. The subsections remain here
+as the design rationale; their current status is summarized in Section 14.
 
 ### 9.1 Priority 1 — in-flight coalescing for exact same-request builds
 
@@ -699,32 +712,32 @@ This proposal intentionally preserves TraceWeave's conservative behavior:
 
 ### Correctness
 
-- [ ] Same-case discovery preserves a valid hierarchy.
-- [ ] Real case identity changes still clear hierarchy and handles.
-- [ ] Supplementary log identity participates in hierarchy lookup.
-- [ ] A real included active-branch DUT instance is recovered despite an unrelated include problem.
-- [ ] Inactive conditional branch instances remain excluded.
-- [ ] Unknown type candidates do not become component-tree nodes.
-- [ ] Legitimate interface instances remain represented.
-- [ ] A later-defined valid module type is not filtered accidentally.
+- [x] Same-case discovery preserves a valid hierarchy.
+- [x] Real case identity changes still clear hierarchy and handles.
+- [x] Supplementary log identity participates in hierarchy lookup.
+- [x] A real included active-branch DUT instance is recovered despite an unrelated include problem.
+- [x] Inactive conditional branch instances remain excluded.
+- [x] Unknown type candidates do not become component-tree nodes.
+- [x] Legitimate interface instances remain represented.
+- [x] A later-defined valid module type is not filtered accidentally.
 
 ### Source Graph semantics
 
-- [ ] Deep target hierarchy resolves as `resolved`, not `truncated`.
-- [ ] Positive load facts retain incomplete-coverage semantics.
-- [ ] No negative/exhaustive claim is enabled by these changes.
-- [ ] Source Graph fallback remains honest on timeout.
+- [x] Deep target hierarchy resolves as `resolved`, not `truncated`.
+- [x] Positive load facts retain incomplete-coverage semantics.
+- [x] No negative/exhaustive claim is enabled by these changes.
+- [x] Source Graph fallback remains honest on timeout.
 
 ### Operational quality
 
-- [ ] Handle-store lifetime remains process/session bounded.
-- [ ] New invalidation behavior does not leak cross-case hierarchy state.
-- [ ] No sensitive data is newly exposed.
-- [ ] Focused tests cover every changed behavioral boundary.
+- [x] Handle-store lifetime remains process/session bounded.
+- [x] New invalidation behavior does not leak cross-case hierarchy state.
+- [x] No sensitive data is newly exposed.
+- [x] Focused tests cover every changed behavioral boundary.
 
 ---
 
-## 12. Suggested commit decomposition
+## 12. Historical suggested commit decomposition
 
 To make review and rollback easy, split the correctness patch into logical commits:
 
@@ -735,85 +748,191 @@ To make review and rollback easy, split the correctness patch into logical commi
 5. `Filter component-tree nodes to known module/interface types`
 6. `Add hierarchy recovery and parser false-positive regressions`
 
-The Source Graph timeout/reuse improvements should be a separate benchmarked PR.
+The Source Graph timeout/reuse improvements were subsequently kept in separate
+benchmarked commits.
 
 ---
 
-## 13. Final recommendation
+## 13. Disposition of the original recommendation
 
-Land the hierarchy/session/parser correctness changes first. They remove a real false-negative path, preserve Source Graph's conservative proof model, and allow deep target scope resolution that was previously impossible.
-
-Then treat driver preparation timeout as a dedicated performance project:
-
-1. capture reproducible baseline metrics;
-2. implement exact in-flight coalescing without persistent reuse of incomplete manifests;
-3. evaluate bounded timeout configuration;
-4. investigate proof-backed source closure reduction;
-5. report wall time, CPU, memory, cancellation behavior, and semantic trade-offs before claiming an optimization.
+The implementation followed the proposed sequence: land the
+hierarchy/session/parser correctness boundary first, then baseline the cold
+driver path, add exact in-flight coalescing, retain a bounded timeout, implement
+proof-backed source closure, and measure wall time, memory, cancellation, and
+semantic equivalence before expanding reuse. Section 14 records the resulting
+architecture and evidence. The sequencing and guardrails remain useful review
+history, but the listed performance steps are no longer open tasks.
 
 ---
 
-## 14. Current implementation status
+## 14. Current implementation status (2026-08-23)
 
-The proposal is **complete for the hierarchy/session/parser correctness failure
-chain and partially complete for the Source Graph performance follow-up**.
-The final recommendation above is a staged performance plan, not one remaining
-standalone issue.
+This proposal is now **implemented for both the original hierarchy-recovery
+failure and its actionable performance follow-up**. Persistent semantic-session
+reuse is also implemented, but deliberately remains an opt-in policy: the
+remaining gate is broader operational evidence, not an unresolved correctness
+or cold-build defect.
 
-### 14.1 Correctness work is complete
+### 14.1 Hierarchy recovery and proof boundaries are complete
 
-The current implementation now:
+The current implementation:
 
-- preserves a valid completed hierarchy during same-case discovery;
-- resolves supplementary-log hierarchy handles for split
-  compile/elaboration flows;
-- recovers real active-branch instances from successfully expanded include
-  fragments while retaining incomplete-context diagnostics;
-- filters recovered component-tree candidates to known module/interface types;
-- keeps incomplete-coverage and timeout fallback semantics conservative.
+- preserves completed hierarchy state across same-case discovery while a real
+  case/snapshot change still invalidates handles and dependent state;
+- resolves supplementary-log hierarchy identity for split compile/elaboration
+  flows;
+- recovers positive instance evidence from successfully expanded active include
+  branches without upgrading an incomplete preprocessing context to complete;
+- admits only known module/interface definitions into the compatibility tree;
+- annotates hierarchy candidates and materialized edges with provenance and
+  fixed gap codes, and rejects unproved generate/array/bind/ambiguous-definition
+  edges instead of flattening lexical guesses;
+- routes hierarchy lookup through a bounded provider contract. The lexical
+  provider remains the dependency-free default, while existing compact semantic
+  IR and exact target-prefix NPI evidence can supply authoritative bindings
+  without a full-design topology walk.
 
-These changes remove the hierarchy-scope false negative described by this
-proposal. A deep driver/load target can now reach Source Graph preparation
-instead of being rejected solely because its valid hierarchy evidence was lost.
+The lightweight preprocessor remains a conservative lexical recovery layer; it
+has not been promoted into a replacement SystemVerilog compiler. Slang or NPI
+continues to own elaborated semantics, and incomplete coverage still forbids
+exhaustive negative claims.
 
-### 14.2 Performance work is only partially complete
+### 14.2 The reported cold-build timeout is resolved
 
-Exact in-flight coalescing is implemented, including for non-cacheable
-incomplete identities. Overlapping driver/load preparations for the same exact
-artifact share one live worker. A successful content-anchored incomplete build
-now also publishes one bounded, one-shot session handoff for the next exact
-artifact request: at most one entry, 512 MiB, and 60 seconds. The handoff is
-consumed immediately, cannot satisfy a dominating-scope request, retains
-`bypass_incomplete_key`, and is reported separately as
-`artifact_reuse=session_handoff` / `cache_tier=handoff`. It never enters the
-process-memory or disk caches. Missing content identity, incomplete snapshots,
-implicit scope, oversize artifacts, failure, timeout, and cancellation are
-ineligible. Waiter-aware cancellation and deterministic cleanup are preserved.
+The production adapter now constructs a proof-backed hierarchy dependency
+closure before launching the frontend. On the representative large-SoC target
+that originally failed:
 
-The Source Graph worker timeout is strictly validated, remains bounded and
-configurable through `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT`, and is reported as
-`effective_timeout_sec`. The default remains 120 seconds. Increasing the timeout
-may allow a near-boundary build to finish, but it does not itself reduce build
-time, CPU use, or peak RSS.
+| Metric | Historical full replay | Current bounded closure |
+|---|---:|---:|
+| Ordered frontend inputs | 784 | 126 |
+| Cold worker build | Did not finish within 180 s | 4,176.488 ms |
+| Parent IR load/index | Unavailable | 271.863 ms |
+| Second exact prepare | Unavailable | 0.860 ms |
+| Worker peak RSS | No completed sample | 513,280 KiB |
+| Compact IR | Unavailable | 2,251,984 bytes |
 
-The original driver performance problem is therefore **improved but not fully
-resolved**:
+The measured cold-build improvement is at least 43.1x relative to the former
+180-second timeout lower bound. Driver and load both return their proved
+positive facts from the same artifact; compile-projection exclusions remain
+visible, so this result does not claim full-design connectivity completeness.
 
-- sequential `load -> driver` calls with the same exact, content-anchored
-  incomplete identity can now share the completed artifact once instead of
-  starting a second worker; identities that fail the admission checks still
-  rebuild;
-- a single cold driver preparation can still exceed the 120-second default;
-- the multi-GiB peak-memory behavior observed on the reported workload has not
-  been shown to improve;
-- proof-backed smaller source-closure construction has not been implemented;
-- the required representative large-design comparison of wall time, worker CPU,
-  peak RSS, success/timeout rate, cancellation latency, and admission wait has
-  not yet been completed.
+Content identity still includes the complete ordered manifest/options/tops and
+compile/hierarchy snapshots. A changed or incomplete captured snapshot cannot
+pair stale hierarchy with new source. The first Source Graph request reuses
+digests captured during hierarchy/source-index reads and hashes only unseen
+support inputs.
 
-Accordingly, the implementation may claim that duplicate overlapping work and
-one immediate sequential same-artifact build are eliminated under the stated
-admission bounds. It must not yet claim that the reported cold end-to-end driver
-timeout or memory peak is solved. Closing the performance project still requires
-representative benchmark evidence and a proven smaller source closure or another
-measured reduction in cold-build cost.
+### 14.3 Reuse is bounded and provenance-preserving
+
+The lifecycle now has several distinct, explicit reuse mechanisms:
+
+1. Exact concurrent cold requests share one live worker, including incomplete
+   identities. One waiter may cancel without killing work needed by another;
+   final-waiter cancellation stops and clears the flight.
+2. A successful content-anchored incomplete build may publish one consumed-once
+   60-second/512-MiB handoff for the next exact request. It remains
+   `bypass_incomplete_key`, never enters the memory/disk cache, and cannot serve
+   dominating-scope lookup.
+3. Reusable compact IR enters a bounded process-memory cache. A cached artifact
+   may serve a smaller compile projection or hierarchy scope only after exact
+   design/snapshot/version/exclusion checks prove that the single cached
+   artifact dominates the request.
+4. The initial deep driver/load plan may include a strictly bounded proved
+   adjacent scope, replacing a reactive two-build sequence with one build. On
+   the representative public driver-then-load sequence, total wall time fell
+   from 10,462.869 ms to 6,046.970 ms while preserving the result fingerprint
+   and one-artifact provenance.
+5. The optional exact disk tier remains default-off, validates current content
+   before lookup, performs no startup scan, and treats corrupt entries as safe
+   misses.
+
+No result merges facts from multiple artifacts or backends. Timeout,
+cancellation, corruption, unsafe scope, and incomplete negative coverage still
+restart or fall back according to the existing conservative route.
+
+### 14.4 Large-project hierarchy and query work are bounded
+
+The recovery work was extended into the large-project path that feeds Source
+Graph:
+
+- compilation-context, interface-reference, include-mask, and literal-admission
+  indexes remove known quadratic/redundant lexical scans while preserving
+  compilation-unit macro state;
+- an exact-identity transient `CompileSourceIndex` lets concurrent hierarchy and
+  structural scans share source reads, then releases source text when the last
+  consumer exits;
+- the compatibility hierarchy uses a template DAG with copy-on-write NPI
+  annotation. A 1,001,000-logical-instance stress case reduced tree
+  materialization from 1,793.482 ms to 3.488 ms and retained RSS delta from
+  293,628 KiB to 528 KiB with identical semantics;
+- the representative hierarchy scan fell from a 16,541.634-ms baseline to
+  4,785.746 ms while preserving its structural oracle; the remaining work is
+  linear compilation-unit macro replay rather than a known quadratic hotspot;
+- structural-risk scanning removed its repeated brace/source-prefix scans,
+  reducing the representative workload from 58,988.707 ms to a 3,441.750-ms
+  median with an identical finding digest;
+- Source Graph driver/load queries enforce state, edge, match, and frontier
+  budgets with cancellation checkpoints and explicit partial/truncation
+  receipts. A 50,000-load stress case reduced query/serialization medians from
+  1,324.266/5,575.989 ms to 3.696/16.311 ms by returning a stable bounded prefix,
+  not by pretending to enumerate all loads;
+- hierarchy prefix lookup, wide-bus membership, and predecessor-based path
+  reconstruction remove measured warm-query hotspots. Public schemas and
+  coverage semantics remain compatible.
+
+NPI remains the preferred backend when trustworthy KDB evidence is available.
+Its direct loads avoid unnecessary whole-cone work, and recursive driver
+traversal is capped inside the native callback: the measured long-tail query
+fell from roughly 59.4 seconds to roughly 2.24 seconds, with work/output
+truncation explicitly reported. An offline NPI/Source Graph differential
+harness classifies expected coverage/provenance differences without treating
+NPI as an infallible oracle.
+
+### 14.5 Persistent semantic session is implemented but stays opt-in
+
+The selected design is a hybrid: one isolated, short-lived, RSS/TTL-bounded
+Slang semantic context may be retained, while only scoped compact IR is
+cacheable. It does not create an eager full-design IR or keep AST state in the
+MCP process. Default guards are one active design, 60-second idle TTL, 768-MiB
+RSS limit, 64 proved instances, and 256 ordered inputs. Context change, crash,
+protocol error, timeout, cancellation, or RSS excess terminates the child and
+cannot publish a partial artifact.
+
+In a 20-query eligible large-SoC sequence, one-shot and persistent totals were
+81,224.832 ms and 43,562.067 ms respectively (46.369% lower). Twenty frontend
+launches became one miss plus 19 hits; fact/status/coverage hashes were
+identical. The trade-off was a retained child near 553 MiB. In an independent
+smaller-SoC sequence, the first bounded compact artifact already covered the
+remaining 19 queries, so both modes used ordinary memory hits and the semantic
+session added no material benefit.
+
+Local-only operational telemetry now reports metric-bearing Source Graph calls
+per case, repeated-case frequency, timestamp/pair coverage, and adjacent calls
+inside the default 60-second window as an **upper bound** on reuse opportunity.
+The current sample has 2,394 total records across 167 cases but only three
+attributable Source Graph calls, each in a different case. That sample cannot
+justify retaining roughly 553 MiB after a single fallback query. Therefore
+`TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION` remains default-off; this is a product
+policy decision, not an implementation failure.
+
+### 14.6 Final validation and remaining evidence gate
+
+The current full regression result is **1,842 passed, 38 skipped**. Focused
+benchmarks use fresh processes, stable result fingerprints, explicit workload
+conditions, wall/RSS measurements, and compatibility/coverage assertions.
+Public MCP inputs are unchanged; receipts gained additive metrics, provenance,
+work-budget, and reuse fields. FSDB locking and observable cancellation/timeout
+behavior are unchanged.
+
+The original proposal may now be closed. Reconsidering semantic-session
+default-on requires both:
+
+1. more independent designs that actually qualify for semantic-session reuse,
+   rather than designs already covered by bounded compact IR; and
+2. a larger operational sample showing repeated eligible Source Graph queries
+   inside the reuse window often enough to justify the retained memory.
+
+Until those data exist, the safe product route remains trusted NPI, then bounded
+on-demand Source Graph, then honest Legacy Static fallback. No synthetic query
+sequence should be presented as real operational frequency evidence.
