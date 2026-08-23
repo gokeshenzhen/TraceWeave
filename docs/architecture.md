@@ -468,6 +468,13 @@ Verification
   `LoadHop` / `DriverChainHop` / hierarchy nodes carry a
   `source_info_origin` field (`"compile_log"` vs `"npi"`) so consumers can
   tell which provenance produced each `file:line`.
+- NPI load lookup treats `net.load_list()` as the authoritative direct-load
+  result. It invokes the much broader `fan_out_reg_list()` boundary-recovery
+  walk only when NPI returned no direct handles at all; a `kind_filter` cannot
+  turn a proved direct result into a recursive cone walk. This keeps ordinary
+  high-fanout clock/reset/scan queries proportional to their direct consumers
+  instead of materialising an entire combinational fan-out cone merely to
+  discard all but the bounded terminal-register prefix.
   `load_design == 1` establishes a clean load. `load_design == 0` is accepted
   only for an error-marked artifact when degraded mode is enabled and a
   non-empty, requested-top-matching top-instance self-check passes. No error

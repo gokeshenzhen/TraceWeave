@@ -964,6 +964,11 @@ finding 只适用于已返回的前缀。请收窄时间窗口做完整的定向
 
 当检测到 KDB 时,`explain_signal_driver`、`find_signal_loads`、`trace_signal_path` 和 `trace_x_source` 会自动启用 Verdi NPI 后端。可信 NPI 结果保持最高优先级；否则 TraceWeave 会先尝试 bounded on-demand Source Graph，再由 Legacy Static 整体重算 fallback 结果或 trace。Static 没有诚实的 `sig_to_sig_conn_list` 等价实现，因此 inconclusive Source Graph path 最终会返回结构化 unsupported，而不会给出近似结论。X-trace 在 backend 或 artifact 改变时始终从原始 signal 重跑。NPI 仍是更深的路径:它使用 `fan_in_reg_list` / `sig_to_sig_conn_list` 在 elaborated netlist 上行走,因此能跨越 Source Graph 明确投影范围之外的实例端口边界、interface 位置绑定与 assign 链。在 **local NPI execution mode** 下，`build_tb_hierarchy` 也可以用 elaborated NPI 证据增强 component-tree 的 `source_file` / `source_line`。这项可选增强有独立资源门禁：默认 `auto` 只接受 clean KDB 且 compile 已证明的实例路径不超过 4,096 条，并只对这些路径调用 `netlist.get_inst()`；degraded KDB 或更大设计保留 compile-log provenance，以固定原因跳过，且不会加载 NPI。设置 `TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY=force` 可显式对 degraded/更大设计启用定向增强（仍有 100,000 路径硬上限），设置为 `off` 可完全关闭。这一设置不改变 driver/load/path 查询的 NPI 优先级。LSF 初始范围不会让 `build_tb_hierarchy` 隐式提交 batch job,因此在 LSF 模式下 hierarchy 的 source 信息仍来自 compile log。`find_driver` / `find_loads` 中受影响的 hop 会带上 `source_info_origin: "npi"` 或 `"source_graph"`，Static 则保持 compile-log-derived；Source Graph path hop 同样只携带 IR 支持的 scope/source/edge evidence。结果信封里的 `backend_status` 会给出 selected/attempted/actual backend、有序 fallback 链、Source Graph coverage/build回执、KDB 流程与按仿真器给出的 `kdb_hint`。NPI 深但并非万无一失:当它对某条 net 能报出的**唯一**驱动同时也是该 net 的一个 LOAD(interface 切片别名,或一个读取该 net 的寄存器)时,说明根本没有 RTL 驱动,真正的驱动是 testbench/行为级的——经 virtual interface + clocking block 写值的 UVM driver,RTL 寄存器 fan-in 看不到它。`explain_signal_driver` 用 driver-vs-loads 交叉校验识别这种矛盾,返回 `driver_status="testbench_driven"`(附 `cross_check.conflict` 回执),而**不会**把那个 load 当成 "exact" 驱动返回——于是 AHB master 的 HTRANS/HADDR 会把你指向 TB driver/BFM,而不是一个只是读总线的 DUT 互连寄存器。
 
+对 load 查询，NPI 先返回 `net.load_list()` 的直接消费者；只有 NPI 完全没有返回
+direct handle 时才进入更广的终点寄存器 fan-out 恢复，filter 不会触发该展开。对全局
+clock/reset/scan 网络，这可避免为了一个很小的直接 load 列表而物化覆盖大半个 SoC 的
+组合 fan-out cone。
+
 带有 Verdi `.hasElabcomError` 标记的 `kdb.elab++` 在没有 clean elaborated
 KDB 时会作为 degraded NPI candidate。error 数量不是阈值：TraceWeave 只在
 `load_design` 返回 `0`、`get_top_inst_list()` 非空，并且可检查时能看到请求的

@@ -149,6 +149,7 @@ class _MockNet:
         self._fan_in_exc = fan_in_exc
         self._fan_out = fan_out
         self._fan_out_exc = fan_out_exc
+        self.fan_out_calls = 0
 
     def load_list(self):
         return self._loads
@@ -164,6 +165,7 @@ class _MockNet:
 
     def fan_out_reg_list(self, stop_at_pin=False, report_primary_port=False,
                          top_scope_name=None):
+        self.fan_out_calls += 1
         if self._fan_out_exc is not None:
             raise self._fan_out_exc
         return list(self._fan_out or [])
@@ -393,6 +395,63 @@ def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
         "top_tb.parent.count[4:0]",
     }
     assert all(ld["backend"] == "verdi_npi" for ld in r["loads"])
+
+
+def test_backend_loads_skip_recursive_fan_out_when_direct_handles_exist(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    direct = _MockPin("top_tb.parent.child.data")
+    net = _MockNet(
+        loads=[direct],
+        fan_out=[
+            _MockPin("top_tb.parent:Always2#Always0:44:51:Reg.D_data"),
+        ],
+    )
+    netlist_obj = _MockNetlist({"top_tb.parent.data": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.parent.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert [load["load_path"] for load in result["loads"]] == [
+        "top_tb.parent.child.data"
+    ]
+    assert net.fan_out_calls == 0
+
+
+def test_backend_kind_filter_does_not_trigger_recursive_fan_out(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[_MockPin("top_tb.parent.child.data")],
+        fan_out=[
+            _MockPin("top_tb.parent:Always2#Always0:44:51:Reg.D_data"),
+        ],
+    )
+    netlist_obj = _MockNetlist({"top_tb.parent.data": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.parent.data",
+        compile_log=log,
+        simulator="vcs",
+        kind_filter=["rhs_expr"],
+    )
+
+    assert result["loads"] == []
+    assert result["stopped_at"] == "no_npi_loads"
+    assert net.fan_out_calls == 0
 
 
 def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):

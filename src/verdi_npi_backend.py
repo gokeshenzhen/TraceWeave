@@ -1131,18 +1131,26 @@ class VerdiNpiBackend:
                 continue
             loads.append(entry)
 
-        fan_out_loads = self._fan_out_loads(
-            net,
-            signal_path,
-            top,
-            include_expr=include_expr,
-            max_branches=_FAN_OUT_MAX_BRANCHES,
-        )
-        if fan_out_loads is not None:
-            for entry in fan_out_loads:
-                if keep is not None and entry["kind"] not in keep:
-                    continue
-                loads.append(entry)
+        # ``load_list`` is the exact direct-consumer API and already covers
+        # the overwhelmingly common case.  ``fan_out_reg_list`` is a full
+        # combinational-cone traversal: on a large global control net it can
+        # materialise the whole design even though we retain only 64 terminal
+        # registers.  Use that expensive boundary-recovery path only when NPI
+        # found no direct handles at all.  A caller-side kind filter must not
+        # turn a proved direct result into an unrelated recursive cone walk.
+        if not raw_loads:
+            fan_out_loads = self._fan_out_loads(
+                net,
+                signal_path,
+                top,
+                include_expr=include_expr,
+                max_branches=_FAN_OUT_MAX_BRANCHES,
+            )
+            if fan_out_loads is not None:
+                for entry in fan_out_loads:
+                    if keep is not None and entry["kind"] not in keep:
+                        continue
+                    loads.append(entry)
 
         result["loads"] = _dedup(loads)
         if not result["loads"]:
