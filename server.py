@@ -79,8 +79,8 @@ from src.hierarchy_handles import (
 from src.source_graph_adapter import (
     AdapterStatus,
     build_source_graph_frontier_plan,
+    build_source_graph_initial_plan,
     build_source_graph_path_plan,
-    build_source_graph_plan,
     build_source_graph_trace_plan,
 )
 from src.source_graph_backend import (
@@ -2476,6 +2476,17 @@ async def _execute_source_graph_connectivity_plan(
     }
 
 
+def build_source_graph_plan(**kwargs):
+    """Select the first artifact behind the historical Source Graph stage.
+
+    The server-level stage name is intentionally stable for tracked route-order
+    audits. The adapter implementation now applies the bounded initial-scope
+    policy before falling back to its exact-ancestor plan.
+    """
+
+    return build_source_graph_initial_plan(**kwargs)
+
+
 async def _route_public_connectivity(
     *,
     operation: str,
@@ -2721,6 +2732,8 @@ async def _route_public_connectivity(
                             if operation == "loads"
                             else ()
                         ),
+                        max_instances=config.frontier_max_instances,
+                        allow_adjacent=not bootstrap_active,
                     )
                 )
                 adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
@@ -2747,7 +2760,9 @@ async def _route_public_connectivity(
                 else:
                     current_plan = plan
                     current_adapter_ms = adapter_wall_ms
-                    accumulated_frontiers: list[str] = []
+                    accumulated_frontiers: list[str] = list(
+                        current_plan.scope_expansion_anchors
+                    )
                     attempted_artifacts: list[str] = []
                     artifact_attempt_count = 0
                     attempted_query_count = 0

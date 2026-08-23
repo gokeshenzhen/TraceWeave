@@ -261,6 +261,18 @@ Verification
   path is usable, but coverage remains `inconclusive` and no negative claim is
   complete. Privacy-safe adapter telemetry reports only mode and aggregate
   input/exclusion/seed/dependency counts plus a fixed fallback reason.
+  Deep single-endpoint queries have a bounded first-artifact admission step.
+  A recursive driver or load depth above one may include the target leaf's
+  hierarchy-proved adjacent siblings before launching the worker, but only for
+  a dependency-projected large manifest. Admission requires no more than 32 new
+  instances, no more than 24 added ordered closure inputs, and no more than 25%
+  input growth once the base closure contains at least 32 inputs; the configured
+  frontier instance cap is an additional bound. Full-manifest, shallow,
+  bootstrap, unresolved, or over-budget cases retain the exact ancestor plan.
+  The admitted parent is carried as a private expansion anchor into any later
+  runtime frontier union. Thus a second expansion cannot shrink the first
+  artifact's scope, while the returned payload still comes wholly from the
+  final artifact. Coverage boundaries and public contracts are unchanged.
   A split VCS build may add ordered `supplementary_compile_logs` at the
   hierarchy boundary. Parse results are merged with separate phase commands;
   the handle/snapshot identity covers every log while one-log callers retain

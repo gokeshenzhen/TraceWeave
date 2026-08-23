@@ -62,6 +62,10 @@ from .source_graph_contract import (
 
 SOURCE_GRAPH_ADAPTER_VERSION = "3.9"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
+_INITIAL_ADJACENT_MAX_NEW_INSTANCES = 32
+_INITIAL_ADJACENT_MAX_ADDED_INPUTS = 24
+_INITIAL_ADJACENT_INPUT_RATIO_NUMERATOR = 5
+_INITIAL_ADJACENT_INPUT_RATIO_DENOMINATOR = 4
 _FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
 _HDL_SUFFIXES = _FRONTEND_HDL_SUFFIXES | _OPAQUE_HDL_SUFFIXES
@@ -445,6 +449,7 @@ class SourceGraphBuildPlan:
     status: AdapterStatus
     request: SourceGraphBuildRequest | None
     receipt: SourceGraphAdapterReceipt
+    scope_expansion_anchors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", AdapterStatus(self.status))
@@ -452,6 +457,14 @@ class SourceGraphBuildPlan:
             raise ValueError("ready Source Graph plan requires a request")
         if self.status is AdapterStatus.BLOCKED and self.request is not None:
             raise ValueError("blocked Source Graph plan must not carry a request")
+        anchors = tuple(
+            dict.fromkeys(
+                str(path).strip()
+                for path in self.scope_expansion_anchors
+                if str(path).strip()
+            )
+        )
+        object.__setattr__(self, "scope_expansion_anchors", anchors)
 
     @property
     def unprojected_instance_candidates(self) -> tuple[str, ...]:
@@ -2792,6 +2805,110 @@ def resolve_source_graph_direct_children(
     return tuple(sorted(set(candidates)))
 
 
+def _expanded_single_endpoint_plan(
+    *,
+    base: SourceGraphBuildPlan,
+    hierarchy_result: Mapping[str, Any],
+    parent_chains: Sequence[tuple[str, ...]],
+    candidate_paths: Sequence[str],
+    scope_expansion_anchors: Sequence[str],
+) -> SourceGraphBuildPlan:
+    """Build one larger artifact from hierarchy-proved parent/child paths."""
+
+    assert base.request is not None
+    request = base.request
+    top = request.scope.top
+    chains: list[tuple[str, ...]] = [
+        request.scope.hierarchy_ancestors,
+        *parent_chains,
+    ]
+    for candidate in sorted(set(candidate_paths)):
+        check_cancelled()
+        ancestors = resolve_source_graph_hierarchy_ancestors(
+            hierarchy_result=hierarchy_result,
+            top=top,
+            signal_path=f"{candidate}.__traceweave_scope__",
+        )
+        if ancestors is not None:
+            chains.append(ancestors)
+    unique_chains = tuple(dict.fromkeys(chains))
+    ancestor_union = tuple(
+        sorted(
+            set().union(*(set(chain) for chain in unique_chains)),
+            key=lambda path: (path.count("."), path),
+        )
+    )
+    lca = _trace_scope_lca(unique_chains)
+    compile_projection = plan_source_graph_compile_projection(
+        manifest=request.identity.compile_inputs,
+        hierarchy_result=hierarchy_result,
+        top=top,
+        instance_paths=ancestor_union,
+    )
+    projected_gaps = set(base.receipt.gap_codes)
+    projected_gaps.discard(COMPILE_PROJECTION_GAP)
+    projected_gaps.update(compile_projection.gap_codes)
+    projected_exclusions = set(base.receipt.objective_exclusions)
+    projected_exclusions.discard(COMPILE_PROJECTION_GAP)
+    projected_exclusions.update(compile_projection.gap_codes)
+    boundary = CoverageBoundary(
+        mode=BoundaryMode.EXPLICIT,
+        instance_paths=ancestor_union,
+        objective_exclusions=tuple(sorted(projected_exclusions)),
+    )
+    base_artifact = request.artifact_identity
+    artifact_scope = SourceGraphArtifactScope(
+        design=base_artifact.scope.design,
+        top=top,
+        hierarchy_snapshot_sha256=base_artifact.scope.hierarchy_snapshot_sha256,
+        proved_ancestor_chains=unique_chains,
+        proved_lcas=(lca,),
+        projection_instance_paths=ancestor_union,
+        coverage_boundary=boundary,
+        capabilities=base_artifact.scope.capabilities,
+    )
+    artifact = replace(
+        base_artifact,
+        scope=artifact_scope,
+        compile_projection=compile_projection.projection,
+    )
+    expanded_request = replace(request, artifact=artifact)
+    artifact_key = compute_source_graph_artifact_key(artifact)
+    query_key = compute_source_graph_query_key(expanded_request.query_identity)
+    return SourceGraphBuildPlan(
+        status=AdapterStatus.READY,
+        request=expanded_request,
+        receipt=replace(
+            base.receipt,
+            ancestor_count=len(ancestor_union),
+            requested_cone_instance_count=len(ancestor_union),
+            coverage_boundary_instance_count=len(ancestor_union),
+            scope_kind="single_endpoint_expanded",
+            lca_depth=lca.count("."),
+            gap_codes=tuple(sorted(projected_gaps)),
+            objective_exclusions=tuple(sorted(projected_exclusions)),
+            compile_projection_mode=compile_projection.mode,
+            compile_projection_input_count=compile_projection.input_count,
+            compile_projection_excluded_input_count=(
+                compile_projection.excluded_input_count
+            ),
+            compile_projection_seed_symbol_count=(
+                compile_projection.seed_symbol_count
+            ),
+            compile_projection_dependency_symbol_count=(
+                compile_projection.dependency_symbol_count
+            ),
+            compile_projection_fallback_reason=(
+                compile_projection.fallback_reason
+            ),
+            cross_request_reusable=artifact_key.cross_request_reusable,
+            artifact_fingerprint_sha256=artifact_key.digest,
+            query_fingerprint_sha256=query_key.digest,
+        ),
+        scope_expansion_anchors=tuple(scope_expansion_anchors),
+    )
+
+
 def build_source_graph_frontier_plan(
     *,
     compile_log: str,
@@ -2899,91 +3016,133 @@ def build_source_graph_frontier_plan(
                 exclusions=base.receipt.objective_exclusions,
             )
 
-    chains: list[tuple[str, ...]] = [request.scope.hierarchy_ancestors, *parent_chains]
-    for candidate in sorted(candidate_paths):
-        check_cancelled()
-        ancestors = resolve_source_graph_hierarchy_ancestors(
-            hierarchy_result=hierarchy_result,
-            top=top,
-            signal_path=f"{candidate}.__traceweave_scope__",
-        )
-        if ancestors is not None:
-            chains.append(ancestors)
-    unique_chains = tuple(dict.fromkeys(chains))
-    ancestor_union = tuple(
-        sorted(
-            set().union(*(set(chain) for chain in unique_chains)),
-            key=lambda path: (path.count("."), path),
-        )
-    )
-    lca = _trace_scope_lca(unique_chains)
-    compile_projection = plan_source_graph_compile_projection(
-        manifest=request.identity.compile_inputs,
+    return _expanded_single_endpoint_plan(
+        base=base,
         hierarchy_result=hierarchy_result,
-        top=top,
-        instance_paths=ancestor_union,
+        parent_chains=parent_chains,
+        candidate_paths=tuple(candidate_paths),
+        scope_expansion_anchors=normalized_frontiers,
     )
-    projected_gaps = set(base.receipt.gap_codes)
-    projected_gaps.discard(COMPILE_PROJECTION_GAP)
-    projected_gaps.update(compile_projection.gap_codes)
-    projected_exclusions = set(base.receipt.objective_exclusions)
-    projected_exclusions.discard(COMPILE_PROJECTION_GAP)
-    projected_exclusions.update(compile_projection.gap_codes)
-    boundary = CoverageBoundary(
-        mode=BoundaryMode.EXPLICIT,
-        instance_paths=ancestor_union,
-        objective_exclusions=tuple(sorted(projected_exclusions)),
+
+
+def _artifact_compile_inputs(plan: SourceGraphBuildPlan) -> tuple[str, ...]:
+    assert plan.request is not None
+    artifact = plan.request.artifact_identity
+    if artifact.compile_projection is not None:
+        return artifact.compile_projection.ordered_inputs
+    return artifact.source.compile_inputs.ordered_inputs
+
+
+def build_source_graph_initial_plan(
+    *,
+    compile_log: str,
+    compile_result: Mapping[str, Any],
+    hierarchy_result: Mapping[str, Any],
+    hierarchy_snapshot_sha256: str,
+    operation: QueryOperation | str,
+    signal_path: str,
+    top_hint: str | None,
+    max_hops: int,
+    frontend_version: str,
+    recursive: bool = False,
+    include_expr: bool = True,
+    kind_filter: Sequence[str] = (),
+    max_instances: int = DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT,
+    allow_adjacent: bool = True,
+) -> SourceGraphBuildPlan:
+    """Select a bounded first artifact for an interactive driver/load query.
+
+    Large-manifest deep queries often cross from a leaf port into one of its
+    direct siblings. When the hierarchy and compile-closure growth are both
+    small and explicitly bounded, admitting that adjacent scope up front avoids
+    a second frontend build. Shallow queries, full-manifest builds, wide
+    siblings, or any unproved/costly expansion retain the exact ancestor plan.
+    """
+
+    base = build_source_graph_plan(
+        compile_log=compile_log,
+        compile_result=compile_result,
+        hierarchy_result=hierarchy_result,
+        hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
+        operation=operation,
+        signal_path=signal_path,
+        top_hint=top_hint,
+        max_hops=max_hops,
+        frontend_version=frontend_version,
+        recursive=recursive,
+        include_expr=include_expr,
+        kind_filter=kind_filter,
     )
-    base_artifact = request.artifact_identity
-    artifact_scope = SourceGraphArtifactScope(
-        design=base_artifact.scope.design,
-        top=top,
-        hierarchy_snapshot_sha256=base_artifact.scope.hierarchy_snapshot_sha256,
-        proved_ancestor_chains=unique_chains,
-        proved_lcas=(lca,),
-        projection_instance_paths=ancestor_union,
-        coverage_boundary=boundary,
-        capabilities=base_artifact.scope.capabilities,
+    if base.status is AdapterStatus.BLOCKED:
+        return base
+    assert base.request is not None
+    requested_operation = base.request.scope.requested_cone.operation
+    deep_query = (
+        requested_operation is QueryOperation.DRIVER and recursive
+    ) or (requested_operation is QueryOperation.LOADS and max_hops > 1)
+    if (
+        not allow_adjacent
+        or not deep_query
+        or base.request.artifact_identity.compile_projection is None
+        or not isinstance(max_instances, int)
+        or isinstance(max_instances, bool)
+        or max_instances < 1
+    ):
+        return base
+
+    ancestors = base.request.scope.hierarchy_ancestors
+    if len(ancestors) < 2:
+        return base
+    parent_chain = ancestors[:-1]
+    parent_path = parent_chain[-1]
+    children = resolve_source_graph_direct_children(
+        hierarchy_result=hierarchy_result,
+        top=base.request.scope.top,
+        instance_path=parent_path,
     )
-    artifact = replace(
-        base_artifact,
-        scope=artifact_scope,
-        compile_projection=compile_projection.projection,
+    if children is None or len(children) > max_instances:
+        return base
+    base_scope_paths = set(
+        base.request.artifact_identity.scope.projection_instance_paths
     )
-    expanded_request = replace(request, artifact=artifact)
-    artifact_key = compute_source_graph_artifact_key(artifact)
-    query_key = compute_source_graph_query_key(expanded_request.query_identity)
-    return SourceGraphBuildPlan(
-        status=AdapterStatus.READY,
-        request=expanded_request,
-        receipt=replace(
-            base.receipt,
-            ancestor_count=len(ancestor_union),
-            requested_cone_instance_count=len(ancestor_union),
-            coverage_boundary_instance_count=len(ancestor_union),
-            scope_kind="single_endpoint_expanded",
-            lca_depth=lca.count("."),
-            gap_codes=tuple(sorted(projected_gaps)),
-            objective_exclusions=tuple(sorted(projected_exclusions)),
-            compile_projection_mode=compile_projection.mode,
-            compile_projection_input_count=compile_projection.input_count,
-            compile_projection_excluded_input_count=(
-                compile_projection.excluded_input_count
-            ),
-            compile_projection_seed_symbol_count=(
-                compile_projection.seed_symbol_count
-            ),
-            compile_projection_dependency_symbol_count=(
-                compile_projection.dependency_symbol_count
-            ),
-            compile_projection_fallback_reason=(
-                compile_projection.fallback_reason
-            ),
-            cross_request_reusable=artifact_key.cross_request_reusable,
-            artifact_fingerprint_sha256=artifact_key.digest,
-            query_fingerprint_sha256=query_key.digest,
-        ),
-    )
+    new_instance_count = len(set(children) - base_scope_paths)
+    if (
+        new_instance_count < 1
+        or new_instance_count > _INITIAL_ADJACENT_MAX_NEW_INSTANCES
+    ):
+        return base
+
+    anchor = f"{parent_path}.__traceweave_initial_scope__"
+    try:
+        expanded = _expanded_single_endpoint_plan(
+            base=base,
+            hierarchy_result=hierarchy_result,
+            parent_chains=(parent_chain,),
+            candidate_paths=children,
+            scope_expansion_anchors=(anchor,),
+        )
+    except ValueError:
+        # Proactive enlargement is optional. Any contract/cost shape it cannot
+        # prove falls back to the already valid exact-ancestor request.
+        return base
+
+    assert expanded.request is not None
+    base_inputs = _artifact_compile_inputs(base)
+    expanded_inputs = _artifact_compile_inputs(expanded)
+    if not set(base_inputs).issubset(expanded_inputs):
+        return base
+    added_inputs = len(expanded_inputs) - len(base_inputs)
+    if (
+        added_inputs < 0
+        or added_inputs > _INITIAL_ADJACENT_MAX_ADDED_INPUTS
+        or (
+            len(base_inputs) >= _INITIAL_ADJACENT_MAX_NEW_INSTANCES
+            and len(expanded_inputs) * _INITIAL_ADJACENT_INPUT_RATIO_DENOMINATOR
+            > len(base_inputs) * _INITIAL_ADJACENT_INPUT_RATIO_NUMERATOR
+        )
+    ):
+        return base
+    return expanded
 
 
 def _trace_scope_lca(chains: Sequence[tuple[str, ...]]) -> str:

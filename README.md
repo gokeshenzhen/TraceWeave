@@ -506,6 +506,21 @@ full replay. Adapter receipts expose only fixed-label/count telemetry under
 `inconclusive`: IR-proved positive driver/load/path facts remain usable, but an
 empty result can never establish `no_driver`, `no_load`, or `not_connected`.
 
+For a deep recursive driver query, or a load query with an explicit depth above
+one, the first large-manifest projection may include the target leaf's adjacent
+siblings instead of waiting for a failed narrow query and rebuilding. This is a
+bounded admission policy, not a general subtree expansion: the parent and every
+direct child must be proved by the hierarchy; at most 32 new instances and 24
+additional closure inputs are admitted; and a base closure of at least 32 inputs
+may grow by no more than 25%. The existing
+`TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES` cap also applies. Shallow
+queries, full-manifest replay, bounded bootstrap, unresolved hierarchy, or any
+costlier shape keeps the exact ancestor artifact. If runtime evidence still
+requires another frontier, the proactively admitted parent is retained in the
+next exact ancestor union, so no scope or fact from two artifacts is mixed.
+This changes only preparation scheduling: coverage exclusions, fingerprints,
+single-artifact provenance, public inputs, and result schemas are unchanged.
+
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and
 use it for the structural scan), then supply the other source/elaboration logs
@@ -792,6 +807,23 @@ reproducible two-scope orchestration benchmark is available as:
 ```bash
 python3.11 scripts/benchmark_source_graph_scope_reuse.py \
   --delay-ms 50 --repeats 5
+```
+
+To compare the historical reactive two-build sequence against the bounded
+first-artifact policy on the same eligible SoC target, run each strategy in a
+fresh process. The report includes plan sizes, preparation/build/load time,
+worker and parent peak RSS, cache bytes, and a hash of the final public query
+result:
+
+```bash
+python3.11 scripts/benchmark_source_graph_initial_scope.py \
+  --compile-log /path/to/build.log --simulator vcs \
+  --signal tb.dut.path.to.signal --operation driver --max-depth 20 \
+  --strategy reactive-sequence
+python3.11 scripts/benchmark_source_graph_initial_scope.py \
+  --compile-log /path/to/build.log --simulator vcs \
+  --signal tb.dut.path.to.signal --operation driver --max-depth 20 \
+  --strategy bounded-adjacent
 ```
 
 For a reproducible cross-restart observation on any SoC layout, use

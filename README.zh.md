@@ -455,6 +455,17 @@ adapter 回执仅在 `manifest.compile_projection` 下公开固定标签和计�
 driver/load/path 正事实仍可使用，但空结果绝不能证明 `no_driver`、`no_load` 或
 `not_connected`。
 
+对于深层 recursive driver 查询，或显式深度大于 1 的 load 查询，大型 manifest 的首个
+projection 可以在第一次构建时纳入目标叶实例的相邻 sibling，避免先执行一次必然过窄的查询
+再重建。这是有界准入策略，不是通用 subtree 展开：parent 与全部 direct child 都必须由
+hierarchy 证明；最多新增 32 个实例和 24 个 closure input；base closure 达到 32 个 input
+后，输入增长不得超过 25%；同时仍受
+`TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES` 限制。浅层查询、full-manifest replay、
+bounded bootstrap、无法证明的 hierarchy 或成本更高的形状都保持精确 ancestor artifact。
+如果运行时证据仍要求新的 frontier，预先纳入的 parent 会保留在下一次精确 ancestor union
+中，不会把两个 artifact 的 scope 或 facts 混在一起。该策略只改变 preparation 调度；
+coverage exclusion、fingerprint、single-artifact provenance、公开输入与结果 schema 均不变。
+
 对于 source compile 与 elaboration 分属多个日志的 VCS 流程，可以显式构造同一个上下文。
 建议把包含源文件顺序的 compile log 保持为 primary（结构扫描也使用它），再按 build 顺序
 提供其余 source/elaboration 日志：
@@ -694,6 +705,21 @@ fact 可以复用；disk lookup 仍保持 exact-only。可通过以下命令
 ```bash
 python3.11 scripts/benchmark_source_graph_scope_reuse.py \
   --delay-ms 50 --repeats 5
+```
+
+要在同一个满足准入条件的 SoC target 上比较历史 reactive 两次构建与新的首 artifact 策略，
+请让两种 strategy 各自在 fresh process 中运行。报告包含 plan 大小、prepare/build/load 时间、
+worker 与 parent peak RSS、cache bytes，以及最终公开查询结果的 hash：
+
+```bash
+python3.11 scripts/benchmark_source_graph_initial_scope.py \
+  --compile-log /path/to/build.log --simulator vcs \
+  --signal tb.dut.path.to.signal --operation driver --max-depth 20 \
+  --strategy reactive-sequence
+python3.11 scripts/benchmark_source_graph_initial_scope.py \
+  --compile-log /path/to/build.log --simulator vcs \
+  --signal tb.dut.path.to.signal --operation driver --max-depth 20 \
+  --strategy bounded-adjacent
 ```
 
 若要在任意 SoC 目录结构上做可复现的跨重启观察，可使用

@@ -36,6 +36,7 @@ from src.source_graph_contract import SourceGraphScopeReceipt
 from src.source_graph_backend import SourceGraphConnectivityBackend
 from src.source_graph_disk_cache import SourceGraphDiskCache
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
+from src.source_graph_adapter import build_source_graph_frontier_plan
 from src.source_graph_runtime import (
     PrepareStatus,
     SourceGraphRuntime,
@@ -1110,6 +1111,90 @@ async def test_single_endpoint_driver_expands_only_dynamic_sibling_frontier(
         "source_graph_scope_expansion",
         None,
     ]
+
+
+@pytest.mark.anyio
+async def test_initial_expanded_plan_queries_one_artifact_without_reactive_build(
+    monkeypatch, tmp_path
+):
+    compile_log = _install_frontier_context(tmp_path)
+    worker = FrontierWorker()
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+
+    def forced_initial(**kwargs):
+        kwargs.pop("allow_adjacent")
+        return build_source_graph_frontier_plan(
+            **kwargs,
+            frontier_signal_paths=("top.parent_net[31:0]",),
+        )
+
+    monkeypatch.setattr(server, "build_source_graph_initial_plan", forced_initial)
+    args = _driver_args(compile_log, "top.u.data_i[31:0]")
+    args["top_hint"] = "top"
+
+    result = await server._dispatch("explain_signal_driver", args)
+
+    assert result.backend == "source_graph"
+    assert result.driver_status == "resolved"
+    assert worker.calls == 1
+    assert static.driver_calls == 0
+    receipt = result.backend_status.source_graph
+    assert receipt.artifact_attempt_count == 1
+    assert receipt.scope_expansion_count == 0
+    assert receipt.adapter["scope"]["kind"] == "single_endpoint_expanded"
+    assert [item.reason for item in result.backend_status.attempted_backends] == [
+        "npi_kdb_unavailable",
+        None,
+    ]
+
+
+@pytest.mark.anyio
+async def test_initial_scope_anchor_is_retained_for_later_frontier_union(
+    monkeypatch, tmp_path
+):
+    compile_log = _install_frontier_context(tmp_path)
+    worker = FrontierWorker()
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+    original_initial = server.build_source_graph_initial_plan
+    original_frontier = server.build_source_graph_frontier_plan
+    seed = "top.__traceweave_initial_scope__"
+    observed = ()
+
+    def seeded_initial(**kwargs):
+        return replace(
+            original_initial(**kwargs),
+            scope_expansion_anchors=(seed,),
+        )
+
+    def captured_frontier(**kwargs):
+        nonlocal observed
+        observed = tuple(kwargs["frontier_signal_paths"])
+        kwargs["frontier_signal_paths"] = tuple(
+            item for item in observed if item != seed
+        )
+        return original_frontier(**kwargs)
+
+    monkeypatch.setattr(server, "build_source_graph_initial_plan", seeded_initial)
+    monkeypatch.setattr(server, "build_source_graph_frontier_plan", captured_frontier)
+    args = _driver_args(compile_log, "top.u.data_i[31:0]")
+    args["top_hint"] = "top"
+
+    result = await server._dispatch("explain_signal_driver", args)
+
+    assert result.backend == "source_graph"
+    assert observed[0] == seed
+    assert len(observed) > 1
+    assert worker.calls == 2
 
 
 @pytest.mark.anyio

@@ -14,6 +14,7 @@ from src.source_graph_adapter import (
     AdapterStatus,
     SOURCE_GRAPH_ADAPTER_VERSION,
     build_source_graph_frontier_plan,
+    build_source_graph_initial_plan,
     build_source_graph_path_plan,
     build_source_graph_plan,
 )
@@ -173,6 +174,73 @@ def _frontier_plan(
         max_hops=8,
         frontend_version="11.0.0",
         max_instances=max_instances,
+    )
+
+
+def _large_adjacent_plan(
+    tmp_path: Path,
+    *,
+    producer_count: int = 1,
+    recursive: bool = True,
+    max_hops: int = 8,
+    operation: QueryOperation = QueryOperation.DRIVER,
+    allow_adjacent: bool = True,
+):
+    leaf = tmp_path / "leaf.sv"
+    dut = tmp_path / "dut.sv"
+    top = tmp_path / "top.sv"
+    _write(leaf, "module leaf(input logic data_i); endmodule\n")
+    producer_paths = tuple(
+        tmp_path / f"producer_{index}.sv" for index in range(producer_count)
+    )
+    for index, path in enumerate(producer_paths):
+        _write(
+            path,
+            f"module producer_{index}(output logic data_o); "
+            "assign data_o = 1'b0; endmodule\n",
+        )
+    instances = "\n".join(
+        f"producer_{index} u_source_{index}(.data_o(link_{index}));"
+        for index in range(producer_count)
+    )
+    links = "\n".join(
+        f"logic link_{index};" for index in range(producer_count)
+    )
+    _write(
+        dut,
+        "module dut;\n"
+        f"{links}\n"
+        f"{instances}\n"
+        "leaf u_leaf(.data_i(link_0));\n"
+        "endmodule\n",
+    )
+    _write(top, "module tb; dut dut(); endmodule\n")
+    target_total = 80
+    unused_count = target_total - len(producer_paths) - 3
+    unused = tuple(tmp_path / f"unused_{index}.sv" for index in range(unused_count))
+    for index, path in enumerate(unused):
+        _write(path, f"module unused_{index}; endmodule\n")
+    sources = (leaf, *producer_paths, dut, top, *unused)
+    compile_result = _compile_result(
+        tmp_path,
+        command=f"xrun {' '.join(str(path) for path in sources)} -top tb",
+        sources=sources,
+    )
+    hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+    return build_source_graph_initial_plan(
+        compile_log=str(tmp_path / "compile.log"),
+        compile_result=hierarchy["compile_result"],
+        hierarchy_result=hierarchy,
+        hierarchy_snapshot_sha256=compute_snapshot_fingerprint(
+            str(tmp_path / "compile.log"), "xcelium"
+        ),
+        operation=operation,
+        signal_path="tb.dut.u_leaf.data_i",
+        top_hint="tb",
+        max_hops=max_hops,
+        frontend_version="11.0.0",
+        recursive=recursive,
+        allow_adjacent=allow_adjacent,
     )
 
 
@@ -606,6 +674,87 @@ def test_frontier_plan_blocks_before_exceeding_direct_child_cap(tmp_path):
     assert plan.status is AdapterStatus.BLOCKED
     assert plan.receipt.blocker is not None
     assert plan.receipt.blocker.code == "frontier_instance_limit"
+
+
+def test_large_deep_query_selects_bounded_adjacent_initial_scope(tmp_path):
+    plan = _large_adjacent_plan(tmp_path)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.receipt.scope_kind == "single_endpoint_expanded"
+    assert plan.request.scope.hierarchy_ancestors == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+    assert plan.request.artifact_identity.scope.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+        "tb.dut.u_source_0",
+    )
+    assert plan.scope_expansion_anchors == (
+        "tb.dut.__traceweave_initial_scope__",
+    )
+    projection = plan.request.artifact_identity.compile_projection
+    assert projection is not None
+    assert len(projection.ordered_inputs) == 4
+
+
+def test_large_shallow_query_keeps_exact_ancestor_initial_scope(tmp_path):
+    plan = _large_adjacent_plan(tmp_path, recursive=False, max_hops=1)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.receipt.scope_kind == "single_endpoint"
+    assert plan.request.artifact_identity.scope.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+    assert plan.scope_expansion_anchors == ()
+
+
+def test_large_deep_load_selects_bounded_adjacent_initial_scope(tmp_path):
+    plan = _large_adjacent_plan(
+        tmp_path,
+        operation=QueryOperation.LOADS,
+        recursive=False,
+        max_hops=2,
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.receipt.scope_kind == "single_endpoint_expanded"
+    assert "tb.dut.u_source_0" in (
+        plan.request.artifact_identity.scope.projection_instance_paths
+    )
+
+
+def test_initial_scope_policy_can_disable_adjacent_expansion(tmp_path):
+    plan = _large_adjacent_plan(tmp_path, allow_adjacent=False)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.receipt.scope_kind == "single_endpoint"
+    assert plan.scope_expansion_anchors == ()
+
+
+def test_large_deep_query_rejects_costly_adjacent_compile_growth(tmp_path):
+    plan = _large_adjacent_plan(tmp_path, producer_count=25)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert plan.receipt.scope_kind == "single_endpoint"
+    assert plan.request.artifact_identity.scope.projection_instance_paths == (
+        "tb",
+        "tb.dut",
+        "tb.dut.u_leaf",
+    )
+    projection = plan.request.artifact_identity.compile_projection
+    assert projection is not None
+    assert len(projection.ordered_inputs) == 3
+    assert plan.scope_expansion_anchors == ()
 
 
 def test_native_xrun_replay_avoids_filelist_echo_duplication_and_resolves_uvmhome(
