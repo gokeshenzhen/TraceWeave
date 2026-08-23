@@ -14,6 +14,7 @@ import base64
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import cached_property
 import json
 import math
 import os
@@ -28,6 +29,7 @@ from typing import Any, Mapping, Protocol
 
 from .connectivity_ir import ConnectivityIR, CoverageStatus
 from .connectivity_query import ConnectivityQueryEngine
+from .hierarchy_provider import ConnectivityIRHierarchyProvider
 from .source_graph_contract import (
     SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     ScopeRelation,
@@ -660,6 +662,17 @@ class SourceGraphCacheEntry:
     @property
     def coverage_status(self) -> CoverageStatus:
         return self.artifact_scope_receipt.coverage_status
+
+    @cached_property
+    def hierarchy_provider(self) -> ConnectivityIRHierarchyProvider:
+        """Lazy semantic hierarchy view sharing the query engine's indexes."""
+
+        return ConnectivityIRHierarchyProvider(
+            self.ir,
+            design_identity=self.build_key.design_digest,
+            instance_index=self.query_engine.instance_index,
+            definition_index=self.query_engine.definition_index,
+        )
 
 
 @dataclass(frozen=True)

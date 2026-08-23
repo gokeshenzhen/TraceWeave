@@ -109,16 +109,17 @@ For any new session, read these files first to build the project map:
 33. `src/cycle_query.py`
 34. `src/schemas.py`
 35. `src/problem_hints.py`
-36. `src/hierarchy_handles.py`
-37. `src/handle_tools.py`
-38. `src/cursor_store.py`
-39. `src/timespec.py`
-40. `src/verify_condition.py`
-41. `src/cancellation.py`
-42. `src/operation_metrics.py`
-43. `src/compile_source_index.py`
-44. `src/compile_source_runtime.py`
-45. `src/compile_session_snapshot.py`
+36. `src/hierarchy_provider.py`
+37. `src/hierarchy_handles.py`
+38. `src/handle_tools.py`
+39. `src/cursor_store.py`
+40. `src/timespec.py`
+41. `src/verify_condition.py`
+42. `src/cancellation.py`
+43. `src/operation_metrics.py`
+44. `src/compile_source_index.py`
+45. `src/compile_source_runtime.py`
+46. `src/compile_session_snapshot.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -172,6 +173,7 @@ If the task involves behavior validation or regression checks, also read:
   join an already-active exact index but never creates a full-design preload on
   a miss. Public metrics contain numeric counters and fixed dispositions only.
 - `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction. Repeated module/UVM descendants retain the compatibility nested-dict schema but share immutable children mappings as an internal object DAG. Logical stats memoize shared subtree summaries; build metrics distinguish logical nodes, reachable physical nodes, allocations, cache hits, and reuse. Full-build instance candidates/nodes also carry fixed edge origin/status/gaps: only complete/positive-local edges enter the tree; explicit/implicit generate, instance-array, and bind candidates stay diagnostic rather than becoming fictitious flat paths; parameter overrides keep the safe direct edge while Slang owns specialization; duplicate definitions stop at an ambiguous node without guessed descendants. Query-relevant hierarchy gaps flow into Source Graph objective exclusions, while the parameter-only gap is informational because the semantic frontend elaborates it. Bounded bootstrap uses the same positive-only rule and blocks a direct unresolved semantic edge. The optional path-specific NPI `file:line` overlay detects aliases and uses copy-on-write only on annotated paths, so provenance never bleeds between repeated instances. `scripts/benchmark_hierarchy_materialization.py` provides the fresh-process eager/shared scaling oracle; `scripts/benchmark_tb_hierarchy.py --no-hierarchy-template-sharing` is the real-design A/B control.
+- `src/hierarchy_provider.py` is the internal bounded hierarchy contract. The compile-log provider wraps the compatibility `component_tree` and resolves a target by exact child lookup without sibling/full-design enumeration. The Connectivity-IR provider reuses the prepared query engine's immutable instance/definition indexes, preserves generate scopes and parameter specializations through `InstanceDecl` parent bindings, and lazily indexes direct children. Provider-local stable instance IDs are scoped by immutable design identity. Basic `build_tb_hierarchy` never imports or requires the optional Slang frontend, and public hierarchy/Source Graph receipt schemas remain unchanged.
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
 - `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.
 - `src/signal_load.py` resolves load/fanout for a signal — the symmetric counterpart to `signal_driver`.

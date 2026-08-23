@@ -522,6 +522,18 @@ annotation can therefore never bleed into a sibling instance that shares the
 same definition template. Numeric `build_metrics` distinguish logical nodes,
 reachable physical nodes, allocations, cache hits, and reused nodes.
 
+Connectivity planning consumes this compatibility representation through
+`src/hierarchy_provider.py`, not by depending on nested dictionaries directly.
+The provider contract exposes O(depth) target resolution, exact
+instance-to-definition bindings, and bounded direct-child reads. The lexical
+provider wraps `component_tree` and remains the default, so basic hierarchy
+construction has no optional-frontend dependency. A prepared Connectivity IR
+creates a semantic provider lazily over the query engine's existing immutable
+instance/definition indexes. Its parent links preserve generate-scope path
+atoms and specialization IDs without materializing a second full tree. Stable
+instance IDs are local to one immutable design identity; public hierarchy and
+Source Graph receipt schemas remain unchanged.
+
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted
 before that uncertainty boundary remain available, while later text is excluded

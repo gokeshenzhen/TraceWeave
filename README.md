@@ -111,6 +111,7 @@ TraceWeave/
     ├── cycle_query.py
     ├── schemas.py
     ├── problem_hints.py
+    ├── hierarchy_provider.py     # Bounded lexical/semantic instance-binding views
     ├── hierarchy_handles.py      # HandleStore + content-addressed handle for build_tb_hierarchy
     ├── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
     ├── cursor_store.py           # Named, process-scoped time anchors (cursor_set/list/delete)
@@ -582,6 +583,17 @@ query-relevant hierarchy gaps into its receipt and coverage boundary, preventing
 complete negative claims; the parameter-only gap is informational because Slang
 performs specialization itself. Build metrics include candidate/unresolved and
 duplicate-definition counts using only numeric values and fixed labels.
+
+Internally, Source Graph no longer depends directly on the compatibility tree
+shape. `hierarchy_provider.py` defines bounded O(depth) scope lookup, exact
+instance-to-definition bindings, and capped direct-child reads. The default
+compile-log provider wraps `component_tree` without importing Slang. Every
+prepared Connectivity IR exposes a second semantic provider over its existing
+query-engine indexes, so generate-scope paths, instance arrays, and parameter
+specializations retain their elaborated `InstanceDecl` bindings without
+copying another full hierarchy or rebuilding path dictionaries. Provider-local
+stable instance IDs are scoped by the immutable design identity; the public
+hierarchy and Source Graph receipt schemas are unchanged.
 
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted

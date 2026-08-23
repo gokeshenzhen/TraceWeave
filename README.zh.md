@@ -104,6 +104,7 @@ TraceWeave/
     ├── cycle_query.py
     ├── schemas.py
     ├── problem_hints.py
+    ├── hierarchy_provider.py     # 有界 lexical/semantic instance-binding 视图
     ├── hierarchy_handles.py      # HandleStore + build_tb_hierarchy 的内容寻址 handle
     ├── handle_tools.py           # get_tb_subtree / lookup_tb_files / find_tb_instance / ...
     ├── cursor_store.py           # 命名的进程内时间锚(cursor_set/list/delete)
@@ -514,6 +515,15 @@ origin/status/gap metadata。显式或隐式 generate、实例数组与 bind sta
 boundary，阻止不完整上下文产生 complete negative；parameter-only gap 属于 informational，
 因为 Slang 会自行完成 specialization。build metrics 只用数值和固定 label 报告 candidate、
 unresolved edge 与 duplicate-definition counts。
+
+Source Graph 内部已不再直接依赖 compatibility tree 的具体形状。
+`hierarchy_provider.py` 提供有界的 O(depth) scope lookup、精确
+instance-to-definition binding 和带上限的 direct-child 读取。默认 compile-log provider
+只包装 `component_tree`，不会导入 Slang；每个已准备好的 Connectivity IR 则在现有 query
+engine 索引之上惰性提供 semantic provider，使 generate scope、instance array 与 parameter
+specialization 保留 elaborated `InstanceDecl` binding，同时不复制另一份完整 hierarchy，也不
+重复建立 path dict。provider-local stable instance ID 受 immutable design identity 限定；公开
+hierarchy 与 Source Graph receipt schema 保持不变。
 
 完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
 不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted

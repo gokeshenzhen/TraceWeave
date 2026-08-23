@@ -2,10 +2,11 @@
 
 The adapter translates only local compile-log facts that can be replayed by
 the isolated Slang worker.  It never starts a worker and never walks an
-elaborated design.  Hierarchy scope is resolved by following the requested
-signal through the already-built ``component_tree`` one child at a time. Path
-requests follow two such chains, require one proved top, and project only their
-ancestor union; no sibling or full-design enumeration is performed.
+elaborated design. Hierarchy scope is resolved through the bounded lexical
+provider by following the requested signal through the already-built
+``component_tree`` one child at a time. Path requests follow two such chains,
+require one proved top, and project only their ancestor union; no sibling or
+full-design enumeration is performed.
 
 Incomplete compile inputs can still produce a diagnostic request, but the
 existing build contract makes its key non-reusable.  Unprovable target/top
@@ -34,6 +35,10 @@ from .compile_session_snapshot import (
     SOURCE_CONTENT_MARKERS,
 )
 from .filelist_tokenizer import tokenize_filelist
+from .hierarchy_provider import (
+    HierarchyAncestorResolution,
+    lexical_hierarchy_provider,
+)
 from .slang_connectivity_projector import SLANG_FRONTEND_NAME
 from .source_graph_compile_projection import (
     COMPILE_PROJECTION_GAP,
@@ -77,12 +82,6 @@ _MAX_FILELIST_TOKENS = 1_000_000
 _MAX_ENV_INFERENCE_FILELISTS = 256
 _MAX_ENV_INFERENCE_ROUNDS = 64
 _MANIFEST_CACHE_MAX_ENTRIES = 8
-_HIERARCHY_INFORMATIONAL_GAP_CODES = frozenset({
-    # The hierarchy handle does not materialize specializations, but the Slang
-    # worker does. The instance edge itself remains safe scope evidence.
-    "hierarchy_parameter_specialization_unmodeled",
-})
-
 _BASE_OPTIONS = {
     "vcs": (
         "--compat",
@@ -200,65 +199,6 @@ class SourceGraphAdapterBlocker:
 
     def to_dict(self) -> dict[str, str]:
         return {"code": self.code, "stage": self.stage}
-
-
-@dataclass(frozen=True)
-class HierarchyAncestorResolution:
-    """Private path-resolution evidence with a privacy-safe public summary.
-
-    A dotted suffix after the last proved instance is not automatically a
-    hierarchy failure: it may be an interface or packed member.  The candidate
-    path therefore stays private and the public receipt reports only counts.
-    ``missing_instance_proved`` is true only when the hierarchy scan metadata
-    independently names the missing child instance.
-    """
-
-    ancestors: tuple[str, ...]
-    remaining_path_segment_count: int
-    stop_depth: int | None = None
-    candidate_instance_path: str | None = None
-    missing_instance_proved: bool = False
-    gap_codes: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        ancestors = tuple(str(path) for path in self.ancestors)
-        if not ancestors or any(not path for path in ancestors):
-            raise ValueError("hierarchy resolution requires proved ancestors")
-        if self.remaining_path_segment_count < 1:
-            raise ValueError("hierarchy resolution must retain a signal suffix")
-        if self.candidate_instance_path is None:
-            if self.stop_depth is not None or self.missing_instance_proved:
-                raise ValueError(
-                    "resolved hierarchy path cannot carry missing-instance evidence"
-                )
-        else:
-            if not self.candidate_instance_path or self.stop_depth is None:
-                raise ValueError(
-                    "deferred hierarchy path requires a candidate and stop depth"
-                )
-            if self.stop_depth < 1:
-                raise ValueError("hierarchy stop depth must be positive")
-        gap_codes = tuple(sorted(set(self.gap_codes)))
-        for code in gap_codes:
-            _fixed_label(code, "hierarchy gap code")
-        object.__setattr__(self, "ancestors", ancestors)
-        object.__setattr__(self, "gap_codes", gap_codes)
-
-    @property
-    def status(self) -> str:
-        if self.candidate_instance_path is None:
-            return "resolved"
-        if self.missing_instance_proved:
-            return "truncated"
-        return "deferred"
-
-    @property
-    def coverage_gap_codes(self) -> tuple[str, ...]:
-        return tuple(
-            code
-            for code in self.gap_codes
-            if code not in _HIERARCHY_INFORMATIONAL_GAP_CODES
-        )
 
 
 def _aggregate_hierarchy_resolutions(
@@ -2360,164 +2300,17 @@ def _selected_top(
     return root if root in tops else None
 
 
-def _hierarchy_module_gap_codes(
-    hierarchy_result: Mapping[str, Any],
-    module_name: str,
-) -> tuple[str, ...]:
-    scans = hierarchy_result.get("_scan_results")
-    if not isinstance(scans, Sequence) or isinstance(scans, (str, bytes)):
-        return ()
-    gap_codes: set[str] = set()
-    definition_count = 0
-    for scan in scans:
-        check_cancelled()
-        if not isinstance(scan, Mapping):
-            continue
-        raw_modules = scan.get("structural_modules")
-        if raw_modules is None:
-            raw_modules = scan.get("modules", ())
-        raw_interfaces = scan.get("structural_interfaces")
-        if raw_interfaces is None:
-            raw_interfaces = scan.get("interfaces", ())
-        for raw_definitions in (raw_modules, raw_interfaces):
-            if isinstance(raw_definitions, Sequence) and not isinstance(
-                raw_definitions,
-                (str, bytes),
-            ):
-                definition_count += sum(
-                    str(name) == module_name for name in raw_definitions
-                )
-        module_gap_map = scan.get("hierarchy_module_gap_map")
-        if not isinstance(module_gap_map, Mapping):
-            continue
-        raw_codes = module_gap_map.get(module_name)
-        if isinstance(raw_codes, Sequence) and not isinstance(
-            raw_codes,
-            (str, bytes),
-        ):
-            gap_codes.update(str(code) for code in raw_codes)
-    if definition_count > 1:
-        gap_codes.add("hierarchy_definition_ambiguous")
-    return tuple(sorted(gap_codes))
-
-
-def _scan_child_instance_evidence(
-    hierarchy_result: Mapping[str, Any],
-    *,
-    parent_module: str | None,
-    instance_name: str,
-) -> tuple[bool, tuple[str, ...]]:
-    """Return proof plus fixed gaps for one scanned child candidate."""
-
-    if not parent_module:
-        return False, ()
-    scans = hierarchy_result.get("_scan_results")
-    if not isinstance(scans, Sequence) or isinstance(scans, (str, bytes)):
-        return False, ()
-    parent_definition_count = 0
-    child_proved = False
-    gap_codes = set(_hierarchy_module_gap_codes(hierarchy_result, parent_module))
-    for scan in scans:
-        check_cancelled()
-        if not isinstance(scan, Mapping):
-            continue
-        by_module = scan.get("module_instance_map")
-        if not isinstance(by_module, Mapping) or parent_module not in by_module:
-            continue
-        items = by_module.get(parent_module)
-        if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
-            continue
-        parent_definition_count += 1
-        for item in items:
-            if (
-                not isinstance(item, Mapping)
-                or str(item.get("instance_name") or "") != instance_name
-            ):
-                continue
-            raw_codes = item.get("hierarchy_gap_codes")
-            if isinstance(raw_codes, Sequence) and not isinstance(
-                raw_codes,
-                (str, bytes),
-            ):
-                gap_codes.update(str(code) for code in raw_codes)
-            child_proved = child_proved or str(
-                item.get("hierarchy_edge_status") or "complete"
-            ) in {"complete", "positive_local"}
-    if parent_definition_count > 1:
-        gap_codes.add("hierarchy_definition_ambiguous")
-    return (
-        parent_definition_count == 1
-        and child_proved
-        and "hierarchy_definition_ambiguous" not in gap_codes,
-        tuple(sorted(gap_codes)),
-    )
-
-
 def resolve_source_graph_hierarchy_scope(
     *,
     hierarchy_result: Mapping[str, Any],
     top: str,
     signal_path: str,
 ) -> HierarchyAncestorResolution | None:
-    """Resolve the proved instance prefix and retain any deferred suffix fact."""
+    """Compatibility wrapper over the default compile-log provider."""
 
-    component_tree = hierarchy_result.get("component_tree")
-    if not isinstance(component_tree, Mapping):
-        return None
-    parts = signal_path.split(".")
-    if len(parts) < 2 or parts[0] != top:
-        return None
-    ancestors = [top]
-    hierarchy_gap_codes = set(
-        _hierarchy_module_gap_codes(hierarchy_result, top)
-    )
-    children = component_tree.get(top)
-    parent_module: str | None = top
-    index = 1
-    while index < len(parts) - 1 and isinstance(children, Mapping):
-        check_cancelled()
-        node = children.get(parts[index])
-        if not isinstance(node, Mapping):
-            break
-        raw_gap_codes = node.get("hierarchy_gap_codes")
-        if isinstance(raw_gap_codes, Sequence) and not isinstance(
-            raw_gap_codes,
-            (str, bytes),
-        ):
-            hierarchy_gap_codes.update(str(code) for code in raw_gap_codes)
-        ancestors.append(".".join(parts[: index + 1]))
-        raw_module = node.get("class") or node.get("module")
-        parent_module = str(raw_module) if raw_module else None
-        nested = node.get("children")
-        children = nested if isinstance(nested, Mapping) else None
-        index += 1
-    # Once a segment is not a proved child instance, the remaining suffix is
-    # deferred to the frontend/query as a signal, interface field, or packed
-    # aggregate member. This never invents an instance: the artifact remains
-    # bounded to the last proved ancestor and an invalid suffix is rejected by
-    # exact IR declaration lookup before any fact can be returned.
-    candidate_instance_path = None
-    missing_instance_proved = False
-    stop_depth = None
-    if index < len(parts) - 1:
-        candidate_instance_path = ".".join(parts[: index + 1])
-        stop_depth = index
-        (
-            missing_instance_proved,
-            candidate_gap_codes,
-        ) = _scan_child_instance_evidence(
-            hierarchy_result,
-            parent_module=parent_module,
-            instance_name=parts[index],
-        )
-        hierarchy_gap_codes.update(candidate_gap_codes)
-    return HierarchyAncestorResolution(
-        ancestors=tuple(ancestors),
-        remaining_path_segment_count=len(parts) - index,
-        stop_depth=stop_depth,
-        candidate_instance_path=candidate_instance_path,
-        missing_instance_proved=missing_instance_proved,
-        gap_codes=tuple(sorted(hierarchy_gap_codes)),
+    return lexical_hierarchy_provider(hierarchy_result).resolve_scope(
+        top=top,
+        signal_path=signal_path,
     )
 
 
@@ -2868,36 +2661,14 @@ def resolve_source_graph_direct_children(
     top: str,
     instance_path: str,
 ) -> tuple[str, ...] | None:
-    component_tree = hierarchy_result.get("component_tree")
-    if not isinstance(component_tree, Mapping):
+    result = lexical_hierarchy_provider(hierarchy_result).direct_children(
+        top=top,
+        instance_path=instance_path,
+        max_children=None,
+    )
+    if result is None or result.truncated:
         return None
-    children = component_tree.get(top)
-    if not isinstance(children, Mapping):
-        return None
-    if instance_path != top:
-        parts = instance_path.split(".")
-        if not parts or parts[0] != top:
-            return None
-        for name in parts[1:]:
-            node = children.get(name)
-            if not isinstance(node, Mapping):
-                return None
-            nested = node.get("children")
-            children = nested if isinstance(nested, Mapping) else {}
-    candidates: list[str] = []
-    for name, node in children.items():
-        check_cancelled()
-        if not isinstance(name, str) or not name or not isinstance(node, Mapping):
-            continue
-        candidate = f"{instance_path}.{name}"
-        proved = resolve_source_graph_hierarchy_ancestors(
-            hierarchy_result=hierarchy_result,
-            top=top,
-            signal_path=f"{candidate}.__traceweave_scope__",
-        )
-        if proved is not None and proved[-1] == candidate:
-            candidates.append(candidate)
-    return tuple(sorted(set(candidates)))
+    return result.paths
 
 
 def _expanded_single_endpoint_plan(

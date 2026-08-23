@@ -11,7 +11,8 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from enum import Enum
 import re
-from typing import Any, Container, Iterable
+from types import MappingProxyType
+from typing import Any, Container, Iterable, Mapping
 
 from .cancellation import check_cancelled
 from .connectivity_ir import (
@@ -28,6 +29,7 @@ from .connectivity_ir import (
     DependencyFact,
     DependencyRole,
     EdgeKind,
+    InstanceDecl,
     PortBinding,
     PortDirection,
     ResolutionKind,
@@ -350,6 +352,8 @@ class ConnectivityQueryEngine:
         self.ir = ir
         self._definitions = ir.definition_index
         self._instances = ir.instance_index
+        self._definition_view = MappingProxyType(self._definitions)
+        self._instance_view = MappingProxyType(self._instances)
         self._incoming: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
         self._outgoing: dict[tuple[str, str], list[_FlowSegment]] = defaultdict(list)
         self._constant_incoming: dict[
@@ -367,6 +371,18 @@ class ConnectivityQueryEngine:
             tuple[str, str], list[tuple[SignalSelection, CoverageGap]]
         ] = defaultdict(list)
         self._build_indexes()
+
+    @property
+    def definition_index(self) -> Mapping[str, DefinitionTemplate]:
+        """Shared read-only definition index for adjacent semantic services."""
+
+        return self._definition_view
+
+    @property
+    def instance_index(self) -> Mapping[str, InstanceDecl]:
+        """Shared read-only instance index; never rebuild it from the IR."""
+
+        return self._instance_view
 
     def query_driver(
         self,

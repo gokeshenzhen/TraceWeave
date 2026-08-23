@@ -92,6 +92,20 @@ def _entry(ir=None) -> SourceGraphCacheEntry:
     )
 
 
+def test_cache_entry_lazily_reuses_query_indexes_for_semantic_hierarchy():
+    entry = _entry()
+
+    first = entry.hierarchy_provider
+    second = entry.hierarchy_provider
+    binding = first.lookup_instance(top="sg_top", instance_path="sg_top")
+
+    assert first is second
+    assert binding is not None
+    assert binding.definition_name == "sg_top"
+    assert entry.query_engine.instance_index is entry.query_engine.instance_index
+    assert entry.query_engine.definition_index is entry.query_engine.definition_index
+
+
 def test_driver_mapping_uses_only_ir_source_facts():
     result = SourceGraphConnectivityBackend(_entry()).find_driver(
         signal_path="sg_top.lane_data[15:8]",

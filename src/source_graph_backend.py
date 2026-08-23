@@ -398,20 +398,22 @@ class SourceGraphConnectivityBackend:
         return result
 
     def _definition_name(self, instance_path: str) -> str | None:
-        instance = self._entry.ir.instance_index.get(instance_path)
-        if instance is None:
-            return None
-        definition = self._entry.ir.definition_index.get(instance.definition_id)
-        return definition.name if definition is not None else None
+        binding = self._entry.hierarchy_provider.lookup_instance(
+            top=self._entry.artifact_scope_receipt.scope.top,
+            instance_path=instance_path,
+        )
+        return binding.definition_name if binding is not None else None
 
     def _selection_location(
         self, selection: SignalSelection
     ) -> tuple[str | None, int | None]:
         instance_path = selection.instance_path
-        instance = self._entry.ir.instance_index.get(instance_path or "")
+        instance = self._entry.query_engine.instance_index.get(instance_path or "")
         if instance is None:
             return None, None
-        definition = self._entry.ir.definition_index.get(instance.definition_id)
+        definition = self._entry.query_engine.definition_index.get(
+            instance.definition_id
+        )
         if definition is None:
             return None, None
         for declaration in (*definition.ports, *definition.signals):
