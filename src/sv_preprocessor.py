@@ -72,6 +72,8 @@ class PreprocessedSource:
     has_conditional_preprocessing: bool
     complete: bool
     issues: tuple[str, ...]
+    trusted_hierarchy_text: str = ""
+    hierarchy_evidence_status: str = "complete"
 
 
 @dataclass
@@ -238,13 +240,24 @@ class _ExpansionState:
     conditional_macros: set[str]
     issues: list[str]
     visited_paths: set[str]
+    trusted_hierarchy_parts: list[str]
     has_conditionals: bool = False
-    has_conditional_include: bool = False
     hierarchy_macro_expansions: int = 0
+    hierarchy_tainted: bool = False
 
-    def issue(self, code: str) -> None:
+    def issue(
+        self,
+        code: str,
+        *,
+        taints_hierarchy: bool = True,
+        invalidates_all_hierarchy: bool = False,
+    ) -> None:
         if code not in self.issues:
             self.issues.append(code)
+        if invalidates_all_hierarchy:
+            self.trusted_hierarchy_parts.clear()
+        if taints_hierarchy:
+            self.hierarchy_tainted = True
 
 
 def _canonical(path: str | os.PathLike[str]) -> str:
@@ -650,10 +663,16 @@ def _expand_hierarchy_macro_line(
     if prefix is None:
         return line
     if not _single_instance_tail(rendered, prefix.end() - 1):
-        state.issue("hierarchy_macro_compound_unsupported")
+        state.issue(
+            "hierarchy_macro_compound_unsupported",
+            taints_hierarchy=False,
+        )
         return line
     if state.hierarchy_macro_expansions >= _MAX_HIERARCHY_MACRO_EXPANSIONS:
-        state.issue("hierarchy_macro_expansion_limit_exceeded")
+        state.issue(
+            "hierarchy_macro_expansion_limit_exceeded",
+            taints_hierarchy=False,
+        )
         return line
     state.hierarchy_macro_expansions += 1
     if invocation_semicolon and not rendered.endswith(";"):
@@ -917,6 +936,7 @@ class SystemVerilogPreprocessor:
             conditional_macros=set(),
             issues=[],
             visited_paths=set(),
+            trusted_hierarchy_parts=[],
         )
         raw = self._load(root)
         text = self._expand_file(
@@ -927,15 +947,22 @@ class SystemVerilogPreprocessor:
             depth=0,
             stack=(),
         )
-        if state.has_conditional_include and not options.complete:
-            state.issue("compile_options_incomplete")
+        if state.has_conditionals and not options.complete:
+            state.issue(
+                "compile_options_incomplete",
+                invalidates_all_hierarchy=True,
+            )
         for parent in state.visited_paths:
             exact_children = set(self._exact_includes.get(parent, ()))
             if not exact_children:
                 continue
             resolved_children = set(state.include_tree.get(parent, ()))
             if resolved_children != exact_children:
-                state.issue("include_evidence_mismatch")
+                state.issue(
+                    "include_evidence_mismatch",
+                    taints_hierarchy=False,
+                )
+        trusted_hierarchy_text = "".join(state.trusted_hierarchy_parts)
         return PreprocessedSource(
             text=text,
             root_text=raw,
@@ -948,6 +975,16 @@ class SystemVerilogPreprocessor:
             has_conditional_preprocessing=state.has_conditionals,
             complete=not state.issues,
             issues=tuple(state.issues),
+            trusted_hierarchy_text=trusted_hierarchy_text,
+            hierarchy_evidence_status=(
+                "complete"
+                if not state.issues
+                else (
+                    "positive_local"
+                    if trusted_hierarchy_text
+                    else "unproved"
+                )
+            ),
         )
 
     def _expand_file(
@@ -983,9 +1020,17 @@ class SystemVerilogPreprocessor:
             # text is equivalent to the line-wise expansion and avoids a
             # full comment-masking pass for ordinary RTL files.
             check_cancelled()
+            if not state.hierarchy_tainted:
+                state.trusted_hierarchy_parts.append(raw)
             return raw
 
         output: list[str] = []
+
+        def emit(piece: str) -> None:
+            output.append(piece)
+            if not state.hierarchy_tainted:
+                state.trusted_hierarchy_parts.append(piece)
+
         frames: list[_ConditionalFrame] = []
         active = True
         in_block_comment = False
@@ -1025,7 +1070,7 @@ class SystemVerilogPreprocessor:
             if continued_define is not None:
                 part, continues = _strip_line_continuation(masked)
                 continued_define.append(part)
-                output.append(newline)
+                emit(newline)
                 if not continues:
                     if continued_define_active:
                         _record_source_macro(state, " ".join(continued_define))
@@ -1033,7 +1078,7 @@ class SystemVerilogPreprocessor:
                     continued_define_active = False
                 continue
             if not match:
-                output.append(
+                emit(
                     _expand_hierarchy_macro_line(line, masked, state)
                     if active
                     else ("\n" if line.endswith("\n") else "")
@@ -1057,7 +1102,7 @@ class SystemVerilogPreprocessor:
                 )
                 frames.append(frame)
                 active = frame.active
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "elsif":
                 state.has_conditionals = True
@@ -1066,7 +1111,7 @@ class SystemVerilogPreprocessor:
                     state.conditional_macros.add(identifier)
                 if not frames:
                     state.issue("conditional_unbalanced")
-                    output.append(newline)
+                    emit(newline)
                     continue
                 frame = frames[-1]
                 condition = bool(identifier and identifier in state.macros)
@@ -1074,20 +1119,20 @@ class SystemVerilogPreprocessor:
                 frame.active = frame.parent_active and take
                 frame.branch_taken = frame.branch_taken or condition
                 active = frame.active
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "else":
                 state.has_conditionals = True
                 if not frames:
                     state.issue("conditional_unbalanced")
-                    output.append(newline)
+                    emit(newline)
                     continue
                 frame = frames[-1]
                 take = not frame.branch_taken
                 frame.active = frame.parent_active and take
                 frame.branch_taken = True
                 active = frame.active
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "endif":
                 state.has_conditionals = True
@@ -1096,44 +1141,42 @@ class SystemVerilogPreprocessor:
                 else:
                     frame = frames.pop()
                     active = frame.parent_active
-                output.append(newline)
+                emit(newline)
                 continue
-            if directive == "include" and frames:
-                state.has_conditional_include = True
             if directive == "define":
                 first_part, continues = _strip_line_continuation(body)
                 if continues:
                     continued_define = [first_part]
                     continued_define_active = active
-                    output.append(newline)
+                    emit(newline)
                     continue
             if not active:
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "define":
                 _record_source_macro(state, body)
                 # A macro definition is not active HDL source. Keeping its
                 # replacement tokens here can fabricate an instance before
                 # the macro is ever invoked.
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "undef":
                 identifier = _directive_identifier(body)
                 if identifier:
                     state.macros.pop(identifier, None)
                     state.text_macros.pop(identifier, None)
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "undefineall":
                 state.macros.clear()
                 state.text_macros.clear()
-                output.append(newline)
+                emit(newline)
                 continue
             if directive == "include":
                 raw_name = _macro_include_name(body, state.macros)
                 if raw_name is None:
                     state.issue("include_expression_unresolved")
-                    output.append(newline)
+                    emit(newline)
                     continue
                 if raw_name not in state.active_include_directives:
                     state.active_include_directives.append(raw_name)
@@ -1144,7 +1187,7 @@ class SystemVerilogPreprocessor:
                 )
                 if child is None:
                     state.issue("include_path_unresolved")
-                    output.append(newline)
+                    emit(newline)
                     continue
                 children = state.include_tree.setdefault(canonical, [])
                 if child not in children:
@@ -1160,11 +1203,14 @@ class SystemVerilogPreprocessor:
                     depth=depth + 1,
                     stack=(*stack, canonical),
                 )
+                # The child records its trusted pieces directly in expansion
+                # order. Append only to the full local text here so the trusted
+                # stream is not duplicated.
                 output.append(child_text)
                 if child_text and not child_text.endswith("\n") and newline:
-                    output.append("\n")
+                    emit("\n")
                 continue
-            output.append(line)
+            emit(line)
 
         if continued_define is not None:
             state.issue("macro_continuation_unterminated")

@@ -544,6 +544,13 @@ kept as the explicit `uvm_dynamic_connectivity` exclusion without expanding the
 whole simulator UVM library. A proved positive
 Source Graph fact is usable but remains scoped: `coverage_status` is
 `inconclusive`, `exhaustive_search=false`, and `negative_claim_allowed=false`.
+When preprocessing is imperfect, the receipt exposes only fixed, privacy-safe
+`preprocessor_issue_categories`. A target chain entirely proved before an
+uncertainty boundary may continue with
+`bootstrap_include_context_incomplete`; if the unresolved context could hide a
+remaining instance segment, bootstrap stops with
+`bootstrap_include_context_unproved`. No path, macro value, or source fragment
+is added to the public diagnostic.
 If proof, build, or query is inconclusive, the bootstrap route returns an honest
 no-fact receipt and does not launch the whole-source Legacy Static scan that it
 was introduced to avoid. The normal full-hierarchy route keeps its existing

@@ -252,6 +252,76 @@ def test_xcelium_bootstrap_resolves_conditional_nested_include_without_sidecar(
     ]
 
 
+def test_bootstrap_uses_proved_chain_before_late_unresolved_include(tmp_path):
+    top = tmp_path / "top.sv"
+    leaf = tmp_path / "leaf.sv"
+    connections = tmp_path / "connect.svh"
+    _write(
+        top,
+        "module top;\n"
+        '  `include "connect.svh"\n'
+        '  `include "missing.svh"\n'
+        "endmodule\n",
+    )
+    _write(connections, "leaf u_leaf();\n")
+    _write(leaf, "module leaf; logic value; endmodule\n")
+    _, compile_result = _vcs_context(tmp_path, [top, leaf])
+
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="9" * 64,
+        signal_path="top.u_leaf.value",
+        top_hint=None,
+        config=_config(),
+    )
+
+    assert result.status == "ready"
+    assert result.receipt["ancestor_chain_proved"] is True
+    assert result.receipt["preprocessor_issue_categories"] == [
+        "include_path_unresolved"
+    ]
+    assert "bootstrap_include_context_incomplete" in result.receipt[
+        "objective_exclusions"
+    ]
+    assert (
+        result.hierarchy_result["component_tree"]["top"]["u_leaf"]["class"]
+        == "leaf"
+    )
+
+
+def test_bootstrap_blocks_chain_hidden_after_unresolved_include(tmp_path):
+    top = tmp_path / "top.sv"
+    leaf = tmp_path / "leaf.sv"
+    connections = tmp_path / "connect.svh"
+    _write(
+        top,
+        "module top;\n"
+        '  `include "missing.svh"\n'
+        '  `include "connect.svh"\n'
+        "endmodule\n",
+    )
+    _write(connections, "leaf u_leaf();\n")
+    _write(leaf, "module leaf; logic value; endmodule\n")
+    _, compile_result = _vcs_context(tmp_path, [top, leaf])
+
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="0" * 64,
+        signal_path="top.u_leaf.value",
+        top_hint=None,
+        config=_config(),
+    )
+
+    assert result.status == "blocked"
+    assert result.receipt["blocker"] == {
+        "code": "bootstrap_include_context_unproved",
+        "stage": "source_closure",
+    }
+    assert result.receipt["preprocessor_issue_categories"] == [
+        "include_path_unresolved"
+    ]
+
+
 def test_bootstrap_adapter_drops_unbounded_library_search_options(tmp_path):
     top = tmp_path / "top.sv"
     library = tmp_path / "large_library.v"

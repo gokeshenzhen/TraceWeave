@@ -490,7 +490,11 @@ preprocessor 上下文，对实际选中的每个输入做内容指纹，并从 
 可能重新展开大库的 `-v`/`-y`。遇到 `uvm_pkg` import 时只记录明确的
 `uvm_dynamic_connectivity` exclusion，不展开整套 simulator UVM library。Source Graph 证明的正事实可以
 使用，但始终是 scoped：`coverage_status=inconclusive`、`exhaustive_search=false`、
-`negative_claim_allowed=false`。若 scope/build/query 无法证明，bootstrap 返回诚实的无事实
+`negative_claim_allowed=false`。当预处理上下文不完整时，回执只公开固定且不含敏感信息的
+`preprocessor_issue_categories`。若目标实例链在不确定边界之前已被完整证明，则可携带
+`bootstrap_include_context_incomplete` 继续；若未解析上下文可能隐藏剩余实例段，则以
+`bootstrap_include_context_unproved` 停止。回执不会包含路径、宏值或源码片段。若
+scope/build/query 无法证明，bootstrap 返回诚实的无事实
 回执，不再启动它原本就是为了避免的全源码 Legacy Static 扫描。正常 full-hierarchy 路径
 仍保持既有的 Source Graph-to-Static fallback。
 

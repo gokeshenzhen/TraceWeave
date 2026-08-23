@@ -332,6 +332,7 @@ def build_bounded_connectivity_context(
     resolved_include_tree: dict[str, list[str]] = {}
     resolved_ordered_includes: list[dict[str, str]] = []
     ancestors: list[str] = []
+    preprocessor_issue_categories: set[str] = set()
     objective_exclusions = {
         "bootstrap_hierarchy_scoped",
         "bootstrap_compile_inputs_scoped",
@@ -339,27 +340,32 @@ def build_bounded_connectivity_context(
 
     def blocked(code: str, stage: str) -> BoundedBootstrapResult:
         elapsed_ms = (time.monotonic() - started) * 1000.0
+        receipt = {
+            "used": True,
+            "status": "blocked",
+            "scope": "single_endpoint",
+            "ancestor_chain_proved": False,
+            "coverage_status": "inconclusive",
+            "objective_exclusions": sorted(objective_exclusions),
+            "metrics": {
+                "inventory_file_count": inventory_files,
+                "inventory_bytes": inventory_bytes,
+                "selected_file_count": len(selected_paths),
+                "selected_source_bytes": selected_bytes,
+                "ancestor_count": len(ancestors),
+                "wall_time_ms": round(elapsed_ms, 3),
+            },
+            "blocker": {"code": code, "stage": stage},
+        }
+        if preprocessor_issue_categories:
+            receipt["preprocessor_issue_categories"] = sorted(
+                preprocessor_issue_categories
+            )
         return BoundedBootstrapResult(
             status="blocked",
             compile_result=None,
             hierarchy_result=None,
-            receipt={
-                "used": True,
-                "status": "blocked",
-                "scope": "single_endpoint",
-                "ancestor_chain_proved": False,
-                "coverage_status": "inconclusive",
-                "objective_exclusions": sorted(objective_exclusions),
-                "metrics": {
-                    "inventory_file_count": inventory_files,
-                    "inventory_bytes": inventory_bytes,
-                    "selected_file_count": len(selected_paths),
-                    "selected_source_bytes": selected_bytes,
-                    "ancestor_count": len(ancestors),
-                    "wall_time_ms": round(elapsed_ms, 3),
-                },
-                "blocker": {"code": code, "stage": stage},
-            },
+            receipt=receipt,
         )
 
     try:
@@ -505,14 +511,13 @@ def build_bounded_connectivity_context(
                 return cached
             preprocessed = preprocessor.preprocess(canonical)
             issues = set(preprocessed.issues)
+            preprocessor_issue_categories.update(issues)
             if "include_depth_exceeded" in issues:
                 raise _BootstrapBlocked(
                     "bootstrap_include_depth_exceeded", "source_closure"
                 )
             if issues:
-                raise _BootstrapBlocked(
-                    "bootstrap_include_context_unproved", "source_closure"
-                )
+                objective_exclusions.add("bootstrap_include_context_incomplete")
             scan = scan_preprocessed_sv(
                 canonical,
                 preprocessed,
@@ -535,6 +540,7 @@ def build_bounded_connectivity_context(
         component_tree: dict[str, dict] = {top: {}}
         children_cursor = component_tree[top]
         parts = normalized_signal.split(".")
+        stopped_at_unmatched_segment = False
         for index, instance_name in enumerate(parts[1:-1], 1):
             _deadline_check(deadline)
             if index > int(config.max_hierarchy_depth):
@@ -547,6 +553,7 @@ def build_bounded_connectivity_context(
                 if isinstance(item, dict) and item.get("instance_name") == instance_name
             ]
             if not matches:
+                stopped_at_unmatched_segment = True
                 break
             if len(matches) != 1:
                 raise _BootstrapBlocked("bootstrap_instance_ambiguous", "target_scope")
@@ -569,6 +576,18 @@ def build_bounded_connectivity_context(
             current_module = child_module
             current_path = child_path
             current_scan = select_and_scan(current_path, source_unit=True)
+
+        if stopped_at_unmatched_segment and preprocessor_issue_categories:
+            # A dotted suffix can legally be a struct/member path rather than
+            # an instance.  Preserve that historical hand-off when the source
+            # context is complete.  With unresolved preprocessing evidence,
+            # however, a missing candidate could equally be an instance hidden
+            # beyond the uncertainty boundary, so bootstrap cannot prove the
+            # scope safely.
+            raise _BootstrapBlocked(
+                "bootstrap_include_context_unproved",
+                "source_closure",
+            )
 
         pending = list(scan_cache)
         processed: set[str] = set()
@@ -670,6 +689,10 @@ def build_bounded_connectivity_context(
                 "wall_time_ms": round(elapsed_ms, 3),
             },
         }
+        if preprocessor_issue_categories:
+            receipt["preprocessor_issue_categories"] = sorted(
+                preprocessor_issue_categories
+            )
         return BoundedBootstrapResult(
             status="ready",
             compile_result=bounded_compile_result,

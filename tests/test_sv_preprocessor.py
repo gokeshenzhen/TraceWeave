@@ -202,6 +202,70 @@ def test_root_include_inventory_is_collected_during_expansion(tmp_path):
     assert result.complete is True
 
 
+def test_include_evidence_mismatch_keeps_positive_hierarchy_evidence(tmp_path):
+    source = tmp_path / "top.sv"
+    active = tmp_path / "active.svh"
+    extra = tmp_path / "simulator_only.svh"
+    source.write_text(
+        "module top;\n"
+        '  `include "active.svh"\n'
+        "endmodule\n"
+    )
+    active.write_text("leaf u_leaf();\n")
+    extra.write_text("// recorded by the simulator but not locally replayed\n")
+    compile_result = {
+        "compile_cwd": str(tmp_path),
+        "compile_command": f"vcs -sverilog +incdir+{tmp_path} {source}",
+        "compile_evidence": {
+            "ordered_includes": [
+                {"parent": str(source), "path": str(active)},
+                {"parent": str(source), "path": str(extra)},
+            ]
+        },
+    }
+
+    preprocessed = SystemVerilogPreprocessor(compile_result).preprocess(
+        str(source)
+    )
+    scan = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert preprocessed.complete is False
+    assert preprocessed.issues == ("include_evidence_mismatch",)
+    assert preprocessed.hierarchy_evidence_status == "positive_local"
+    assert "u_leaf" in preprocessed.trusted_hierarchy_text
+    assert scan["module_instance_map"]["top"] == [
+        {"module_name": "leaf", "instance_name": "u_leaf"}
+    ]
+
+
+def test_incomplete_compile_options_invalidate_conditional_hierarchy(tmp_path):
+    source = tmp_path / "top.sv"
+    source.write_text(
+        "module top;\n"
+        "`ifdef FPGA_BUILD\n"
+        "  fpga_stub u_selected();\n"
+        "`else\n"
+        "  dut u_selected();\n"
+        "`endif\n"
+        "endmodule\n"
+    )
+
+    preprocessed = SystemVerilogPreprocessor({}).preprocess(str(source))
+    scan = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert preprocessed.issues == ("compile_options_incomplete",)
+    assert preprocessed.hierarchy_evidence_status == "unproved"
+    assert preprocessed.trusted_hierarchy_text == ""
+    assert scan["module_instance_map"] == {}
+    assert scan["structural_modules"] == []
+
+
 def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch):
     source = tmp_path / "top.sv"
     source.write_text(

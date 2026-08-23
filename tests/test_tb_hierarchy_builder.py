@@ -260,6 +260,143 @@ class TestBuildHierarchy:
             str(nested_fragment.resolve())
         ]
 
+    def test_incomplete_late_include_keeps_only_proved_structural_nodes(
+        self, tmp_path
+    ):
+        top = tmp_path / "top.sv"
+        definitions = tmp_path / "definitions.sv"
+        connections = tmp_path / "connect.svh"
+        _write(
+            top,
+            "module tb_top;\n"
+            '  `include "connect.svh"\n'
+            '  `include "missing.svh"\n'
+            "endmodule\n",
+        )
+        _write(
+            connections,
+            "`ifdef FPGA_BUILD\n"
+            "  fpga_stub u_fpga_stub();\n"
+            "`else\n"
+            "  dut u_dut();\n"
+            "  bus_if bus();\n"
+            "  unknown_helper u_false_positive();\n"
+            "`endif\n",
+        )
+        # Definitions intentionally follow the top in compile order.  Tree
+        # admission must use the global scanned definition set, not only the
+        # definitions seen before a candidate.
+        _write(
+            definitions,
+            "module dut; endmodule\n"
+            "module fpga_stub; endmodule\n"
+            "interface bus_if; endinterface\n",
+        )
+        sources = [top, definitions]
+        compile_result = {
+            "files": {
+                "user": [
+                    {
+                        "path": str(path),
+                        "category": "rtl",
+                        "type": "module",
+                    }
+                    for path in sources
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "vcs",
+            "compile_command": (
+                f"vcs -sverilog +incdir+{tmp_path} "
+                + " ".join(str(path) for path in sources)
+                + " -top tb_top"
+            ),
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(
+            compile_result,
+            apply_source_overlay=False,
+        )
+
+        tree = hierarchy["component_tree"]["tb_top"]
+        assert set(tree) == {"u_dut", "bus"}
+        assert tree["u_dut"]["class"] == "dut"
+        assert tree["bus"]["type"] == "interface"
+        assert "u_fpga_stub" not in tree
+        assert "u_false_positive" not in tree
+        assert hierarchy["build_metrics"]["include_context_complete"] is False
+        assert hierarchy["build_metrics"][
+            "include_resolution_issue_categories"
+        ] == ["include_path_unresolved"]
+        top_scan = next(
+            scan
+            for scan in hierarchy["_scan_results"]
+            if scan["path"] == str(top)
+        )
+        assert top_scan["hierarchy_evidence_status"] == "positive_local"
+        # Keep raw lexical candidates for diagnostics even though the proof
+        # boundary filters the unknown type from the component tree.
+        assert {
+            item["instance_name"]
+            for item in top_scan["module_instance_map"]["tb_top"]
+        } == {"u_dut", "bus", "u_false_positive"}
+
+    def test_incomplete_early_include_does_not_trust_later_instances(
+        self, tmp_path
+    ):
+        top = tmp_path / "top.sv"
+        definition = tmp_path / "dut.sv"
+        connections = tmp_path / "connect.svh"
+        _write(
+            top,
+            "module tb_top;\n"
+            '  `include "missing.svh"\n'
+            '  `include "connect.svh"\n'
+            "endmodule\n",
+        )
+        _write(connections, "dut u_dut();\n")
+        _write(definition, "module dut; endmodule\n")
+        sources = [top, definition]
+        compile_result = {
+            "files": {
+                "user": [
+                    {
+                        "path": str(path),
+                        "category": "rtl",
+                        "type": "module",
+                    }
+                    for path in sources
+                ]
+            },
+            "primary_top": "tb_top",
+            "top_modules": ["tb_top"],
+            "interfaces": [],
+            "simulator": "vcs",
+            "compile_command": (
+                f"vcs -sverilog +incdir+{tmp_path} "
+                + " ".join(str(path) for path in sources)
+                + " -top tb_top"
+            ),
+            "compile_cwd": str(tmp_path),
+        }
+
+        hierarchy = build_hierarchy(
+            compile_result,
+            apply_source_overlay=False,
+        )
+
+        assert hierarchy["component_tree"] == {}
+        top_scan = next(
+            scan
+            for scan in hierarchy["_scan_results"]
+            if scan["path"] == str(top)
+        )
+        assert top_scan["module_instance_map"].get("tb_top", []) == []
+        assert top_scan["hierarchy_evidence_status"] == "positive_local"
+
     def test_full_pipeline(self):
         tmp, root = _make_project()
         try:

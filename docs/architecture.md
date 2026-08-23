@@ -394,6 +394,18 @@ store. Retained hierarchy memory therefore scales with extracted metadata, not
 the sum of source bytes. The full result is registered in an in-process `HandleStore`
 (`src/hierarchy_handles.py`) keyed by the handle.
 
+Include preprocessing distinguishes complete context from locally proved
+structural evidence. If an include cannot be resolved, hierarchy facts emitted
+before that uncertainty boundary remain available, while later text is excluded
+because the missing header could have changed macro state. An
+`include_evidence_mismatch` is a scoped coverage exclusion and does not erase
+otherwise positive local facts. `build_metrics` reports the fixed-label
+`include_resolution_issue_categories` and `include_context_complete`; individual
+scan records report `hierarchy_evidence_status`. The `component_tree` is the
+stronger proof boundary: a lexical instance candidate is admitted only when its
+type has a scanned module or interface definition. Raw candidates remain in the
+scan metadata for diagnostics.
+
 Six handle tools (`src/handle_tools.py`) resolve a handle and return
 targeted slices:
 

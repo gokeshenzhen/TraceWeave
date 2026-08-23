@@ -283,6 +283,8 @@ def scan_sv_text(
         "class_extends": class_extends,
         "modules": modules,
         "interfaces": interfaces,
+        "structural_modules": modules,
+        "structural_interfaces": interfaces,
         "packages": list(dict.fromkeys(_PACKAGE_RE.findall(text))),
         "package_imports": list(dict.fromkeys(_PACKAGE_IMPORT_RE.findall(text))),
         "include_directives": list(
@@ -350,11 +352,31 @@ def scan_preprocessed_sv(
         source.root_text,
         retain_source_text=retain_source_text,
     )
-    if source.complete and source.text != source.root_text:
+    hierarchy_text = (
+        source.text if source.complete else source.trusted_hierarchy_text
+    )
+    if hierarchy_text and (
+        not source.complete or hierarchy_text != source.root_text
+    ):
+        structural_text = _strip_comments(hierarchy_text)
         (
             result["module_instances"],
             result["module_instance_map"],
-        ) = _extract_module_instances(_strip_comments(source.text))
+        ) = _extract_module_instances(structural_text)
+        result["structural_modules"] = list(
+            dict.fromkeys(_MODULE_RE.findall(structural_text))
+        )
+        result["structural_interfaces"] = list(
+            dict.fromkeys(_INTERFACE_RE.findall(structural_text))
+        )
+    elif source.issues:
+        # A hard uncertainty before any trusted structural text is safer as a
+        # no-fact scan than a root-only scan that can see both sides of an
+        # unresolved conditional.
+        result["module_instances"] = []
+        result["module_instance_map"] = {}
+        result["structural_modules"] = []
+        result["structural_interfaces"] = []
     result["include_directives"] = list(source.root_include_directives)
     result["active_include_directives"] = list(
         source.active_include_directives
@@ -362,6 +384,7 @@ def scan_preprocessed_sv(
     result["resolved_include_paths"] = list(source.included_paths)
     result["include_context_complete"] = source.complete
     result["include_resolution_issues"] = list(source.issues)
+    result["hierarchy_evidence_status"] = source.hierarchy_evidence_status
     result["has_conditional_preprocessing"] = (
         result["has_conditional_preprocessing"]
         or source.has_conditional_preprocessing
@@ -454,12 +477,17 @@ def build_class_hierarchy(scan_results: list[dict]) -> list[str]:
     return chains
 
 
-def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str]) -> dict:
+def _add_module_children(
+    module_name: str,
+    design_to_scan: dict,
+    definition_kinds: dict[str, str],
+    seen: set[str],
+) -> dict:
     if module_name in seen:
         return {}
     seen = seen | {module_name}
     tree = {}
-    result = module_to_scan.get(module_name)
+    result = design_to_scan.get(module_name)
     if not result:
         return tree
     # Baseline provenance comes from the compile_log file list (the parent
@@ -474,18 +502,27 @@ def _add_module_children(module_name: str, module_to_scan: dict, seen: set[str])
         else result.get("module_instances", [])
     )
     for item in items:
-        child_scan = module_to_scan.get(item["module_name"])
-        child_src = child_scan["name"] if child_scan else ""
+        child_name = item["module_name"]
+        child_scan = design_to_scan.get(child_name)
+        child_kind = definition_kinds.get(child_name)
+        if child_scan is None or child_kind is None:
+            continue
+        child_src = child_scan["name"]
         node = {
-            "type": "module",
-            "class": item["module_name"],
+            "type": child_kind,
+            "class": child_name,
             "src": child_src,
-            "role": _classify_node(item["module_name"], item["instance_name"]),
+            "role": _classify_node(child_name, item["instance_name"]),
             "source_file": parent_path,
             "source_line": None,
             "source_info_origin": "compile_log" if parent_path else None,
         }
-        descendants = _add_module_children(item["module_name"], module_to_scan, seen)
+        descendants = _add_module_children(
+            child_name,
+            design_to_scan,
+            definition_kinds,
+            seen,
+        )
         if descendants:
             node["children"] = descendants
         tree[item["instance_name"]] = node
@@ -537,10 +574,17 @@ def _build_uvm_tree(class_name: str, class_to_scan: dict, seen: set[str]) -> dic
 
 
 def build_component_tree(scan_results: list[dict], top_module: str) -> dict:
-    module_to_scan, class_to_scan = _build_symbol_indexes(scan_results)
+    design_to_scan, definition_kinds, class_to_scan = _build_symbol_indexes(
+        scan_results
+    )
 
     component_tree = {}
-    top_node = _add_module_children(top_module, module_to_scan, set())
+    top_node = _add_module_children(
+        top_module,
+        design_to_scan,
+        definition_kinds,
+        set(),
+    )
     if top_node:
         component_tree[top_module] = top_node
 
@@ -873,7 +917,9 @@ def _scan_user_files(
         source_bytes_scanned += stat_result.st_size
         largest_source_bytes = max(largest_source_bytes, stat_result.st_size)
         source_text = result.pop("source_text", "")
-        for interface_name in result["interfaces"]:
+        for interface_name in result.get(
+            "structural_interfaces", result["interfaces"]
+        ):
             interface_defs[interface_name] = result
         for binding in result["virtual_interfaces"]:
             interface_bindings.setdefault(
@@ -909,6 +955,10 @@ def _scan_user_files(
             "largest_source_file_bytes": largest_source_bytes,
             "resolved_include_file_count": len(resolved_include_paths),
             "include_resolution_issue_count": len(include_resolution_issues),
+            "include_resolution_issue_categories": sorted(
+                include_resolution_issues
+            ),
+            "include_context_complete": not include_resolution_issues,
             "rss_peak_kib": rss_peak_kib,
         },
         resolved_include_tree,
@@ -935,15 +985,24 @@ def _compute_source_root(file_entries: list[dict]) -> str:
     return os.path.commonpath([item["path"] for item in file_entries])
 
 
-def _build_symbol_indexes(scan_results: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
-    module_to_scan = {}
+def _build_symbol_indexes(
+    scan_results: list[dict],
+) -> tuple[dict[str, dict], dict[str, str], dict[str, dict]]:
+    design_to_scan = {}
+    definition_kinds: dict[str, str] = {}
     class_to_scan = {}
     for result in scan_results:
-        for module_name in result["modules"]:
-            module_to_scan[module_name] = result
+        for module_name in result.get("structural_modules", result["modules"]):
+            design_to_scan[module_name] = result
+            definition_kinds[module_name] = "module"
+        for interface_name in result.get(
+            "structural_interfaces", result["interfaces"]
+        ):
+            design_to_scan[interface_name] = result
+            definition_kinds[interface_name] = "interface"
         for class_name in result["classes"]:
             class_to_scan[class_name] = result
-    return module_to_scan, class_to_scan
+    return design_to_scan, definition_kinds, class_to_scan
 
 
 # ---------------------------------------------------------------------------
