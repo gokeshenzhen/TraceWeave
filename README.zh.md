@@ -443,6 +443,18 @@ manifest，并标记 `hit_session_snapshot`。每条复用记录都会重新校�
 旧 hierarchy 与 manifest 的组合会以 `compile_session_snapshot_changed` 阻断，必须先重新
 编译并刷新 hierarchy。compile log 变化或 hierarchy handle 刷新也会使 snapshot 失效。
 
+对于大型且完整的 Verilog/SystemVerilog manifest，adapter 可以直接使用该 handle 已保存的
+hierarchy scan 事实推导 compile-input closure：包括已证明 ancestor definition、显式 compile
+top/bind top、package import/qualified package reference，以及按编译顺序出现的宏
+define/undef。Slang 仍然负责真正的解析与 elaboration；这个 planner 不是另一个编译器。
+完整 ordered manifest 与全量内容 fingerprint 继续作为 artifact 的失效 identity，隔离 worker
+只接收保持原顺序的 closure，并只 elaboration 当前请求的 design top。依赖证明缺失或歧义、
+manifest 不完整/混合语言、重复输入、或 closure 超出预算时都会安全保留 full replay。
+adapter 回执仅在 `manifest.compile_projection` 下公开固定标签和计数。任何实际裁剪都会增加
+`compile_projection_pruned_inputs`，因此图的 coverage 明确为 `inconclusive`：IR 已证明的
+driver/load/path 正事实仍可使用，但空结果绝不能证明 `no_driver`、`no_load` 或
+`not_connected`。
+
 对于 source compile 与 elaboration 分属多个日志的 VCS 流程，可以显式构造同一个上下文。
 建议把包含源文件顺序的 compile log 保持为 primary（结构扫描也使用它），再按 build 顺序
 提供其余 source/elaboration 日志：

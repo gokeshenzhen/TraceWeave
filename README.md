@@ -490,6 +490,22 @@ hierarchy/manifest pair with `compile_session_snapshot_changed`; rebuild and
 refresh the hierarchy before querying. A changed compile log or refreshed
 hierarchy handle likewise invalidates the snapshot.
 
+For a large, complete Verilog/SystemVerilog manifest, the adapter can derive a
+compile-input closure from the hierarchy scan facts already held by that
+handle: the proved ancestor definitions, explicit compile tops/bind tops,
+package imports and qualified package references, and compile-order macro
+definitions/undefinitions. Slang remains the parser and elaborator; this
+planner is not a replacement compiler. The full ordered manifest and content
+fingerprint remain the artifact's invalidation identity, while only the
+ordered closure is sent to the isolated worker and only the requested design
+top is elaborated. Missing or ambiguous proof, incomplete/mixed-language
+inputs, duplicate inputs, or a closure that is too large safely retains the
+full replay. Adapter receipts expose only fixed-label/count telemetry under
+`manifest.compile_projection`. Every applied closure adds
+`compile_projection_pruned_inputs`, so its graph is explicitly
+`inconclusive`: IR-proved positive driver/load/path facts remain usable, but an
+empty result can never establish `no_driver`, `no_load`, or `not_connected`.
+
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and
 use it for the structural scan), then supply the other source/elaboration logs

@@ -1410,3 +1410,41 @@ Top Level Modules:
             )
         finally:
             tmp.cleanup()
+
+
+def test_scan_records_package_qualifiers_as_dependency_evidence():
+    scanned = scan_sv_text(
+        "qualified_pkg.sv",
+        """
+package local_pkg; endpackage
+module top;
+  import imported_pkg::*;
+  imported_pkg::word_t a;
+  class_scope::factory_t b;
+endmodule
+""",
+        retain_source_text=False,
+    )
+
+    assert scanned["package_imports"] == ["imported_pkg"]
+    assert scanned["package_qualifiers"] == ["imported_pkg", "class_scope"]
+
+
+def test_scan_records_macro_state_mutations_as_dependency_evidence():
+    scanned = scan_sv_text(
+        "macro_state.sv",
+        """
+`define FEATURE
+`ifdef FEATURE
+`undef FEATURE
+`endif
+`undefineall
+module top; endmodule
+""",
+        retain_source_text=False,
+    )
+
+    assert scanned["macro_definitions"] == ["FEATURE"]
+    assert scanned["macro_undefinitions"] == ["FEATURE"]
+    assert scanned["conditional_macros"] == ["FEATURE"]
+    assert scanned["has_macro_undefineall"] is True

@@ -16,6 +16,7 @@ from src.connectivity_ir import CoverageGap, CoverageReport, CoverageStatus
 from src.source_graph_contract import (
     BoundaryMode,
     CompileInputManifest,
+    CompileProjectionMode,
     ConnectivityTarget,
     CoverageBoundary,
     QueryOperation,
@@ -26,6 +27,7 @@ from src.source_graph_contract import (
     SourceGraphArtifactScope,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
+    SourceGraphCompileProjection,
     SourceGraphIdentity,
     SourceGraphQueryIdentity,
     SourceGraphScopeReceipt,
@@ -163,6 +165,47 @@ def test_worker_replays_all_ordered_tops_from_compile_manifest():
         "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
         "--top",
         "bind_top",
+        "--top",
+        "sg_top",
+    ]
+
+
+def test_worker_replays_projected_inputs_and_only_the_proved_scope_top():
+    request = _request()
+    source = replace(
+        request.identity,
+        compile_inputs=replace(
+            request.identity.compile_inputs,
+            ordered_inputs=(
+                "rtl/pkg.sv",
+                "rtl/unrelated.sv",
+                "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+            ),
+            ordered_tops=("bind_top", "sg_top"),
+        ),
+    )
+    projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
+        ),
+        full_input_count=3,
+        seed_symbol_count=2,
+        dependency_symbol_count=1,
+    )
+    artifact = replace(
+        request.artifact_identity,
+        source=source,
+        compile_projection=projection,
+    )
+    request = replace(request, identity=source, artifact=artifact)
+
+    assert _frontend_args(request) == [
+        "--compat",
+        "all",
+        "rtl/pkg.sv",
+        "tests/fixtures/source_graph_frontend/hand_connectivity.sv",
         "--top",
         "sg_top",
     ]

@@ -117,15 +117,33 @@ def _frontend_args(
         else request.source
     )
     manifest = source_identity.compile_inputs
+    artifact_identity = (
+        request.artifact_identity
+        if isinstance(request, SourceGraphBuildRequest)
+        else request.identity
+    )
+    compile_projection = artifact_identity.compile_projection
+    ordered_inputs = (
+        compile_projection.ordered_inputs
+        if compile_projection is not None
+        else manifest.ordered_inputs
+    )
     result = [
         *manifest.ordered_options,
         *(
             path
-            for path in manifest.ordered_inputs
+            for path in ordered_inputs
             if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
         ),
     ]
-    tops = manifest.ordered_tops or (request.scope.top,)
+    # A dependency-closure build compiles every proved top/bind definition but
+    # elaborates only the hierarchy-selected design top.  Full-manifest calls
+    # retain the historical all-top replay for compatibility.
+    tops = (
+        (request.scope.top,)
+        if compile_projection is not None
+        else manifest.ordered_tops or (request.scope.top,)
+    )
     for top in tops:
         result.extend(["--top", top])
     return result
@@ -265,9 +283,15 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         diagnostic_payload = _diagnostics_payload(driver, diagnostics)
         source_root = Path.cwd()
         manifest = identity.compile_inputs
+        compile_projection = request.identity.compile_projection
+        projected_inputs = (
+            compile_projection.ordered_inputs
+            if compile_projection is not None
+            else manifest.ordered_inputs
+        )
         frontend_inputs = tuple(
             path
-            for path in manifest.ordered_inputs
+            for path in projected_inputs
             if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
         )
         vhdl_inputs = tuple(

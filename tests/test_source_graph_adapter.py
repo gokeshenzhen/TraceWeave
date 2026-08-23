@@ -215,6 +215,45 @@ def test_builds_complete_ordered_manifest_and_replays_every_top(tmp_path):
     assert receipt["cross_request_reusable"] is True
 
 
+def test_large_complete_manifest_projects_hierarchy_dependency_closure(tmp_path):
+    dut = tmp_path / "rtl" / "dut.sv"
+    top = tmp_path / "tb" / "top.sv"
+    _write(dut, "module dut; logic [3:0] q; endmodule\n")
+    _write(top, "module tb; dut dut(); endmodule\n")
+    unrelated = tuple(tmp_path / "rtl" / f"unused_{index}.sv" for index in range(68))
+    for index, path in enumerate(unrelated):
+        _write(path, f"module unused_{index}; endmodule\n")
+    sources = (dut, top, *unrelated)
+    compile_result = _compile_result(
+        tmp_path,
+        command=f"xrun {' '.join(str(path) for path in sources)} -top tb",
+        sources=sources,
+    )
+    hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+
+    plan = _plan(tmp_path, compile_result, hierarchy=hierarchy)
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    projection = plan.request.artifact_identity.compile_projection
+    assert projection is not None
+    assert projection.ordered_inputs == (str(dut.resolve()), str(top.resolve()))
+    assert projection.full_input_count == 70
+    assert "compile_projection_pruned_inputs" in plan.receipt.gap_codes
+    assert "compile_projection_pruned_inputs" in (
+        plan.request.artifact_identity.scope.coverage_boundary.objective_exclusions
+    )
+    receipt = plan.receipt.to_dict()["manifest"]["compile_projection"]
+    assert receipt == {
+        "mode": "hierarchy_dependency_closure",
+        "input_count": 2,
+        "excluded_input_count": 68,
+        "seed_symbol_count": 2,
+        "dependency_symbol_count": 0,
+        "fallback_reason": None,
+    }
+
+
 def test_merged_source_phases_replay_options_without_fictional_command(tmp_path):
     first = tmp_path / "rtl" / "first.sv"
     second = tmp_path / "rtl" / "second.sv"

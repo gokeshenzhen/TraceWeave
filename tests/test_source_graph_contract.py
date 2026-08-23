@@ -9,6 +9,7 @@ from src.connectivity_ir import CoverageStatus
 from src.source_graph_contract import (
     BoundaryMode,
     CompileInputManifest,
+    CompileProjectionMode,
     ConnectivityPathTarget,
     ConnectivityTarget,
     CoverageBoundary,
@@ -22,6 +23,7 @@ from src.source_graph_contract import (
     SourceGraphArtifactScopeReceipt,
     SourceGraphBuildRequest,
     SourceGraphBuildScope,
+    SourceGraphCompileProjection,
     SourceGraphIdentity,
     SourceGraphQueryIdentity,
     SourceGraphScopeReceipt,
@@ -147,6 +149,41 @@ def _artifact_identity(
         adapter_version=adapter_version,
         worker_protocol_version=worker_protocol_version,
     )
+
+
+def test_compile_projection_round_trips_and_changes_artifact_identity():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/leaf.sv", "rtl/top.sv")
+    )
+    baseline = _artifact_identity(manifest=manifest)
+    projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/top.sv"),
+        full_input_count=3,
+        seed_symbol_count=1,
+        dependency_symbol_count=1,
+    )
+    projected = replace(baseline, compile_projection=projection)
+
+    assert SourceGraphArtifactIdentity.from_dict(projected.to_dict()) == projected
+    assert compute_source_graph_artifact_key(projected).digest != (
+        compute_source_graph_artifact_key(baseline).digest
+    )
+    assert projection.excluded_input_count == 1
+
+
+def test_compile_projection_must_preserve_manifest_order():
+    manifest = _manifest(
+        ordered_inputs=("rtl/pkg.sv", "rtl/leaf.sv", "rtl/top.sv")
+    )
+    projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/top.sv", "rtl/pkg.sv"),
+        full_input_count=3,
+    )
+
+    with pytest.raises(ValueError, match="ordered manifest subsequence"):
+        replace(_artifact_identity(manifest=manifest), compile_projection=projection)
 
 
 def _path_scope(

@@ -29,11 +29,15 @@ _PACKAGE_RE = re.compile(r"^\s*package\s+(\w+)\b", re.IGNORECASE | re.MULTILINE)
 _PACKAGE_IMPORT_RE = re.compile(
     r"\bimport\s+([A-Za-z_][A-Za-z0-9_$]*)\s*::", re.IGNORECASE
 )
+_PACKAGE_QUALIFIER_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_$]*)\s*::", re.IGNORECASE
+)
 _INCLUDE_DIRECTIVE_RE = re.compile(r"`include\s+[\"<]([^\">]+)[\">]")
 _CONDITIONAL_DIRECTIVE_RE = re.compile(
     r"`(?:ifdef|ifndef|elsif)\b", re.IGNORECASE
 )
 _MACRO_DEFINE_RE = re.compile(r"`define\s+([A-Za-z_][A-Za-z0-9_$]*)")
+_MACRO_UNDEF_RE = re.compile(r"`undef\s+([A-Za-z_][A-Za-z0-9_$]*)")
 _MACRO_CONDITION_RE = re.compile(
     r"`(?:ifdef|ifndef|elsif)\s+([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
 )
@@ -343,6 +347,13 @@ def scan_sv_text(
         "structural_interfaces": interfaces,
         "packages": list(dict.fromkeys(_PACKAGE_RE.findall(text))),
         "package_imports": list(dict.fromkeys(_PACKAGE_IMPORT_RE.findall(text))),
+        # This is dependency-planning evidence, not a semantic classification:
+        # ``name::`` can also name a class or nested scope.  Source Graph uses
+        # an entry only when ``name`` exactly matches a compile-proved package
+        # definition; every other qualifier is ignored conservatively.
+        "package_qualifiers": list(
+            dict.fromkeys(_PACKAGE_QUALIFIER_RE.findall(text))
+        ),
         "include_directives": list(
             dict.fromkeys(_INCLUDE_DIRECTIVE_RE.findall(text))
         ),
@@ -350,6 +361,10 @@ def scan_sv_text(
             _CONDITIONAL_DIRECTIVE_RE.search(text)
         ),
         "macro_definitions": list(dict.fromkeys(_MACRO_DEFINE_RE.findall(text))),
+        "macro_undefinitions": list(
+            dict.fromkeys(_MACRO_UNDEF_RE.findall(text))
+        ),
+        "has_macro_undefineall": bool(re.search(r"`undefineall\b", text)),
         "conditional_macros": list(
             dict.fromkeys(_MACRO_CONDITION_RE.findall(text))
         ),

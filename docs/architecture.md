@@ -28,6 +28,10 @@ Source-aware structure analysis
 
 Connectivity backends (driver/load/path resolution)
   src/connectivity_backend.py     # protocol + Static + select_backend
+  src/source_graph_adapter.py     # compile/hierarchy identity + proved query scope
+  src/source_graph_compile_projection.py # large-manifest dependency closure planner
+  src/source_graph_runtime.py     # isolated worker + bounded memory/disk lifecycle
+  src/source_graph_worker.py      # optional Slang frontend process
   src/verdi_npi_backend.py        # Verdi NPI backend, lazy, license-tolerant
   src/npi_lsf.py                  # optional LSF transport + exact worker protocol
   src/npi_worker.py               # short-lived compute-node NPI entry point
@@ -204,6 +208,30 @@ Verification
   both capture and manifest construction. A changed record produces the fixed
   `compile_session_snapshot_changed` blocker rather than mixing a stale
   hierarchy with fresh source content.
+  On a large, complete Verilog/SystemVerilog manifest,
+  `source_graph_compile_projection.py` may replace full frontend replay with an
+  ordered hierarchy-dependency closure. It seeds the exact ancestor module /
+  interface definitions plus every explicit compile top (including bind tops),
+  then closes over exact package providers and compile-order macro state
+  mutations (`define`, `undef`, `undefineall`, and conditional uses). A
+  simulator-added tool package can be recovered by basename only when that
+  input was absent from the project hierarchy scan. Ambiguous definitions,
+  unresolved imports, duplicate/canonical-colliding inputs, incomplete or VHDL
+  manifests, missing scan evidence, and insufficient reduction all retain the
+  historical full replay. Admission is bounded: at least 64 full inputs and 32
+  exclusions are required, the closure must contain at most 512 inputs and no
+  more than half of the manifest.
+  The planner never replaces Slang. The complete manifest, all content digests,
+  options, tops, and compile/hierarchy snapshots remain in artifact identity;
+  changing an omitted file still invalidates the artifact. The projection is
+  also part of build semantics, so exact/dominating cache reuse cannot mix two
+  different closures. The worker preserves selected input order, compiles the
+  seeded definitions, and elaborates only the hierarchy-selected top. An
+  applied projection is always accompanied by the objective exclusion and gap
+  `compile_projection_pruned_inputs`. Consequently a proved positive edge or
+  path is usable, but coverage remains `inconclusive` and no negative claim is
+  complete. Privacy-safe adapter telemetry reports only mode and aggregate
+  input/exclusion/seed/dependency counts plus a fixed fallback reason.
   A split VCS build may add ordered `supplementary_compile_logs` at the
   hierarchy boundary. Parse results are merged with separate phase commands;
   the handle/snapshot identity covers every log while one-log callers retain

@@ -35,6 +35,10 @@ from .compile_session_snapshot import (
 )
 from .filelist_tokenizer import tokenize_filelist
 from .slang_connectivity_projector import SLANG_FRONTEND_NAME
+from .source_graph_compile_projection import (
+    COMPILE_PROJECTION_GAP,
+    plan_source_graph_compile_projection,
+)
 from .source_graph_contract import (
     BoundaryMode,
     CompileInputManifest,
@@ -56,7 +60,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.8"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.9"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
 _OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
@@ -294,6 +298,12 @@ class SourceGraphAdapterReceipt:
     content_digest_read_count: int = 0
     content_digest_read_bytes: int = 0
     content_snapshot_conflict_count: int = 0
+    compile_projection_mode: str = "full_manifest"
+    compile_projection_input_count: int = 0
+    compile_projection_excluded_input_count: int = 0
+    compile_projection_seed_symbol_count: int = 0
+    compile_projection_dependency_symbol_count: int = 0
+    compile_projection_fallback_reason: str | None = None
     hierarchy_resolutions: tuple[HierarchyAncestorResolution, ...] = ()
     blocker: SourceGraphAdapterBlocker | None = None
 
@@ -334,12 +344,26 @@ class SourceGraphAdapterReceipt:
             "hit_session_snapshot",
         }:
             raise ValueError("invalid fingerprint cache disposition")
+        if self.compile_projection_mode not in {
+            "full_manifest",
+            "hierarchy_dependency_closure",
+        }:
+            raise ValueError("invalid compile projection mode")
+        if self.compile_projection_fallback_reason is not None:
+            _fixed_label(
+                self.compile_projection_fallback_reason,
+                "compile_projection_fallback_reason",
+            )
         for field_name in (
             "content_digest_reuse_count",
             "content_digest_reuse_bytes",
             "content_digest_read_count",
             "content_digest_read_bytes",
             "content_snapshot_conflict_count",
+            "compile_projection_input_count",
+            "compile_projection_excluded_input_count",
+            "compile_projection_seed_symbol_count",
+            "compile_projection_dependency_symbol_count",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -376,6 +400,20 @@ class SourceGraphAdapterReceipt:
                 "content_snapshot_conflict_count": (
                     self.content_snapshot_conflict_count
                 ),
+                "compile_projection": {
+                    "mode": self.compile_projection_mode,
+                    "input_count": self.compile_projection_input_count,
+                    "excluded_input_count": (
+                        self.compile_projection_excluded_input_count
+                    ),
+                    "seed_symbol_count": (
+                        self.compile_projection_seed_symbol_count
+                    ),
+                    "dependency_symbol_count": (
+                        self.compile_projection_dependency_symbol_count
+                    ),
+                    "fallback_reason": self.compile_projection_fallback_reason,
+                },
             },
             "scope": {
                 "kind": self.scope_kind,
@@ -2593,6 +2631,16 @@ def build_source_graph_plan(
     # siblings or descendants; every admitted path came directly from the
     # hierarchy handle.
     boundary_paths = tuple(dict.fromkeys(ancestors))
+    compile_projection = plan_source_graph_compile_projection(
+        manifest=manifest,
+        hierarchy_result=hierarchy_result,
+        top=top,
+        instance_paths=boundary_paths,
+    )
+    projected_gaps = tuple(sorted({*gaps, *compile_projection.gap_codes}))
+    projected_exclusions = tuple(
+        sorted({*exclusions, *compile_projection.gap_codes})
+    )
     scope = SourceGraphBuildScope(
         design=(
             f"compile_{manifest.fingerprint[:24]}"
@@ -2613,7 +2661,7 @@ def build_source_graph_plan(
         coverage_boundary=CoverageBoundary(
             mode=BoundaryMode.EXPLICIT,
             instance_paths=boundary_paths,
-            objective_exclusions=tuple(exclusions),
+            objective_exclusions=projected_exclusions,
         ),
     )
     source_identity = SourceGraphIdentity(
@@ -2643,6 +2691,7 @@ def build_source_graph_plan(
         adapter_version=SOURCE_GRAPH_ADAPTER_VERSION,
         worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
         snapshots_complete=compile_snapshot is not None,
+        compile_projection=compile_projection.projection,
     )
     query_identity = SourceGraphQueryIdentity.from_build_scope(
         scope,
@@ -2665,8 +2714,8 @@ def build_source_graph_plan(
         top_count=len(manifest.ordered_tops),
         manifest_complete=manifest.complete,
         manifest_incomplete_reasons=manifest.incomplete_reasons,
-        gap_codes=gaps,
-        objective_exclusions=tuple(exclusions),
+        gap_codes=projected_gaps,
+        objective_exclusions=projected_exclusions,
         ancestor_count=len(ancestors),
         requested_cone_instance_count=len(boundary_paths),
         coverage_boundary_instance_count=len(boundary_paths),
@@ -2686,6 +2735,16 @@ def build_source_graph_plan(
         content_snapshot_conflict_count=digest_metrics[
             "content_snapshot_conflict_count"
         ],
+        compile_projection_mode=compile_projection.mode,
+        compile_projection_input_count=compile_projection.input_count,
+        compile_projection_excluded_input_count=(
+            compile_projection.excluded_input_count
+        ),
+        compile_projection_seed_symbol_count=compile_projection.seed_symbol_count,
+        compile_projection_dependency_symbol_count=(
+            compile_projection.dependency_symbol_count
+        ),
+        compile_projection_fallback_reason=compile_projection.fallback_reason,
         hierarchy_resolutions=(hierarchy_resolution,),
     )
     return SourceGraphBuildPlan(
@@ -2858,10 +2917,22 @@ def build_source_graph_frontier_plan(
         )
     )
     lca = _trace_scope_lca(unique_chains)
+    compile_projection = plan_source_graph_compile_projection(
+        manifest=request.identity.compile_inputs,
+        hierarchy_result=hierarchy_result,
+        top=top,
+        instance_paths=ancestor_union,
+    )
+    projected_gaps = set(base.receipt.gap_codes)
+    projected_gaps.discard(COMPILE_PROJECTION_GAP)
+    projected_gaps.update(compile_projection.gap_codes)
+    projected_exclusions = set(base.receipt.objective_exclusions)
+    projected_exclusions.discard(COMPILE_PROJECTION_GAP)
+    projected_exclusions.update(compile_projection.gap_codes)
     boundary = CoverageBoundary(
         mode=BoundaryMode.EXPLICIT,
         instance_paths=ancestor_union,
-        objective_exclusions=request.scope.coverage_boundary.objective_exclusions,
+        objective_exclusions=tuple(sorted(projected_exclusions)),
     )
     base_artifact = request.artifact_identity
     artifact_scope = SourceGraphArtifactScope(
@@ -2874,7 +2945,11 @@ def build_source_graph_frontier_plan(
         coverage_boundary=boundary,
         capabilities=base_artifact.scope.capabilities,
     )
-    artifact = replace(base_artifact, scope=artifact_scope)
+    artifact = replace(
+        base_artifact,
+        scope=artifact_scope,
+        compile_projection=compile_projection.projection,
+    )
     expanded_request = replace(request, artifact=artifact)
     artifact_key = compute_source_graph_artifact_key(artifact)
     query_key = compute_source_graph_query_key(expanded_request.query_identity)
@@ -2888,6 +2963,22 @@ def build_source_graph_frontier_plan(
             coverage_boundary_instance_count=len(ancestor_union),
             scope_kind="single_endpoint_expanded",
             lca_depth=lca.count("."),
+            gap_codes=tuple(sorted(projected_gaps)),
+            objective_exclusions=tuple(sorted(projected_exclusions)),
+            compile_projection_mode=compile_projection.mode,
+            compile_projection_input_count=compile_projection.input_count,
+            compile_projection_excluded_input_count=(
+                compile_projection.excluded_input_count
+            ),
+            compile_projection_seed_symbol_count=(
+                compile_projection.seed_symbol_count
+            ),
+            compile_projection_dependency_symbol_count=(
+                compile_projection.dependency_symbol_count
+            ),
+            compile_projection_fallback_reason=(
+                compile_projection.fallback_reason
+            ),
             cross_request_reusable=artifact_key.cross_request_reusable,
             artifact_fingerprint_sha256=artifact_key.digest,
             query_fingerprint_sha256=query_key.digest,
@@ -3031,10 +3122,22 @@ def build_source_graph_trace_plan(
         )
     )
     lca = _trace_scope_lca(unique_chains)
+    compile_projection = plan_source_graph_compile_projection(
+        manifest=manifest,
+        hierarchy_result=hierarchy_result,
+        top=top,
+        instance_paths=ancestor_union,
+    )
+    projected_gaps = set(base.receipt.gap_codes)
+    projected_gaps.discard(COMPILE_PROJECTION_GAP)
+    projected_gaps.update(compile_projection.gap_codes)
+    projected_exclusions = set(base.receipt.objective_exclusions)
+    projected_exclusions.discard(COMPILE_PROJECTION_GAP)
+    projected_exclusions.update(compile_projection.gap_codes)
     boundary = CoverageBoundary(
         mode=BoundaryMode.EXPLICIT,
         instance_paths=ancestor_union,
-        objective_exclusions=request.scope.coverage_boundary.objective_exclusions,
+        objective_exclusions=tuple(sorted(projected_exclusions)),
     )
     base_artifact = request.artifact_identity
     artifact_scope = SourceGraphArtifactScope(
@@ -3047,7 +3150,11 @@ def build_source_graph_trace_plan(
         coverage_boundary=boundary,
         capabilities=base_artifact.scope.capabilities,
     )
-    artifact = replace(base_artifact, scope=artifact_scope)
+    artifact = replace(
+        base_artifact,
+        scope=artifact_scope,
+        compile_projection=compile_projection.projection,
+    )
     trace_request = replace(request, artifact=artifact)
     artifact_key = compute_source_graph_artifact_key(artifact)
     query_key = compute_source_graph_query_key(trace_request.query_identity)
@@ -3059,6 +3166,18 @@ def build_source_graph_trace_plan(
         scope_kind=scope_kind,
         endpoint_count=len(normalized_paths),
         lca_depth=lca.count("."),
+        gap_codes=tuple(sorted(projected_gaps)),
+        objective_exclusions=tuple(sorted(projected_exclusions)),
+        compile_projection_mode=compile_projection.mode,
+        compile_projection_input_count=compile_projection.input_count,
+        compile_projection_excluded_input_count=(
+            compile_projection.excluded_input_count
+        ),
+        compile_projection_seed_symbol_count=compile_projection.seed_symbol_count,
+        compile_projection_dependency_symbol_count=(
+            compile_projection.dependency_symbol_count
+        ),
+        compile_projection_fallback_reason=compile_projection.fallback_reason,
         cross_request_reusable=artifact_key.cross_request_reusable,
         artifact_fingerprint_sha256=artifact_key.digest,
         query_fingerprint_sha256=query_key.digest,
@@ -3293,6 +3412,16 @@ def build_source_graph_path_plan(
         ancestor_union=ancestor_union,
         lca=lca,
     )
+    compile_projection = plan_source_graph_compile_projection(
+        manifest=manifest,
+        hierarchy_result=hierarchy_result,
+        top=top,
+        instance_paths=ancestor_union,
+    )
+    projected_gaps = tuple(sorted({*gaps, *compile_projection.gap_codes}))
+    projected_exclusions = tuple(
+        sorted({*exclusions, *compile_projection.gap_codes})
+    )
     scope = SourceGraphBuildScope(
         design=(
             f"compile_{manifest.fingerprint[:24]}"
@@ -3313,7 +3442,7 @@ def build_source_graph_path_plan(
         coverage_boundary=CoverageBoundary(
             mode=BoundaryMode.EXPLICIT,
             instance_paths=ancestor_union,
-            objective_exclusions=tuple(exclusions),
+            objective_exclusions=projected_exclusions,
         ),
         path_hierarchy=path_hierarchy,
     )
@@ -3344,6 +3473,7 @@ def build_source_graph_path_plan(
         adapter_version=SOURCE_GRAPH_ADAPTER_VERSION,
         worker_protocol_version=SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
         snapshots_complete=compile_snapshot is not None,
+        compile_projection=compile_projection.projection,
     )
     query_identity = SourceGraphQueryIdentity.from_build_scope(scope)
     request = SourceGraphBuildRequest(
@@ -3361,8 +3491,8 @@ def build_source_graph_path_plan(
         top_count=len(manifest.ordered_tops),
         manifest_complete=manifest.complete,
         manifest_incomplete_reasons=manifest.incomplete_reasons,
-        gap_codes=gaps,
-        objective_exclusions=tuple(exclusions),
+        gap_codes=projected_gaps,
+        objective_exclusions=projected_exclusions,
         ancestor_count=len(ancestor_union),
         requested_cone_instance_count=len(ancestor_union),
         coverage_boundary_instance_count=len(ancestor_union),
@@ -3385,6 +3515,16 @@ def build_source_graph_path_plan(
         content_snapshot_conflict_count=digest_metrics[
             "content_snapshot_conflict_count"
         ],
+        compile_projection_mode=compile_projection.mode,
+        compile_projection_input_count=compile_projection.input_count,
+        compile_projection_excluded_input_count=(
+            compile_projection.excluded_input_count
+        ),
+        compile_projection_seed_symbol_count=compile_projection.seed_symbol_count,
+        compile_projection_dependency_symbol_count=(
+            compile_projection.dependency_symbol_count
+        ),
+        compile_projection_fallback_reason=compile_projection.fallback_reason,
         hierarchy_resolutions=hierarchy_resolutions,
     )
     return SourceGraphBuildPlan(

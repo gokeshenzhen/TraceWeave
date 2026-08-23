@@ -57,6 +57,10 @@ class ScopeRelation(str, Enum):
     UNPROVEN = "unproven"
 
 
+class CompileProjectionMode(str, Enum):
+    HIERARCHY_DEPENDENCY_CLOSURE = "hierarchy_dependency_closure"
+
+
 def _required_text(value: str, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must not be empty")
@@ -195,6 +199,63 @@ class CompileInputManifest:
             inputs_complete=bool(value.get("inputs_complete", False)),
             options_complete=bool(value.get("options_complete", False)),
             tops_complete=bool(value.get("tops_complete", False)),
+        )
+
+
+@dataclass(frozen=True)
+class SourceGraphCompileProjection:
+    """Explicit compile-input subset used by one bounded artifact build.
+
+    The full :class:`CompileInputManifest` remains the content and invalidation
+    identity.  This object records only the ordered compilation units admitted
+    to the isolated frontend for the hierarchy-proved scope.  Omitting it means
+    the worker must replay the full manifest for backward compatibility.
+    """
+
+    mode: CompileProjectionMode
+    ordered_inputs: tuple[str, ...]
+    full_input_count: int
+    seed_symbol_count: int = 0
+    dependency_symbol_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", CompileProjectionMode(self.mode))
+        inputs = _ordered_text(self.ordered_inputs, "compile projection input")
+        if not inputs:
+            raise ValueError("compile projection inputs must not be empty")
+        object.__setattr__(self, "ordered_inputs", inputs)
+        for field_name in (
+            "full_input_count",
+            "seed_symbol_count",
+            "dependency_symbol_count",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.full_input_count <= len(inputs):
+            raise ValueError("compile projection must exclude at least one input")
+
+    @property
+    def excluded_input_count(self) -> int:
+        return self.full_input_count - len(self.ordered_inputs)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode.value,
+            "ordered_inputs": list(self.ordered_inputs),
+            "full_input_count": self.full_input_count,
+            "seed_symbol_count": self.seed_symbol_count,
+            "dependency_symbol_count": self.dependency_symbol_count,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> SourceGraphCompileProjection:
+        return cls(
+            mode=CompileProjectionMode(value["mode"]),
+            ordered_inputs=tuple(value.get("ordered_inputs", ())),
+            full_input_count=int(value["full_input_count"]),
+            seed_symbol_count=int(value.get("seed_symbol_count", 0)),
+            dependency_symbol_count=int(value.get("dependency_symbol_count", 0)),
         )
 
 
@@ -971,6 +1032,7 @@ class SourceGraphArtifactIdentity:
     adapter_version: str
     worker_protocol_version: str
     snapshots_complete: bool = True
+    compile_projection: SourceGraphCompileProjection | None = None
     identity_version: str = SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION
     build_contract_version: str = SOURCE_GRAPH_BUILD_CONTRACT_VERSION
 
@@ -1002,9 +1064,26 @@ class SourceGraphArtifactIdentity:
             raise ValueError(
                 "artifact top is absent from the complete compile top list"
             )
+        projection = self.compile_projection
+        if projection is not None:
+            if not isinstance(projection, SourceGraphCompileProjection):
+                raise ValueError("artifact compile_projection is invalid")
+            full_inputs = self.source.compile_inputs.ordered_inputs
+            selected_paths = set(projection.ordered_inputs)
+            expected_order = tuple(
+                path for path in full_inputs if path in selected_paths
+            )
+            if projection.full_input_count != len(full_inputs):
+                raise ValueError(
+                    "compile projection full_input_count must match source manifest"
+                )
+            if expected_order != projection.ordered_inputs:
+                raise ValueError(
+                    "compile projection must be an ordered manifest subsequence"
+                )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "identity_version": self.identity_version,
             "build_contract_version": self.build_contract_version,
             "source": self.source.to_dict(),
@@ -1014,6 +1093,9 @@ class SourceGraphArtifactIdentity:
             "worker_protocol_version": self.worker_protocol_version,
             "snapshots_complete": self.snapshots_complete,
         }
+        if self.compile_projection is not None:
+            result["compile_projection"] = self.compile_projection.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> SourceGraphArtifactIdentity:
@@ -1021,6 +1103,9 @@ class SourceGraphArtifactIdentity:
         scope = value.get("scope")
         if not isinstance(source, Mapping) or not isinstance(scope, Mapping):
             raise ValueError("artifact source and scope must be objects")
+        projection = value.get("compile_projection")
+        if projection is not None and not isinstance(projection, Mapping):
+            raise ValueError("artifact compile_projection must be an object")
         return cls(
             source=SourceGraphIdentity.from_dict(source),
             scope=SourceGraphArtifactScope.from_dict(scope),
@@ -1028,6 +1113,11 @@ class SourceGraphArtifactIdentity:
             adapter_version=value["adapter_version"],
             worker_protocol_version=value["worker_protocol_version"],
             snapshots_complete=bool(value.get("snapshots_complete", False)),
+            compile_projection=(
+                SourceGraphCompileProjection.from_dict(projection)
+                if isinstance(projection, Mapping)
+                else None
+            ),
             identity_version=value.get(
                 "identity_version", SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION
             ),
@@ -1318,6 +1408,11 @@ def compute_source_graph_artifact_key(
             "worker_protocol_version": identity.worker_protocol_version,
             "build_contract_version": identity.build_contract_version,
             "identity_version": identity.identity_version,
+            "compile_projection": (
+                identity.compile_projection.to_dict()
+                if identity.compile_projection is not None
+                else None
+            ),
         }
     )
     scope_digest = _sha256(identity.scope.to_dict())
