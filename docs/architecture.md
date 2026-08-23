@@ -205,13 +205,16 @@ Verification
   is target-independent, so a dominating proved artifact may serve a covered
   endpoint while QueryIdentity remains target-specific.
   The deterministic shortest-hop query traverses only supported structural IR
-  bindings and combinational dependencies. Positive partial results remain
-  partial, while only complete coverage can establish `not_connected`;
-  inconclusive/truncated negatives fall through to Static's structured
-  unsupported result. `expand_assigns` changes only whether real assignment
-  evidence is exposed. `trace_x_source` uses the same memory-first artifact
-  runtime and optional exact disk tier while retaining split-phase waveform
-  locking and whole-trace restart semantics.
+  bindings and combinational dependencies. Its BFS queue retains only current
+  selections. Each first-discovered state stores one predecessor hop, and the
+  selected shortest path is reconstructed once with per-hop cancellation
+  checks; queue entries never copy their complete path prefix. Positive partial
+  results remain partial, while only complete coverage can establish
+  `not_connected`; inconclusive/truncated negatives fall through to Static's
+  structured unsupported result. `expand_assigns` changes only whether real
+  assignment evidence is exposed. `trace_x_source` uses the same memory-first
+  artifact runtime and optional exact disk tier while retaining split-phase
+  waveform locking and whole-trace restart semantics.
   Driver/load traversal has a second resource boundary independent of artifact
   preparation: 4,096 states, 16,384 inspected IR edges, 256 unique matches,
   and 4,096 expansion frontiers by default. Index lists are canonicalized once
@@ -228,9 +231,13 @@ Verification
   rather than projected instance count. Ordered wide-bit mappings remain
   tuples for exact ascending-range/concat semantics, but per-match membership
   indexes are built once instead of once per candidate bit. Neither optimization
-  changes the IR or public result schema; interval/segment storage remains a
-  separately measured future migration rather than a prerequisite for indexed
-  warm queries.
+  changes the IR or public result schema. A 100,000-instance synthetic lookup
+  remained 0.0037 ms median; 4,096/16,384/65,536-bit load queries were
+  4.1/16.7/75.6 ms median, while the 65,536-bit public JSON alone was 3.44 MB.
+  The measured cost is linear in an extreme-width result rather than a
+  hierarchy or stable-ID lookup hotspot. Interval/segment storage therefore
+  remains a future migration gated on a representative workload whose IR
+  memory or warm latency is dominated by bit tuples.
   The two default compile-source consumers use a separate process-session
   `CompileSourceIndexRuntime`. An exact compile-log snapshot, simulator,
   ordered source list, and resource policy identify one active session.

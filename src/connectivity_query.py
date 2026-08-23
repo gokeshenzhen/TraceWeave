@@ -261,6 +261,9 @@ class _PathEdge:
     procedure_kind: str | None = None
 
 
+_PathStateKey = tuple[str, str, tuple[int, ...]]
+
+
 @dataclass
 class _QueryWorkBudget:
     """Deterministic work and output bounds for driver/load graph walks."""
@@ -795,10 +798,13 @@ class ConnectivityQueryEngine:
                 output_truncated=False,
             )
 
-        queue: deque[tuple[SignalSelection, tuple[PathTraversalEdge, ...]]] = deque(
-            [(from_endpoint, ())]
-        )
-        visited = {_state_key(from_endpoint)}
+        from_state = _state_key(from_endpoint)
+        queue: deque[SignalSelection] = deque((from_endpoint,))
+        visited = {from_state}
+        predecessors: dict[
+            _PathStateKey,
+            tuple[_PathStateKey, PathTraversalEdge],
+        ] = {}
         touched_paths = {from_endpoint.path(), to_endpoint.path()}
         query_gaps: dict[tuple[str, str, int, str], CoverageGap] = {}
         traversed_edges = 0
@@ -806,7 +812,8 @@ class ConnectivityQueryEngine:
 
         while queue and not traversal_truncated:
             check_cancelled()
-            current, current_path = queue.popleft()
+            current = queue.popleft()
+            current_state = _state_key(current)
             touched_paths.add(current.path())
             for excluded_source, gap in self._path_exclusions.get(
                 _endpoint_key(current), ()
@@ -836,8 +843,14 @@ class ConnectivityQueryEngine:
                     )
                     query_gaps[_gap_key(path_gap)] = path_gap
                 hop = _public_path_edge(edge, current, downstream)
-                next_path = current_path + (hop,)
+                state = _state_key(downstream)
                 if _same_path_endpoint(downstream, to_endpoint):
+                    predecessors.setdefault(state, (current_state, hop))
+                    next_path = _reconstruct_path(
+                        from_state=from_state,
+                        to_state=state,
+                        predecessors=predecessors,
+                    )
                     path_touched = {
                         from_endpoint.path(),
                         to_endpoint.path(),
@@ -853,7 +866,6 @@ class ConnectivityQueryEngine:
                         _path_evidence_gaps(next_path),
                     )
                     output_truncated = len(next_path) > output_limit
-                    target_state = _state_key(downstream)
                     return ConnectivityPathQueryResult(
                         operation="path",
                         from_signal=from_signal,
@@ -889,17 +901,17 @@ class ConnectivityQueryEngine:
                         endpoint_alias_equivalent=False,
                         expand_assigns=expand_assigns,
                         traversed_edge_count=traversed_edges,
-                        visited_state_count=len(visited | {target_state}),
+                        visited_state_count=len(visited | {state}),
                         traversal_limit=traversal_limit,
                         output_limit=output_limit,
                         traversal_truncated=False,
                         output_truncated=output_truncated,
                     )
-                state = _state_key(downstream)
                 if state in visited:
                     continue
                 visited.add(state)
-                queue.append((downstream, next_path))
+                predecessors[state] = (current_state, hop)
+                queue.append(downstream)
 
         relevant_gaps = _merge_path_gaps(
             self.ir.coverage,
@@ -1456,7 +1468,7 @@ def _positive_query_limit(value: int, label: str) -> int:
     return value
 
 
-def _state_key(selection: SignalSelection) -> tuple[str, str, tuple[int, ...]]:
+def _state_key(selection: SignalSelection) -> _PathStateKey:
     instance, symbol = _endpoint_key(selection)
     return instance, symbol, selection.bits
 
@@ -1558,6 +1570,27 @@ def _public_path_edge(
         boundary=edge.boundary,
         procedure_kind=edge.procedure_kind,
     )
+
+
+def _reconstruct_path(
+    *,
+    from_state: _PathStateKey,
+    to_state: _PathStateKey,
+    predecessors: Mapping[
+        _PathStateKey,
+        tuple[_PathStateKey, PathTraversalEdge],
+    ],
+) -> tuple[PathTraversalEdge, ...]:
+    """Rebuild one BFS path without retaining full prefixes in the queue."""
+
+    reversed_path: list[PathTraversalEdge] = []
+    state = to_state
+    while state != from_state:
+        check_cancelled()
+        state, hop = predecessors[state]
+        reversed_path.append(hop)
+    reversed_path.reverse()
+    return tuple(reversed_path)
 
 
 def _path_edge_sort_key(edge: _PathEdge) -> tuple[Any, ...]:

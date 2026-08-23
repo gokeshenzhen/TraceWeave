@@ -427,10 +427,12 @@ lock，也不会把 `pyslang` 导入 MCP server 进程。
 
 对 path 请求，adapter 必须证明两个 hierarchy ancestor chain 属于同一个 top，只投影
 两条 chain 经最低公共祖先形成的 union；不会枚举无关 sibling 或完整设计。查询只沿受支持的
-IR binding 与组合依赖返回 deterministic shortest-hop 结构路径。partial 正结果仍是
-partial；只有 coverage-complete 的负结果才是 `not_connected`，inconclusive 或 truncated
-负结果会继续回退到 Static 的结构化 unsupported。`expand_assigns` 只控制是否展示真实的
-IR/source assignment evidence，不改变端点是否连通。
+IR binding 与组合依赖返回 deterministic shortest-hop 结构路径。BFS 队列只保存当前
+selection，每个首次发现的 state 只保存一个 predecessor hop，命中后才回建一次路径；不会在
+frontier 的每个元素里复制完整路径前缀。partial 正结果仍是 partial；只有
+coverage-complete 的负结果才是 `not_connected`，inconclusive 或 truncated 负结果会继续
+回退到 Static 的结构化 unsupported。`expand_assigns` 只控制是否展示真实的 IR/source
+assignment evidence，不改变端点是否连通。
 
 `build_tb_hierarchy` 读取源码与已解析 include 时，会同步捕获一份私有、不可变的
 compile-session snapshot；其中只包含内容摘要、stat identity、字节数和固定标签语义
@@ -831,6 +833,15 @@ IR 当前仍使用显式有序 bit tuple。更大范围的 interval/segment 重�
 version 与正确性成本，因此留到真实 workload 证明仍有必要时再实施。两个 path workload
 分别暴露深路径 CPU 成本和队列共享前缀的内存放大，因此 path search 的存储优化可以与
 instance 或 packed-bit 表示解耦评估。
+在 Linux 4.18、CPython 3.11.13、AMD Ryzen 7 5700G 上，对 4,096-edge workload 做三组
+fresh-process 配对复测：`path-chain` 的跨进程中位数从 39.47 降到 24.78 ms（1.59x），
+`path-comb` 从 77.12 降到 20.87 ms（3.69x）。`path-comb` 的 median maximum RSS 从
+63,900 降到 31,464 KiB；单链则因用 predecessor table 交换一个持续增长的 prefix，峰值从
+32,456 增到 33,584 KiB。前后 result fingerprint、status、visited state、traversed edge 与
+truncation receipt 完全一致。真实 OpenTitan 的两条 fact 短路径基本不变（0.452 对
+0.438 ms）。10 万实例解析中位数仍为 0.0037 ms；即使合成 65,536-bit load 也为
+75.6 ms，而公开结果本身已达 3.44 MB。因此 numeric stable ID、hierarchy trie 与
+interval-bit IR 继续保持 evidence-gated，不纳入本次改动。
 
 可选的 exact content-addressed disk cache 能在 MCP 重启后复用已验证的 scoped IR，
 但默认保持关闭：

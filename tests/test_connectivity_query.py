@@ -864,6 +864,33 @@ def test_path_checks_cancellation_during_graph_traversal(monkeypatch):
     assert calls == 4
 
 
+def test_path_checks_cancellation_during_predecessor_reconstruction(monkeypatch):
+    calls = 0
+
+    def cancel_during_reconstruction():
+        nonlocal calls
+        calls += 1
+        if calls == 8:
+            raise cancellation.OperationCancelled(
+                "cancelled during path reconstruction"
+            )
+
+    monkeypatch.setattr(
+        "src.connectivity_query.check_cancelled", cancel_during_reconstruction
+    )
+    engine = ConnectivityQueryEngine(
+        _build_scalar_path_ir(
+            ("edge-a-b", "a", "b", BoundaryKind.COMBINATIONAL),
+            ("edge-b-c", "b", "c", BoundaryKind.COMBINATIONAL),
+            ("edge-c-d", "c", "d", BoundaryKind.COMBINATIONAL),
+        )
+    )
+
+    with pytest.raises(cancellation.OperationCancelled):
+        engine.query_path("path_top.a", "path_top.d")
+    assert calls == 8
+
+
 def _build_high_fanout_ir(count: int) -> ConnectivityIR:
     return _build_scalar_path_ir(
         *(

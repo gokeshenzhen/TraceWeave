@@ -469,11 +469,13 @@ For a path request, the adapter proves both hierarchy ancestor chains share one
 top and projects only their ancestor union through the lowest common ancestor;
 it does not enumerate unrelated siblings or the full design. The query returns a
 deterministic shortest-hop structural path over supported IR bindings and
-combinational dependencies. A partial positive remains partial. Only a
-coverage-complete negative is `not_connected`; inconclusive or truncated
-negatives continue to Static's structured unsupported result. `expand_assigns`
-only exposes real IR/source assignment evidence and does not change whether the
-endpoints are connected.
+combinational dependencies. The BFS queue stores one selection plus one
+predecessor hop per first-discovered state, then reconstructs the selected path
+once; it never duplicates every complete path prefix across the frontier. A
+partial positive remains partial. Only a coverage-complete negative is
+`not_connected`; inconclusive or truncated negatives continue to Static's
+structured unsupported result. `expand_assigns` only exposes real IR/source
+assignment evidence and does not change whether the endpoints are connected.
 
 While `build_tb_hierarchy` reads sources and resolved includes, it captures a
 private immutable compile-session snapshot containing only content digests,
@@ -968,6 +970,18 @@ is deliberately deferred until a measured workload justifies its schema,
 cache-version, and correctness cost. The path workloads independently expose
 deep-path CPU cost and queued shared-prefix memory, so path-search storage can
 be optimized without conflating it with instance or packed-bit representation.
+On Linux 4.18 with CPython 3.11.13 and an AMD Ryzen 7 5700G, three paired fresh-
+process runs at 4,096 edges reduced the process-median `path-chain` query from
+39.47 to 24.78 ms (1.59x) and `path-comb` from 77.12 to 20.87 ms (3.69x).
+`path-comb` median maximum RSS fell from 63,900 to 31,464 KiB; the single-chain
+case instead increased from 32,456 to 33,584 KiB because it trades one growing
+prefix for the predecessor table. Result fingerprints, statuses, visited-state
+counts, traversed-edge counts, and truncation receipts were identical. A real
+OpenTitan two-fact short path remained effectively unchanged at 0.452 versus
+0.438 ms. A 100,000-instance lookup was 0.0037 ms median, and even a synthetic
+65,536-bit load was 75.6 ms while serializing a 3.44 MB public result, so numeric
+stable IDs, a hierarchy trie, and interval-bit IR remain evidence-gated rather
+than part of this change.
 
 An optional exact, content-addressed disk cache can reuse a validated scoped IR
 after an MCP restart. It remains disabled by default:
