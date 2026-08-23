@@ -24,11 +24,13 @@ import os
 import re
 import sys
 import tempfile
+import time
 from typing import Any
 
 from config import NPI_ALLOW_DEGRADED_KDB
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
+from .operation_metrics import read_process_rss_kib
 from .verdi_backend import (
     kdb_has_elaboration_errors,
     probe_verdi_backend,
@@ -283,6 +285,7 @@ class VerdiNpiBackend:
         self._degraded_error_count: int | None = None
         self._degraded_error_log: str | None = None
         self._last_query_kdb_status: dict[str, Any] | None = None
+        self._last_instance_src_map_metrics: dict[str, Any] | None = None
         self._npi_modules: tuple[Any, Any] | None = None  # (npisys, netlist)
 
     # ── public API matching ConnectivityBackend ────────────────────────
@@ -537,29 +540,130 @@ class VerdiNpiBackend:
         on any failure path so the caller can keep going without
         annotation. Never raises.
         """
+        started = time.perf_counter()
+        rss_start_kib = read_process_rss_kib()
+        metrics: dict[str, Any] = {
+            "status": "started",
+            "compile_parse_wall_ms": 0.0,
+            "kdb_probe_wall_ms": 0.0,
+            "design_load_wall_ms": 0.0,
+            "top_list_wall_ms": 0.0,
+            "instance_walk_wall_ms": 0.0,
+            "top_instance_count": 0,
+            "instance_visited_count": 0,
+            "source_entry_count": 0,
+            "depth_limit_count": 0,
+            "full_name_error_count": 0,
+            "child_list_error_count": 0,
+            "design_load_cache_hit": 0,
+            "rss_start_kib": rss_start_kib,
+            "rss_after_load_kib": None,
+            "rss_peak_kib": rss_start_kib,
+            "rss_end_kib": None,
+        }
+        self._last_instance_src_map_metrics = metrics
+
+        def _sample_rss() -> int | None:
+            rss_kib = read_process_rss_kib()
+            if isinstance(rss_kib, int):
+                peak_kib = metrics.get("rss_peak_kib")
+                metrics["rss_peak_kib"] = max(
+                    int(peak_kib) if isinstance(peak_kib, int) else 0,
+                    rss_kib,
+                )
+            return rss_kib
+
+        def _finish(status: str) -> None:
+            metrics["status"] = status
+            metrics["total_wall_ms"] = round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            )
+            metrics["rss_end_kib"] = _sample_rss()
+
         try:
+            phase_started = time.perf_counter()
             compile_result = parse_compile_log(compile_log, simulator)
+            metrics["compile_parse_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            phase_started = time.perf_counter()
             kdb_path = self._kdb_path_from(compile_result, compile_log)
+            metrics["kdb_probe_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
             top = self._top_from(compile_result)
             if not kdb_path or not top:
+                _finish("missing_kdb_or_top")
                 return {}
+            metrics["design_load_cache_hit"] = int(
+                self._state == "ready"
+                and self._loaded_kdb == kdb_path
+                and self._loaded_top == top
+            )
+            phase_started = time.perf_counter()
             if not self._ensure_loaded(kdb_path, top):
+                metrics["design_load_wall_ms"] = round(
+                    (time.perf_counter() - phase_started) * 1000.0,
+                    3,
+                )
+                metrics["rss_after_load_kib"] = _sample_rss()
+                _finish("design_load_failed")
                 return {}
+            metrics["design_load_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            metrics["rss_after_load_kib"] = _sample_rss()
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("collect_instance_src_map setup failed: %s", exc)
+            _finish("setup_failed")
             return {}
 
         _, netlist = self._npi_modules  # type: ignore[misc]
         out: dict[str, tuple[str | None, int | None]] = {}
         try:
+            phase_started = time.perf_counter()
             with _silence_native_stdio():
                 top_list = netlist.get_top_inst_list() or []
+            metrics["top_list_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("get_top_inst_list failed: %s", exc)
+            _finish("top_list_failed")
             return {}
+        metrics["top_instance_count"] = len(top_list)
+        walk_stats = {
+            "instance_visited_count": 0,
+            "source_entry_count": 0,
+            "depth_limit_count": 0,
+            "full_name_error_count": 0,
+            "child_list_error_count": 0,
+        }
+        phase_started = time.perf_counter()
         for inst in top_list:
-            _walk_inst_src(inst, out)
+            _walk_inst_src(inst, out, stats=walk_stats)
+        metrics["instance_walk_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        metrics.update(walk_stats)
+        _finish("completed")
         return out
+
+    @property
+    def instance_src_map_metrics(self) -> dict[str, Any] | None:
+        """Return privacy-safe metrics from the latest hierarchy source walk."""
+
+        return (
+            dict(self._last_instance_src_map_metrics)
+            if self._last_instance_src_map_metrics is not None
+            else None
+        )
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -1546,6 +1650,8 @@ def _walk_inst_src(
     inst: Any,
     accumulator: dict[str, tuple[str | None, int | None]],
     _depth: int = 0,
+    *,
+    stats: dict[str, int] | None = None,
 ) -> None:
     """Recursively populate ``full_name() -> (file, line)`` for an instance tree.
 
@@ -1554,24 +1660,34 @@ def _walk_inst_src(
     """
     if inst is None:
         return
+    if stats is not None:
+        stats["instance_visited_count"] += 1
     # Guard runaway hierarchies (synthesized loops should not happen but
     # libNPI has surprised us before).
     if _depth > 256:
+        if stats is not None:
+            stats["depth_limit_count"] += 1
         return
     try:
         path = inst.full_name() if hasattr(inst, "full_name") else None
     except Exception:  # noqa: BLE001
         path = None
+        if stats is not None:
+            stats["full_name_error_count"] += 1
     if path:
         file_val, line_val = _inst_src_info(inst)
         if file_val is not None or line_val is not None:
             accumulator[path] = (file_val, line_val)
+            if stats is not None:
+                stats["source_entry_count"] += 1
     try:
         children = inst.inst_list() if hasattr(inst, "inst_list") else []
     except Exception:  # noqa: BLE001
         children = []
+        if stats is not None:
+            stats["child_list_error_count"] += 1
     for child in children or []:
-        _walk_inst_src(child, accumulator, _depth + 1)
+        _walk_inst_src(child, accumulator, _depth + 1, stats=stats)
 
 
 def _scope_inst_of(hdl: Any) -> Any:

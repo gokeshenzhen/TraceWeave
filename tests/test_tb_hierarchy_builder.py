@@ -1009,6 +1009,16 @@ Top Level Modules:
 
             class _FakeNpiBackend:
                 name = "verdi_npi"
+                instance_src_map_metrics = {
+                    "status": "completed",
+                    "design_load_wall_ms": 12.5,
+                    "instance_walk_wall_ms": 3.25,
+                    "instance_visited_count": 2,
+                    "source_entry_count": 1,
+                    # Metric forwarding is allowlisted; arbitrary strings
+                    # must never enter the public build receipt.
+                    "private_path": "/must/not/leak",
+                }
 
                 def collect_instance_src_map(self, compile_log, simulator):
                     return {"top_tb.dut_i": ("/elaborated/dut.sv", 137)}
@@ -1028,6 +1038,14 @@ Top Level Modules:
             assert node["source_info_origin"] == "npi"
             assert hierarchy["project"]["source_info_overlay"] == "npi"
             assert hierarchy["project"]["source_info_overlay_reason"] is None
+            overlay_metrics = hierarchy["build_metrics"]["source_overlay_metrics"]
+            assert overlay_metrics["status"] == "completed"
+            assert overlay_metrics["npi_map_entry_count"] == 1
+            assert overlay_metrics["hierarchy_node_count"] == 1
+            assert overlay_metrics["annotated_node_count"] == 1
+            assert overlay_metrics["annotation_coverage_ppm"] == 1_000_000
+            assert overlay_metrics["npi_backend"]["design_load_wall_ms"] == 12.5
+            assert "private_path" not in overlay_metrics["npi_backend"]
         finally:
             tmp.cleanup()
 
@@ -1077,6 +1095,10 @@ Top Level Modules:
             assert hierarchy["project"]["source_info_overlay_reason"] == (
                 "npi_degraded_kdb"
             )
+            assert (
+                hierarchy["build_metrics"]["source_overlay_metrics"]["status"]
+                == "completed_partial"
+            )
         finally:
             tmp.cleanup()
 
@@ -1112,6 +1134,10 @@ Top Level Modules:
             assert hierarchy["project"]["source_info_overlay"] == "compile_log"
             assert hierarchy["project"]["source_info_overlay_reason"] == (
                 "npi_skipped_by_policy"
+            )
+            assert (
+                hierarchy["build_metrics"]["source_overlay_metrics"]["status"]
+                == "skipped_by_policy"
             )
         finally:
             tmp.cleanup()
@@ -1197,5 +1223,9 @@ Top Level Modules:
             assert called["n"] == 0
             node = hierarchy["component_tree"]["top_tb"]["dut_i"]
             assert node["source_info_origin"] == "compile_log"
+            assert (
+                hierarchy["build_metrics"]["source_overlay_metrics"]["status"]
+                == "skipped_no_kdb"
+            )
         finally:
             tmp.cleanup()

@@ -33,6 +33,47 @@ _MACRO_DEFINE_RE = re.compile(r"`define\s+([A-Za-z_][A-Za-z0-9_$]*)")
 _MACRO_CONDITION_RE = re.compile(
     r"`(?:ifdef|ifndef|elsif)\s+([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
 )
+
+_NPI_SOURCE_MAP_METRIC_KEYS = frozenset({
+    "status",
+    "compile_parse_wall_ms",
+    "kdb_probe_wall_ms",
+    "design_load_wall_ms",
+    "top_list_wall_ms",
+    "instance_walk_wall_ms",
+    "total_wall_ms",
+    "top_instance_count",
+    "instance_visited_count",
+    "source_entry_count",
+    "depth_limit_count",
+    "full_name_error_count",
+    "child_list_error_count",
+    "design_load_cache_hit",
+    "rss_start_kib",
+    "rss_after_load_kib",
+    "rss_peak_kib",
+    "rss_end_kib",
+})
+
+
+def _source_overlay_metrics(status: str) -> dict:
+    rss_kib = read_process_rss_kib()
+    return {
+        "status": status,
+        "probe_wall_ms": 0.0,
+        "backend_select_wall_ms": 0.0,
+        "collect_wall_ms": 0.0,
+        "merge_wall_ms": 0.0,
+        "npi_map_entry_count": 0,
+        "hierarchy_node_count": 0,
+        "annotated_node_count": 0,
+        "annotation_coverage_ppm": 0,
+        "rss_start_kib": rss_kib,
+        "rss_peak_kib": rss_kib,
+        "rss_end_kib": rss_kib,
+    }
+
+
 _MACRO_TOKEN_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_$]*)")
 _PREPROCESSOR_KEYWORDS = {
     "begin_keywords",
@@ -643,6 +684,7 @@ def build_hierarchy(
 
     source_info_overlay = "compile_log"
     source_info_overlay_reason = None
+    source_overlay_metrics = _source_overlay_metrics("disabled")
 
     # B2 enrichment: when a Verdi KDB is available, walk the elaborated
     # netlist and overwrite each component_tree node's source info with
@@ -650,12 +692,18 @@ def build_hierarchy(
     # baseline; ``_npi_annotate_component_tree`` swallows everything.
     overlay_started = time.perf_counter()
     if apply_source_overlay and compile_log_path and top_module and component_tree:
-        source_info_overlay, source_info_overlay_reason = _npi_annotate_component_tree(
+        (
+            source_info_overlay,
+            source_info_overlay_reason,
+            source_overlay_metrics,
+        ) = _npi_annotate_component_tree(
             component_tree=component_tree,
             top_module=top_module,
             compile_result=effective_compile_result,
             compile_log_path=compile_log_path,
         )
+    elif apply_source_overlay:
+        source_overlay_metrics["status"] = "skipped_missing_prerequisite"
     overlay_wall_ms = (time.perf_counter() - overlay_started) * 1000.0
     rss_end_kib = read_process_rss_kib()
     sampled_rss = [
@@ -677,6 +725,7 @@ def build_hierarchy(
         "scan_wall_ms": round(scan_wall_ms, 3),
         "tree_wall_ms": round(tree_wall_ms, 3),
         "source_overlay_wall_ms": round(overlay_wall_ms, 3),
+        "source_overlay_metrics": source_overlay_metrics,
         "total_wall_ms": round(
             (time.perf_counter() - total_started) * 1000.0, 3
         ),
@@ -729,13 +778,14 @@ def apply_npi_source_overlay(
     started = time.perf_counter()
     overlay = "compile_log"
     reason = None
+    overlay_metrics = _source_overlay_metrics("skipped_missing_prerequisite")
     if (
         top_module
         and isinstance(component_tree, dict)
         and component_tree
         and isinstance(compile_result, dict)
     ):
-        overlay, reason = _npi_annotate_component_tree(
+        overlay, reason, overlay_metrics = _npi_annotate_component_tree(
             component_tree=component_tree,
             top_module=top_module,
             compile_result=compile_result,
@@ -750,6 +800,7 @@ def apply_npi_source_overlay(
         metrics["source_overlay_wall_ms"] = round(
             previous_overlay_ms + elapsed_ms, 3
         )
+        metrics["source_overlay_metrics"] = overlay_metrics
         metrics["total_wall_ms"] = round(
             float(metrics.get("total_wall_ms") or 0.0) + elapsed_ms, 3
         )
@@ -767,7 +818,7 @@ def _npi_annotate_component_tree(
     top_module: str,
     compile_result: dict,
     compile_log_path: str,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, dict]:
     """Overlay NPI-derived file:line onto an already-built component_tree.
 
     Guarded against every known failure mode (missing VERDI_HOME, no KDB,
@@ -775,11 +826,68 @@ def _npi_annotate_component_tree(
     failure). Mutates ``component_tree`` in place, never raises, and returns
     the fixed-label public overlay provenance.
     """
+    started = time.perf_counter()
+    metrics = _source_overlay_metrics("started")
+
+    def _sample_rss() -> int | None:
+        rss_kib = read_process_rss_kib()
+        if isinstance(rss_kib, int):
+            peak_kib = metrics.get("rss_peak_kib")
+            metrics["rss_peak_kib"] = max(
+                int(peak_kib) if isinstance(peak_kib, int) else 0,
+                rss_kib,
+            )
+        return rss_kib
+
+    def _finish(
+        status: str,
+        *,
+        overlay: str = "compile_log",
+        reason: str | None = None,
+    ) -> tuple[str, str | None, dict]:
+        metrics["status"] = status
+        metrics["total_wall_ms"] = round(
+            (time.perf_counter() - started) * 1000.0,
+            3,
+        )
+        rss_end_kib = _sample_rss()
+        metrics["rss_end_kib"] = rss_end_kib
+        rss_start_kib = metrics.get("rss_start_kib")
+        if isinstance(rss_start_kib, int) and isinstance(rss_end_kib, int):
+            metrics["rss_delta_kib"] = rss_end_kib - rss_start_kib
+        return overlay, reason, metrics
+
+    def _copy_backend_metrics(backend: object) -> None:
+        raw = getattr(backend, "instance_src_map_metrics", None)
+        if not isinstance(raw, dict):
+            return
+        sanitized: dict[str, object] = {}
+        for key in _NPI_SOURCE_MAP_METRIC_KEYS:
+            value = raw.get(key)
+            if key == "status":
+                if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value):
+                    sanitized[key] = value
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                sanitized[key] = value
+            elif value is None and key.startswith("rss_"):
+                sanitized[key] = None
+        metrics["npi_backend"] = sanitized
+        backend_peak_kib = sanitized.get("rss_peak_kib")
+        if isinstance(backend_peak_kib, int):
+            current_peak_kib = metrics.get("rss_peak_kib")
+            metrics["rss_peak_kib"] = max(
+                int(current_peak_kib) if isinstance(current_peak_kib, int) else 0,
+                backend_peak_kib,
+            )
+
     try:
         from config import get_connectivity_route_config  # noqa: PLC0415
 
         if get_connectivity_route_config().mode == "source_graph":
-            return "compile_log", "npi_skipped_by_policy"
+            return _finish(
+                "skipped_by_policy",
+                reason="npi_skipped_by_policy",
+            )
     except Exception:  # noqa: BLE001
         # Invalid or unavailable route configuration preserves the historical
         # best-effort NPI overlay behavior.
@@ -789,31 +897,61 @@ def _npi_annotate_component_tree(
         from .connectivity_backend import select_backend  # noqa: PLC0415
         from .verdi_backend import probe_verdi_backend  # noqa: PLC0415
     except Exception:  # noqa: BLE001
-        return "compile_log", None
+        return _finish("backend_import_failed")
+    phase_started = time.perf_counter()
     try:
         backend_status = probe_verdi_backend(
             compile_result, compile_log_path=compile_log_path
         )
     except Exception:  # noqa: BLE001
-        return "compile_log", None
+        metrics["probe_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        return _finish("probe_failed")
+    metrics["probe_wall_ms"] = round(
+        (time.perf_counter() - phase_started) * 1000.0,
+        3,
+    )
     if backend_status.get("kdb_flow", "none") == "none":
-        return "compile_log", None
+        return _finish("skipped_no_kdb")
+    phase_started = time.perf_counter()
     try:
         backend = select_backend(backend_status)
     except Exception:  # noqa: BLE001
-        return "compile_log", None
+        metrics["backend_select_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        return _finish("backend_select_failed")
+    metrics["backend_select_wall_ms"] = round(
+        (time.perf_counter() - phase_started) * 1000.0,
+        3,
+    )
     if getattr(backend, "name", None) != "verdi_npi":
-        return "compile_log", None
+        return _finish("skipped_nonlocal_backend")
     collector = getattr(backend, "collect_instance_src_map", None)
     if collector is None:
-        return "compile_log", None
+        return _finish("collector_unavailable")
     simulator = compile_result.get("simulator") or "auto"
+    phase_started = time.perf_counter()
     try:
         inst_map = collector(compile_log_path, simulator)
     except Exception:  # noqa: BLE001
-        return "compile_log", None
-    if not inst_map:
-        return "compile_log", None
+        metrics["collect_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        _copy_backend_metrics(backend)
+        return _finish("collection_failed")
+    metrics["collect_wall_ms"] = round(
+        (time.perf_counter() - phase_started) * 1000.0,
+        3,
+    )
+    _copy_backend_metrics(backend)
+    if not isinstance(inst_map, dict) or not inst_map:
+        return _finish("empty_source_map")
+    metrics["npi_map_entry_count"] = len(inst_map)
     degraded_overlay = getattr(backend, "kdb_load_quality", "clean") == "degraded"
 
     # component_tree shape: {top: {inst_name: node, ...}} where each node
@@ -821,23 +959,51 @@ def _npi_annotate_component_tree(
     # not a node and has no annotation to apply.
     children = component_tree.get(top_module)
     if isinstance(children, dict):
-        annotated_count = _overlay_npi_on_subtree(children, top_module, inst_map)
+        merge_stats = {
+            "hierarchy_node_count": 0,
+            "annotated_node_count": 0,
+        }
+        phase_started = time.perf_counter()
+        annotated_count = _overlay_npi_on_subtree(
+            children,
+            top_module,
+            inst_map,
+            stats=merge_stats,
+        )
+        metrics["merge_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        metrics.update(merge_stats)
+        hierarchy_node_count = merge_stats["hierarchy_node_count"]
+        if hierarchy_node_count:
+            metrics["annotation_coverage_ppm"] = round(
+                annotated_count * 1_000_000 / hierarchy_node_count
+            )
         if annotated_count:
             if degraded_overlay:
-                return "npi_partial", "npi_degraded_kdb"
-            return "npi", None
-    return "compile_log", None
+                return _finish(
+                    "completed_partial",
+                    overlay="npi_partial",
+                    reason="npi_degraded_kdb",
+                )
+            return _finish("completed", overlay="npi")
+    return _finish("no_matching_nodes")
 
 
 def _overlay_npi_on_subtree(
     children: dict,
     parent_path: str,
     inst_map: dict,
+    *,
+    stats: dict[str, int] | None = None,
 ) -> int:
     annotated_count = 0
     for inst_name, node in children.items():
         if not isinstance(node, dict):
             continue
+        if stats is not None:
+            stats["hierarchy_node_count"] += 1
         full_path = f"{parent_path}.{inst_name}"
         npi_entry = inst_map.get(full_path)
         if npi_entry is not None:
@@ -849,9 +1015,16 @@ def _overlay_npi_on_subtree(
             if file_val is not None or line_val is not None:
                 node["source_info_origin"] = "npi"
                 annotated_count += 1
+                if stats is not None:
+                    stats["annotated_node_count"] += 1
         sub = node.get("children")
         if isinstance(sub, dict):
-            annotated_count += _overlay_npi_on_subtree(sub, full_path, inst_map)
+            annotated_count += _overlay_npi_on_subtree(
+                sub,
+                full_path,
+                inst_map,
+                stats=stats,
+            )
     return annotated_count
 
 

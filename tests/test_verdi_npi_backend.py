@@ -1013,6 +1013,19 @@ class _MockInst:
         return self._src_info
 
 
+class _MockHierarchyInst(_MockInst):
+    def __init__(self, name, *, children=(), **kwargs):
+        super().__init__(**kwargs)
+        self._name = name
+        self._children = list(children)
+
+    def full_name(self):
+        return self._name
+
+    def inst_list(self):
+        return list(self._children)
+
+
 def test_inst_src_info_returns_none_for_none():
     assert _inst_src_info(None) == (None, None)
 
@@ -1038,6 +1051,52 @@ def test_inst_src_info_falls_back_to_src_info_tuple():
 def test_inst_src_info_treats_empty_file_string_as_none():
     inst = _MockInst(file_val="", line_val=None)
     assert _inst_src_info(inst) == (None, None)
+
+
+def test_collect_instance_src_map_reports_phase_and_walk_metrics(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    child = _MockHierarchyInst(
+        "top_tb.u_dut",
+        file_val="/project/dut.sv",
+        line_val=23,
+    )
+    top = _MockHierarchyInst(
+        "top_tb",
+        children=(child,),
+        file_val="/project/top_tb.sv",
+        line_val=7,
+    )
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, tops=[top]),
+    )
+
+    assert backend.collect_instance_src_map(log, "vcs") == {
+        "top_tb": ("/project/top_tb.sv", 7),
+        "top_tb.u_dut": ("/project/dut.sv", 23),
+    }
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["top_instance_count"] == 1
+    assert metrics["instance_visited_count"] == 2
+    assert metrics["source_entry_count"] == 2
+    assert metrics["design_load_cache_hit"] == 0
+    assert metrics["compile_parse_wall_ms"] >= 0
+    assert metrics["kdb_probe_wall_ms"] >= 0
+    assert metrics["design_load_wall_ms"] >= 0
+    assert metrics["instance_walk_wall_ms"] >= 0
+    assert metrics["total_wall_ms"] >= metrics["instance_walk_wall_ms"]
+    assert len(npisys.load_calls) == 1
+
+    backend.collect_instance_src_map(log, "vcs")
+    warm_metrics = backend.instance_src_map_metrics
+    assert warm_metrics is not None
+    assert warm_metrics["design_load_cache_hit"] == 1
+    assert len(npisys.load_calls) == 1
 
 
 class _PinWithInst:
