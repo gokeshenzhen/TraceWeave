@@ -491,17 +491,20 @@ warning，manifest 会保持保守/incomplete，不会拼出一个并不存在�
 `source_text_bytes_retained=0`，以及隐私安全的 compile-session snapshot
 文件数/字节数/完整性和有界 preprocessor counters。这些计数会区分 physical source load、
 source/masked-text cache hit 与 bytes、logical expansion、comment-mask fast path，以及
-exact/LRU include resolution 的 hit、miss、entry 和 eviction；绝不暴露 path、include name、
-macro 或源码内容。Source Graph manifest receipt 还会在同一隐私边界下报告摘要复用/读取的
-文件数、字节数和冲突数。
+plain expansion-line fast path、exact/LRU include resolution 的 hit、miss、entry 和
+eviction；绝不暴露 path、include name、macro 或源码内容。Source Graph manifest receipt
+还会在同一隐私边界下报告摘要复用/读取的文件数、字节数和冲突数。
 
 完整 scanner 在不削弱 preprocessing proof 的前提下消除重复工作：不在 block comment 中且
 不含 `/` 的行直接跳过逐字符 mask；结构 token 收集前用同一字符串语法一次性移除 quoted
 string；simulator 记录的 include edge 先形成无歧义 basename index，再进入目录搜索。正向
 include resolution 进入 4,096-entry LRU，未解析 include 从不缓存。definition regex 只接受
-水平缩进，避免 `^\s*` 在展开 header 的数千空行之间反复回溯。basename 有歧义时仍按原
-include-dir 顺序解析；所有优化都保持每个 compilation unit 独立 macro state、cancellation
-checkpoint、compact snapshot 与公开 hierarchy schema。
+水平缩进，避免 `^\s*` 在展开 header 的数千空行之间反复回溯。在含 directive 的
+compilation unit 内，comment-aware 后没有反引号的 active line 会同时跳过 directive 与
+hierarchy-macro recognizer；文件元数据 regex 只在匹配所需字面量存在时运行。expanded/trusted
+structural view 要覆盖 root-local instance facts 时，也不会先解析再丢弃 root instance list。
+basename 有歧义时仍按原 include-dir 顺序解析；所有优化都保持每个 compilation unit 独立
+macro state、cancellation checkpoint、compact snapshot 与公开 hierarchy schema。
 
 完整构建有两个默认关闭的可选 guardrail。若站点外层 MCP watchdog 为固定时限，可以把
 内部阈值设得更早，从而收到结构化 blocker，而不是只看到 client/process 被终止：

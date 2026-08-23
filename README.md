@@ -551,10 +551,10 @@ source counts/bytes, phase timings, RSS samples, `source_text_bytes_retained=0`,
 privacy-safe compile-session snapshot counts/bytes/completeness, and bounded
 preprocessor counters. Those counters distinguish physical source loads,
 source/masked-text cache hits and bytes, logical expansions, comment-mask fast
-paths, and exact/LRU include-resolution hits, misses, entries, and evictions;
-they never expose paths, include names, macros, or source content. Source Graph
-manifest receipts expose digest reuse/read counts and bytes plus a conflict
-count under the same privacy boundary.
+paths, plain expansion-line fast paths, and exact/LRU include-resolution hits,
+misses, entries, and evictions; they never expose paths, include names, macros,
+or source content. Source Graph manifest receipts expose digest reuse/read
+counts and bytes plus a conflict count under the same privacy boundary.
 
 The full scanner avoids repeated work without weakening preprocessing proof.
 Slash-free lines outside a block comment bypass the character masker; quoted
@@ -563,10 +563,14 @@ and simulator-recorded include edges provide an unambiguous basename index
 before directory search. Positive include resolutions then enter a 4,096-entry
 LRU, while unresolved includes are never cached. Definition regexes accept only
 horizontal indentation, so `^\s*` cannot backtrack across thousands of blank
-lines in expanded headers. Ambiguous include basenames retain ordered include
-directory resolution, and all optimizations preserve per-compilation-unit macro
-state, cancellation checkpoints, compact snapshots, and the public hierarchy
-schema.
+lines in expanded headers. Within a directive-bearing compilation unit, an
+active comment-aware line with no backtick bypasses both directive and hierarchy
+macro recognition. Metadata regexes run only when their required literal is
+present, and an expanded/trusted structural view replaces root-local instance
+facts without first parsing and discarding that root instance list. Ambiguous
+include basenames retain ordered include-directory resolution, and all
+optimizations preserve per-compilation-unit macro state, cancellation
+checkpoints, compact snapshots, and the public hierarchy schema.
 
 Two optional full-build guardrails are disabled by default. Set them below an
 outer MCP watchdog when a site wants a structured blocker instead of an opaque

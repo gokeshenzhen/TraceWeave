@@ -302,6 +302,7 @@ def scan_sv_text(
     raw: str,
     *,
     retain_source_text: bool = True,
+    scan_module_instances: bool = True,
 ) -> dict:
     """Extract hierarchy metadata from already-loaded SystemVerilog text.
 
@@ -312,22 +313,83 @@ def scan_sv_text(
 
     check_cancelled()
     text = _strip_comments(raw)
+    lower_text = text.lower()
+    has_class = "class" in lower_text
+    has_module = "module" in lower_text
+    has_interface = "interface" in lower_text
+    has_package = "package" in lower_text
+    has_scope_operator = "::" in text
+    has_backtick = "`" in text
 
-    class_extends = {child: parent for child, parent in _CLASS_EXTENDS_RE.findall(text)}
-    classes = list(dict.fromkeys(_CLASS_RE.findall(text)))
-    modules = list(dict.fromkeys(_MODULE_RE.findall(text)))
-    interfaces = list(dict.fromkeys(_INTERFACE_RE.findall(text)))
+    class_extends = (
+        {
+            child: parent
+            for child, parent in _CLASS_EXTENDS_RE.findall(text)
+        }
+        if has_class and "extends" in lower_text
+        else {}
+    )
+    classes = (
+        list(dict.fromkeys(_CLASS_RE.findall(text))) if has_class else []
+    )
+    modules = (
+        list(dict.fromkeys(_MODULE_RE.findall(text))) if has_module else []
+    )
+    interfaces = (
+        list(dict.fromkeys(_INTERFACE_RE.findall(text)))
+        if has_interface
+        else []
+    )
     creates = [
         {"var_name": var, "class_name": cls, "instance_name": inst}
         for var, cls, inst in _CREATE_RE.findall(text)
-    ]
+    ] if "::type_id::create" in lower_text else []
 
-    module_instances, module_instance_map = _extract_module_instances(text)
+    if scan_module_instances and has_module:
+        module_instances, module_instance_map = _extract_module_instances(text)
+    else:
+        module_instances, module_instance_map = [], {}
 
     virtual_interfaces = [
         {"interface_name": if_name, "var_name": var_name}
         for if_name, var_name in _VIRTUAL_IF_RE.findall(text)
-    ]
+    ] if "virtual" in lower_text else []
+
+    packages = (
+        list(dict.fromkeys(_PACKAGE_RE.findall(text))) if has_package else []
+    )
+    package_imports = (
+        list(dict.fromkeys(_PACKAGE_IMPORT_RE.findall(text)))
+        if has_scope_operator and "import" in lower_text
+        else []
+    )
+    package_qualifiers = (
+        list(dict.fromkeys(_PACKAGE_QUALIFIER_RE.findall(text)))
+        if has_scope_operator
+        else []
+    )
+    include_directives = (
+        list(dict.fromkeys(_INCLUDE_DIRECTIVE_RE.findall(text)))
+        if "`include" in text
+        else []
+    )
+    conditional_macros = (
+        list(dict.fromkeys(_MACRO_CONDITION_RE.findall(text)))
+        if has_backtick
+        else []
+    )
+    macro_uses = (
+        list(
+            dict.fromkeys(
+                name
+                for name in _MACRO_TOKEN_RE.findall(text)
+                if name.lower() not in _PREPROCESSOR_KEYWORDS
+                and name not in {"__FILE__", "__LINE__"}
+            )
+        )
+        if has_backtick
+        else []
+    )
 
     file_type = "unknown"
     if modules:
@@ -348,37 +410,29 @@ def scan_sv_text(
         "interfaces": interfaces,
         "structural_modules": modules,
         "structural_interfaces": interfaces,
-        "packages": list(dict.fromkeys(_PACKAGE_RE.findall(text))),
-        "package_imports": list(dict.fromkeys(_PACKAGE_IMPORT_RE.findall(text))),
+        "packages": packages,
+        "package_imports": package_imports,
         # This is dependency-planning evidence, not a semantic classification:
         # ``name::`` can also name a class or nested scope.  Source Graph uses
         # an entry only when ``name`` exactly matches a compile-proved package
         # definition; every other qualifier is ignored conservatively.
-        "package_qualifiers": list(
-            dict.fromkeys(_PACKAGE_QUALIFIER_RE.findall(text))
-        ),
-        "include_directives": list(
-            dict.fromkeys(_INCLUDE_DIRECTIVE_RE.findall(text))
-        ),
+        "package_qualifiers": package_qualifiers,
+        "include_directives": include_directives,
         "has_conditional_preprocessing": bool(
-            _CONDITIONAL_DIRECTIVE_RE.search(text)
+            has_backtick and _CONDITIONAL_DIRECTIVE_RE.search(text)
         ),
-        "macro_definitions": list(dict.fromkeys(_MACRO_DEFINE_RE.findall(text))),
+        "macro_definitions": list(
+            dict.fromkeys(_MACRO_DEFINE_RE.findall(text))
+        ) if "`define" in text else [],
         "macro_undefinitions": list(
             dict.fromkeys(_MACRO_UNDEF_RE.findall(text))
+        ) if "`undef" in text else [],
+        "has_macro_undefineall": bool(
+            "`undefineall" in text
+            and re.search(r"`undefineall\b", text)
         ),
-        "has_macro_undefineall": bool(re.search(r"`undefineall\b", text)),
-        "conditional_macros": list(
-            dict.fromkeys(_MACRO_CONDITION_RE.findall(text))
-        ),
-        "macro_uses": list(
-            dict.fromkeys(
-                name
-                for name in _MACRO_TOKEN_RE.findall(text)
-                if name.lower() not in _PREPROCESSOR_KEYWORDS
-                and name not in {"__FILE__", "__LINE__"}
-            )
-        ),
+        "conditional_macros": conditional_macros,
+        "macro_uses": macro_uses,
         "creates": creates,
         "module_instances": module_instances,
         "module_instance_map": module_instance_map,
@@ -421,27 +475,43 @@ def scan_preprocessed_sv(
     # one synthetic source would make every class appear to own every factory
     # ``create`` in that compilation unit. Only module-instance extraction
     # needs the textual include view for this hierarchy gap.
+    hierarchy_text = (
+        source.text if source.complete else source.trusted_hierarchy_text
+    )
+    replace_root_hierarchy = bool(hierarchy_text) and (
+        not source.complete or hierarchy_text != source.root_text
+    )
+    discard_root_hierarchy = bool(source.issues) and not hierarchy_text
     result = scan_sv_text(
         file_path,
         source.root_text,
         retain_source_text=retain_source_text,
+        # Expanded/trusted hierarchy facts below replace this result in full.
+        # Avoid parsing root-local instances only to discard them immediately.
+        scan_module_instances=not (
+            replace_root_hierarchy or discard_root_hierarchy
+        ),
     )
-    hierarchy_text = (
-        source.text if source.complete else source.trusted_hierarchy_text
-    )
-    if hierarchy_text and (
-        not source.complete or hierarchy_text != source.root_text
-    ):
+    if replace_root_hierarchy:
         structural_text = _strip_comments(hierarchy_text)
+        structural_lower = structural_text.lower()
         (
             result["module_instances"],
             result["module_instance_map"],
-        ) = _extract_module_instances(structural_text)
-        result["structural_modules"] = list(
-            dict.fromkeys(_MODULE_RE.findall(structural_text))
+        ) = (
+            _extract_module_instances(structural_text)
+            if "module" in structural_lower
+            else ([], {})
         )
-        result["structural_interfaces"] = list(
-            dict.fromkeys(_INTERFACE_RE.findall(structural_text))
+        result["structural_modules"] = (
+            list(dict.fromkeys(_MODULE_RE.findall(structural_text)))
+            if "module" in structural_lower
+            else []
+        )
+        result["structural_interfaces"] = (
+            list(dict.fromkeys(_INTERFACE_RE.findall(structural_text)))
+            if "interface" in structural_lower
+            else []
         )
     elif source.issues:
         # A hard uncertainty before any trusted structural text is safer as a

@@ -1471,3 +1471,30 @@ module top; endmodule
     assert scanned["macro_undefinitions"] == ["FEATURE"]
     assert scanned["conditional_macros"] == ["FEATURE"]
     assert scanned["has_macro_undefineall"] is True
+
+
+def test_metadata_prefilters_preserve_case_insensitive_matches():
+    scanned = scan_sv_text(
+        "mixed_case_metadata.sv",
+        """
+CLASS child EXTENDS parent;
+  OBJ = item::TYPE_ID::CREATE("obj");
+ENDCLASS
+MODULE top;
+  VIRTUAL bus_if vif;
+  IMPORT defs_pkg::*;
+ENDMODULE
+""",
+        retain_source_text=False,
+    )
+
+    assert scanned["classes"] == ["child"]
+    assert scanned["class_extends"] == {"child": "parent"}
+    assert scanned["creates"] == [
+        {"var_name": "OBJ", "class_name": "item", "instance_name": "obj"}
+    ]
+    assert scanned["virtual_interfaces"] == [
+        {"interface_name": "bus_if", "var_name": "vif"}
+    ]
+    assert scanned["package_imports"] == ["defs_pkg"]
+    assert scanned["package_qualifiers"] == ["item", "TYPE_ID", "defs_pkg"]

@@ -799,6 +799,7 @@ class SystemVerilogPreprocessor:
         self._logical_file_expansion_count = 0
         self._comment_mask_line_count = 0
         self._comment_mask_fast_path_count = 0
+        self._plain_expansion_line_fast_path_count = 0
         self._masked_text_cache_hit_count = 0
 
     def _canonical_path(self, path: str | os.PathLike[str]) -> str:
@@ -918,6 +919,9 @@ class SystemVerilogPreprocessor:
             "preprocessor_comment_mask_line_count": self._comment_mask_line_count,
             "preprocessor_comment_mask_fast_path_count": (
                 self._comment_mask_fast_path_count
+            ),
+            "preprocessor_plain_expansion_line_fast_path_count": (
+                self._plain_expansion_line_fast_path_count
             ),
             "preprocessor_masked_text_cache_hit_count": (
                 self._masked_text_cache_hit_count
@@ -1197,6 +1201,14 @@ class SystemVerilogPreprocessor:
                 masked = cached_masked[masked_offset:masked_end]
                 masked_offset = masked_end
             newline = "\n" if line.endswith("\n") else ""
+            if "`" not in masked and continued_define is None:
+                # A comment-aware line without a backtick cannot be a
+                # directive or standalone macro invocation. Preserve active
+                # text (or the inactive branch's line shape) without running
+                # either recognizer.
+                self._plain_expansion_line_fast_path_count += 1
+                emit(line if active else newline)
+                continue
             match = _DIRECTIVE_RE.match(masked)
             if match and depth == 0 and match.group("name").lower() == "include":
                 literal = _INCLUDE_LITERAL_RE.match(match.group("body"))

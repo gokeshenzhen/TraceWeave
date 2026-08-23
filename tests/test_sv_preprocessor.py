@@ -303,6 +303,86 @@ def test_unchanged_preprocessed_text_reuses_instance_scan(tmp_path, monkeypatch)
     assert extract_calls == 1
 
 
+def test_changed_preprocessed_text_skips_discarded_root_instance_scan(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "top.sv"
+    header = tmp_path / "leaf.svh"
+    source.write_text(
+        "module leaf; endmodule\n"
+        "module top;\n"
+        '  `include "leaf.svh"\n'
+        "endmodule\n"
+    )
+    header.write_text("leaf u_leaf();\n")
+    preprocessed = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs -sverilog +incdir+{tmp_path} {source}",
+        }
+    ).preprocess(str(source))
+    extract_calls = 0
+    original = tb_hierarchy_builder._extract_module_instances
+
+    def counted(text: str):
+        nonlocal extract_calls
+        extract_calls += 1
+        return original(text)
+
+    monkeypatch.setattr(
+        tb_hierarchy_builder,
+        "_extract_module_instances",
+        counted,
+    )
+
+    result = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert result["module_instance_map"]["top"] == [
+        {"module_name": "leaf", "instance_name": "u_leaf"}
+    ]
+    assert extract_calls == 1
+
+
+def test_unproved_preprocessed_text_skips_discarded_root_instance_scan(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "top.sv"
+    source.write_text(
+        "module top;\n"
+        "`ifdef UNKNOWN\n"
+        "  leaf u_unproved();\n"
+        "`endif\n"
+        "endmodule\n"
+    )
+    preprocessed = SystemVerilogPreprocessor({}).preprocess(str(source))
+    extract_calls = 0
+    original = tb_hierarchy_builder._extract_module_instances
+
+    def counted(text: str):
+        nonlocal extract_calls
+        extract_calls += 1
+        return original(text)
+
+    monkeypatch.setattr(
+        tb_hierarchy_builder,
+        "_extract_module_instances",
+        counted,
+    )
+
+    result = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert result["module_instance_map"] == {}
+    assert extract_calls == 0
+
+
 def test_shared_include_mask_cache_is_bounded_and_reused(tmp_path, monkeypatch):
     header = tmp_path / "shared.svh"
     roots = [tmp_path / "first.sv", tmp_path / "second.sv"]
@@ -457,6 +537,57 @@ def test_comment_mask_fast_path_is_counted_for_slash_free_directive_lines(
     assert metrics["preprocessor_comment_mask_line_count"] == 3
     assert metrics["preprocessor_comment_mask_fast_path_count"] == 3
     assert metrics["preprocessor_logical_file_expansion_count"] == 1
+
+
+def test_plain_expansion_lines_skip_directive_and_macro_recognizers(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "conditional.sv"
+    source.write_text(
+        "`ifdef ENABLED\n"
+        "module selected; endmodule\n"
+        "`else\n"
+        "module inactive; endmodule\n"
+        "`endif\n"
+    )
+    directive_calls = 0
+    macro_calls = 0
+    directive = sv_preprocessor._DIRECTIVE_RE
+    original_macro = sv_preprocessor._expand_hierarchy_macro_line
+
+    class CountedDirective:
+        def match(self, value: str):
+            nonlocal directive_calls
+            directive_calls += 1
+            return directive.match(value)
+
+    def counted_macro(line, masked, state):
+        nonlocal macro_calls
+        macro_calls += 1
+        return original_macro(line, masked, state)
+
+    monkeypatch.setattr(sv_preprocessor, "_DIRECTIVE_RE", CountedDirective())
+    monkeypatch.setattr(
+        sv_preprocessor,
+        "_expand_hierarchy_macro_line",
+        counted_macro,
+    )
+    preprocessor = SystemVerilogPreprocessor(
+        {
+            "compile_cwd": str(tmp_path),
+            "compile_command": f"vcs +define+ENABLED {source}",
+        }
+    )
+
+    result = preprocessor.preprocess(str(source))
+    metrics = preprocessor.metrics_snapshot()
+
+    assert "module selected" in result.text
+    assert "module inactive" not in result.text
+    assert directive_calls == 3
+    assert macro_calls == 0
+    assert metrics["preprocessor_plain_expansion_line_fast_path_count"] == 2
 
 
 def test_nested_include_resolution_cache_is_bounded_and_reused(tmp_path):

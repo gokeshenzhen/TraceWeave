@@ -509,7 +509,11 @@ ambiguous names deliberately fall through to the historical ordered directory
 search. Comment masking has a strict slash-free-line fast path, structural
 tokenization removes strings with the same lexical grammar before one token
 `findall`, and definition patterns use horizontal indentation rather than
-cross-line `\s*`. These are compilation-unit-local execution optimizations:
+cross-line `\s*`. A comment-aware expansion line without a backtick bypasses
+the directive/macro recognizers, and file metadata regexes are admitted only by
+necessary literal prefilters. When an expanded or trusted structural view will
+replace root-local instances, the scanner suppresses that otherwise discarded
+root instance parse. These are compilation-unit-local execution optimizations:
 macro/conditional state is still replayed independently, incomplete evidence
 retains the same proof boundary, and no preprocessed text enters the handle.
 `build_metrics` exposes only numeric cache/load/expansion/mask counts and fixed
