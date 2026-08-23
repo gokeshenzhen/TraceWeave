@@ -919,6 +919,31 @@ def test_opentitan_shaped_vcs_log_keeps_project_filelist_order_and_excludes_reco
         "simulator_instrumentation",
     ]
 
+    hierarchy = build_hierarchy(compile_result, apply_source_overlay=False)
+    hierarchy_snapshot = compute_snapshot_fingerprint(str(log), "vcs")
+    hierarchy["_hierarchy_snapshot_sha256"] = hierarchy_snapshot
+    plan = build_source_graph_plan(
+        compile_log=str(log),
+        compile_result=hierarchy["compile_result"],
+        hierarchy_result=hierarchy,
+        hierarchy_snapshot_sha256=hierarchy_snapshot,
+        operation=QueryOperation.DRIVER,
+        signal_path="tb.u_core.q",
+        top_hint="tb",
+        max_hops=8,
+        frontend_version="11.0.0",
+    )
+
+    assert plan.status is AdapterStatus.READY
+    assert plan.request is not None
+    assert str(uvm_pkg.resolve()) in plan.request.identity.compile_inputs.ordered_inputs
+    assert plan.receipt.fingerprint_cache_disposition == (
+        "miss_reused_compile_session"
+    )
+    assert plan.receipt.content_digest_reuse_count == 4
+    assert plan.receipt.content_digest_read_count >= 1
+    assert plan.receipt.content_snapshot_conflict_count == 0
+
 
 def test_content_fingerprint_changes_when_an_input_changes(tmp_path):
     source = tmp_path / "top.sv"

@@ -192,8 +192,12 @@ Verification
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first
   request for that hierarchy handle, the adapter reuses records whose full stat
-  identity is still current and hashes only unseen support inputs. A bounded
-  process-memory manifest cache then serves later requests. Its key includes
+  identity is still current and hashes only unseen support inputs. Replay-only
+  simulator/frontend tool-library inputs (such as the `uvm_pkg.sv` expansion
+  of VCS `-ntb_opts uvm`) are fresh-hashed support facts because they did not
+  participate in project hierarchy construction; every original project input
+  remains snapshot-required and fail-closed. A bounded process-memory manifest
+  cache then serves later requests. Its key includes
   compile-log metadata, normalized parser output, and the hierarchy content
   snapshot fingerprint, matching the handle's rebuild boundary. Re-running the
   compile and `build_tb_hierarchy` invalidates it. Metadata is checked around

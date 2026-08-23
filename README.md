@@ -480,12 +480,15 @@ stat identities, byte counts, and fixed-label semantic markers--never source
 text. The first Source Graph request reuses every still-current record instead
 of reopening that file, reported as
 `fingerprint_cache_disposition=miss_reused_compile_session`; support inputs not
-seen by hierarchy are still read and hashed normally. Later requests reuse the
-bounded in-memory manifest as `hit_session_snapshot`. Every reused record is
-stat-validated, and a changed source blocks the stale hierarchy/manifest pair
-with `compile_session_snapshot_changed`; rebuild and refresh the hierarchy
-before querying. A changed compile log or refreshed hierarchy handle likewise
-invalidates the snapshot.
+seen by hierarchy are still read and hashed normally. This includes
+simulator/frontend replay-only tool-library inputs (for example `uvm_pkg.sv`
+expanded from VCS `-ntb_opts uvm`), which are not project hierarchy evidence.
+Every original project input must still have a current snapshot record. Later
+requests reuse the bounded in-memory manifest as `hit_session_snapshot`. Every
+reused record is stat-validated, and a changed source blocks the stale
+hierarchy/manifest pair with `compile_session_snapshot_changed`; rebuild and
+refresh the hierarchy before querying. A changed compile log or refreshed
+hierarchy handle likewise invalidates the snapshot.
 
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and

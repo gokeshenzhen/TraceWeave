@@ -1568,7 +1568,7 @@ def _compile_fingerprint(
     exclusions: set[str],
     snapshot_records: Mapping[str, FileContentSnapshot],
     digest_metrics: dict[str, int],
-    require_input_snapshot_records: bool,
+    required_snapshot_input_paths: set[str],
 ) -> tuple[str | None, bool]:
     input_records: list[dict[str, Any]] = []
     readable = True
@@ -1579,7 +1579,9 @@ def _compile_fingerprint(
             exclusions,
             snapshot_records=snapshot_records,
             metrics=digest_metrics,
-            require_snapshot_record=require_input_snapshot_records,
+            require_snapshot_record=(
+                str(path.resolve(strict=False)) in required_snapshot_input_paths
+            ),
         )
         if fact is None:
             readable = False
@@ -1762,6 +1764,24 @@ def _build_compile_manifest(
         content_snapshot.record_map()
         if content_snapshot is not None and content_snapshot.complete
         else {}
+    )
+    # Only sources that actually participated in hierarchy construction must
+    # already exist in its immutable snapshot. Simulator/frontend replay can
+    # add tool-library inputs (for example VCS ``-ntb_opts uvm`` expands to
+    # ``uvm_pkg.sv``); those were deliberately excluded from project hierarchy
+    # scanning and are safe to hash as new support facts. Project paths remain
+    # fail-closed, including a symlink that was retargeted after hierarchy
+    # construction.
+    raw_files = compile_result.get("files")
+    raw_user_inputs = raw_files.get("user") if isinstance(raw_files, Mapping) else ()
+    required_snapshot_input_paths = (
+        {
+            str(Path(str(item.get("path"))).resolve(strict=False))
+            for item in raw_user_inputs
+            if isinstance(item, Mapping) and item.get("path")
+        }
+        if snapshot_records
+        else set()
     )
     simulator = str(compile_result.get("simulator") or "").lower()
     if simulator not in _BASE_OPTIONS:
@@ -2098,9 +2118,7 @@ def _build_compile_manifest(
             exclusions=state.objective_exclusions,
             snapshot_records=snapshot_records,
             digest_metrics=digest_metrics,
-            require_input_snapshot_records=(
-                content_snapshot is not None and content_snapshot.complete
-            ),
+            required_snapshot_input_paths=required_snapshot_input_paths,
         )
         after_content = _content_stat_key(
             inputs=state.inputs,
