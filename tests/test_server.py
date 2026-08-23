@@ -368,6 +368,32 @@ class TestStructuralScannerToolContract:
             supplementary_compile_logs=(str(elaborate_log),),
         )
 
+        # Recovery must not depend exclusively on the exact handle surviving
+        # in session/provenance. The ordered supplementary logs reproduce the
+        # same merged identity.
+        server._session_state["build_tb_hierarchy"].pop("hierarchy_handle")
+        server._result_provenance["build_tb_hierarchy"].pop("hierarchy_handle")
+        recovered, recovered_snapshot = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert recovered is context
+        assert recovered_snapshot == snapshot
+
+        # A primary-only lookup must never alias the split-log artifact when
+        # no matching supplementary provenance is available.
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+        }
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+        }
+        primary_only, _ = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert primary_only is None
+
 
 class TestSweepRetryRouting:
     @staticmethod
@@ -3065,6 +3091,128 @@ $enddefinitions $end
         )
         assert server._session_state["build_tb_hierarchy"] is None
         assert server._session_state["get_sim_paths"] is not None
+
+    def test_same_case_discovery_preserves_fresh_merged_hierarchy(self, tmp_path):
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        compile_log.write_text("compile\n", encoding="utf-8")
+        elaborate_log.write_text("elaborate\n", encoding="utf-8")
+        snapshot = server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        full = {"_hierarchy_snapshot_sha256": snapshot, "component_tree": {}}
+        server._handle_store.register(handle, full)
+        hierarchy_state = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+            "hierarchy_handle": handle,
+            "hierarchy_snapshot_sha256": snapshot,
+            "supplementary_compile_logs": [str(elaborate_log)],
+        }
+        hierarchy_result = server.schemas.BuildTbHierarchyResult.model_validate(
+            {
+                "hierarchy_handle": handle,
+                "project": {"simulator": "vcs"},
+            }
+        )
+        server._session_state["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._result_cache["build_tb_hierarchy"] = hierarchy_result
+        server._result_provenance["build_tb_hierarchy"] = dict(hierarchy_state)
+
+        sim_payload = {
+            "verif_root": str(tmp_path),
+            "case_name": "case0",
+            "config_source": "auto",
+            "discovery_mode": "case_dir",
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_logs": [
+                {
+                    "path": str(compile_log),
+                    "size": compile_log.stat().st_size,
+                    "mtime": "2026-08-22T00:00:00",
+                    "age_hours": 0.0,
+                    "phase": "compile",
+                }
+            ],
+        }
+        sim_result = server.schemas.SimPathsResult.model_validate(sim_payload)
+        server._result_cache["get_sim_paths"] = sim_result
+        server._session_state["get_sim_paths"] = {
+            "verif_root": str(tmp_path),
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_log": str(compile_log),
+        }
+
+        server._update_session_state("get_sim_paths", {}, sim_payload)
+
+        assert server._session_state["build_tb_hierarchy"] == hierarchy_state
+        assert server._result_cache["build_tb_hierarchy"] is hierarchy_result
+        assert server._result_provenance["build_tb_hierarchy"] == hierarchy_state
+        assert server._handle_store.resolve(handle) is full
+
+    def test_same_case_discovery_invalidates_changed_supplement(self, tmp_path):
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        compile_log.write_text("compile\n", encoding="utf-8")
+        elaborate_log.write_text("elaborate\n", encoding="utf-8")
+        snapshot = server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        hierarchy_state = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+            "hierarchy_handle": handle,
+            "hierarchy_snapshot_sha256": snapshot,
+            "supplementary_compile_logs": [str(elaborate_log)],
+        }
+        server._session_state["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._result_cache["build_tb_hierarchy"] = (
+            server.schemas.BuildTbHierarchyResult.model_validate(
+                {"hierarchy_handle": handle, "project": {"simulator": "vcs"}}
+            )
+        )
+        server._result_provenance["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._handle_store.register(
+            handle,
+            {"_hierarchy_snapshot_sha256": snapshot, "component_tree": {}},
+        )
+
+        sim_payload = {
+            "verif_root": str(tmp_path),
+            "case_name": "case0",
+            "config_source": "auto",
+            "discovery_mode": "case_dir",
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_logs": [],
+        }
+        server._result_cache["get_sim_paths"] = (
+            server.schemas.SimPathsResult.model_validate(sim_payload)
+        )
+        elaborate_log.write_text("elaborate changed\n", encoding="utf-8")
+
+        server._update_session_state("get_sim_paths", {}, sim_payload)
+
+        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._result_cache["build_tb_hierarchy"] is None
+        assert server._result_provenance["build_tb_hierarchy"] is None
+        assert server._handle_store.resolve(handle) is None
 
     async def test_suggested_call_includes_compile_log(self):
         _prefill_get_sim_paths_state(

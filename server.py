@@ -182,7 +182,6 @@ _cursor_store = CursorStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
     "get_sim_paths": [
-        "build_tb_hierarchy",
         "parse_sim_log",
         "sweep_handshakes",
         "recommend_failure_debug_next_steps",
@@ -401,6 +400,15 @@ def _invalidate_downstream(from_tool: str):
             _handle_store.invalidate()
 
 
+def _invalidate_hierarchy_state() -> None:
+    """Drop only the full-hierarchy lifecycle state and registered handles."""
+
+    _session_state["build_tb_hierarchy"] = None
+    _result_cache["build_tb_hierarchy"] = None
+    _result_provenance["build_tb_hierarchy"] = None
+    _handle_store.invalidate()
+
+
 def _clear_result_state():
     for key in _result_cache:
         _result_cache[key] = None
@@ -419,30 +427,84 @@ def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple
     if isinstance(sim_result, schemas.SimPathsResult):
         verif_root = sim_result.verif_root
         case_name = sim_result.case_name
+        case_dir = sim_result.case_dir
+        simulator = sim_result.simulator
         compile_logs = [entry.model_dump() for entry in sim_result.compile_logs]
     else:
         verif_root = sim_result.get("verif_root")
         case_name = sim_result.get("case_name")
+        case_dir = sim_result.get("case_dir")
+        simulator = sim_result.get("simulator")
         compile_logs = list(sim_result.get("compile_logs", []))
 
-    compile_log = None
-    for entry in compile_logs:
-        if entry.get("phase") == "elaborate":
-            compile_log = entry
-            break
-    if compile_log is None and compile_logs:
-        compile_log = compile_logs[0]
-    if compile_log is None:
-        compile_sig = None
-    else:
-        compile_sig = (
-            os.path.realpath(compile_log.get("path", ""))
-            if compile_log.get("path")
-            else None,
-            compile_log.get("size"),
-            compile_log.get("mtime"),
+    compile_signatures = tuple(
+        (
+            os.path.realpath(entry.get("path", "")) if entry.get("path") else None,
+            entry.get("phase"),
+            entry.get("size"),
+            entry.get("mtime"),
         )
-    return verif_root, case_name, compile_sig
+        for entry in compile_logs
+        if isinstance(entry, dict)
+    )
+    return (
+        os.path.realpath(verif_root) if verif_root else None,
+        case_name,
+        os.path.realpath(case_dir) if case_dir else None,
+        simulator,
+        compile_signatures,
+    )
+
+
+def _hierarchy_snapshot_is_current() -> bool:
+    """Prove that the cached hierarchy still names the same ordered log set."""
+
+    for source in (
+        _session_state.get("build_tb_hierarchy"),
+        _result_provenance.get("build_tb_hierarchy"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        compile_log = source.get("compile_log")
+        simulator = source.get("simulator")
+        stored_snapshot = source.get("hierarchy_snapshot_sha256")
+        supplements = source.get("supplementary_compile_logs") or ()
+        if (
+            not isinstance(compile_log, str)
+            or not compile_log
+            or not isinstance(simulator, str)
+            or not simulator
+            or not isinstance(stored_snapshot, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", stored_snapshot)
+            or not isinstance(supplements, (list, tuple))
+            or any(not isinstance(path, str) or not path for path in supplements)
+        ):
+            continue
+        current_snapshot = compute_snapshot_fingerprint(
+            compile_log,
+            simulator,
+            supplementary_compile_logs=supplements,
+        )
+        if current_snapshot != stored_snapshot:
+            continue
+        handle = source.get("hierarchy_handle")
+        if not isinstance(handle, str) or not handle:
+            handle = compute_handle(
+                compile_log,
+                simulator,
+                supplementary_compile_logs=supplements,
+            )
+        full = _handle_store.resolve(handle)
+        if full is not None:
+            full_snapshot = full.get("_hierarchy_snapshot_sha256")
+            if (
+                isinstance(full_snapshot, str)
+                and re.fullmatch(r"[0-9a-f]{64}", full_snapshot)
+                and full_snapshot != current_snapshot
+            ):
+                continue
+        return True
+    return False
 
 
 def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
@@ -839,7 +901,8 @@ def _resolve_hierarchy_context(
 ) -> tuple[dict | None, str]:
     """Resolve the active merged hierarchy while preserving one-log callers."""
 
-    candidates: list[str] = []
+    exact_candidates: list[tuple[str, str]] = []
+    recomputed_candidates: list[tuple[str, str]] = []
     for source in (
         _session_state.get("build_tb_hierarchy"),
         _result_provenance.get("build_tb_hierarchy"),
@@ -851,20 +914,59 @@ def _resolve_hierarchy_context(
         source_simulator = source.get("simulator")
         if source_simulator not in {None, "auto", simulator}:
             continue
+        resolved_simulator = (
+            simulator
+            if source_simulator in {None, "auto"}
+            else str(source_simulator)
+        )
+        raw_supplements = source.get("supplementary_compile_logs") or ()
+        supplements = (
+            tuple(raw_supplements)
+            if isinstance(raw_supplements, (list, tuple))
+            and all(isinstance(path, str) and path for path in raw_supplements)
+            else ()
+        )
+        expected_snapshot = compute_snapshot_fingerprint(
+            compile_log,
+            resolved_simulator,
+            supplementary_compile_logs=supplements,
+        )
         handle = source.get("hierarchy_handle")
         if isinstance(handle, str) and handle:
-            candidates.append(handle)
-    candidates.append(compute_handle(compile_log, simulator))
+            exact_candidates.append((handle, expected_snapshot))
+        if supplements:
+            recomputed_candidates.append(
+                (
+                    compute_handle(
+                        compile_log,
+                        resolved_simulator,
+                        supplementary_compile_logs=supplements,
+                    ),
+                    expected_snapshot,
+                )
+            )
+    bare_snapshot = compute_snapshot_fingerprint(compile_log, simulator)
+    candidates = [
+        *exact_candidates,
+        *recomputed_candidates,
+        (compute_handle(compile_log, simulator), bare_snapshot),
+    ]
 
-    for handle in dict.fromkeys(candidates):
+    for handle, expected_snapshot in dict.fromkeys(candidates):
         hierarchy_result = _handle_store.resolve(handle)
         if hierarchy_result is None:
             continue
         snapshot = hierarchy_result.get("_hierarchy_snapshot_sha256")
-        if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot):
-            snapshot = compute_snapshot_fingerprint(compile_log, simulator)
+        if isinstance(snapshot, str) and re.fullmatch(r"[0-9a-f]{64}", snapshot):
+            if snapshot != expected_snapshot:
+                continue
+        else:
+            snapshot = expected_snapshot
         return hierarchy_result, snapshot
-    return None, compute_snapshot_fingerprint(compile_log, simulator)
+    fallback_snapshot = (
+        recomputed_candidates[0][1] if recomputed_candidates else bare_snapshot
+    )
+    return None, fallback_snapshot
 
 
 def _log_stat_info(log_path: str) -> dict:
@@ -1048,6 +1150,11 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             _clear_result_state()
         else:
             _invalidate_downstream(tool_name)
+            if (
+                _session_state.get("build_tb_hierarchy") is not None
+                and not _hierarchy_snapshot_is_current()
+            ):
+                _invalidate_hierarchy_state()
         compile_log = None
         for entry in result.get("compile_logs", []):
             if entry.get("phase") == "elaborate":

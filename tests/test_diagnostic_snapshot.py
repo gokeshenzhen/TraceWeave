@@ -518,16 +518,16 @@ class TestDiagnosticSnapshot:
 
         assert result.log_analysis.summary["auto_diff_available"] is False
 
-    def test_cascade_invalidation(self):
+    def test_path_rediscovery_invalidation_preserves_hierarchy(self):
         _prefill_all()
 
         server._invalidate_downstream("get_sim_paths")
 
         assert server._result_cache["get_sim_paths"] is not None
-        assert server._result_cache["build_tb_hierarchy"] is None
+        assert server._result_cache["build_tb_hierarchy"] is not None
         assert server._result_cache["parse_sim_log"] is None
         assert server._result_cache["recommend_failure_debug_next_steps"] is None
-        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._session_state["build_tb_hierarchy"] is not None
 
     def test_cascade_from_parse_sim_log(self):
         _prefill_all()
