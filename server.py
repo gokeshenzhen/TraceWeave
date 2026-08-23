@@ -52,6 +52,7 @@ from config import (
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
     get_bounded_bootstrap_config,
+    get_compile_source_index_config,
     get_hierarchy_execution_config,
     get_source_graph_execution_config,
 )
@@ -69,6 +70,10 @@ from src.compile_log_parser import (
     parse_compile_log,
 )
 from src.bounded_hierarchy_bootstrap import build_bounded_connectivity_context
+from src.compile_source_runtime import (
+    CompileSourceIndexRuntime,
+    compile_source_index_key,
+)
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import (
@@ -174,6 +179,7 @@ _handle_store = HandleStore()
 # still seed an explicitly requested bounded connectivity bootstrap.
 _COMPILE_CONTEXT_CACHE_MAX = 4
 _compile_context_cache: dict[str, dict] = {}
+_compile_source_index_runtime = CompileSourceIndexRuntime()
 
 # Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
 # is process-scoped — same semantics as _handle_store: no persistence,
@@ -860,17 +866,58 @@ async def _resolve_connectivity_hierarchy_context(
             ),
             code,
         )
+    source_index_config = get_compile_source_index_config()
+    source_index_key, source_index_paths = compile_source_index_key(
+        compile_snapshot_sha256=snapshot,
+        compile_result=compile_result,
+    )
+    source_index_lease = None
+    source_index_disposition = (
+        source_index_config.error_code
+        or ("disabled" if not source_index_config.enabled else None)
+    )
     try:
         with anyio.fail_after(remaining):
-            result = await _run_in_cancellable_thread(
-                lambda: build_bounded_connectivity_context(
-                    compile_result=compile_result,
-                    hierarchy_snapshot_sha256=snapshot,
-                    signal_path=args["signal_path"],
-                    top_hint=args.get("top_hint"),
-                    config=config,
+            if source_index_config.valid and source_index_config.enabled:
+                source_index_lease = await _compile_source_index_runtime.acquire(
+                    key=source_index_key,
+                    paths=source_index_paths,
+                    max_bytes=source_index_config.max_bytes,
+                    max_files=source_index_config.max_files,
+                    create_if_missing=False,
                 )
-            )
+                if source_index_lease is None:
+                    source_index_disposition = "miss_no_active_session"
+            try:
+                result = await _run_in_cancellable_thread(
+                    lambda: build_bounded_connectivity_context(
+                        compile_result=compile_result,
+                        hierarchy_snapshot_sha256=snapshot,
+                        signal_path=args["signal_path"],
+                        top_hint=args.get("top_hint"),
+                        config=config,
+                        source_reader=(
+                            source_index_lease.index.read
+                            if source_index_lease is not None
+                            else None
+                        ),
+                    )
+                )
+                result.receipt["source_index"] = {
+                    **(
+                        source_index_lease.index.metrics_snapshot()
+                        if source_index_lease is not None
+                        else {}
+                    ),
+                    "compile_source_index_disposition": (
+                        source_index_lease.disposition
+                        if source_index_lease is not None
+                        else source_index_disposition
+                    ),
+                }
+            finally:
+                if source_index_lease is not None:
+                    await source_index_lease.release()
     except TimeoutError:
         code = "bootstrap_timeout"
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -6915,22 +6962,58 @@ async def _dispatch(name: str, args: dict):
             "_hierarchy_snapshot_sha256": hierarchy_snapshot_sha256,
         }
 
-        def _build_full_hierarchy_work():
-            preflight, within_limit = _hierarchy_source_preflight(
-                compile_result,
-                max_source_bytes=hierarchy_config.max_source_bytes,
-            )
-            if not within_limit:
-                return None, preflight
+        source_index_config = get_compile_source_index_config()
+        source_index_key, source_index_paths = compile_source_index_key(
+            compile_snapshot_sha256=hierarchy_snapshot_sha256,
+            compile_result=compile_result,
+        )
+
+        def _build_full_hierarchy_work(source_index=None, disposition=None):
             result = build_hierarchy(
                 compile_result,
                 compile_log_path=compile_log,
                 apply_source_overlay=False,
+                source_index=source_index,
+                source_index_disposition=disposition,
             )
             result.setdefault("build_metrics", {})["parse_wall_ms"] = round(
                 parse_wall_ms, 3
             )
-            return result, preflight
+            return result
+
+        async def _build_full_hierarchy_async():
+            preflight, within_limit = await _run_in_cancellable_thread(
+                lambda: _hierarchy_source_preflight(
+                    compile_result,
+                    max_source_bytes=hierarchy_config.max_source_bytes,
+                )
+            )
+            if not within_limit:
+                return None, preflight
+            lease = None
+            disposition = (
+                source_index_config.error_code
+                or ("disabled" if not source_index_config.enabled else None)
+            )
+            if source_index_config.valid and source_index_config.enabled:
+                lease = await _compile_source_index_runtime.acquire(
+                    key=source_index_key,
+                    paths=source_index_paths,
+                    max_bytes=source_index_config.max_bytes,
+                    max_files=source_index_config.max_files,
+                )
+                assert lease is not None
+            try:
+                result = await _run_in_cancellable_thread(
+                    lambda: _build_full_hierarchy_work(
+                        lease.index if lease is not None else None,
+                        lease.disposition if lease is not None else disposition,
+                    )
+                )
+                return result, preflight
+            finally:
+                if lease is not None:
+                    await lease.release()
 
         if timeout_sec:
             remaining_sec = timeout_sec - (time.perf_counter() - hierarchy_started)
@@ -6946,9 +7029,7 @@ async def _dispatch(name: str, args: dict):
                 )
             try:
                 with anyio.fail_after(remaining_sec):
-                    full_result, preflight = await _run_in_cancellable_thread(
-                        _build_full_hierarchy_work
-                    )
+                    full_result, preflight = await _build_full_hierarchy_async()
             except TimeoutError:
                 return _blocked_hierarchy_result(
                     code="hierarchy_timeout",
@@ -6978,9 +7059,7 @@ async def _dispatch(name: str, args: dict):
                 )
         else:
             try:
-                full_result, preflight = await _run_in_cancellable_thread(
-                    _build_full_hierarchy_work
-                )
+                full_result, preflight = await _build_full_hierarchy_async()
             except MemoryError:
                 return _blocked_hierarchy_result(
                     code="hierarchy_memory_exhausted",
@@ -7086,14 +7165,68 @@ async def _dispatch(name: str, args: dict):
     elif name == "scan_structural_risks":
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
-        result = await _run_in_cancellable_thread(
-            lambda: scan_structural_risks(
+        compile_result, context_simulator = await _run_in_cancellable_thread(
+            lambda: _parse_merged_compile_context(
                 compile_log=args["compile_log"],
                 simulator=simulator,
-                scan_scope=args.get("scan_scope", "scope1"),
-                categories=args.get("categories"),
+                supplementary_compile_logs=[],
             )
         )
+        compile_snapshot_sha256 = compute_snapshot_fingerprint(
+            args["compile_log"],
+            context_simulator,
+        )
+        _cache_compile_context(
+            compile_log=args["compile_log"],
+            simulator=context_simulator,
+            supplementary_compile_logs=[],
+            snapshot_sha256=compile_snapshot_sha256,
+            compile_result=compile_result,
+        )
+        source_index_config = get_compile_source_index_config()
+        source_index_key, source_index_paths = compile_source_index_key(
+            compile_snapshot_sha256=compile_snapshot_sha256,
+            compile_result=compile_result,
+        )
+        lease = None
+        source_index_disposition = (
+            source_index_config.error_code
+            or ("disabled" if not source_index_config.enabled else None)
+        )
+        if source_index_config.valid and source_index_config.enabled:
+            lease = await _compile_source_index_runtime.acquire(
+                key=source_index_key,
+                paths=source_index_paths,
+                max_bytes=source_index_config.max_bytes,
+                max_files=source_index_config.max_files,
+            )
+            assert lease is not None
+        try:
+            result = await _run_in_cancellable_thread(
+                lambda: scan_structural_risks(
+                    compile_log=args["compile_log"],
+                    simulator=simulator,
+                    scan_scope=args.get("scan_scope", "scope1"),
+                    categories=args.get("categories"),
+                    compile_result=compile_result,
+                    source_loader=(
+                        lease.index.read_text if lease is not None else None
+                    ),
+                )
+            )
+            result["scan_metrics"] = {
+                **(
+                    lease.index.metrics_snapshot() if lease is not None else {}
+                ),
+                "compile_source_index_disposition": (
+                    lease.disposition
+                    if lease is not None
+                    else source_index_disposition
+                ),
+            }
+        finally:
+            if lease is not None:
+                await lease.release()
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
             [

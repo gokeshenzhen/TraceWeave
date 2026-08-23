@@ -15,6 +15,7 @@ import json
 import locale
 import os
 import re
+from typing import Callable
 
 from .cancellation import check_cancelled
 
@@ -134,44 +135,78 @@ class CompileSessionSnapshot:
         return self.complete
 
 
+@dataclass(frozen=True)
+class SourceContentRead:
+    """One decoded source body plus facts derived from its exact raw bytes."""
+
+    text: str
+    snapshot: FileContentSnapshot | None
+    issue_codes: tuple[str, ...] = ()
+
+
+def read_source_content(path: str) -> SourceContentRead:
+    """Read one source with before/after identity and exact-byte evidence."""
+
+    canonical = os.path.realpath(path)
+    check_cancelled()
+    before = _stat_identity(canonical)
+    with open(canonical, "rb") as stream:
+        data = stream.read()
+    check_cancelled()
+    after = _stat_identity(canonical)
+    issues: set[str] = set()
+    if before is None or after is None or before != after:
+        issues.add("compile_content_changed_during_scan")
+    stable = after or before
+    snapshot = None
+    if stable is not None:
+        snapshot = FileContentSnapshot(
+            path=canonical,
+            device=stable[0],
+            inode=stable[1],
+            size=stable[2],
+            mtime_ns=stable[3],
+            ctime_ns=stable[4],
+            sha256=hashlib.sha256(data).hexdigest(),
+            objective_exclusions=_marker_codes(data),
+        )
+    return SourceContentRead(
+        text=_decode_source(data),
+        snapshot=snapshot,
+        issue_codes=tuple(sorted(issues)),
+    )
+
+
 class CompileSessionSnapshotBuilder:
     """Capture exact raw-byte facts through the hierarchy source loader."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        indexed_reader: Callable[[str], SourceContentRead] | None = None,
+    ) -> None:
         self._records: dict[str, FileContentSnapshot] = {}
         self._issues: set[str] = set()
+        self._indexed_reader = indexed_reader
 
     def mark_issue(self, code: str) -> None:
         self._issues.add(code)
 
     def read_text(self, path: str) -> str:
-        canonical = os.path.realpath(path)
-        check_cancelled()
-        before = _stat_identity(canonical)
-        with open(canonical, "rb") as stream:
-            data = stream.read()
-        check_cancelled()
-        after = _stat_identity(canonical)
-        if before is None or after is None or before != after:
-            self._issues.add("compile_content_changed_during_scan")
-        stable = after or before
-        if stable is not None:
-            record = FileContentSnapshot(
-                path=canonical,
-                device=stable[0],
-                inode=stable[1],
-                size=stable[2],
-                mtime_ns=stable[3],
-                ctime_ns=stable[4],
-                sha256=hashlib.sha256(data).hexdigest(),
-                objective_exclusions=_marker_codes(data),
-            )
-            previous = self._records.get(canonical)
+        content = (
+            self._indexed_reader(path)
+            if self._indexed_reader is not None
+            else read_source_content(path)
+        )
+        self._issues.update(content.issue_codes)
+        record = content.snapshot
+        if record is not None:
+            previous = self._records.get(record.path)
             if previous is not None and previous != record:
                 self._issues.add("compile_content_changed_during_scan")
             else:
-                self._records[canonical] = record
-        return _decode_source(data)
+                self._records[record.path] = record
+        return content.text
 
     def finish(self) -> CompileSessionSnapshot:
         records = tuple(sorted(self._records.values(), key=lambda item: item.path))

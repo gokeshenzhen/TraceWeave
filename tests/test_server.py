@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import patch
 
 import server
-from config import DEFAULT_EXTRA_TRANSITIONS
+from config import CompileSourceIndexConfig, DEFAULT_EXTRA_TRANSITIONS
 from src.compile_session_snapshot import CompileSessionSnapshot
 from src.schemas import ToolErrorResult
 
@@ -255,14 +255,27 @@ class TestStructuralScannerToolContract:
         assert "zero_coverage" in scan_tool.description
 
     async def test_dispatch_uses_auto_simulator_default(self):
-        with patch.object(server, "scan_structural_risks", return_value={
-            "scan_scope": "scope1",
-            "files_scanned": 1,
-            "total_risks": 0,
-            "risks": [],
-            "categories_scanned": ["slice_overlap"],
-            "skipped_files": [],
-        }) as scan_mock:
+        compile_result = {"simulator": "vcs", "files": {"user": []}}
+        with (
+            patch.object(
+                server,
+                "_parse_merged_compile_context",
+                return_value=(compile_result, "vcs"),
+            ),
+            patch.object(
+                server,
+                "get_compile_source_index_config",
+                return_value=CompileSourceIndexConfig(enabled=False),
+            ),
+            patch.object(server, "scan_structural_risks", return_value={
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }) as scan_mock,
+        ):
             result = await server._dispatch(
                 "scan_structural_risks",
                 {
@@ -276,6 +289,8 @@ class TestStructuralScannerToolContract:
             simulator="auto",
             scan_scope="scope1",
             categories=["slice_overlap"],
+            compile_result=compile_result,
+            source_loader=None,
         )
         assert result["scan_scope"] == "scope1"
         assert result["files_scanned"] == 1

@@ -477,8 +477,13 @@ endpoints are connected.
 While `build_tb_hierarchy` reads sources and resolved includes, it captures a
 private immutable compile-session snapshot containing only content digests,
 stat identities, byte counts, and fixed-label semantic markers--never source
-text. The first Source Graph request reuses every still-current record instead
-of reopening that file, reported as
+text. When the default parallel `build_tb_hierarchy` and
+`scan_structural_risks` calls overlap on the same compile identity, a transient
+single-flight index lets both consume text and exact digest/stat/marker facts
+from one physical read. It is bounded, process-memory only, and clears all
+source bodies as soon as the final active call releases it; hierarchy handles
+and results retain only compact facts. The first Source Graph request reuses
+every still-current record instead of reopening that file, reported as
 `fingerprint_cache_disposition=miss_reused_compile_session`; support inputs not
 seen by hierarchy are still read and hashed normally. This includes
 simulator/frontend replay-only tool-library inputs (for example `uvm_pkg.sv`
@@ -549,7 +554,8 @@ now parsed as streams, and the handle retains compact per-file facts rather than
 raw source bodies. The slim result includes numeric `build_metrics`, including
 source counts/bytes, phase timings, RSS samples, `source_text_bytes_retained=0`,
 privacy-safe compile-session snapshot counts/bytes/completeness, and bounded
-preprocessor counters. Those counters distinguish physical source loads,
+preprocessor/source-index counters. `scan_structural_risks` exposes the same
+privacy-safe source-index facts under `scan_metrics`. Those counters distinguish physical source loads,
 source/masked-text cache hits and bytes, logical expansions, comment-mask fast
 paths, plain expansion-line fast paths, and exact/LRU include-resolution hits,
 misses, entries, and evictions; they never expose paths, include names, macros,
@@ -580,6 +586,20 @@ client/process termination:
 export TRACEWEAVE_HIERARCHY_TIMEOUT=20
 export TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES=1073741824
 ```
+
+The transient shared-source tier is enabled by default and has independent
+limits. A capacity miss safely uses the original readers; it does not block the
+tools or publish a partial hierarchy:
+
+```bash
+export TRACEWEAVE_COMPILE_SOURCE_INDEX=1
+export TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES=134217728
+export TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES=32768
+```
+
+Set `TRACEWEAVE_COMPILE_SOURCE_INDEX=0` to disable sharing. Invalid or
+non-positive limits disable only the optimization and appear as the fixed
+`compile_source_index_config_invalid` disposition.
 
 A guardrail hit returns `build_status="blocked"`, a fixed `blocker`, and no
 `hierarchy_handle`; it does not masquerade as a partial panorama. The compact
@@ -613,6 +633,9 @@ uncertainty boundary may continue with
 remaining instance segment, bootstrap stops with
 `bootstrap_include_context_unproved`. No path, macro value, or source fragment
 is added to the public diagnostic.
+If an exact full-design source index is already active, bootstrap may reuse it;
+on a miss it reports `miss_no_active_session` and keeps its original bounded
+reader instead of initiating a full-project preload.
 If proof, build, or query is inconclusive, the bootstrap route returns an honest
 no-fact receipt and does not launch the whole-source Legacy Static scan that it
 was introduced to avoid. The normal full-hierarchy route keeps its existing
@@ -662,6 +685,15 @@ and a hash of the complete result for before/after equivalence checks.
 ```bash
 python3.11 scripts/benchmark_structural_scan.py \
   --compile-log /path/to/build.log --simulator vcs
+```
+
+To measure the shared tier itself, the combined benchmark runs both public
+tools in parallel in fresh processes, alternates enabled/disabled trial order,
+and reports read amplification, wall/RSS, and both complete semantic hashes:
+
+```bash
+python3.11 scripts/benchmark_compile_source_index.py \
+  --compile-log /path/to/build.log --simulator vcs --repeats 3
 ```
 
 Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top

@@ -16,6 +16,11 @@ import server
 from src import cancellation
 from src.bounded_hierarchy_bootstrap import build_bounded_connectivity_context
 from src.compile_log_parser import parse_compile_log
+from src.compile_source_index import CompileSourceIndex
+from src.compile_source_runtime import (
+    CompileSourceIndexRuntime,
+    compile_source_index_key,
+)
 from src.connectivity_ir import ConnectivityIR
 from src.connectivity_query import ConnectivityQueryEngine, QueryStatus
 from src.source_graph_adapter import AdapterStatus, build_source_graph_plan
@@ -180,7 +185,6 @@ def test_bootstrap_selects_only_proved_ancestor_source_closure(tmp_path):
         result.hierarchy_result["component_tree"]["top"]["u_child"]["class"]
         == "child"
     )
-
     plan = build_source_graph_plan(
         compile_log=str(compile_log),
         compile_result=result.compile_result,
@@ -199,6 +203,138 @@ def test_bootstrap_selects_only_proved_ancestor_source_closure(tmp_path):
     assert manifest.complete is False
     assert "bootstrap_compile_inputs_scoped" in plan.receipt.objective_exclusions
     assert plan.receipt.cross_request_reusable is False
+
+
+def test_bootstrap_can_consume_an_existing_exact_source_index(
+    tmp_path,
+    monkeypatch,
+):
+    top = tmp_path / "top.sv"
+    child = tmp_path / "child.sv"
+    _write(top, "module top; child u_child(); endmodule\n")
+    _write(child, "module child; logic value; endmodule\n")
+    _, compile_result = _vcs_context(tmp_path, [top, child])
+    index = CompileSourceIndex(max_bytes=16 * 1024, max_files=8)
+    index.preload([str(top), str(child)])
+    real_open = open
+
+    def reject_source_open(path, *args, **kwargs):
+        if str(path).endswith((".sv", ".svh", ".v", ".vh")):
+            raise AssertionError("bootstrap should reuse indexed source")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", reject_source_open)
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="8" * 64,
+        signal_path="top.u_child.value",
+        top_hint=None,
+        config=_config(),
+        source_reader=index.read,
+    )
+
+    assert result.status == "ready"
+    metrics = index.metrics_snapshot()
+    assert metrics["compile_source_index_physical_read_count"] == 2
+    assert metrics["compile_source_index_cache_hit_count"] >= 2
+
+
+def test_bootstrap_blocks_when_an_active_index_snapshot_is_stale(tmp_path):
+    top = tmp_path / "top.sv"
+    _write(top, "module top; logic value; endmodule\n")
+    _, compile_result = _vcs_context(tmp_path, [top])
+    index = CompileSourceIndex(max_bytes=16 * 1024, max_files=8)
+    index.preload([str(top)])
+    _write(top, "module top; logic value; logic changed; endmodule\n")
+
+    result = build_bounded_connectivity_context(
+        compile_result=compile_result,
+        hierarchy_snapshot_sha256="9" * 64,
+        signal_path="top.value",
+        top_hint=None,
+        config=_config(),
+        source_reader=index.read,
+    )
+
+    assert result.status == "blocked"
+    assert result.receipt["blocker"] == {
+        "code": "bootstrap_source_changed_during_scan",
+        "stage": "source_closure",
+    }
+
+
+@pytest.mark.anyio
+async def test_server_bootstrap_reuses_only_an_active_full_index(
+    tmp_path,
+    monkeypatch,
+):
+    server.reset_session_state()
+    top = tmp_path / "top.sv"
+    _write(top, "module top; logic value; endmodule\n")
+    compile_log, compile_result = _vcs_context(tmp_path, [top])
+    snapshot = server.compute_snapshot_fingerprint(str(compile_log), "vcs")
+    server._cache_compile_context(
+        compile_log=str(compile_log),
+        simulator="vcs",
+        supplementary_compile_logs=[],
+        snapshot_sha256=snapshot,
+        compile_result=compile_result,
+    )
+    runtime = CompileSourceIndexRuntime()
+    monkeypatch.setattr(server, "_compile_source_index_runtime", runtime)
+    key, paths = compile_source_index_key(
+        compile_snapshot_sha256=snapshot,
+        compile_result=compile_result,
+    )
+    owner = await runtime.acquire(
+        key=key,
+        paths=paths,
+        max_bytes=128 * 1024 * 1024,
+        max_files=32_768,
+    )
+    assert owner is not None
+
+    hierarchy, resolved_snapshot, receipt, blocker = (
+        await server._resolve_connectivity_hierarchy_context(
+            args={
+                "compile_log": str(compile_log),
+                "signal_path": "top.value",
+                "allow_bounded_bootstrap": True,
+            },
+            simulator="vcs",
+        )
+    )
+
+    assert hierarchy is not None
+    assert resolved_snapshot == snapshot
+    assert blocker is None
+    assert receipt["source_index"][
+        "compile_source_index_disposition"
+    ] == "hit_active_session"
+    assert runtime.metrics_snapshot()["compile_source_runtime_build_count"] == 1
+    await owner.release()
+
+    empty_runtime = CompileSourceIndexRuntime()
+    monkeypatch.setattr(server, "_compile_source_index_runtime", empty_runtime)
+    hierarchy, _, receipt, blocker = (
+        await server._resolve_connectivity_hierarchy_context(
+            args={
+                "compile_log": str(compile_log),
+                "signal_path": "top.value",
+                "allow_bounded_bootstrap": True,
+            },
+            simulator="vcs",
+        )
+    )
+
+    assert hierarchy is not None
+    assert blocker is None
+    assert receipt["source_index"][
+        "compile_source_index_disposition"
+    ] == "miss_no_active_session"
+    assert empty_runtime.metrics_snapshot()[
+        "compile_source_runtime_build_count"
+    ] == 0
 
 
 def test_xcelium_bootstrap_resolves_conditional_nested_include_without_sidecar(

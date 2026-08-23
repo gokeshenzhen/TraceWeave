@@ -13,6 +13,7 @@ from .compile_session_snapshot import (
     CompileSessionSnapshot,
     CompileSessionSnapshotBuilder,
 )
+from .compile_source_index import CompileSourceIndex
 from .operation_metrics import read_process_rss_kib
 from .sv_preprocessor import (
     PreprocessedSource,
@@ -744,6 +745,8 @@ def build_hierarchy(
     compile_log_path: str | None = None,
     *,
     apply_source_overlay: bool = True,
+    source_index: CompileSourceIndex | None = None,
+    source_index_disposition: str | None = None,
 ) -> dict:
     total_started = time.perf_counter()
     rss_start_kib = read_process_rss_kib()
@@ -758,7 +761,11 @@ def build_hierarchy(
         resolved_include_tree,
         resolved_ordered_includes,
         compile_session_snapshot,
-    ) = _scan_user_files(file_entries, compile_result)
+    ) = _scan_user_files(
+        file_entries,
+        compile_result,
+        source_index=source_index,
+    )
     effective_compile_result = merge_resolved_include_evidence(
         compile_result,
         include_tree=resolved_include_tree,
@@ -837,6 +844,10 @@ def build_hierarchy(
         "rss_peak_kib": max(sampled_rss) if sampled_rss else None,
         "rss_end_kib": rss_end_kib,
     }
+    if source_index_disposition is not None:
+        build_metrics["compile_source_index_disposition"] = (
+            source_index_disposition
+        )
 
     return {
         "project": {
@@ -1232,6 +1243,8 @@ def _overlay_npi_on_subtree(
 def _scan_user_files(
     file_entries: list[dict],
     compile_result: dict,
+    *,
+    source_index: CompileSourceIndex | None = None,
 ) -> tuple[
     list[dict],
     dict[str, dict],
@@ -1261,7 +1274,9 @@ def _scan_user_files(
     source_bytes_scanned = 0
     largest_source_bytes = 0
     rss_peak_kib = read_process_rss_kib() or 0
-    content_snapshot_builder = CompileSessionSnapshotBuilder()
+    content_snapshot_builder = CompileSessionSnapshotBuilder(
+        indexed_reader=source_index.read if source_index is not None else None,
+    )
     preprocessor = SystemVerilogPreprocessor(
         compile_result,
         source_loader=content_snapshot_builder.read_text,
@@ -1348,6 +1363,11 @@ def _scan_user_files(
             ),
             "content_snapshot_complete": compile_session_snapshot.complete,
             **preprocessor.metrics_snapshot(),
+            **(
+                source_index.metrics_snapshot()
+                if source_index is not None
+                else {}
+            ),
             "rss_peak_kib": rss_peak_kib,
         },
         resolved_include_tree,

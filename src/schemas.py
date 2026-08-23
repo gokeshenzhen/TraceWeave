@@ -253,6 +253,7 @@ class ScanStructuralRisksResult(TruncatableResult):
     risks: list[StructuralRisk] = Field(default_factory=list)
     categories_scanned: list[str] = Field(default_factory=list)
     skipped_files: list[str] = Field(default_factory=list)
+    scan_metrics: dict[str, int | str] = Field(default_factory=dict)
 
 
 class ErrorGroup(SchemaModel):

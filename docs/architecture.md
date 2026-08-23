@@ -222,6 +222,18 @@ Verification
   changes the IR or public result schema; interval/segment storage remains a
   separately measured future migration rather than a prerequisite for indexed
   warm queries.
+  The two default compile-source consumers use a separate process-session
+  `CompileSourceIndexRuntime`. An exact compile-log snapshot, simulator,
+  ordered source list, and resource policy identify one active session.
+  Concurrent hierarchy and structural calls single-flight a bounded preload,
+  then reuse immutable decoded text and digest/stat/marker facts derived from
+  the same raw bytes. The final lease clears source bodies immediately; no
+  handoff or disk tier retains them. A whole-set capacity miss bypasses sharing
+  rather than publishing a partial preload. Cancellation follows waiter
+  ownership: one cancelled waiter does not stop work needed by another, while
+  the final waiter arms cooperative cancellation. A bounded bootstrap is
+  reuse-only: it may join an active exact index but never starts a full-design
+  preload itself.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first
@@ -559,6 +571,12 @@ Lifecycle:
   returns `build_status="blocked"` plus a fixed-label blocker and never
   registers a partial handle. The already-parsed compact compile context stays
   in a four-entry process cache for an explicitly requested bounded bootstrap.
+- Transient source sharing is default-on and independently bounded by
+  `TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES` (128 MiB) and
+  `TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES` (32,768). Set
+  `TRACEWEAVE_COMPILE_SOURCE_INDEX=0` to disable it. Invalid/non-positive limits
+  disable only this optimization and surface a fixed disposition; hierarchy and
+  structural behavior continue through their original readers.
 - Local NPI `file:line` enrichment has a separate admission boundary. The
   default `TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY=auto` accepts only clean
   KDBs with at most 4,096 compile-proved instance paths and queries those paths

@@ -200,6 +200,55 @@ KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"
 
 
 @dataclass(frozen=True)
+class CompileSourceIndexConfig:
+    """Transient source-sharing limits for concurrent compile consumers."""
+
+    enabled: bool = True
+    max_bytes: int = 128 * 1024 * 1024
+    max_files: int = 32_768
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_compile_source_index_config() -> CompileSourceIndexConfig:
+    enabled = _env_flag("TRACEWEAVE_COMPILE_SOURCE_INDEX", True)
+    raw_bytes = os.environ.get(
+        "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES",
+        str(128 * 1024 * 1024),
+    ).strip()
+    raw_files = os.environ.get(
+        "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES",
+        "32768",
+    ).strip()
+    try:
+        max_bytes = int(raw_bytes)
+        max_files = int(raw_files)
+    except ValueError:
+        return CompileSourceIndexConfig(
+            enabled=False,
+            error_code="compile_source_index_config_invalid",
+        )
+    if (
+        max_bytes < 1
+        or max_bytes > (1 << 63) - 1
+        or max_files < 1
+        or max_files > 1_000_000
+    ):
+        return CompileSourceIndexConfig(
+            enabled=False,
+            error_code="compile_source_index_config_invalid",
+        )
+    return CompileSourceIndexConfig(
+        enabled=enabled,
+        max_bytes=max_bytes,
+        max_files=max_files,
+    )
+
+
+@dataclass(frozen=True)
 class HierarchyExecutionConfig:
     """Optional internal guardrails for full hierarchy construction.
 

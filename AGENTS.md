@@ -116,7 +116,9 @@ For any new session, read these files first to build the project map:
 40. `src/verify_condition.py`
 41. `src/cancellation.py`
 42. `src/operation_metrics.py`
-43. `src/compile_session_snapshot.py`
+43. `src/compile_source_index.py`
+44. `src/compile_source_runtime.py`
+45. `src/compile_session_snapshot.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -158,6 +160,17 @@ If the task involves behavior validation or regression checks, also read:
 - `src/cancellation.py` + `server._run_in_wave_thread`: wave-touching tool bodies (signal queries, search, summary, period/diff, suggest/sweep/inspect, verify_window, reconstruct_transactions) are synchronous CPU-bound scans, so `_dispatch` offloads them to a worker thread — the event loop stays free (no head-of-line blocking of light calls behind a heavy sweep) and client cancellation can actually be delivered. Parser access is serialized by wave locks acquired INSIDE the worker: one global lock for ALL FSDB work (the Verdi ffr API makes no thread-safety promise even across handles), a per-path lock for VCD; `diff_first_divergence` takes both paths' locks in a stable global order (no deadlock). `trace_x_source` is the split-phase exception: each waveform read/path-resolution phase runs through `_run_in_wave_thread`, then releases the wave lock before its connectivity-backend query. Static and Source Graph queries run in the lock-free cancellable worker; local NPI retains its existing synchronous execution model; LSF uses its existing worker path. An internal NPI fallback discards the partial chain and restarts from the original signal with Source Graph. A Source Graph blocker, build/query failure, coverage-incomplete negative, or unsafe scope explanation similarly discards its entire chain and restarts with Static. Positive edges under incomplete coverage stay partial; only a complete negative may terminate the Source Graph trace. Cancellation at any stage propagates without entering the next backend. Cancellation is cooperative: cancelling the request task (client `notifications/cancelled` or disconnect) arms a per-call `threading.Event`, and the scan loops in `cycle_query`/`handshake_sweep`/`verify_condition`/`window_verify`/`txn_reconstruct` hit `check_cancelled()` stride checkpoints (`CANCEL_CHECK_STRIDE`). Handshake discovery checks before/after every `search_signals` call and between valid/ready and AHB phases; it explicitly re-raises `OperationCancelled` instead of swallowing it in best-effort search handling. A synchronous native search is not interruptible inside that call yet, so cancellation is observed immediately after it returns. A call cancelled while still queued on a wave lock gives up without ever touching the parser. Because a client-side read timeout may not emit `notifications/cancelled`, an interactive FSDB call queued behind background `sweep_handshakes` also arms the sweep's cancel event; the sweep releases the global lock at its next checkpoint, so the light query proceeds without ever overlapping FFR access. `src/operation_metrics.py` records only whitelisted numeric timings/counts and a fixed phase label (lock wait, discovery/search costs, preemption-to-cancel latency); it never records paths, scopes, keywords, signal names, or values. Loop-side dispatch state (`_result_cache`/`_session_state`/provenance) is still written only on the event-loop thread — the worker computes, the loop remains the single writer. Regression coverage: `tests/test_server_concurrency.py` and `tests/test_source_graph_trace_public_routing.py`.
 - Full-sweep operation metrics add only privacy-safe aggregates: total sweep time, planned/attempted/completed interface counts, unique clock/signal counts, aggregate/max inspect time, clock-vs-signal transition read count/total/max, edge-extraction/value-sampling time, and transition-truncated interface count. FSDB sweeps also expose aggregate native phase timings, group/fallback counts, transition/output volume, sampling shape, cache peaks, result build/serialization cost, and process RSS start/peak/end. They remain numeric/fixed-label only. They never record paths, scopes, signal names, search keywords, or values.
 - `src/path_discovery.py` owns compile/sim/wave path discovery.
+- `src/compile_source_index.py` + `src/compile_source_runtime.py` provide the
+  transient compile-source sharing layer used by the default parallel
+  `build_tb_hierarchy` / `scan_structural_risks` workflow. Exact compile
+  identities single-flight one bounded preload (128 MiB / 32,768 files by
+  default); both consumers reuse immutable decoded text plus its exact raw-byte
+  digest/stat/marker evidence, and the final lease immediately clears all
+  source bodies. Capacity/config failure is an optimization bypass, not a
+  functional blocker. Cancellation of one waiter preserves other consumers;
+  final-waiter cancellation stops preload. An explicit bounded bootstrap may
+  join an already-active exact index but never creates a full-design preload on
+  a miss. Public metrics contain numeric counters and fixed dispositions only.
 - `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction.
 - `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
 - `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.

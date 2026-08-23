@@ -16,9 +16,14 @@ from pathlib import Path
 import re
 import shlex
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .cancellation import check_cancelled
+from .compile_session_snapshot import (
+    CompileSessionSnapshotBuilder,
+    FileContentSnapshot,
+    SourceContentRead,
+)
 from .sv_preprocessor import (
     SystemVerilogPreprocessor,
     merge_resolved_include_evidence,
@@ -188,21 +193,46 @@ def _inventory_file(
     path: str,
     *,
     deadline: float,
+    source_reader: Callable[[str], SourceContentRead] | None = None,
+) -> tuple[dict[str, set[str]], set[str]]:
+    if source_reader is not None:
+        lines = _iter_text_lines(source_reader(path).text)
+        return _inventory_lines(lines, deadline=deadline)
+    with open(path, "r", errors="replace") as stream:
+        return _inventory_lines(stream, deadline=deadline)
+
+
+def _iter_text_lines(text: str) -> Iterable[str]:
+    """Yield lines without materializing a second full list of source text."""
+
+    start = 0
+    while start < len(text):
+        newline = text.find("\n", start)
+        if newline < 0:
+            yield text[start:]
+            return
+        yield text[start : newline + 1]
+        start = newline + 1
+
+
+def _inventory_lines(
+    lines: Iterable[str],
+    *,
+    deadline: float,
 ) -> tuple[dict[str, set[str]], set[str]]:
     definitions = {"modules": set(), "interfaces": set(), "packages": set()}
     macros: set[str] = set()
     carry = ""
     in_block_comment = False
-    with open(path, "r", errors="replace") as stream:
-        for line_number, line in enumerate(stream, 1):
-            if line_number % _INVENTORY_CANCEL_STRIDE == 0:
-                _deadline_check(deadline)
-            code, in_block_comment = _code_only(line, in_block_comment)
-            window = carry + code
-            for kind, name in _DEFINITION_RE.findall(window):
-                definitions[f"{kind.lower()}s"].add(name)
-            macros.update(_MACRO_DEFINE_RE.findall(window))
-            carry = window[-256:]
+    for line_number, line in enumerate(lines, 1):
+        if line_number % _INVENTORY_CANCEL_STRIDE == 0:
+            _deadline_check(deadline)
+        code, in_block_comment = _code_only(line, in_block_comment)
+        window = carry + code
+        for kind, name in _DEFINITION_RE.findall(window):
+            definitions[f"{kind.lower()}s"].add(name)
+        macros.update(_MACRO_DEFINE_RE.findall(window))
+        carry = window[-256:]
     _deadline_check(deadline)
     return definitions, macros
 
@@ -315,6 +345,7 @@ def build_bounded_connectivity_context(
     signal_path: str,
     top_hint: str | None,
     config: Any,
+    source_reader: Callable[[str], SourceContentRead] | None = None,
 ) -> BoundedBootstrapResult:
     """Build a bounded Source Graph context or a fixed structured blocker."""
 
@@ -333,10 +364,29 @@ def build_bounded_connectivity_context(
     resolved_ordered_includes: list[dict[str, str]] = []
     ancestors: list[str] = []
     preprocessor_issue_categories: set[str] = set()
+    indexed_inventory_snapshots: dict[str, FileContentSnapshot] = {}
     objective_exclusions = {
         "bootstrap_hierarchy_scoped",
         "bootstrap_compile_inputs_scoped",
     }
+
+    def observed_source_read(path: str) -> SourceContentRead:
+        assert source_reader is not None
+        content = source_reader(path)
+        snapshot = content.snapshot
+        if snapshot is not None:
+            previous = indexed_inventory_snapshots.get(snapshot.path)
+            if previous is not None and previous != snapshot:
+                raise _BootstrapBlocked(
+                    "bootstrap_source_changed_during_scan",
+                    "source_closure",
+                )
+            indexed_inventory_snapshots[snapshot.path] = snapshot
+        return content
+
+    content_snapshot_builder = CompileSessionSnapshotBuilder(
+        indexed_reader=(observed_source_read if source_reader is not None else None)
+    )
 
     def blocked(code: str, stage: str) -> BoundedBootstrapResult:
         elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -410,7 +460,13 @@ def build_bounded_connectivity_context(
                     continue
                 if inventory_bytes + size > int(config.max_inventory_bytes):
                     raise _BootstrapBlocked("bootstrap_inventory_byte_limit_exceeded", "definition_inventory")
-                found, macros = _inventory_file(path, deadline=deadline)
+                found, macros = _inventory_file(
+                    path,
+                    deadline=deadline,
+                    source_reader=(
+                        observed_source_read if source_reader is not None else None
+                    ),
+                )
                 inventory_files += 1
                 inventory_bytes += size
                 for kind, names in found.items():
@@ -481,8 +537,7 @@ def build_bounded_connectivity_context(
             if selected_bytes + size > int(config.max_source_bytes):
                 raise _BootstrapBlocked("bootstrap_source_byte_limit_exceeded", "source_closure")
             try:
-                with open(canonical, "r", errors="replace") as stream:
-                    raw = stream.read()
+                raw = content_snapshot_builder.read_text(canonical)
             except OSError:
                 raise _BootstrapBlocked(
                     "bootstrap_source_unreadable", "source_closure"
@@ -659,6 +714,22 @@ def build_bounded_connectivity_context(
             ordered_records=selected_ordered_records,
             objective_exclusions=sorted(objective_exclusions),
         )
+        for index, snapshot_record in enumerate(
+            indexed_inventory_snapshots.values()
+        ):
+            if index % _INVENTORY_CANCEL_STRIDE == 0:
+                _deadline_check(deadline)
+            if not snapshot_record.current():
+                raise _BootstrapBlocked(
+                    "bootstrap_source_changed_during_scan",
+                    "source_closure",
+                )
+        compile_session_snapshot = content_snapshot_builder.finish()
+        if not compile_session_snapshot.complete:
+            raise _BootstrapBlocked(
+                "bootstrap_source_changed_during_scan",
+                "source_closure",
+            )
         hierarchy_result = {
             "project": {
                 "top_module": top,
@@ -669,6 +740,7 @@ def build_bounded_connectivity_context(
             "component_tree": component_tree,
             "compile_result": bounded_compile_result,
             "_hierarchy_snapshot_sha256": hierarchy_snapshot_sha256,
+            "_compile_session_snapshot": compile_session_snapshot,
         }
         elapsed_ms = (time.monotonic() - started) * 1000.0
         receipt = {
@@ -686,6 +758,10 @@ def build_bounded_connectivity_context(
                 "selected_support_file_count": len(selected_support_paths),
                 "selected_source_bytes": selected_bytes,
                 "ancestor_count": len(ancestors),
+                "content_snapshot_file_count": (
+                    compile_session_snapshot.file_count
+                ),
+                "content_snapshot_bytes": compile_session_snapshot.total_bytes,
                 "wall_time_ms": round(elapsed_ms, 3),
             },
         }

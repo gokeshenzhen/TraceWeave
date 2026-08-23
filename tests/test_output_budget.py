@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 import server
+from config import CompileSourceIndexConfig
 from src import schemas
 
 
@@ -80,22 +81,39 @@ async def test_scan_structural_risks_stays_under_budget_when_budget_is_tiny(monk
         for idx in range(40)
     ]
 
-    with patch.object(
-        server,
-        "scan_structural_risks",
-        return_value={
-            "scan_scope": "scope1",
-            "files_scanned": 12,
-            "total_risks": len(oversized_risks),
-            "risks": oversized_risks,
-            "categories_scanned": [
-                "slice_overlap",
-                "multi_drive",
-                "incomplete_case",
-                "magic_condition",
-            ],
-            "skipped_files": [f"/tmp/skipped_{idx}.sv" for idx in range(20)],
-        },
+    with (
+        patch.object(
+            server,
+            "_parse_merged_compile_context",
+            return_value=(
+                {"simulator": "vcs", "files": {"user": []}},
+                "vcs",
+            ),
+        ),
+        patch.object(
+            server,
+            "get_compile_source_index_config",
+            return_value=CompileSourceIndexConfig(enabled=False),
+        ),
+        patch.object(
+            server,
+            "scan_structural_risks",
+            return_value={
+                "scan_scope": "scope1",
+                "files_scanned": 12,
+                "total_risks": len(oversized_risks),
+                "risks": oversized_risks,
+                "categories_scanned": [
+                    "slice_overlap",
+                    "multi_drive",
+                    "incomplete_case",
+                    "magic_condition",
+                ],
+                "skipped_files": [
+                    f"/tmp/skipped_{idx}.sv" for idx in range(20)
+                ],
+            },
+        ),
     ):
         result = await server._dispatch(
             "scan_structural_risks",

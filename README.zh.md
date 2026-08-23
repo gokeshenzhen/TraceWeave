@@ -433,7 +433,11 @@ IR/source assignment evidence，不改变端点是否连通。
 
 `build_tb_hierarchy` 读取源码与已解析 include 时，会同步捕获一份私有、不可变的
 compile-session snapshot；其中只包含内容摘要、stat identity、字节数和固定标签语义
-marker，绝不保留源码正文。Source Graph 首次请求会复用所有仍然 current 的记录而不再打开
+marker，绝不把源码正文写入 hierarchy 结果。当默认并行的 `build_tb_hierarchy` 与
+`scan_structural_risks` 针对同一个 compile identity 重叠执行时，进程内 transient
+single-flight index 让两者复用同一次物理读取及其精确 digest/stat/marker facts。该索引容量
+有界，最后一个 active call 释放后立即清空全部源码正文，不进入 handle、磁盘或跨请求
+handoff。Source Graph 首次请求会复用所有仍然 current 的记录而不再打开
 对应文件，并在回执中标记
 `fingerprint_cache_disposition=miss_reused_compile_session`；hierarchy 没有读到的 support
 input 仍按原路径读取并哈希；这也包括 simulator/frontend replay 阶段才补入的工具库输入
@@ -489,7 +493,8 @@ warning，manifest 会保持保守/incomplete，不会拼出一个并不存在�
 现在 compile log 采用流式解析；handle 只保留每个文件的紧凑扫描事实，不再保存源码正文。
 精简结果新增数值型 `build_metrics`，包括源码文件数/字节数、各阶段耗时、RSS 采样、
 `source_text_bytes_retained=0`，以及隐私安全的 compile-session snapshot
-文件数/字节数/完整性和有界 preprocessor counters。这些计数会区分 physical source load、
+文件数/字节数/完整性和有界 preprocessor/source-index counters；
+`scan_structural_risks` 在 `scan_metrics` 中公开相同的隐私安全索引事实。这些计数会区分 physical source load、
 source/masked-text cache hit 与 bytes、logical expansion、comment-mask fast path，以及
 plain expansion-line fast path、exact/LRU include resolution 的 hit、miss、entry 和
 eviction；绝不暴露 path、include name、macro 或源码内容。Source Graph manifest receipt
@@ -513,6 +518,18 @@ macro state、cancellation checkpoint、compact snapshot 与公开 hierarchy sch
 export TRACEWEAVE_HIERARCHY_TIMEOUT=20
 export TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES=1073741824
 ```
+
+transient 共享源码层默认开启，并有独立上限。容量不足会安全回到原 reader，不会阻断工具，
+也不会发布部分 hierarchy：
+
+```bash
+export TRACEWEAVE_COMPILE_SOURCE_INDEX=1
+export TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES=134217728
+export TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES=32768
+```
+
+设置 `TRACEWEAVE_COMPILE_SOURCE_INDEX=0` 可关闭共享；非法或非正数上限只会禁用该优化，
+并以固定 `compile_source_index_config_invalid` disposition 呈现。
 
 触发阈值时返回 `build_status="blocked"`、固定 `blocker`，且不生成
 `hierarchy_handle`；它不会把部分 hierarchy 冒充成全景图。紧凑 compile context 会保留在
@@ -542,6 +559,9 @@ preprocessor 上下文，对实际选中的每个输入做内容指纹，并从 
 scope/build/query 无法证明，bootstrap 返回诚实的无事实
 回执，不再启动它原本就是为了避免的全源码 Legacy Static 扫描。正常 full-hierarchy 路径
 仍保持既有的 Source Graph-to-Static fallback。
+若同一 identity 的 full-design source index 已经 active，bootstrap 可以复用；若没有，则回执
+标记 `miss_no_active_session`，继续使用原来的 bounded reader，绝不会为单 endpoint 主动预读
+整个工程。
 
 Bootstrap 的限制都是硬上限，可分别配置（字节值使用纯整数）。默认值为用户所报的
 3,843 个源码场景留出了充足余量。内部 timeout 设为 24 秒，有意低于该环境观测到的
@@ -582,6 +602,14 @@ python3.11 scripts/benchmark_tb_hierarchy.py \
 ```bash
 python3.11 scripts/benchmark_structural_scan.py \
   --compile-log /path/to/build.log --simulator vcs
+```
+
+若要直接测量共享层，可使用组合 benchmark。它在 fresh process 中并行运行两个公开工具，
+交替 enabled/disabled trial 顺序，并报告读取放大、wall/RSS 及两份完整语义哈希：
+
+```bash
+python3.11 scripts/benchmark_compile_source_index.py \
+  --compile-log /path/to/build.log --simulator vcs --repeats 3
 ```
 
 当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含

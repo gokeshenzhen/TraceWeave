@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import os
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
@@ -114,17 +114,27 @@ def scan_structural_risks(
     simulator: str,
     scan_scope: str = SUPPORTED_SCAN_SCOPE,
     categories: list[str] | None = None,
+    *,
+    compile_result: dict | None = None,
+    source_loader: Callable[[str], str] | None = None,
 ) -> dict:
     if scan_scope != SUPPORTED_SCAN_SCOPE:
         raise ValueError(f"scan_scope only supports {SUPPORTED_SCAN_SCOPE}")
 
     categories_scanned = _normalize_categories(categories)
-    compile_result = parse_compile_log(compile_log, simulator)
+    compile_result = (
+        compile_result
+        if compile_result is not None
+        else parse_compile_log(compile_log, simulator)
+    )
     check_cancelled()
     file_entries = compile_result.get("files", {}).get("user", [])
     eligible_entries = [entry for entry in file_entries if _should_scan_file(entry["path"])]
     module_port_dirs = (
-        _build_module_port_directions(eligible_entries)
+        _build_module_port_directions(
+            eligible_entries,
+            source_loader=source_loader,
+        )
         if "slice_overlap" in categories_scanned
         else {}
     )
@@ -136,11 +146,16 @@ def scan_structural_risks(
     for entry in eligible_entries:
         check_cancelled()
         path = entry["path"]
-        if not os.path.exists(path):
+        if source_loader is None and not os.path.exists(path):
             skipped_files.append(path)
             continue
         try:
-            file_risks = _scan_file(path, categories_scanned, module_port_dirs)
+            file_risks = _scan_file(
+                path,
+                categories_scanned,
+                module_port_dirs,
+                source_loader=source_loader,
+            )
         except OSError:
             skipped_files.append(path)
             continue
@@ -211,10 +226,11 @@ def _scan_file(
     path: str,
     categories: list[str],
     module_port_dirs: dict[str, dict[str, str]],
+    *,
+    source_loader: Callable[[str], str] | None = None,
 ) -> list[_Risk]:
     check_cancelled()
-    with open(path, "r", errors="replace") as handle:
-        raw_text = handle.read()
+    raw_text = _load_source_text(path, source_loader)
     check_cancelled()
     text = _strip_comments_keep_lines(raw_text)
     module_categories = {
@@ -836,16 +852,29 @@ def _is_allowed_literal(literal: str) -> bool:
     return False
 
 
-def _build_module_port_directions(file_entries: list[dict]) -> dict[str, dict[str, str]]:
+def _load_source_text(
+    path: str,
+    source_loader: Callable[[str], str] | None,
+) -> str:
+    if source_loader is not None:
+        return source_loader(path)
+    with open(path, "r", errors="replace") as handle:
+        return handle.read()
+
+
+def _build_module_port_directions(
+    file_entries: list[dict],
+    *,
+    source_loader: Callable[[str], str] | None = None,
+) -> dict[str, dict[str, str]]:
     module_port_dirs: dict[str, dict[str, str]] = {}
     for entry in file_entries:
         check_cancelled()
         path = entry["path"]
-        if not os.path.exists(path):
+        if source_loader is None and not os.path.exists(path):
             continue
         try:
-            with open(path, "r", errors="replace") as handle:
-                raw_text = handle.read()
+            raw_text = _load_source_text(path, source_loader)
         except OSError:
             continue
         for match in _MODULE_HEADER_RE.finditer(raw_text):

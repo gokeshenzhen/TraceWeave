@@ -17,6 +17,7 @@ import anyio
 import pytest
 
 import server
+from config import CompileSourceIndexConfig
 from src import cancellation, operation_metrics
 from src.cancellation import OperationCancelled
 
@@ -132,6 +133,19 @@ class TestEventLoopNotBlocked:
             }
 
         monkeypatch.setattr(server, "scan_structural_risks", slow_scan)
+        monkeypatch.setattr(
+            server,
+            "_parse_merged_compile_context",
+            lambda **_kwargs: (
+                {"simulator": "vcs", "files": {"user": []}},
+                "vcs",
+            ),
+        )
+        monkeypatch.setattr(
+            server,
+            "get_compile_source_index_config",
+            lambda: CompileSourceIndexConfig(enabled=False),
+        )
         light_elapsed = None
         try:
             async with anyio.create_task_group() as tg:
@@ -283,6 +297,19 @@ class TestCooperativeCancellation:
             return {}
 
         monkeypatch.setattr(server, "scan_structural_risks", looping_scan)
+        monkeypatch.setattr(
+            server,
+            "_parse_merged_compile_context",
+            lambda **_kwargs: (
+                {"simulator": "vcs", "files": {"user": []}},
+                "vcs",
+            ),
+        )
+        monkeypatch.setattr(
+            server,
+            "get_compile_source_index_config",
+            lambda: CompileSourceIndexConfig(enabled=False),
+        )
         async with anyio.create_task_group() as tg:
 
             async def call():

@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
+from src.compile_source_index import CompileSourceIndex
 from src.structural_scanner import (
     _index_enclosing_brace_spans,
     scan_structural_risks,
@@ -24,6 +25,39 @@ def _compile_result_for(*names: str) -> dict:
 
 
 class TestStructuralScanner:
+    def test_compile_source_index_serves_both_structural_passes(self, tmp_path):
+        rtl = tmp_path / "top.sv"
+        rtl.write_text(
+            "module top(input logic [3:0] mode, output logic y);\n"
+            "  always_comb if (mode == 4'h2) y = 1'b1;\n"
+            "endmodule\n"
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {
+                        "path": str(rtl),
+                        "type": "module",
+                        "category": "rtl",
+                    }
+                ]
+            }
+        }
+        index = CompileSourceIndex(max_bytes=1024, max_files=4)
+        index.preload([str(rtl)])
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+            source_loader=index.read_text,
+        )
+        metrics = index.metrics_snapshot()
+
+        assert result["total_risks"] == 1
+        assert metrics["compile_source_index_physical_read_count"] == 1
+        assert metrics["compile_source_index_cache_hit_count"] == 2
+
     def test_brace_span_index_preserves_innermost_and_balanced_semantics(self):
         text = "prefix { outer 8'b0 { inner 4'b0 } tail 2'b0 } orphan 1'b0"
         positions = [
