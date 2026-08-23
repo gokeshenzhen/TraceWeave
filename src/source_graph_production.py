@@ -23,6 +23,7 @@ from .source_graph_runtime import (
     SourceGraphRuntime,
     SourceGraphWorkerRunner,
 )
+from .source_graph_session_runtime import PersistentSourceGraphProcessRunner
 
 
 RunnerFactory = Callable[[SourceGraphExecutionConfig], SourceGraphWorkerRunner]
@@ -31,6 +32,12 @@ RunnerFactory = Callable[[SourceGraphExecutionConfig], SourceGraphWorkerRunner]
 def _default_runner_factory(
     config: SourceGraphExecutionConfig,
 ) -> SourceGraphWorkerRunner:
+    if config.semantic_session_enabled:
+        return PersistentSourceGraphProcessRunner(
+            python_executable=config.python_bin,
+            idle_ttl_seconds=config.semantic_session_idle_ttl_sec,
+            max_rss_kib=max(config.semantic_session_max_rss_bytes // 1024, 1),
+        )
     return IsolatedSourceGraphProcessRunner(python_executable=config.python_bin)
 
 
@@ -71,6 +78,11 @@ class SourceGraphRuntimeSession:
             os.fspath(config.disk_cache_root),
             config.disk_cache_max_entries,
             config.disk_cache_max_bytes,
+            config.semantic_session_enabled,
+            config.semantic_session_idle_ttl_sec,
+            config.semantic_session_max_rss_bytes,
+            config.semantic_session_max_instances,
+            config.semantic_session_max_inputs,
         )
         with self._lock:
             if self._runtime is None:

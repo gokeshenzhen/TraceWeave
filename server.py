@@ -1854,6 +1854,33 @@ def _source_graph_metrics_dict(
                     "disk_eviction_count": prepare_metrics.disk_eviction_count,
                 }
             )
+        if any(
+            (
+                prepare_metrics.semantic_session_hit_count,
+                prepare_metrics.semantic_session_miss_count,
+                prepare_metrics.semantic_session_restart_count,
+                prepare_metrics.semantic_session_eviction_count,
+            )
+        ):
+            result.update(
+                {
+                    "frontend_launch_count": (
+                        prepare_metrics.frontend_launch_count
+                    ),
+                    "semantic_session_hit_count": (
+                        prepare_metrics.semantic_session_hit_count
+                    ),
+                    "semantic_session_miss_count": (
+                        prepare_metrics.semantic_session_miss_count
+                    ),
+                    "semantic_session_restart_count": (
+                        prepare_metrics.semantic_session_restart_count
+                    ),
+                    "semantic_session_eviction_count": (
+                        prepare_metrics.semantic_session_eviction_count
+                    ),
+                }
+            )
         for source_name, public_name in (
             ("cancel_to_exit_ms", "cancel_to_exit_ms"),
             ("worker_cpu_ms", "worker_cpu_ms"),
@@ -1928,6 +1955,29 @@ def _record_source_graph_prepare_metrics(outcome) -> None:
             "source_graph_disk_validation_outcome",
             metrics.disk_validation_outcome,
         )
+    session_metrics = (
+        ("source_graph_semantic_session_hit_count", metrics.semantic_session_hit_count),
+        (
+            "source_graph_semantic_session_miss_count",
+            metrics.semantic_session_miss_count,
+        ),
+        (
+            "source_graph_semantic_session_restart_count",
+            metrics.semantic_session_restart_count,
+        ),
+        (
+            "source_graph_semantic_session_eviction_count",
+            metrics.semantic_session_eviction_count,
+        ),
+    )
+    if any(value for _, value in session_metrics):
+        operation_metrics.set_value(
+            "source_graph_frontend_launch_count",
+            metrics.frontend_launch_count,
+        )
+    for field, value in session_metrics:
+        if value:
+            operation_metrics.set_value(field, value)
 
 
 def _accumulate_source_graph_trace_metrics(
@@ -1963,9 +2013,30 @@ def _accumulate_source_graph_trace_metrics(
         if value is not None:
             aggregate[public_name] = aggregate.get(public_name, 0) + value
 
+    session_fields = (
+        "semantic_session_hit_count",
+        "semantic_session_miss_count",
+        "semantic_session_restart_count",
+        "semantic_session_eviction_count",
+    )
+    session_observed = any(
+        getattr(prepare_metrics, field) for field in session_fields
+    ) or any(field in aggregate for field in session_fields)
+    if session_observed:
+        # Once any attempt uses the semantic-session route, frontend launches
+        # from every attempt remain relevant.  This includes a later bounded
+        # frontier that honestly takes the one-shot path because the retained
+        # context does not cover its inputs.
+        aggregate["frontend_launch_count"] = int(
+            aggregate.get("frontend_launch_count", 0)
+        ) + prepare_metrics.frontend_launch_count
+        for field in session_fields:
+            aggregate[field] = int(aggregate.get(field, 0)) + getattr(
+                prepare_metrics, field
+            )
+
     if prepare_metrics.disk_validation_outcome != "disabled":
         for public_name, source_name in (
-            ("frontend_launch_count", "frontend_launch_count"),
             ("disk_lookup_wall_ms", "disk_lookup_wall_ms"),
             ("disk_read_wall_ms", "disk_read_wall_ms"),
             ("disk_validate_wall_ms", "disk_validate_wall_ms"),
@@ -1982,6 +2053,10 @@ def _accumulate_source_graph_trace_metrics(
         ):
             value = getattr(prepare_metrics, source_name)
             aggregate[public_name] = aggregate.get(public_name, 0) + value
+        if not session_observed:
+            aggregate["frontend_launch_count"] = int(
+                aggregate.get("frontend_launch_count", 0)
+            ) + prepare_metrics.frontend_launch_count
 
     cancel_to_exit_ms = prepare_metrics.cancel_to_exit_ms
     if cancel_to_exit_ms is not None:
@@ -2041,6 +2116,18 @@ def _publish_source_graph_trace_metrics(
         "cache_eviction_count": "source_graph_cache_eviction_count",
         "cache_oversize_bypass_count": ("source_graph_cache_oversize_bypass_count"),
         "frontend_launch_count": "source_graph_frontend_launch_count",
+        "semantic_session_hit_count": (
+            "source_graph_semantic_session_hit_count"
+        ),
+        "semantic_session_miss_count": (
+            "source_graph_semantic_session_miss_count"
+        ),
+        "semantic_session_restart_count": (
+            "source_graph_semantic_session_restart_count"
+        ),
+        "semantic_session_eviction_count": (
+            "source_graph_semantic_session_eviction_count"
+        ),
         "disk_lookup_wall_ms": "source_graph_disk_lookup_ms",
         "disk_read_wall_ms": "source_graph_disk_read_ms",
         "disk_validate_wall_ms": "source_graph_disk_validate_ms",
@@ -2781,6 +2868,15 @@ async def _route_public_connectivity(
                         ),
                         max_instances=config.frontier_max_instances,
                         allow_adjacent=not bootstrap_active,
+                        enable_semantic_context=(
+                            config.semantic_session_enabled
+                        ),
+                        semantic_context_max_instances=(
+                            config.semantic_session_max_instances
+                        ),
+                        semantic_context_max_inputs=(
+                            config.semantic_session_max_inputs
+                        ),
                     )
                 )
                 adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
@@ -2953,6 +3049,9 @@ async def _route_public_connectivity(
                             )
                             operation_metrics.set_value("source_graph_phase", "adapter")
                             expansion_started = time.perf_counter()
+                            semantic_context = (
+                                current_plan.request.artifact_identity.semantic_context
+                            )
                             try:
                                 expanded = await _run_in_cancellable_thread(
                                     lambda: build_source_graph_frontier_plan(
@@ -2993,6 +3092,7 @@ async def _route_public_connectivity(
                                             else ()
                                         ),
                                         max_instances=(config.frontier_max_instances),
+                                        semantic_context=semantic_context,
                                     )
                                 )
                             except OperationCancelled as exc:

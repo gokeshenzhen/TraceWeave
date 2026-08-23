@@ -12,6 +12,7 @@ from config import (
     get_source_graph_execution_config,
 )
 from src.source_graph_production import SourceGraphRuntimeSession
+from src.source_graph_session_runtime import PersistentSourceGraphProcessRunner
 
 
 class NeverRunWorker:
@@ -102,6 +103,19 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", raising=False)
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", raising=False)
     monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", raising=False)
+    monkeypatch.delenv("TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION", raising=False)
+    monkeypatch.delenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL", raising=False
+    )
+    monkeypatch.delenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES", raising=False
+    )
+    monkeypatch.delenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INSTANCES", raising=False
+    )
+    monkeypatch.delenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", raising=False
+    )
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "1")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", "/tmp/pinned/bin/python")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0")
@@ -141,11 +155,67 @@ def test_source_graph_frontier_limits_are_namespaced_and_bounded(monkeypatch):
     assert get_source_graph_execution_config().error_code == (
         "source_graph_frontier_config_invalid"
     )
-
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "bad")
     assert get_source_graph_execution_config().error_code == (
         "source_graph_frontier_config_invalid"
     )
+
+
+def test_semantic_session_config_is_opt_in_namespaced_and_bounded(monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION", "1")
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL", "12.5"
+    )
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES", "268435456"
+    )
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INSTANCES", "48"
+    )
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", "192"
+    )
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.semantic_session_enabled is True
+    assert config.semantic_session_idle_ttl_sec == 12.5
+    assert config.semantic_session_max_rss_bytes == 268435456
+    assert config.semantic_session_max_instances == 48
+    assert config.semantic_session_max_inputs == 192
+
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES", "1"
+    )
+    assert get_source_graph_execution_config().error_code == (
+        "source_graph_semantic_session_config_invalid"
+    )
+
+
+def test_disabled_semantic_session_ignores_invalid_optional_budgets(monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION", "0")
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL", "bad"
+    )
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", "-1"
+    )
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.semantic_session_enabled is False
+    assert config.semantic_session_idle_ttl_sec == 60.0
+    assert config.semantic_session_max_inputs == 256
+
+
+def test_runtime_factory_selects_persistent_runner_only_when_opted_in():
+    session = SourceGraphRuntimeSession()
+
+    runtime = session.get(_config(semantic_session_enabled=True))
+
+    assert isinstance(runtime._worker_runner, PersistentSourceGraphProcessRunner)
 
 
 def test_connectivity_route_is_explicit_and_invalid_values_preserve_auto(monkeypatch):

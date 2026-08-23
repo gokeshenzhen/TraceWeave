@@ -166,6 +166,10 @@ _DIAGNOSTIC_WHITELIST = {
     "source_graph_cache_tier",
     "source_graph_disk_validation_outcome",
     "source_graph_frontend_launch_count",
+    "source_graph_semantic_session_hit_count",
+    "source_graph_semantic_session_miss_count",
+    "source_graph_semantic_session_restart_count",
+    "source_graph_semantic_session_eviction_count",
     "source_graph_disk_lookup_ms",
     "source_graph_disk_read_ms",
     "source_graph_disk_validate_ms",
@@ -253,6 +257,14 @@ _SOURCE_GRAPH_TIERS = ("memory", "disk", "build", "handoff")
 _SOURCE_GRAPH_SUM_FIELDS = {
     "actual_build_count": "source_graph_actual_build_count",
     "frontend_launch_count": "source_graph_frontend_launch_count",
+    "semantic_session_hit_count": "source_graph_semantic_session_hit_count",
+    "semantic_session_miss_count": "source_graph_semantic_session_miss_count",
+    "semantic_session_restart_count": (
+        "source_graph_semantic_session_restart_count"
+    ),
+    "semantic_session_eviction_count": (
+        "source_graph_semantic_session_eviction_count"
+    ),
     "coalesced_waiter_count": "source_graph_coalesced_waiter_count",
     "cache_eviction_count": "source_graph_cache_eviction_count",
     "cache_oversize_bypass_count": "source_graph_cache_oversize_bypass_count",
@@ -629,6 +641,14 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
         "execution": {
             "actual_build_count": sums["actual_build_count"],
             "frontend_launch_count": sums["frontend_launch_count"],
+            "semantic_session_hit_count": sums["semantic_session_hit_count"],
+            "semantic_session_miss_count": sums["semantic_session_miss_count"],
+            "semantic_session_restart_count": sums[
+                "semantic_session_restart_count"
+            ],
+            "semantic_session_eviction_count": sums[
+                "semantic_session_eviction_count"
+            ],
             "coalesced_waiter_count": sums["coalesced_waiter_count"],
             "memory_cache_eviction_count": sums["cache_eviction_count"],
             "memory_cache_oversize_bypass_count": sums["cache_oversize_bypass_count"],

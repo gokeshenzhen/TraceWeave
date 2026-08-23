@@ -527,6 +527,31 @@ next exact ancestor union, so no scope or fact from two artifacts is mixed.
 This changes only preparation scheduling: coverage exclusions, fingerprints,
 single-artifact provenance, public inputs, and result schemas are unchanged.
 
+Repeated deep queries below one proved parent can optionally reuse a bounded
+Slang semantic session while still publishing a separate narrow IR for each
+scope. This accelerator is guarded and disabled by default:
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION=1
+export TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL=60
+export TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES=805306368
+export TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INSTANCES=64
+export TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS=256
+```
+
+The adapter keeps the artifact narrow and binds it to a separately proved
+parent context within the instance/input caps. One isolated child retains at
+most one exact source/options/top/snapshot context; a second eligible scope
+projects from that root without reparsing. A context change restarts the child,
+60 seconds of inactivity evicts it, and cancellation, timeout, crash, protocol
+failure, or either live/reported RSS limit breach destroys the whole session
+without publishing a partial artifact. A frontier outside the retained context
+uses the historical one-shot worker and leaves the parent session available.
+Only compact scoped IR enters memory or the optional disk cache; Slang state
+never enters the MCP process or disk. Additive numeric receipts report session
+hits, misses, restarts, evictions, and frontend launches. Requests that lack a
+complete bounded context retain the default one-shot behavior.
+
 VCS flows that split source compilation and elaboration across logs can build
 one context explicitly. Keep the source-compile log as the primary path (and
 use it for the structural scan), then supply the other source/elaboration logs
@@ -1126,7 +1151,7 @@ For VCS flows the cheapest way to get a KDB is to recompile with `-kdb=only` —
 
 When enabled, TraceWeave appends one JSONL line per tool call to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (default `~/.cache/traceweave/telemetry/`) — tool name, argument *keys* and a few scalar flags (never argument values or paths), result size, latency, a session id anchored to each `get_sim_paths` case, and on failed calls a classification `error_code` (a code or exception class name, never the message). It is **local-only** (nothing is sent anywhere) and exists to quantify which tools actually get used. The telemetry directory and JSONL are tightened to owner-only `0700`/`0600` on every append, including an existing file created under a permissive umask. The normal user default is that `TRACEWEAVE_TELEMETRY` is absent; recording is then disabled and no telemetry file is written. To opt in, set `TRACEWEAVE_TELEMETRY=1` before starting the MCP server, then restart or reconnect it after changing the value.
 
-Source Graph calls use a second independently validated allowlist of numeric/fixed-label diagnostics, including `memory`/`disk`/`build`/`handoff` tier and process resource aggregates. When the opt-in disk cache is enabled, it additionally carries exact disk hit/miss/corrupt/build-skip counts, frontend launches, lookup/read/validate/write/publish/eviction timings, and artifact bytes/entry counts. It never persists artifact fingerprints, cache/source/wave paths, signal/scope/value content, diagnostics, or exception text. `python3.11 scripts/telemetry_report.py` reports per-tool and per-session usage plus Source Graph tier counts, exact disk hit rate, validation outcomes, builds/skips, bytes/entries/evictions, and p50/p95 latency by tier; add `--json` for machine-readable output. Use a fresh private `TRACEWEAVE_CACHE_DIR` when an operational soak needs an isolated observation window.
+Source Graph calls use a second independently validated allowlist of numeric/fixed-label diagnostics, including `memory`/`disk`/`build`/`handoff` tier and process resource aggregates. When the opt-in semantic session is active, it also reports frontend launches and session hit/miss/restart/eviction counts. When the opt-in disk cache is enabled, it additionally carries exact disk hit/miss/corrupt/build-skip counts, frontend launches, lookup/read/validate/write/publish/eviction timings, and artifact bytes/entry counts. It never persists artifact fingerprints, cache/source/wave paths, signal/scope/value content, diagnostics, or exception text. `python3.11 scripts/telemetry_report.py` reports per-tool and per-session usage plus Source Graph tier counts, exact disk hit rate, validation outcomes, builds/skips, bytes/entries/evictions, and p50/p95 latency by tier; add `--json` for machine-readable output. Use a fresh private `TRACEWEAVE_CACHE_DIR` when an operational soak needs an isolated observation window.
 
 ## Testing
 

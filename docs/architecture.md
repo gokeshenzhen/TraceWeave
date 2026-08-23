@@ -154,7 +154,16 @@ Verification
   triggers a whole-result Legacy Static recomputation. The Source Graph runtime
   is created lazily once per server process, keeps a bounded in-memory scoped
   IR cache, admits at most one cold build per process, and executes its optional
-  frontend in an isolated one-shot worker. An opt-in, default-disabled disk
+  frontend in an isolated one-shot worker. An opt-in, default-disabled semantic
+  session can instead retain one exact, bounded Slang compilation/root in that
+  isolated child and project several narrow scoped IR artifacts without a
+  second parse/elaboration. The broader proved context is part of artifact
+  build semantics, but only compact scoped IR is cacheable; AST state never
+  enters the server or disk. Context changes restart the child. Idle TTL, live
+  and reported-peak RSS caps, timeout, cancellation, crash, and protocol errors
+  destroy the whole session before any partial artifact can publish. A runtime
+  frontier outside the context takes the historical one-shot route without
+  discarding the still-useful parent session. An opt-in, default-disabled disk
   tier stores only canonical ConnectivityIR JSON plus a versioned manifest
   under `TRACEWEAVE_CACHE_DIR/source_graph/disk-v1`. It performs a direct
   exact-identity lookup only after a memory miss, never scans at startup, and

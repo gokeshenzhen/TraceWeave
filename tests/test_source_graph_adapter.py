@@ -22,6 +22,7 @@ from src.tb_hierarchy_builder import build_hierarchy
 from src.source_graph_contract import (
     ConnectivityPathTarget,
     QueryOperation,
+    SourceGraphSemanticContext,
     compute_source_graph_build_key,
     compute_source_graph_query_key,
 )
@@ -146,6 +147,7 @@ def _frontier_plan(
     compile_result: dict,
     *,
     max_instances: int = 128,
+    semantic_context: SourceGraphSemanticContext | None = None,
 ):
     hierarchy = {
         "component_tree": {
@@ -174,6 +176,7 @@ def _frontier_plan(
         max_hops=8,
         frontend_version="11.0.0",
         max_instances=max_instances,
+        semantic_context=semantic_context,
     )
 
 
@@ -680,6 +683,64 @@ def test_frontier_plan_blocks_before_exceeding_direct_child_cap(tmp_path):
     assert plan.status is AdapterStatus.BLOCKED
     assert plan.receipt.blocker is not None
     assert plan.receipt.blocker.code == "frontier_instance_limit"
+
+
+def test_frontier_plan_reuses_covering_semantic_context(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    expanded = _frontier_plan(tmp_path, compile_result)
+    assert expanded.request is not None
+    context = SourceGraphSemanticContext(
+        scope=expanded.request.artifact_identity.scope,
+    )
+
+    reused = _frontier_plan(
+        tmp_path,
+        compile_result,
+        semantic_context=context,
+    )
+
+    assert reused.request is not None
+    assert reused.request.artifact_identity.semantic_context == context
+    assert reused.receipt.semantic_context_status == "reused"
+    assert reused.receipt.semantic_context_instance_count == 4
+    assert reused.receipt.semantic_context_input_count == 1
+
+
+def test_frontier_plan_drops_semantic_context_that_does_not_cover_expansion(
+    tmp_path,
+):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="xrun top.sv -top tb",
+        sources=(source,),
+    )
+    exact = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.dut.u_leaf.data_i",
+    )
+    assert exact.request is not None
+    narrow_context = SourceGraphSemanticContext(
+        scope=exact.request.artifact_identity.scope,
+    )
+
+    expanded = _frontier_plan(
+        tmp_path,
+        compile_result,
+        semantic_context=narrow_context,
+    )
+
+    assert expanded.request is not None
+    assert expanded.request.artifact_identity.semantic_context is None
+    assert expanded.receipt.semantic_context_status == "context_not_covering"
 
 
 def test_large_deep_query_selects_bounded_adjacent_initial_scope(tmp_path):

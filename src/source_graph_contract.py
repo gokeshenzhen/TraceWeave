@@ -1485,6 +1485,24 @@ class SourceGraphArtifactKey:
 
 
 @dataclass(frozen=True)
+class SourceGraphSemanticContextKey:
+    digest: str
+    cross_request_reusable: bool
+    incomplete_reasons: tuple[str, ...]
+
+    @property
+    def cache_key(self) -> str | None:
+        return self.digest if self.cross_request_reusable else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "digest": self.digest,
+            "cross_request_reusable": self.cross_request_reusable,
+            "incomplete_reasons": list(self.incomplete_reasons),
+        }
+
+
+@dataclass(frozen=True)
 class SourceGraphQueryKey:
     digest: str
 
@@ -1533,6 +1551,63 @@ def compute_source_graph_artifact_key(
         digest=digest,
         build_semantics_digest=build_semantics_digest,
         scope_digest=scope_digest,
+        cross_request_reusable=not incomplete_reasons,
+        incomplete_reasons=incomplete_reasons,
+    )
+
+
+def compute_source_graph_semantic_context_key(
+    identity: SourceGraphArtifactIdentity,
+) -> SourceGraphSemanticContextKey:
+    """Key one isolated frontend root independently of narrow artifact scope.
+
+    The retained Slang root is determined by the source/options identity, the
+    selected ordered inputs, and the elaborated top.  Projection planning
+    counters and hierarchy proof shapes are receipts for individual artifacts;
+    they do not alter ``_frontend_args`` and therefore must not split an
+    otherwise identical semantic session.
+    """
+
+    context = identity.semantic_context
+    context_projection = (
+        context.compile_projection if context is not None else None
+    )
+    frontend_inputs = (
+        context_projection.ordered_inputs
+        if context_projection is not None
+        else identity.source.compile_inputs.ordered_inputs
+    )
+    digest = _sha256(
+        {
+            "source": identity.source.to_dict(),
+            "compile_snapshot_sha256": identity.compile_snapshot_sha256,
+            "adapter_version": identity.adapter_version,
+            "worker_protocol_version": identity.worker_protocol_version,
+            "build_contract_version": identity.build_contract_version,
+            "identity_version": identity.identity_version,
+            "semantic_frontend": (
+                {
+                    "context_version": context.context_version,
+                    "design": context.scope.design,
+                    "top": context.scope.top,
+                    "hierarchy_snapshot_sha256": (
+                        context.scope.hierarchy_snapshot_sha256
+                    ),
+                    "ordered_inputs": list(frontend_inputs),
+                }
+                if context is not None
+                else None
+            ),
+        }
+    )
+    reasons = list(identity.source.compile_inputs.incomplete_reasons)
+    if context is None:
+        reasons.append("semantic_context_missing")
+    if not identity.snapshots_complete:
+        reasons.append("snapshot_identity_unproved")
+    incomplete_reasons = tuple(sorted(set(reasons)))
+    return SourceGraphSemanticContextKey(
+        digest=digest,
         cross_request_reusable=not incomplete_reasons,
         incomplete_reasons=incomplete_reasons,
     )

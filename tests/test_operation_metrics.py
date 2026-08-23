@@ -26,6 +26,18 @@ def test_source_graph_metrics_accept_only_numeric_values_and_fixed_labels():
     operation_metrics.set_value("source_graph_cache_tier", "disk", metrics)
     operation_metrics.set_value("source_graph_disk_validation_outcome", "hit", metrics)
     operation_metrics.set_value("source_graph_frontend_launch_count", 0, metrics)
+    operation_metrics.set_value(
+        "source_graph_semantic_session_hit_count", 2, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_miss_count", 1, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_restart_count", 1, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_eviction_count", 0, metrics
+    )
     operation_metrics.set_value("source_graph_disk_lookup_ms", 3.25, metrics)
     operation_metrics.set_value("source_graph_disk_hit_count", 1, metrics)
     operation_metrics.set_value("source_graph_disk_bytes_read", 8192, metrics)
@@ -45,6 +57,10 @@ def test_source_graph_metrics_accept_only_numeric_values_and_fixed_labels():
         "source_graph_cache_tier": "disk",
         "source_graph_disk_validation_outcome": "hit",
         "source_graph_frontend_launch_count": 0,
+        "source_graph_semantic_session_hit_count": 2,
+        "source_graph_semantic_session_miss_count": 1,
+        "source_graph_semantic_session_restart_count": 1,
+        "source_graph_semantic_session_eviction_count": 0,
         "source_graph_disk_lookup_ms": 3.2,
         "source_graph_disk_hit_count": 1,
         "source_graph_disk_bytes_read": 8192,

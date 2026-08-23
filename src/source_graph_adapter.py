@@ -2816,6 +2816,7 @@ def build_source_graph_frontier_plan(
     include_expr: bool = True,
     kind_filter: Sequence[str] = (),
     max_instances: int = DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT,
+    semantic_context: SourceGraphSemanticContext | None = None,
 ) -> SourceGraphBuildPlan:
     """Expand one single-endpoint artifact at proved dynamic frontiers.
 
@@ -2907,13 +2908,16 @@ def build_source_graph_frontier_plan(
                 exclusions=base.receipt.objective_exclusions,
             )
 
-    return _expanded_single_endpoint_plan(
+    expanded = _expanded_single_endpoint_plan(
         base=base,
         hierarchy_result=hierarchy_result,
         parent_chains=parent_chains,
         candidate_paths=tuple(candidate_paths),
         scope_expansion_anchors=normalized_frontiers,
     )
+    if semantic_context is None:
+        return expanded
+    return _reuse_semantic_context(expanded, semantic_context)
 
 
 def _artifact_compile_inputs(plan: SourceGraphBuildPlan) -> tuple[str, ...]:
@@ -2922,6 +2926,51 @@ def _artifact_compile_inputs(plan: SourceGraphBuildPlan) -> tuple[str, ...]:
     if artifact.compile_projection is not None:
         return artifact.compile_projection.ordered_inputs
     return artifact.source.compile_inputs.ordered_inputs
+
+
+def _reuse_semantic_context(
+    plan: SourceGraphBuildPlan,
+    context: SourceGraphSemanticContext,
+) -> SourceGraphBuildPlan:
+    """Retain a live parent context only when it proves the expanded artifact."""
+
+    assert plan.request is not None
+    try:
+        artifact = replace(
+            plan.request.artifact_identity,
+            semantic_context=context,
+        )
+    except ValueError:
+        return _with_semantic_context_status(
+            plan,
+            "context_not_covering",
+            instance_count=len(context.scope.projection_instance_paths),
+            input_count=(
+                len(context.compile_projection.ordered_inputs)
+                if context.compile_projection is not None
+                else len(plan.request.identity.compile_inputs.ordered_inputs)
+            ),
+        )
+    request = replace(plan.request, artifact=artifact)
+    artifact_key = compute_source_graph_artifact_key(artifact)
+    return replace(
+        plan,
+        request=request,
+        receipt=replace(
+            plan.receipt,
+            semantic_context_status="reused",
+            semantic_context_instance_count=len(
+                context.scope.projection_instance_paths
+            ),
+            semantic_context_input_count=(
+                len(context.compile_projection.ordered_inputs)
+                if context.compile_projection is not None
+                else len(request.identity.compile_inputs.ordered_inputs)
+            ),
+            cross_request_reusable=artifact_key.cross_request_reusable,
+            artifact_fingerprint_sha256=artifact_key.digest,
+        ),
+    )
 
 
 def _with_semantic_context(

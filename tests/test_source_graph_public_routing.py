@@ -32,13 +32,16 @@ from src.connectivity_ir import (
     SymbolKind,
 )
 import src.connectivity_backend as connectivity_backend
-from src.source_graph_contract import SourceGraphScopeReceipt
+from src.source_graph_contract import SourceGraphScopeReceipt, SourceGraphSemanticContext
 from src.source_graph_backend import SourceGraphConnectivityBackend
 from src.source_graph_disk_cache import SourceGraphDiskCache
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
 from src.source_graph_adapter import build_source_graph_frontier_plan
 from src.source_graph_runtime import (
+    CacheDisposition,
+    FlightDisposition,
     PrepareStatus,
+    SourceGraphPrepareMetrics,
     SourceGraphRuntime,
     WorkerBuildResult,
     WorkerResourceMetrics,
@@ -61,6 +64,36 @@ def _source_config() -> SourceGraphExecutionConfig:
         frontend_version="11.0.0",
         timeout_sec=5.0,
     )
+
+
+def test_multi_artifact_metrics_count_session_and_one_shot_frontend_launches():
+    aggregate: dict[str, int | float] = {}
+    first = SourceGraphPrepareMetrics(
+        cache_disposition=CacheDisposition.MISS,
+        flight_disposition=FlightDisposition.BUILDER,
+        total_wall_ms=4.0,
+        frontend_launch_count=1,
+        semantic_session_miss_count=1,
+    )
+    frontier = SourceGraphPrepareMetrics(
+        cache_disposition=CacheDisposition.MISS,
+        flight_disposition=FlightDisposition.BUILDER,
+        total_wall_ms=6.0,
+        frontend_launch_count=1,
+    )
+
+    server._accumulate_source_graph_trace_metrics(
+        aggregate,
+        prepare_metrics=first,
+    )
+    server._accumulate_source_graph_trace_metrics(
+        aggregate,
+        prepare_metrics=frontier,
+    )
+
+    assert aggregate["frontend_launch_count"] == 2
+    assert aggregate["semantic_session_miss_count"] == 1
+    assert aggregate["semantic_session_hit_count"] == 0
 
 
 def _probe(*, with_kdb: bool = False) -> dict:
@@ -1114,6 +1147,72 @@ async def test_single_endpoint_driver_expands_only_dynamic_sibling_frontier(
 
 
 @pytest.mark.anyio
+async def test_dynamic_frontier_retains_covering_semantic_context(
+    monkeypatch,
+    tmp_path,
+):
+    compile_log = _install_frontier_context(tmp_path)
+    worker = FrontierWorker()
+    static = TrackingStaticBackend()
+    _patch_common(
+        monkeypatch,
+        runtime=SourceGraphRuntime(worker),
+        static=static,
+    )
+    original_initial = server.build_source_graph_initial_plan
+    original_frontier = server.build_source_graph_frontier_plan
+    selected_context = None
+    observed_context = None
+
+    def contextual_initial(**kwargs):
+        nonlocal selected_context
+        base = original_initial(**kwargs)
+        frontier_kwargs = dict(kwargs)
+        frontier_kwargs.pop("allow_adjacent")
+        frontier_kwargs.pop("enable_semantic_context")
+        frontier_kwargs.pop("semantic_context_max_instances")
+        frontier_kwargs.pop("semantic_context_max_inputs")
+        expanded = original_frontier(
+            **frontier_kwargs,
+            frontier_signal_paths=("top.parent_net[31:0]",),
+        )
+        assert base.request is not None
+        assert expanded.request is not None
+        selected_context = SourceGraphSemanticContext(
+            scope=expanded.request.artifact_identity.scope,
+            compile_projection=(
+                expanded.request.artifact_identity.compile_projection
+            ),
+        )
+        artifact = replace(
+            base.request.artifact_identity,
+            semantic_context=selected_context,
+        )
+        return replace(
+            base,
+            request=replace(base.request, artifact=artifact),
+        )
+
+    def captured_frontier(**kwargs):
+        nonlocal observed_context
+        observed_context = kwargs["semantic_context"]
+        return original_frontier(**kwargs)
+
+    monkeypatch.setattr(server, "build_source_graph_initial_plan", contextual_initial)
+    monkeypatch.setattr(server, "build_source_graph_frontier_plan", captured_frontier)
+    args = _driver_args(compile_log, "top.u.data_i[31:0]")
+    args["top_hint"] = "top"
+
+    result = await server._dispatch("explain_signal_driver", args)
+
+    assert result.backend == "source_graph"
+    assert observed_context == selected_context
+    assert result.backend_status.source_graph.adapter["semantic_context"][
+        "status"
+    ] == "reused"
+
+
+@pytest.mark.anyio
 async def test_initial_expanded_plan_queries_one_artifact_without_reactive_build(
     monkeypatch, tmp_path
 ):
@@ -1128,6 +1227,9 @@ async def test_initial_expanded_plan_queries_one_artifact_without_reactive_build
 
     def forced_initial(**kwargs):
         kwargs.pop("allow_adjacent")
+        kwargs.pop("enable_semantic_context")
+        kwargs.pop("semantic_context_max_instances")
+        kwargs.pop("semantic_context_max_inputs")
         return build_source_graph_frontier_plan(
             **kwargs,
             frontier_signal_paths=("top.parent_net[31:0]",),

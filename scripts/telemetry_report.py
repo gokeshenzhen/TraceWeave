@@ -117,6 +117,13 @@ def render(report: dict) -> str:
             f"{_fmt_int(execution['frontend_launch_count'])}"
         )
         lines.append(
+            "  semantic session     "
+            f"hit={_fmt_int(execution['semantic_session_hit_count'])}  "
+            f"miss={_fmt_int(execution['semantic_session_miss_count'])}  "
+            f"restart={_fmt_int(execution['semantic_session_restart_count'])}  "
+            f"evict={_fmt_int(execution['semantic_session_eviction_count'])}"
+        )
+        lines.append(
             "  disk bytes/entries   "
             f"read={_fmt_int(disk['bytes_read'])}  "
             f"written={_fmt_int(disk['bytes_written'])}  "

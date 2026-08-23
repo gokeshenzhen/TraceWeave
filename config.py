@@ -441,6 +441,11 @@ class SourceGraphExecutionConfig:
     disk_cache_max_bytes: int = 512 * 1024 * 1024
     frontier_max_instances: int = 128
     frontier_max_rounds: int = 4
+    semantic_session_enabled: bool = False
+    semantic_session_idle_ttl_sec: float = 60.0
+    semantic_session_max_rss_bytes: int = 768 * 1024 * 1024
+    semantic_session_max_instances: int = 64
+    semantic_session_max_inputs: int = 256
 
     @property
     def valid(self) -> bool:
@@ -478,6 +483,22 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
     ).strip()
     raw_frontier_rounds = os.environ.get(
         "TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", "4"
+    ).strip()
+    semantic_session_enabled = _env_flag(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION", False
+    )
+    raw_semantic_session_ttl = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL", "60"
+    ).strip()
+    raw_semantic_session_rss = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES",
+        str(768 * 1024 * 1024),
+    ).strip()
+    raw_semantic_session_instances = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INSTANCES", "64"
+    ).strip()
+    raw_semantic_session_inputs = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", "256"
     ).strip()
 
     try:
@@ -529,6 +550,37 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         frontier_max_instances = 128
         frontier_max_rounds = 4
         error_code = "source_graph_frontier_config_invalid"
+
+    try:
+        semantic_session_idle_ttl_sec = float(raw_semantic_session_ttl)
+        semantic_session_max_rss_bytes = int(raw_semantic_session_rss)
+        semantic_session_max_instances = int(raw_semantic_session_instances)
+        semantic_session_max_inputs = int(raw_semantic_session_inputs)
+    except ValueError:
+        semantic_session_idle_ttl_sec = 60.0
+        semantic_session_max_rss_bytes = 768 * 1024 * 1024
+        semantic_session_max_instances = 64
+        semantic_session_max_inputs = 256
+        if semantic_session_enabled:
+            error_code = "source_graph_semantic_session_config_invalid"
+    semantic_session_values_invalid = (
+        not math.isfinite(semantic_session_idle_ttl_sec)
+        or semantic_session_idle_ttl_sec < 0.01
+        or semantic_session_idle_ttl_sec > 3_600
+        or semantic_session_max_rss_bytes < 64 * 1024 * 1024
+        or semantic_session_max_rss_bytes > 8 * 1024 * 1024 * 1024
+        or semantic_session_max_instances < 1
+        or semantic_session_max_instances > 256
+        or semantic_session_max_inputs < 1
+        or semantic_session_max_inputs > 1024
+    )
+    if semantic_session_values_invalid:
+        semantic_session_idle_ttl_sec = 60.0
+        semantic_session_max_rss_bytes = 768 * 1024 * 1024
+        semantic_session_max_instances = 64
+        semantic_session_max_inputs = 256
+        if semantic_session_enabled:
+            error_code = "source_graph_semantic_session_config_invalid"
     if (
         frontier_max_instances < 1
         or frontier_max_instances > 4096
@@ -551,6 +603,11 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         disk_cache_max_bytes=disk_cache_max_bytes,
         frontier_max_instances=frontier_max_instances,
         frontier_max_rounds=frontier_max_rounds,
+        semantic_session_enabled=semantic_session_enabled,
+        semantic_session_idle_ttl_sec=semantic_session_idle_ttl_sec,
+        semantic_session_max_rss_bytes=semantic_session_max_rss_bytes,
+        semantic_session_max_instances=semantic_session_max_instances,
+        semantic_session_max_inputs=semantic_session_max_inputs,
     )
 
 

@@ -238,6 +238,10 @@ def test_source_graph_diagnostics_persist_only_numeric_and_fixed_labels(
             "source_graph_disk_miss_count": 0,
             "source_graph_disk_build_skip_count": 1,
             "source_graph_frontend_launch_count": 0,
+            "source_graph_semantic_session_hit_count": 2,
+            "source_graph_semantic_session_miss_count": 1,
+            "source_graph_semantic_session_restart_count": 0,
+            "source_graph_semantic_session_eviction_count": 1,
             "source_graph_disk_bytes_read": 8192,
             "source_graph_disk_entry_count": 1,
             "source_graph_disk_bytes": 12288,
@@ -260,6 +264,10 @@ def test_source_graph_diagnostics_persist_only_numeric_and_fixed_labels(
         "source_graph_disk_miss_count": 0,
         "source_graph_disk_build_skip_count": 1,
         "source_graph_frontend_launch_count": 0,
+        "source_graph_semantic_session_hit_count": 2,
+        "source_graph_semantic_session_miss_count": 1,
+        "source_graph_semantic_session_restart_count": 0,
+        "source_graph_semantic_session_eviction_count": 1,
         "source_graph_disk_bytes_read": 8192,
         "source_graph_disk_entry_count": 1,
         "source_graph_disk_bytes": 12288,
@@ -482,6 +490,7 @@ def test_aggregate_source_graph_operational_cache_metrics():
                 "source_graph_disk_validation_outcome": "not_found",
                 "source_graph_actual_build_count": 1,
                 "source_graph_frontend_launch_count": 1,
+                "source_graph_semantic_session_miss_count": 1,
                 "source_graph_disk_lookup_ms": 2.0,
                 "source_graph_disk_publish_ms": 4.0,
                 "source_graph_disk_miss_count": 1,
@@ -502,6 +511,7 @@ def test_aggregate_source_graph_operational_cache_metrics():
                 "source_graph_disk_validation_outcome": "hit",
                 "source_graph_actual_build_count": 0,
                 "source_graph_frontend_launch_count": 0,
+                "source_graph_semantic_session_hit_count": 1,
                 "source_graph_disk_lookup_ms": 12.0,
                 "source_graph_disk_validate_ms": 10.0,
                 "source_graph_disk_hit_count": 1,
@@ -576,6 +586,10 @@ def test_aggregate_source_graph_operational_cache_metrics():
     }
     assert source_graph["execution"]["actual_build_count"] == 2
     assert source_graph["execution"]["frontend_launch_count"] == 2
+    assert source_graph["execution"]["semantic_session_hit_count"] == 1
+    assert source_graph["execution"]["semantic_session_miss_count"] == 1
+    assert source_graph["execution"]["semantic_session_restart_count"] == 0
+    assert source_graph["execution"]["semantic_session_eviction_count"] == 0
     assert source_graph["timings_ms"]["disk_lookup"]["n"] == 3
     assert source_graph["trace"] == {
         "query_count": 2,
@@ -622,4 +636,5 @@ def test_telemetry_report_renders_source_graph_operational_section():
     assert "Source Graph disk cache — operational telemetry" in text
     assert "memory=0  disk=1  build=0  handoff=0" in text
     assert "hit=1  miss=0  corrupt=0  hit-rate=100.0%" in text
+    assert "semantic session" in text
     assert "explain_signal_driver" in text

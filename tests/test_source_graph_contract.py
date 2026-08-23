@@ -34,6 +34,7 @@ from src.source_graph_contract import (
     compute_source_graph_artifact_key,
     compute_source_graph_build_key,
     compute_source_graph_query_key,
+    compute_source_graph_semantic_context_key,
     source_graph_artifact_design_matches,
     source_graph_artifact_identity_covers,
 )
@@ -282,6 +283,88 @@ def test_semantic_context_round_trips_and_enters_artifact_build_identity():
         compute_source_graph_artifact_key(baseline)
     )
     assert source_graph_artifact_design_matches(contextual, baseline) is False
+
+
+def test_semantic_context_key_ignores_target_specific_projection_counters():
+    manifest = _manifest(
+        ordered_inputs=(
+            "rtl/pkg.sv",
+            "rtl/left.sv",
+            "rtl/right.sv",
+            "rtl/top.sv",
+        )
+    )
+    exclusion = (SOURCE_GRAPH_COMPILE_PROJECTION_GAP,)
+    narrow_scope = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(("top", "top.u_left"),),
+        proved_lcas=("top.u_left",),
+        projection_instance_paths=("top", "top.u_left"),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left"),
+            objective_exclusions=exclusion,
+        ),
+        capabilities=(QueryOperation.DRIVER,),
+    )
+    broad_scope = SourceGraphArtifactScope(
+        design="unit_fixture",
+        top="top",
+        hierarchy_snapshot_sha256=_fingerprint("hierarchy"),
+        proved_ancestor_chains=(
+            ("top", "top.u_left"),
+            ("top", "top.u_right"),
+        ),
+        proved_lcas=("top",),
+        projection_instance_paths=("top", "top.u_left", "top.u_right"),
+        coverage_boundary=CoverageBoundary(
+            mode=BoundaryMode.EXPLICIT,
+            instance_paths=("top", "top.u_left", "top.u_right"),
+            objective_exclusions=exclusion,
+        ),
+        capabilities=(QueryOperation.DRIVER,),
+    )
+    narrow_projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv"),
+        full_input_count=4,
+    )
+    broad_projection = SourceGraphCompileProjection(
+        mode=CompileProjectionMode.HIERARCHY_DEPENDENCY_CLOSURE,
+        ordered_inputs=("rtl/pkg.sv", "rtl/left.sv", "rtl/right.sv"),
+        full_input_count=4,
+        seed_symbol_count=2,
+        dependency_symbol_count=7,
+    )
+    baseline = replace(
+        _artifact_identity(manifest=manifest),
+        scope=narrow_scope,
+        compile_projection=narrow_projection,
+        semantic_context=SourceGraphSemanticContext(
+            scope=broad_scope,
+            compile_projection=broad_projection,
+        ),
+    )
+    different_planner_receipt = replace(
+        baseline,
+        semantic_context=SourceGraphSemanticContext(
+            scope=broad_scope,
+            compile_projection=replace(
+                broad_projection,
+                seed_symbol_count=19,
+                dependency_symbol_count=23,
+            ),
+        ),
+    )
+
+    assert compute_source_graph_artifact_key(baseline) != (
+        compute_source_graph_artifact_key(different_planner_receipt)
+    )
+    assert compute_source_graph_semantic_context_key(baseline) == (
+        compute_source_graph_semantic_context_key(different_planner_receipt)
+    )
 
 
 def test_semantic_context_must_cover_artifact_scope_and_compile_projection():

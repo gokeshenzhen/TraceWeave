@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from dataclasses import dataclass
 import importlib.metadata
 import json
 import os
@@ -160,6 +161,11 @@ def _worker_metrics(
     cpu_started: float,
     rss_start: int | None,
     ir_bytes: int = 0,
+    frontend_launch_count: int | None = 1,
+    semantic_session_hit_count: int = 0,
+    semantic_session_miss_count: int = 0,
+    semantic_session_restart_count: int = 0,
+    semantic_session_eviction_count: int = 0,
 ) -> WorkerResourceMetrics:
     rss_end, rss_peak = _read_rss_kib()
     return WorkerResourceMetrics(
@@ -169,6 +175,11 @@ def _worker_metrics(
         rss_peak_kib=rss_peak,
         rss_end_kib=rss_end,
         ir_bytes=ir_bytes,
+        frontend_launch_count=frontend_launch_count,
+        semantic_session_hit_count=semantic_session_hit_count,
+        semantic_session_miss_count=semantic_session_miss_count,
+        semantic_session_restart_count=semantic_session_restart_count,
+        semantic_session_eviction_count=semantic_session_eviction_count,
     )
 
 
@@ -184,6 +195,159 @@ def _failure_payload(
         "metrics": metrics.to_dict(),
         "fallback_used": False,
     }
+
+
+@dataclass
+class SemanticFrontendSession:
+    """Worker-local Slang state; never imported into the MCP parent process."""
+
+    driver: Any
+    compilation: Any
+    root: Any
+    diagnostic_payload: Mapping[str, Any]
+    frontend_version: str
+
+
+def create_semantic_frontend_session(
+    request: SourceGraphArtifactBuildRequest,
+    *,
+    driver_module: Any,
+    frontend_version: str,
+) -> SemanticFrontendSession:
+    """Parse and elaborate one bounded semantic context."""
+
+    # This helper contains the already-validated Phase 0B command-line
+    # boundary. Importing it here keeps both it and pyslang out of the parent
+    # runtime module.
+    from scripts.spike_source_frontend import (
+        _configure_driver,
+        _diagnostics_payload,
+    )
+
+    driver = _configure_driver(driver_module, _frontend_args(request))
+    if not driver.parseAllSources():
+        raise RuntimeError("Driver.parseAllSources returned false")
+    compilation = driver.createCompilation()
+    root = compilation.getRoot()
+    diagnostics = list(compilation.getAllDiagnostics())
+    return SemanticFrontendSession(
+        driver=driver,
+        compilation=compilation,
+        root=root,
+        diagnostic_payload=_diagnostics_payload(driver, diagnostics),
+        frontend_version=frontend_version,
+    )
+
+
+def project_semantic_frontend_session(
+    session: SemanticFrontendSession,
+    request: SourceGraphArtifactBuildRequest,
+) -> tuple[bytes, str, SourceGraphArtifactScopeReceipt, Mapping[str, Any]]:
+    """Project one narrow deterministic artifact from a prepared root."""
+
+    identity = request.source
+    source_root = Path.cwd()
+    manifest = identity.compile_inputs
+    semantic_context = request.identity.semantic_context
+    compile_projection = (
+        semantic_context.compile_projection
+        if semantic_context is not None
+        else request.identity.compile_projection
+    )
+    projected_inputs = (
+        compile_projection.ordered_inputs
+        if compile_projection is not None
+        else manifest.ordered_inputs
+    )
+    frontend_inputs = tuple(
+        path
+        for path in projected_inputs
+        if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
+    )
+    vhdl_inputs = tuple(
+        path
+        for path in manifest.ordered_inputs
+        if Path(path).suffix.lower() in _VHDL_SUFFIXES
+    )
+    exclusion_codes = set(request.scope.coverage_boundary.objective_exclusions)
+    if semantic_context is not None:
+        exclusion_codes.update(
+            semantic_context.scope.coverage_boundary.objective_exclusions
+        )
+    exclusions = tuple(
+        ProjectionExclusion(
+            code=code,
+            message=f"objective exclusion retained by build contract: {code}",
+            impact=CoverageStatus.INCONCLUSIVE,
+            scopes=("*",),
+            constructs=(code,),
+        )
+        for code in sorted(exclusion_codes)
+    )
+    if vhdl_inputs and "opaque_vhdl_boundary" not in {
+        item.code for item in exclusions
+    }:
+        exclusions = (
+            *exclusions,
+            ProjectionExclusion(
+                code="opaque_vhdl_boundary",
+                message=(
+                    "VHDL source is retained in build identity but projected "
+                    "as an opaque mixed-language boundary"
+                ),
+                impact=CoverageStatus.INCONCLUSIVE,
+                scopes=("*",),
+                constructs=("vhdl", "mixed_language_boundary"),
+            ),
+        )
+    diagnostic_payload = session.diagnostic_payload
+    projection = project_slang_design(
+        root=session.root,
+        source_manager=session.driver.sourceManager,
+        frontend_version=session.frontend_version,
+        options=ProjectionOptions(
+            source_root=source_root,
+            files_total=len(manifest.ordered_inputs),
+            files_projected=sum(
+                Path(path).expanduser().is_file() for path in frontend_inputs
+            ),
+            diagnostics=_projection_diagnostics(diagnostic_payload, source_root),
+            diagnostic_total=int(diagnostic_payload["total"]),
+            blocking_diagnostic_total=int(
+                diagnostic_payload["blocking_error_count"]
+            ),
+            exclusions=exclusions,
+            focus_instance_paths=request.scope.coverage_boundary.instance_paths,
+            assignment_instance_paths=request.scope.projection_instance_paths,
+            metadata=(
+                (
+                    "runtime",
+                    (
+                        "phase5_semantic_context"
+                        if semantic_context is not None
+                        else "phase3b_bounded_artifact"
+                    ),
+                ),
+                ("scope_contract", request.contract_version),
+            ),
+        ),
+    )
+    ir = projection.ir
+    serialized = ir.to_json_bytes()
+    gap_codes = {_gap_label(gap.code) for gap in ir.coverage.gaps}
+    if ir.coverage.status is not CoverageStatus.COMPLETE and not gap_codes:
+        gap_codes.add("coverage_incomplete_without_detailed_gap")
+    scope_receipt = SourceGraphArtifactScopeReceipt(
+        scope=request.scope,
+        coverage_status=ir.coverage.status,
+        gap_codes=tuple(sorted(gap_codes)),
+    )
+    return (
+        serialized,
+        ir.fingerprint_sha256(),
+        scope_receipt,
+        projection.receipt.to_dict(),
+    )
 
 
 def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
@@ -271,119 +435,17 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         )
 
     try:
-        # This helper contains the already-validated Phase 0B command-line
-        # boundary.  Importing it here keeps both it and pyslang out of the
-        # parent runtime module.
-        from scripts.spike_source_frontend import (
-            _configure_driver,
-            _diagnostics_payload,
-        )
-
-        driver = _configure_driver(driver_module, _frontend_args(request))
-        if not driver.parseAllSources():
-            raise RuntimeError("Driver.parseAllSources returned false")
-        compilation = driver.createCompilation()
-        root = compilation.getRoot()
-        diagnostics = list(compilation.getAllDiagnostics())
-        diagnostic_payload = _diagnostics_payload(driver, diagnostics)
-        source_root = Path.cwd()
-        manifest = identity.compile_inputs
-        semantic_context = request.identity.semantic_context
-        compile_projection = (
-            semantic_context.compile_projection
-            if semantic_context is not None
-            else request.identity.compile_projection
-        )
-        projected_inputs = (
-            compile_projection.ordered_inputs
-            if compile_projection is not None
-            else manifest.ordered_inputs
-        )
-        frontend_inputs = tuple(
-            path
-            for path in projected_inputs
-            if Path(path).suffix.lower() in _FRONTEND_HDL_SUFFIXES
-        )
-        vhdl_inputs = tuple(
-            path
-            for path in manifest.ordered_inputs
-            if Path(path).suffix.lower() in _VHDL_SUFFIXES
-        )
-        exclusion_codes = set(
-            request.scope.coverage_boundary.objective_exclusions
-        )
-        if semantic_context is not None:
-            exclusion_codes.update(
-                semantic_context.scope.coverage_boundary.objective_exclusions
-            )
-        exclusions = tuple(
-            ProjectionExclusion(
-                code=code,
-                message=f"objective exclusion retained by build contract: {code}",
-                impact=CoverageStatus.INCONCLUSIVE,
-                scopes=("*",),
-                constructs=(code,),
-            )
-            for code in sorted(exclusion_codes)
-        )
-        if vhdl_inputs and "opaque_vhdl_boundary" not in {
-            item.code for item in exclusions
-        }:
-            exclusions = (
-                *exclusions,
-                ProjectionExclusion(
-                    code="opaque_vhdl_boundary",
-                    message=(
-                        "VHDL source is retained in build identity but projected "
-                        "as an opaque mixed-language boundary"
-                    ),
-                    impact=CoverageStatus.INCONCLUSIVE,
-                    scopes=("*",),
-                    constructs=("vhdl", "mixed_language_boundary"),
-                ),
-            )
-        projection = project_slang_design(
-            root=root,
-            source_manager=driver.sourceManager,
+        session = create_semantic_frontend_session(
+            request,
+            driver_module=driver_module,
             frontend_version=version,
-            options=ProjectionOptions(
-                source_root=source_root,
-                files_total=len(manifest.ordered_inputs),
-                files_projected=sum(
-                    Path(path).expanduser().is_file()
-                    for path in frontend_inputs
-                ),
-                diagnostics=_projection_diagnostics(diagnostic_payload, source_root),
-                diagnostic_total=int(diagnostic_payload["total"]),
-                blocking_diagnostic_total=int(
-                    diagnostic_payload["blocking_error_count"]
-                ),
-                exclusions=exclusions,
-                focus_instance_paths=request.scope.coverage_boundary.instance_paths,
-                assignment_instance_paths=request.scope.projection_instance_paths,
-                metadata=(
-                    (
-                        "runtime",
-                        (
-                            "phase5_semantic_context"
-                            if semantic_context is not None
-                            else "phase3b_bounded_artifact"
-                        ),
-                    ),
-                    ("scope_contract", request.contract_version),
-                ),
-            ),
         )
-        ir = projection.ir
-        serialized = ir.to_json_bytes()
-        gap_codes = {_gap_label(gap.code) for gap in ir.coverage.gaps}
-        if ir.coverage.status is not CoverageStatus.COMPLETE and not gap_codes:
-            gap_codes.add("coverage_incomplete_without_detailed_gap")
-        scope_receipt = SourceGraphArtifactScopeReceipt(
-            scope=request.scope,
-            coverage_status=ir.coverage.status,
-            gap_codes=tuple(sorted(gap_codes)),
-        )
+        (
+            serialized,
+            ir_fingerprint_sha256,
+            scope_receipt,
+            projection_receipt,
+        ) = project_semantic_frontend_session(session, request)
     except Exception as exc:
         return _failure_payload(
             PrepareStatus.BUILD_FAILED,
@@ -409,9 +471,9 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         "protocol_version": SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
         "status": PrepareStatus.READY.value,
         "ir_json_base64": base64.b64encode(serialized).decode("ascii"),
-        "ir_fingerprint_sha256": ir.fingerprint_sha256(),
+        "ir_fingerprint_sha256": ir_fingerprint_sha256,
         "scope_receipt": scope_receipt.to_dict(),
-        "projection_receipt": projection.receipt.to_dict(),
+        "projection_receipt": projection_receipt,
         "metrics": metrics.to_dict(),
         "fallback_used": False,
     }

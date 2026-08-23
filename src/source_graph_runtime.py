@@ -192,6 +192,11 @@ class WorkerResourceMetrics:
     rss_end_kib: int | None = None
     ir_bytes: int = 0
     cancel_to_exit_ms: float | None = None
+    frontend_launch_count: int | None = None
+    semantic_session_hit_count: int = 0
+    semantic_session_miss_count: int = 0
+    semantic_session_restart_count: int = 0
+    semantic_session_eviction_count: int = 0
 
     def __post_init__(self) -> None:
         numeric = (
@@ -202,6 +207,11 @@ class WorkerResourceMetrics:
             self.rss_end_kib,
             self.ir_bytes,
             self.cancel_to_exit_ms,
+            self.frontend_launch_count,
+            self.semantic_session_hit_count,
+            self.semantic_session_miss_count,
+            self.semantic_session_restart_count,
+            self.semantic_session_eviction_count,
         )
         if any(value is not None and value < 0 for value in numeric):
             raise ValueError("worker metrics must not be negative")
@@ -210,6 +220,10 @@ class WorkerResourceMetrics:
         result: dict[str, int | float] = {
             "wall_time_ms": _round_ms(self.wall_time_ms),
             "ir_bytes": self.ir_bytes,
+            "semantic_session_hit_count": self.semantic_session_hit_count,
+            "semantic_session_miss_count": self.semantic_session_miss_count,
+            "semantic_session_restart_count": self.semantic_session_restart_count,
+            "semantic_session_eviction_count": self.semantic_session_eviction_count,
         }
         for name in (
             "cpu_time_ms",
@@ -217,6 +231,7 @@ class WorkerResourceMetrics:
             "rss_peak_kib",
             "rss_end_kib",
             "cancel_to_exit_ms",
+            "frontend_launch_count",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -241,6 +256,19 @@ class WorkerResourceMetrics:
             rss_end_kib=optional_int("rss_end_kib"),
             ir_bytes=int(value.get("ir_bytes", 0)),
             cancel_to_exit_ms=optional_float("cancel_to_exit_ms"),
+            frontend_launch_count=optional_int("frontend_launch_count"),
+            semantic_session_hit_count=int(
+                value.get("semantic_session_hit_count", 0)
+            ),
+            semantic_session_miss_count=int(
+                value.get("semantic_session_miss_count", 0)
+            ),
+            semantic_session_restart_count=int(
+                value.get("semantic_session_restart_count", 0)
+            ),
+            semantic_session_eviction_count=int(
+                value.get("semantic_session_eviction_count", 0)
+            ),
         )
 
 
@@ -700,6 +728,10 @@ class SourceGraphPrepareMetrics:
     cache_eviction_count: int = 0
     cache_oversize_bypass_count: int = 0
     frontend_launch_count: int = 0
+    semantic_session_hit_count: int = 0
+    semantic_session_miss_count: int = 0
+    semantic_session_restart_count: int = 0
+    semantic_session_eviction_count: int = 0
     disk_lookup_wall_ms: float = 0.0
     disk_read_wall_ms: float = 0.0
     disk_validate_wall_ms: float = 0.0
@@ -736,6 +768,10 @@ class SourceGraphPrepareMetrics:
             "cache_eviction_count": self.cache_eviction_count,
             "cache_oversize_bypass_count": self.cache_oversize_bypass_count,
             "frontend_launch_count": self.frontend_launch_count,
+            "semantic_session_hit_count": self.semantic_session_hit_count,
+            "semantic_session_miss_count": self.semantic_session_miss_count,
+            "semantic_session_restart_count": self.semantic_session_restart_count,
+            "semantic_session_eviction_count": self.semantic_session_eviction_count,
             "disk_lookup_wall_ms": _round_ms(self.disk_lookup_wall_ms),
             "disk_read_wall_ms": _round_ms(self.disk_read_wall_ms),
             "disk_validate_wall_ms": _round_ms(self.disk_validate_wall_ms),
@@ -950,6 +986,10 @@ class SourceGraphRuntime:
         self._stats: dict[str, int | float] = {
             "actual_build_count": 0,
             "frontend_launch_count": 0,
+            "semantic_session_hit_count": 0,
+            "semantic_session_miss_count": 0,
+            "semantic_session_restart_count": 0,
+            "semantic_session_eviction_count": 0,
             "cache_hit_count": 0,
             "cache_miss_count": 0,
             "cache_bypass_count": 0,
@@ -1208,7 +1248,6 @@ class SourceGraphRuntime:
             flight.actual_build_count = 1
             async with self._state_lock:
                 self._stats["actual_build_count"] += 1
-                self._stats["frontend_launch_count"] += 1
             build_started = time.perf_counter()
             try:
                 worker = await self._worker_runner.run(
@@ -1227,6 +1266,24 @@ class SourceGraphRuntime:
         finally:
             if admitted:
                 _PROCESS_COLD_BUILD_LOCK.release()
+
+        frontend_launch_count = worker.metrics.frontend_launch_count
+        if frontend_launch_count is None:
+            frontend_launch_count = flight.actual_build_count
+        async with self._state_lock:
+            self._stats["frontend_launch_count"] += frontend_launch_count
+            self._stats["semantic_session_hit_count"] += (
+                worker.metrics.semantic_session_hit_count
+            )
+            self._stats["semantic_session_miss_count"] += (
+                worker.metrics.semantic_session_miss_count
+            )
+            self._stats["semantic_session_restart_count"] += (
+                worker.metrics.semantic_session_restart_count
+            )
+            self._stats["semantic_session_eviction_count"] += (
+                worker.metrics.semantic_session_eviction_count
+            )
 
         if worker.status is not PrepareStatus.READY:
             async with self._state_lock:
@@ -1952,7 +2009,29 @@ class SourceGraphRuntime:
                 flight.actual_build_count if role is FlightDisposition.BUILDER else 0
             ),
             frontend_launch_count=(
-                flight.actual_build_count if role is FlightDisposition.BUILDER else 0
+                outcome.metrics.frontend_launch_count
+                if role is FlightDisposition.BUILDER
+                else 0
+            ),
+            semantic_session_hit_count=(
+                outcome.metrics.semantic_session_hit_count
+                if role is FlightDisposition.BUILDER
+                else 0
+            ),
+            semantic_session_miss_count=(
+                outcome.metrics.semantic_session_miss_count
+                if role is FlightDisposition.BUILDER
+                else 0
+            ),
+            semantic_session_restart_count=(
+                outcome.metrics.semantic_session_restart_count
+                if role is FlightDisposition.BUILDER
+                else 0
+            ),
+            semantic_session_eviction_count=(
+                outcome.metrics.semantic_session_eviction_count
+                if role is FlightDisposition.BUILDER
+                else 0
             ),
             coalesced_waiter_count=flight.coalesced_waiter_count,
         )
@@ -1997,7 +2076,19 @@ class SourceGraphRuntime:
             rss_end_kib=worker_metrics.rss_end_kib,
             ir_bytes=ir_bytes or worker_metrics.ir_bytes,
             cache_bytes=cache_bytes,
-            frontend_launch_count=flight.actual_build_count,
+            frontend_launch_count=(
+                worker_metrics.frontend_launch_count
+                if worker_metrics.frontend_launch_count is not None
+                else flight.actual_build_count
+            ),
+            semantic_session_hit_count=worker_metrics.semantic_session_hit_count,
+            semantic_session_miss_count=worker_metrics.semantic_session_miss_count,
+            semantic_session_restart_count=(
+                worker_metrics.semantic_session_restart_count
+            ),
+            semantic_session_eviction_count=(
+                worker_metrics.semantic_session_eviction_count
+            ),
             disk_lookup_wall_ms=flight.disk_lookup_wall_ms,
             disk_read_wall_ms=flight.disk_read_wall_ms,
             disk_validate_wall_ms=flight.disk_validate_wall_ms,

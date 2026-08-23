@@ -769,6 +769,10 @@ class SourceGraphMetricsReceipt(SchemaModel):
     cache_eviction_count: int = 0
     cache_oversize_bypass_count: int = 0
     frontend_launch_count: int = 0
+    semantic_session_hit_count: int = 0
+    semantic_session_miss_count: int = 0
+    semantic_session_restart_count: int = 0
+    semantic_session_eviction_count: int = 0
     disk_lookup_wall_ms: float = 0.0
     disk_read_wall_ms: float = 0.0
     disk_validate_wall_ms: float = 0.0
@@ -790,6 +794,10 @@ class SourceGraphMetricsReceipt(SchemaModel):
         data = handler(self)
         for field in (
             "frontend_launch_count",
+            "semantic_session_hit_count",
+            "semantic_session_miss_count",
+            "semantic_session_restart_count",
+            "semantic_session_eviction_count",
             "disk_lookup_wall_ms",
             "disk_read_wall_ms",
             "disk_validate_wall_ms",
