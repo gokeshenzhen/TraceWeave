@@ -2911,6 +2911,9 @@ async def _route_public_connectivity(
                             "max_depth", 10 if operation == "driver" else 1
                         ),
                         frontend_version=config.frontend_version,
+                        runtime_plusarg_allowlist=(
+                            config.runtime_plusarg_allowlist
+                        ),
                         recursive=(
                             bool(args.get("recursive", False))
                             if operation == "driver"
@@ -3136,6 +3139,9 @@ async def _route_public_connectivity(
                                             10 if operation == "driver" else 1,
                                         ),
                                         frontend_version=config.frontend_version,
+                                        runtime_plusarg_allowlist=(
+                                            config.runtime_plusarg_allowlist
+                                        ),
                                         recursive=(
                                             bool(args.get("recursive", False))
                                             if operation == "driver"
@@ -3649,6 +3655,9 @@ async def _route_public_signal_path(
                             top_hint=args.get("top_hint"),
                             expand_assigns=args.get("expand_assigns", False),
                             frontend_version=config.frontend_version,
+                            runtime_plusarg_allowlist=(
+                                config.runtime_plusarg_allowlist
+                            ),
                         )
                     )
                 except OperationCancelled as exc:
@@ -4309,6 +4318,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                                 top_hint=top_hint,
                                 max_hops=max_depth,
                                 frontend_version=config.frontend_version,
+                                runtime_plusarg_allowlist=(
+                                    config.runtime_plusarg_allowlist
+                                ),
                             )
                         )
                     except OperationCancelled as exc:

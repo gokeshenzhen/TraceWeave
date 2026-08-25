@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 import threading
 
@@ -88,6 +89,7 @@ def _plan(
     *,
     signal_path: str = "tb.dut.q[3:0]",
     hierarchy: dict | None = None,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ):
     return build_source_graph_plan(
         compile_log=str(tmp_path / "compile.log"),
@@ -101,6 +103,7 @@ def _plan(
         top_hint="tb",
         max_hops=8,
         frontend_version="11.0.0",
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
 
 
@@ -1679,6 +1682,131 @@ def test_common_vcs_runtime_options_preserve_exact_source_manifest(tmp_path):
     assert {"dpi_runtime", "uvm_dynamic_connectivity"} <= set(
         plan.receipt.objective_exclusions
     )
+
+
+def test_extended_systemverilog_suffixes_reconcile_and_reach_manifest(tmp_path):
+    paths = {
+        "top": tmp_path / "rtl" / "top.sv",
+        "header": tmp_path / "rtl" / "defs.svh",
+        "include": tmp_path / "rtl" / "checks.svi",
+        "assertions": tmp_path / "rtl" / "assertions.sva",
+        "library": tmp_path / "rtl" / "checker_library.svl",
+        "protected": tmp_path / "rtl" / "protected_model.svp",
+    }
+    _write(paths["top"], "module tb; logic q; endmodule\n")
+    _write(paths["header"], "`define WIDTH 8\n")
+    _write(paths["include"], "package checks_pkg; endpackage\n")
+    _write(paths["assertions"], "module assertions; endmodule\n")
+    _write(paths["library"], "package checker_library; endpackage\n")
+    _write(paths["protected"], "`protected\nopaque payload\n")
+    ordered = (
+        paths["top"],
+        paths["header"],
+        paths["include"],
+        paths["assertions"],
+        paths["library"],
+        paths["protected"],
+        paths["include"],
+    )
+    _write(
+        tmp_path / "design.f",
+        "\n".join(str(path.relative_to(tmp_path)) for path in ordered) + "\n",
+    )
+    private_plusarg = "+TW_PRIVATE+MODE"
+    compile_result = _compile_result(
+        tmp_path,
+        command=(
+            f"vcs -f design.f -diag reports {private_plusarg} -top tb"
+        ),
+        sources=ordered,
+    )
+    compile_result["simulator"] = "vcs"
+    compile_result["compile_evidence"] = {
+        "schema_version": 1,
+        "unit_order_source": "simulator_log",
+        "ordered_compilation_units": [
+            {"path": str(path.resolve()), "role": "project"} for path in ordered
+        ],
+        "ordered_includes": [],
+        "filelists": [],
+    }
+
+    plan = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy={"component_tree": {"tb": {}}},
+        runtime_plusarg_allowlist=frozenset({private_plusarg}),
+    )
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == tuple(str(path.resolve()) for path in ordered)
+    assert manifest.complete is True
+    assert plan.receipt.cross_request_reusable is True
+    assert "compile_log_source_reconciliation_gap" not in plan.receipt.gap_codes
+    assert "compile_option_unclassified" not in plan.receipt.gap_codes
+    assert "protected_region" in plan.receipt.objective_exclusions
+    assert "-diag" not in manifest.ordered_options
+    assert "reports" not in manifest.ordered_options
+    assert private_plusarg not in manifest.ordered_options
+    assert private_plusarg not in json.dumps(plan.receipt.to_dict())
+
+
+def test_runtime_plusarg_allowlist_is_exact_and_manifest_cache_scoped(tmp_path):
+    source = tmp_path / "top.sv"
+    _write(source, "module tb; logic q; endmodule\n")
+    private_plusarg = "+TW_PRIVATE+MODE"
+    compile_result = _compile_result(
+        tmp_path,
+        command=f"xrun {private_plusarg} top.sv -top tb",
+        sources=(source,),
+    )
+
+    allowed = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy={"component_tree": {"tb": {}}},
+        runtime_plusarg_allowlist=frozenset({private_plusarg}),
+    )
+    disallowed = _plan(
+        tmp_path,
+        compile_result,
+        signal_path="tb.q",
+        hierarchy={"component_tree": {"tb": {}}},
+    )
+
+    assert allowed.request is not None
+    assert allowed.request.identity.compile_inputs.complete is True
+    assert allowed.receipt.cross_request_reusable is True
+    assert disallowed.request is not None
+    assert disallowed.request.identity.compile_inputs.options_complete is False
+    assert disallowed.receipt.cross_request_reusable is False
+    assert "compile_option_unclassified" in disallowed.receipt.gap_codes
+
+
+def test_unknown_option_and_arbitrary_filelist_suffix_remain_fail_closed(tmp_path):
+    source = tmp_path / "top.sv"
+    unrelated = tmp_path / "payload.design_data"
+    _write(source, "module tb; logic q; endmodule\n")
+    _write(unrelated, "not an HDL compilation unit\n")
+    _write(tmp_path / "design.f", "top.sv\npayload.design_data\n")
+    compile_result = _compile_result(
+        tmp_path,
+        command="vcs -f design.f -mystery-mode -top tb",
+        sources=(source,),
+    )
+
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(source.resolve()),)
+    assert str(unrelated.resolve()) not in manifest.ordered_inputs
+    assert manifest.options_complete is False
+    assert plan.receipt.cross_request_reusable is False
+    assert "compile_option_unclassified" in plan.receipt.gap_codes
 
 
 def test_dotted_symbol_suffix_is_deferred_to_exact_ir_resolution(tmp_path):

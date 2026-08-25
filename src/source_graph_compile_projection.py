@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .cancellation import check_cancelled
+from .hdl_suffixes import FRONTEND_HDL_SUFFIXES, VHDL_SOURCE_SUFFIXES
 from .source_graph_contract import (
     CompileInputManifest,
     CompileProjectionMode,
@@ -30,8 +31,8 @@ _MIN_FULL_INPUT_COUNT = 64
 _MIN_EXCLUDED_INPUT_COUNT = 32
 _MAX_PROJECTED_INPUT_COUNT = 512
 _MAX_PROJECTED_RATIO = 0.5
-_FRONTEND_HDL_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
-_VHDL_SUFFIXES = frozenset({".vhd", ".vhdl"})
+_FRONTEND_HDL_SUFFIXES = FRONTEND_HDL_SUFFIXES
+_VHDL_SUFFIXES = VHDL_SOURCE_SUFFIXES
 
 
 @dataclass(frozen=True)

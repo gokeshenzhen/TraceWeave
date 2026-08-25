@@ -25,6 +25,84 @@ def _compile_result_for(*names: str) -> dict:
 
 
 class TestStructuralScanner:
+    @pytest.mark.parametrize("suffix", [".svi", ".sva", ".svl"])
+    def test_extended_systemverilog_suffixes_are_text_scanned(
+        self, tmp_path, suffix
+    ):
+        rtl = tmp_path / f"checker{suffix}"
+        rtl.write_text(
+            "module checker(input logic [3:0] mode, output logic y);\n"
+            "  always_comb if (mode == 4'h2) y = 1'b1;\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        compile_result = {
+            "files": {"user": [{"path": str(rtl), "type": "module"}]}
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            categories=["magic_condition"],
+            compile_result=compile_result,
+        )
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["total_risks"] == 1
+
+    def test_protected_svp_is_not_misread_as_plain_structural_source(self, tmp_path):
+        protected = tmp_path / "encrypted.svp"
+        protected.write_text(
+            "module fake; always_comb if (mode == 4'h2) y = 1'b1; endmodule\n",
+            encoding="utf-8",
+        )
+        compile_result = {
+            "files": {"user": [{"path": str(protected), "type": "module"}]}
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+        )
+
+        assert result["coverage_status"] == "zero_coverage"
+        assert result["files_scanned"] == 0
+        assert result["total_risks"] == 0
+        assert any(
+            "protected SystemVerilog inputs" in warning
+            for warning in result["coverage_warnings"]
+        )
+
+    def test_protected_svp_degrades_mixed_text_scan_coverage(self, tmp_path):
+        rtl = tmp_path / "top.sv"
+        protected = tmp_path / "encrypted.svp"
+        rtl.write_text("module top; endmodule\n", encoding="utf-8")
+        protected.write_text("opaque ciphertext\n", encoding="utf-8")
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(rtl), "type": "module"},
+                    {"path": str(protected), "type": "module"},
+                ]
+            }
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+        )
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "degraded"
+        assert any(
+            "protected SystemVerilog inputs" in warning
+            for warning in result["coverage_warnings"]
+        )
+
     def test_compile_source_index_serves_both_structural_passes(self, tmp_path):
         rtl = tmp_path / "top.sv"
         rtl.write_text(

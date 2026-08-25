@@ -538,6 +538,47 @@ Top Level Modules:
         finally:
             tmp.cleanup()
 
+    def test_protected_svp_is_snapshotted_without_lexical_hierarchy_scan(
+        self, tmp_path
+    ):
+        top = tmp_path / "top.sv"
+        protected = tmp_path / "encrypted.svp"
+        _write(top, "module top; endmodule\n")
+        # Deliberately resembles valid source: suffix policy, not a plaintext
+        # marker, must keep protected payload out of regex hierarchy results.
+        _write(protected, "module counterfeit; endmodule\n")
+        log = tmp_path / "comp.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs {top} {protected} -top top\n"
+            f"Parsing design file '{top}'\n"
+            f"Parsing design file '{protected}'\n"
+            "Top Level Modules:\n"
+            "       top\n",
+        )
+
+        hierarchy = build_hierarchy(
+            parse_compile_log(str(log), "vcs"),
+            apply_source_overlay=False,
+        )
+
+        assert [scan["name"] for scan in hierarchy["_scan_results"]] == [
+            "top.sv"
+        ]
+        snapshot = hierarchy["_compile_session_snapshot"]
+        assert snapshot.file_count == 2
+        protected_record = next(
+            record
+            for record in snapshot.records
+            if record.path == str(protected.resolve())
+        )
+        assert protected_record.objective_exclusions == ("protected_region",)
+        metrics = hierarchy["build_metrics"]
+        assert metrics["source_file_count_scanned"] == 1
+        assert metrics["source_file_count_protected_opaque"] == 1
+        assert metrics["content_snapshot_file_count"] == 2
+
     def test_component_tree_marks_roles_and_filters_pseudo_nodes(self):
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)

@@ -11,6 +11,11 @@ from copy import deepcopy
 from pathlib import Path
 
 from .filelist_tokenizer import tokenize_filelist
+from .hdl_suffixes import (
+    FRONTEND_HDL_SUFFIXES,
+    HDL_SOURCE_SUFFIXES,
+    VHDL_SOURCE_SUFFIXES,
+)
 
 
 EDA_LIB_PREFIXES = [
@@ -44,7 +49,7 @@ _XCE_SHELL_COMMAND_RE = re.compile(
 )
 _TOP_RE = re.compile(r"(?:^|\s)-top\s+(\w+)")
 _SNAPSHOT_RE = re.compile(r"(?:^|\s)-snapshot\s+(\w+)")
-_SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl")
+_SOURCE_SUFFIXES = tuple(sorted(HDL_SOURCE_SUFFIXES))
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _VCS_FILELIST_MAX_DEPTH = 16
 _VCS_FILELIST_MAX_TOKENS = 100_000
@@ -55,6 +60,7 @@ _VCS_FLAGS_WITH_VALUE = frozenset(
     {
         "-assert",
         "-cm_dir",
+        "-diag",
         "-l",
         "-Mdir",
         "-ntb_opts",
@@ -1172,8 +1178,8 @@ def _merge_phase_language(result: dict) -> str:
         for item in units
         if isinstance(item, dict) and item.get("path")
     }
-    has_vhdl = bool(suffixes & {".vhd", ".vhdl"})
-    has_verilog = bool(suffixes & {".v", ".sv", ".vh", ".svh"})
+    has_vhdl = bool(suffixes & VHDL_SOURCE_SUFFIXES)
+    has_verilog = bool(suffixes & FRONTEND_HDL_SUFFIXES)
     if has_vhdl and has_verilog:
         return "mixed"
     if has_vhdl:

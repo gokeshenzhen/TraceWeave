@@ -14,6 +14,7 @@ from .compile_session_snapshot import (
     CompileSessionSnapshotBuilder,
 )
 from .compile_source_index import CompileSourceIndex
+from .hdl_suffixes import is_protected_systemverilog_path
 from .operation_metrics import read_process_rss_kib
 from .sv_preprocessor import (
     PreprocessedSource,
@@ -1795,6 +1796,7 @@ def _scan_user_files(
     interface_bindings: dict[str, str] = {}
     requested_count = len(file_entries)
     scanned_count = 0
+    protected_count = 0
     missing_count = 0
     source_bytes_scanned = 0
     largest_source_bytes = 0
@@ -1821,6 +1823,19 @@ def _scan_user_files(
         except OSError:
             missing_count += 1
             content_snapshot_builder.mark_issue("compile_source_unavailable")
+            continue
+        if is_protected_systemverilog_path(path):
+            # Preserve the protected unit's exact content identity without
+            # feeding encrypted payload to the lexical hierarchy scanner.
+            # The semantic frontend still receives the unit later and the
+            # snapshot marks protected_region for honest coverage.
+            try:
+                content_snapshot_builder.read_text(path)
+            except OSError:
+                missing_count += 1
+                content_snapshot_builder.mark_issue("compile_source_unavailable")
+                continue
+            protected_count += 1
             continue
         try:
             preprocessed = preprocessor.preprocess(path)
@@ -1882,6 +1897,7 @@ def _scan_user_files(
         {
             "source_file_count_requested": requested_count,
             "source_file_count_scanned": scanned_count,
+            "source_file_count_protected_opaque": protected_count,
             "source_file_count_missing": missing_count,
             "source_bytes_scanned": source_bytes_scanned,
             "source_text_bytes_retained": 0,

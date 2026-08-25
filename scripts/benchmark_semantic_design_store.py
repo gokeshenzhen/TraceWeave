@@ -48,6 +48,7 @@ from scripts.benchmark_hierarchy_provider_soc import (  # noqa: E402
     _sha256_json,
     _without_npi_hierarchy_overlay,
 )
+from src.hdl_suffixes import FRONTEND_HDL_SUFFIXES  # noqa: E402
 
 
 BENCHMARK_NAME = "semantic_design_store_ab_v1"
@@ -425,7 +426,7 @@ def _run_persistent_parent(
         exact_frontend_inputs = {
             os.fspath(Path(path).resolve(strict=False))
             for path in exact_inputs
-            if Path(path).suffix.lower() in {".v", ".sv", ".vh", ".svh"}
+            if Path(path).suffix.lower() in FRONTEND_HDL_SUFFIXES
         }
         exact_diagnostics = []
         for diagnostic in diagnostics:

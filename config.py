@@ -446,6 +446,7 @@ class SourceGraphExecutionConfig:
     semantic_session_max_rss_bytes: int = 768 * 1024 * 1024
     semantic_session_max_instances: int = 64
     semantic_session_max_inputs: int = 256
+    runtime_plusarg_allowlist: frozenset[str] = frozenset()
 
     @property
     def valid(self) -> bool:
@@ -499,6 +500,9 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
     ).strip()
     raw_semantic_session_inputs = os.environ.get(
         "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", "256"
+    ).strip()
+    raw_runtime_plusargs = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON", ""
     ).strip()
 
     try:
@@ -591,6 +595,32 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         frontier_max_rounds = 4
         error_code = "source_graph_frontier_config_invalid"
 
+    runtime_plusarg_allowlist: frozenset[str] = frozenset()
+    if raw_runtime_plusargs:
+        try:
+            decoded_runtime_plusargs = json.loads(raw_runtime_plusargs)
+        except (json.JSONDecodeError, TypeError):
+            decoded_runtime_plusargs = None
+        valid_runtime_plusargs = (
+            isinstance(decoded_runtime_plusargs, list)
+            and len(decoded_runtime_plusargs) <= 256
+            and all(
+                isinstance(item, str)
+                and 1 < len(item) <= 4096
+                and item.startswith("+")
+                and "\x00" not in item
+                and not any(character.isspace() for character in item)
+                and not item.lower().startswith(
+                    ("+define+", "+incdir+", "+libext+")
+                )
+                for item in decoded_runtime_plusargs
+            )
+        )
+        if valid_runtime_plusargs:
+            runtime_plusarg_allowlist = frozenset(decoded_runtime_plusargs)
+        else:
+            error_code = "source_graph_runtime_plusarg_config_invalid"
+
     return SourceGraphExecutionConfig(
         enabled=enabled,
         python_bin=python_bin or sys.executable,
@@ -608,6 +638,7 @@ def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
         semantic_session_max_rss_bytes=semantic_session_max_rss_bytes,
         semantic_session_max_instances=semantic_session_max_instances,
         semantic_session_max_inputs=semantic_session_max_inputs,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
 
 

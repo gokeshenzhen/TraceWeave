@@ -715,8 +715,13 @@ python3.11 scripts/benchmark_compile_source_index.py \
 ```
 
 当所选 top 和查询区域能由 Verilog/SystemVerilog frontend elaboration 时，包含
-Verilog、SystemVerilog 与 VHDL 的工程仍可进入 Source Graph。VHDL 文件继续参与内容身份，
-但不传给 Slang；coverage 会报告 `opaque_vhdl_boundary`（以及未投影文件计数）。因此 frontend
+Verilog、SystemVerilog 与 VHDL 的工程仍可进入 Source Graph。
+编译命令与 filelist 共用同一套大小写不敏感的后缀策略：`.v`、`.vh`、`.sv`、`.svh`、
+`.svi`、`.sva`、`.svl` 作为普通 frontend 文本输入；`.svp` 仍按精确顺序进入内容指纹、
+worker 请求和 KDB build 输入，但按 protected unit 处理——层次/结构正则扫描不会读取其载荷，
+Source Graph coverage 会报告 `protected_region`，不会声称能够看见加密 IP 内部。
+VHDL 文件继续参与内容身份但不传给 Slang；coverage 会报告 `opaque_vhdl_boundary`
+（以及未投影文件计数）。因此 frontend
 diagnostic 或不透明 VHDL 区域会禁止穷尽式负结论，但不会丢弃已证明的正向 driver/load/path
 事实：有正向事实的查询仍以 Source Graph 返回并携带 `positive_fact_confidence`，只有没有
 可证明事实的 inconclusive 查询才继续降级到 Legacy Static。本阶段不投影 VHDL 内部；若
@@ -741,6 +746,18 @@ export TRACEWEAVE_SOURCE_GRAPH_PYTHON=/path/to/pyslang-11.0.0/bin/python
 export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
+
+若站点编译 wrapper 会加入一个已经确认只影响 runtime 的私有 plusarg，可用精确本地白名单
+将它从 frontend replay 中排除：
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON='["+PROJECT+RUNTIME_MODE"]'
+```
+
+该值必须是最多 256 项的 JSON list，每项按大小写精确匹配；不支持 prefix 或 wildcard。
+未知选项仍然 fail-closed，具有语义影响的 `+define+`、`+incdir+`、`+libext+` 不能加入白名单。
+私有 token 文本不会出现在公开回执中，但该策略会参与 cache identity。修改后需重启或重新连接
+MCP server。
 
 `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` 是有限的 worker 秒级时限（范围
 `0.001..86400`），默认值仍为 120。每次实际进入 prepare 的回执都会以

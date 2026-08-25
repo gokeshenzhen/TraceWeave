@@ -201,9 +201,14 @@ Verification
   `handoff` tier. Missing/changed identity evidence, unsafe scope, capacity,
   failure, timeout, and cancellation cannot publish it. The flight itself is
   removed on success, failure, timeout, or final-waiter cancellation. One waiter
-  cannot cancel a worker still needed by another. The finite validated timeout remains configurable through
-  `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` and is echoed numerically as
-  `source_graph.effective_timeout_sec`.
+  cannot cancel a worker still needed by another. The finite validated timeout
+  remains configurable through `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` and is echoed
+  numerically as `source_graph.effective_timeout_sec`.
+  A site may classify an exact, case-sensitive private runtime-only plusarg via
+  `TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON`. The bounded JSON allowlist
+  is part of runtime and manifest-cache identity; it cannot classify semantic
+  `+define+`, `+incdir+`, or `+libext+` options, never uses prefix/wildcard
+  matching, and never exposes configured token text in a public receipt.
   Adapter and graph queries use the
   lock-free cancellable worker path, so neither build nor query holds a waveform
   lock or blocks light event-loop calls. Cancellation terminates the request
@@ -316,7 +321,14 @@ Verification
   hierarchy boundary. Parse results are merged with separate phase commands;
   the handle/snapshot identity covers every log while one-log callers retain
   their old identity. Mixed-language manifests retain VHDL files in that
-  identity but send only Verilog/SystemVerilog inputs to Slang. The worker marks
+  identity but send only Verilog/SystemVerilog inputs to Slang. Compile-log
+  parsing, manifest translation, bounded projection, workers, KDB input
+  extraction, and benchmark oracles share `hdl_suffixes.py`: `.v`, `.vh`,
+  `.sv`, `.svh`, `.svi`, `.sva`, and `.svl` are text-capable frontend inputs;
+  `.svp` remains an ordered, content-fingerprinted frontend/KDB input but is
+  never fed to lexical hierarchy or structural-risk scans. Its suffix alone
+  contributes `protected_region`, so encrypted internals cannot support an
+  exhaustive source-level claim. The worker marks
   VHDL as `opaque_vhdl_boundary`: blocking frontend diagnostics or missing VHDL
   projection make negative claims inconclusive, but an IR-proved positive fact
   still returns from Source Graph and does not enter Static.

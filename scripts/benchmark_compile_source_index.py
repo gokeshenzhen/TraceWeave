@@ -30,9 +30,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.hdl_suffixes import FRONTEND_HDL_SUFFIXES  # noqa: E402
 
 BENCHMARK_NAME = "compile_source_index_parallel_v1"
-_SOURCE_SUFFIXES = (".sv", ".svh", ".v", ".vh")
+_SOURCE_SUFFIXES = tuple(sorted(FRONTEND_HDL_SUFFIXES))
 _HIERARCHY_ORACLE_FIELDS = (
     "project",
     "files",

@@ -24,6 +24,10 @@ from .compile_session_snapshot import (
     FileContentSnapshot,
     SourceContentRead,
 )
+from .hdl_suffixes import (
+    FRONTEND_HDL_SUFFIXES,
+    is_protected_systemverilog_path,
+)
 from .sv_preprocessor import (
     SystemVerilogPreprocessor,
     merge_resolved_include_evidence,
@@ -34,8 +38,7 @@ from .tb_hierarchy_builder import (
 )
 
 
-_HDL_UNIT_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
-_SOURCE_UNIT_SUFFIXES = {".v", ".sv"}
+_HDL_UNIT_SUFFIXES = FRONTEND_HDL_SUFFIXES
 _DEFINITION_RE = re.compile(
     r"\b(module|interface|package)\s+(?:(?:automatic|static)\s+)?"
     r"([A-Za-z_][A-Za-z0-9_$]*)",
@@ -468,6 +471,15 @@ def build_bounded_connectivity_context(
                     continue
                 if inventory_bytes + size > int(config.max_inventory_bytes):
                     raise _BootstrapBlocked("bootstrap_inventory_byte_limit_exceeded", "definition_inventory")
+                if is_protected_systemverilog_path(path):
+                    # Never inventory encrypted bytes as lexical HDL.  The
+                    # protected unit remains in the compilation identity, and
+                    # any target that depends on definitions inside it blocks
+                    # instead of accepting a guessed hierarchy edge.
+                    objective_exclusions.add("protected_region")
+                    inventory_files += 1
+                    inventory_bytes += size
+                    continue
                 found, macros = _inventory_file(
                     path,
                     deadline=deadline,
@@ -569,6 +581,12 @@ def build_bounded_connectivity_context(
         def select_and_scan(path: str, *, source_unit: bool) -> dict:
             canonical = os.path.realpath(path)
             select_source(canonical, source_unit=source_unit)
+            if is_protected_systemverilog_path(canonical):
+                objective_exclusions.add("protected_region")
+                raise _BootstrapBlocked(
+                    "bootstrap_protected_source_opaque",
+                    "source_closure",
+                )
             cached = scan_cache.get(canonical)
             if cached is not None:
                 return cached

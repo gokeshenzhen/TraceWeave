@@ -24,6 +24,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.connectivity_ir import CoverageStatus, SourceLocation  # noqa: E402
+from src.hdl_suffixes import (  # noqa: E402
+    FRONTEND_HDL_SUFFIXES,
+    VHDL_SOURCE_SUFFIXES,
+)
 from src.slang_connectivity_projector import (  # noqa: E402
     ProjectionDiagnostic,
     ProjectionExclusion,
@@ -46,8 +50,8 @@ from src.source_graph_runtime import (  # noqa: E402
 )
 
 
-_FRONTEND_HDL_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
-_VHDL_SUFFIXES = frozenset({".vhd", ".vhdl"})
+_FRONTEND_HDL_SUFFIXES = FRONTEND_HDL_SUFFIXES
+_VHDL_SUFFIXES = VHDL_SOURCE_SUFFIXES
 
 
 def _read_rss_kib() -> tuple[int | None, int | None]:

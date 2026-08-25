@@ -830,6 +830,12 @@ python3.11 scripts/benchmark_compile_source_index.py \
 
 Mixed Verilog/SystemVerilog/VHDL builds remain eligible when the selected top
 and queried region can be elaborated by the Verilog/SystemVerilog frontend.
+Compile-command and filelist inputs use one shared, case-insensitive suffix
+policy: `.v`, `.vh`, `.sv`, `.svh`, `.svi`, `.sva`, and `.svl` are regular
+frontend text inputs. `.svp` is retained in exact order, content fingerprints,
+worker requests, and KDB build inputs, but is treated as protected: lexical
+hierarchy/risk scans do not inspect its payload and Source Graph coverage
+reports `protected_region` rather than claiming visibility into encrypted IP.
 VHDL files stay in the content identity but are not passed to Slang; coverage
 reports `opaque_vhdl_boundary` (and the unprojected-file count). A frontend
 diagnostic or opaque VHDL region therefore prevents exhaustive negative claims,
@@ -859,6 +865,21 @@ export TRACEWEAVE_SOURCE_GRAPH_PYTHON=/path/to/pyslang-11.0.0/bin/python
 export TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION=11.0.0
 export TRACEWEAVE_SOURCE_GRAPH_TIMEOUT=120
 ```
+
+If a site compile wrapper adds a private plusarg that is known to be strictly
+runtime-only, it can be excluded from frontend replay with an exact local
+allowlist:
+
+```bash
+export TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON='["+PROJECT+RUNTIME_MODE"]'
+```
+
+The value must be a JSON list of at most 256 exact, case-sensitive tokens.
+Prefix and wildcard matching are never used; unknown options remain
+fail-closed, and semantic `+define+`, `+incdir+`, and `+libext+` tokens cannot
+be allowlisted. The private token text is not exposed in public receipts, but
+the policy participates in cache identity. Restart or reconnect the MCP server
+after changing it.
 
 `TRACEWEAVE_SOURCE_GRAPH_TIMEOUT` is a finite worker deadline in seconds
 (`0.001..86400`); the default remains 120. Every attempted preparation reports

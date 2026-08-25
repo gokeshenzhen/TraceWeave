@@ -15,6 +15,10 @@ from typing import Callable, Iterable
 
 from .cancellation import check_cancelled
 from .compile_log_parser import parse_compile_log
+from .hdl_suffixes import (
+    is_protected_systemverilog_path,
+    is_text_scan_hdl_path,
+)
 
 
 SUPPORTED_SCAN_SCOPE = "scope1"
@@ -130,6 +134,11 @@ def scan_structural_risks(
     check_cancelled()
     file_entries = compile_result.get("files", {}).get("user", [])
     eligible_entries = [entry for entry in file_entries if _should_scan_file(entry["path"])]
+    protected_entries = [
+        entry
+        for entry in file_entries
+        if is_protected_systemverilog_path(entry["path"])
+    ]
     module_port_dirs = (
         _build_module_port_directions(
             eligible_entries,
@@ -171,7 +180,7 @@ def scan_structural_risks(
             "ZERO COVERAGE: no supported Verilog/SystemVerilog source files were available to scan; "
             "total_risks=0 is not evidence of a clean design."
         )
-    elif skipped_files or parse_warnings:
+    elif skipped_files or parse_warnings or protected_entries:
         coverage_status = "degraded"
         if skipped_files:
             coverage_warnings.append(
@@ -187,6 +196,11 @@ def scan_structural_risks(
         coverage_warnings.append(
             f"Compile-log parsing reported {warning_count} {suffix}; "
             "structural source coverage may be incomplete."
+        )
+    if protected_entries:
+        coverage_warnings.append(
+            "COVERAGE GAP: protected SystemVerilog inputs were not "
+            "text-scanned; structural findings exclude encrypted regions."
         )
 
     ordered_risks = sorted(risks, key=lambda item: (item.file, item.line, item.type, item.detail))
@@ -219,7 +233,7 @@ def _normalize_categories(categories: list[str] | None) -> list[str]:
 
 
 def _should_scan_file(path: str) -> bool:
-    return path.lower().endswith((".sv", ".svh", ".v", ".vh"))
+    return is_text_scan_hdl_path(path)
 
 
 def _scan_file(

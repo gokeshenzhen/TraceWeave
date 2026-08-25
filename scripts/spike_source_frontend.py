@@ -38,6 +38,8 @@ from typing import Any, Callable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.hdl_suffixes import FRONTEND_HDL_SUFFIXES  # noqa: E402
+
 SCHEMA_VERSION = "1.0"
 SPIKE_NAME = "source_graph_frontend_feasibility"
 FRONTEND_NAME = "Slang/pyslang"
@@ -75,7 +77,7 @@ DEFAULT_REAL_COMPILE_LOG = Path(
 
 WORKLOAD_NAMES = ("deep_x_npi", "hand_fixture", "real_uvm")
 REAL_SIMULATORS = ("auto", "vcs", "xcelium")
-HDL_SUFFIXES = {".v", ".vh", ".sv", ".svh", ".sva", ".svp"}
+HDL_SUFFIXES = FRONTEND_HDL_SUFFIXES
 _DESIGN_FILE_RE = re.compile(r"Parsing design file\s+['\"]([^'\"]+)['\"]")
 _ENV_REF_RE = re.compile(
     r"\$(?:\((?P<paren>[A-Za-z_][A-Za-z0-9_]*)\)|"

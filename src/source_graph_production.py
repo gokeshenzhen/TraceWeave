@@ -83,6 +83,7 @@ class SourceGraphRuntimeSession:
             config.semantic_session_max_rss_bytes,
             config.semantic_session_max_instances,
             config.semantic_session_max_inputs,
+            tuple(sorted(config.runtime_plusarg_allowlist)),
         )
         with self._lock:
             if self._runtime is None:

@@ -18,6 +18,7 @@ import re
 from typing import Callable
 
 from .cancellation import check_cancelled
+from .hdl_suffixes import is_protected_systemverilog_path
 
 
 SOURCE_CONTENT_MARKERS: tuple[tuple[re.Pattern[bytes], str], ...] = (
@@ -160,6 +161,13 @@ def read_source_content(path: str) -> SourceContentRead:
     stable = after or before
     snapshot = None
     if stable is not None:
+        objective_exclusions = set(_marker_codes(data))
+        # A protected compilation unit may not retain a plaintext pragma in
+        # every vendor encoding.  The explicit suffix is still sufficient to
+        # prevent exhaustive source-level claims while keeping the exact raw
+        # bytes in the compile-session identity.
+        if is_protected_systemverilog_path(canonical):
+            objective_exclusions.add("protected_region")
         snapshot = FileContentSnapshot(
             path=canonical,
             device=stable[0],
@@ -168,7 +176,7 @@ def read_source_content(path: str) -> SourceContentRead:
             mtime_ns=stable[3],
             ctime_ns=stable[4],
             sha256=hashlib.sha256(data).hexdigest(),
-            objective_exclusions=_marker_codes(data),
+            objective_exclusions=tuple(sorted(objective_exclusions)),
         )
     return SourceContentRead(
         text=_decode_source(data),

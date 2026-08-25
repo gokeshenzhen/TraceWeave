@@ -48,6 +48,7 @@ from config import (
     KDB_CACHE_SUBDIR,
     TRACEWEAVE_CACHE_ROOT,
 )
+from .hdl_suffixes import is_frontend_hdl_path
 
 
 _KDB_ELAB_DIRNAME = "kdb.elab++"
@@ -317,7 +318,7 @@ def _extract_build_inputs(
 
 
 def _is_source_file(path: str) -> bool:
-    return path.lower().endswith((".v", ".sv", ".vh", ".svh"))
+    return is_frontend_hdl_path(path)
 
 
 def _pick_top(compile_result: dict[str, Any]) -> str | None:

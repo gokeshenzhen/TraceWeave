@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.compile_log_parser import detect_simulator  # noqa: E402
+from src.hdl_suffixes import TEXT_SCAN_HDL_SUFFIXES  # noqa: E402
 from src.operation_metrics import read_process_rss_kib  # noqa: E402
 from src.structural_scanner import (  # noqa: E402
     ALL_CATEGORIES,
@@ -35,7 +36,7 @@ from src.structural_scanner import (  # noqa: E402
 
 
 BENCHMARK_NAME = "structural_scan_real_v1"
-_SOURCE_SUFFIXES = (".sv", ".svh", ".v", ".vh")
+_SOURCE_SUFFIXES = tuple(sorted(TEXT_SCAN_HDL_SUFFIXES))
 
 
 def _git_head() -> str | None:

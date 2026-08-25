@@ -318,6 +318,37 @@ def test_worker_keeps_vhdl_in_identity_but_not_slang_arguments():
     assert "tests/fixtures/source_graph_frontend/hand_connectivity.sv" in args
 
 
+def test_worker_forwards_every_supported_systemverilog_suffix_in_order():
+    request = _request(explicit_artifact=False)
+    frontend_inputs = (
+        "rtl/top.sv",
+        "rtl/defs.svh",
+        "rtl/include.svi",
+        "rtl/assertions.sva",
+        "rtl/checker_library.svl",
+        "rtl/protected_model.svp",
+    )
+    request = replace(
+        request,
+        identity=replace(
+            request.identity,
+            compile_inputs=replace(
+                request.identity.compile_inputs,
+                ordered_inputs=(
+                    frontend_inputs[0],
+                    "rtl/opaque.vhd",
+                    *frontend_inputs[1:],
+                ),
+            ),
+        ),
+    )
+
+    args = _frontend_args(request)
+
+    assert args[2 : 2 + len(frontend_inputs)] == list(frontend_inputs)
+    assert "rtl/opaque.vhd" not in args
+
+
 class ImmediateWorker:
     def __init__(self, results=None):
         self.count = 0

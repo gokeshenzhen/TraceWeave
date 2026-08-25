@@ -123,6 +123,22 @@ def test_extract_inputs_minimal(tmp_path):
     assert len(out["hash"]) == 16  # truncated sha256
 
 
+def test_extract_inputs_keeps_extended_systemverilog_and_protected_sources(tmp_path):
+    suffixes = (".sv", ".svh", ".svi", ".sva", ".svl", ".svp")
+    sources = tuple(tmp_path / f"unit{suffix}" for suffix in suffixes)
+    for source in sources:
+        source.write_text("module unit; endmodule\n", encoding="utf-8")
+    compile_result = {
+        "top_modules": ["unit"],
+        "files": {"user": [{"path": str(path)} for path in sources]},
+        "compile_command": "vcs -sverilog " + " ".join(map(str, sources)),
+    }
+
+    inputs = _extract_build_inputs(compile_result, top_hint=None)
+
+    assert inputs["files"] == [str(path) for path in sources]
+
+
 def test_extract_inputs_dedups_files(tmp_path):
     rtl = tmp_path / "a.sv"
     rtl.write_text("")

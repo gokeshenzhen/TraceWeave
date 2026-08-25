@@ -780,6 +780,50 @@ file: {root / "tb" / "top_tb.sv"}
         ]
         assert result["parse_warnings"] == []
 
+    def test_vcs_filelist_recovers_extended_systemverilog_suffixes(self, tmp_path):
+        suffixes = (".sv", ".svh", ".svi", ".sva", ".svl", ".svp")
+        sources = tuple(tmp_path / "rtl" / f"unit{suffix}" for suffix in suffixes)
+        for source in sources:
+            _write(source, "module unit; endmodule\n")
+        _write(
+            tmp_path / "design.f",
+            "\n".join(str(path.relative_to(tmp_path)) for path in sources) + "\n",
+        )
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            "Command: vcs -f design.f -top unit\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(path.resolve()) for path in sources
+        ]
+        assert result["parse_warnings"] == []
+
+    def test_vcs_diag_consumes_exactly_one_non_source_operand(self, tmp_path):
+        diagnostic_target = tmp_path / "reports.sv"
+        source = tmp_path / "top.sv"
+        _write(diagnostic_target, "module must_not_be_compiled; endmodule\n")
+        _write(source, "module top; endmodule\n")
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs -diag {diagnostic_target} {source} -top top\n"
+            "Top Level Modules:\n"
+            "       top\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(source.resolve())
+        ]
+
     def test_vcs_filelist_preserves_embedded_double_slash_path(
         self, monkeypatch, tmp_path
     ):

@@ -39,6 +39,12 @@ from .hierarchy_provider import (
     HierarchyAncestorResolution,
     lexical_hierarchy_provider,
 )
+from .hdl_suffixes import (
+    FRONTEND_HDL_SUFFIXES,
+    HDL_SOURCE_SUFFIXES,
+    PROTECTED_SYSTEMVERILOG_SOURCE_SUFFIXES,
+    VHDL_SOURCE_SUFFIXES,
+)
 from .slang_connectivity_projector import SLANG_FRONTEND_NAME
 from .source_graph_compile_projection import (
     COMPILE_PROJECTION_GAP,
@@ -66,7 +72,7 @@ from .source_graph_contract import (
 )
 
 
-SOURCE_GRAPH_ADAPTER_VERSION = "3.11"
+SOURCE_GRAPH_ADAPTER_VERSION = "3.12"
 DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT = 128
 _INITIAL_ADJACENT_MAX_NEW_INSTANCES = 32
 _INITIAL_ADJACENT_MAX_ADDED_INPUTS = 24
@@ -74,9 +80,9 @@ _INITIAL_ADJACENT_INPUT_RATIO_NUMERATOR = 5
 _INITIAL_ADJACENT_INPUT_RATIO_DENOMINATOR = 4
 DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INSTANCES = 64
 DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INPUTS = 256
-_FRONTEND_HDL_SUFFIXES = {".v", ".sv", ".vh", ".svh"}
-_OPAQUE_HDL_SUFFIXES = {".vhd", ".vhdl"}
-_HDL_SUFFIXES = _FRONTEND_HDL_SUFFIXES | _OPAQUE_HDL_SUFFIXES
+_FRONTEND_HDL_SUFFIXES = FRONTEND_HDL_SUFFIXES
+_OPAQUE_HDL_SUFFIXES = VHDL_SOURCE_SUFFIXES
+_HDL_SUFFIXES = HDL_SOURCE_SUFFIXES
 _NATIVE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".o", ".a", ".so"}
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
 _FIXED_LABEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -109,6 +115,7 @@ _IGNORED_VALUE_OPTIONS = {
     "-covfile",
     "-covtest",
     "-covworkdir",
+    "-diag",
     "-errormax",
     "-input",
     "-l",
@@ -453,6 +460,7 @@ class SourceGraphBuildPlan:
 class _TranslationState:
     simulator: str
     command_dir: Path
+    runtime_plusarg_allowlist: frozenset[str] = frozenset()
     inputs: list[str] = field(default_factory=list)
     options: list[str] = field(default_factory=list)
     command_tops: list[str] = field(default_factory=list)
@@ -551,6 +559,8 @@ def _append_source(
     if path is None:
         return
     state.inputs.append(str(path))
+    if path.suffix.lower() in PROTECTED_SYSTEMVERILOG_SOURCE_SUFFIXES:
+        state.objective_exclusions.add("protected_region")
 
 
 def _append_path_option(
@@ -758,6 +768,12 @@ def _translate_tokens(
             continue
         if token.startswith("+libext+"):
             state.options.append(token)
+            index += 1
+            continue
+        if token in state.runtime_plusarg_allowlist:
+            # The operator explicitly certifies these exact, case-sensitive
+            # tokens as runtime-only. Unknown plus options remain fail-closed;
+            # no prefix, wildcard, or shape matching is performed here.
             index += 1
             continue
         if token in {"-sverilog", "-sv"}:
@@ -1693,6 +1709,7 @@ def _manifest_snapshot_key(
     compile_log: str,
     compile_result: Mapping[str, Any],
     content_snapshot: CompileSessionSnapshot | None = None,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> str | None:
     log_path = Path(compile_log).resolve(strict=False)
     log_record = _stat_record(log_path)
@@ -1735,6 +1752,9 @@ def _manifest_snapshot_key(
         "filelist_tree": compile_result.get("filelist_tree") or {},
         "compile_evidence": compile_result.get("compile_evidence") or {},
         "parse_warnings": list(compile_result.get("parse_warnings") or ()),
+        "runtime_plusarg_policy_sha256": hashlib.sha256(
+            _canonical_json(sorted(runtime_plusarg_allowlist))
+        ).hexdigest(),
         "compile_content_snapshot": (
             content_snapshot.content_fingerprint_sha256
             if content_snapshot_current
@@ -1780,6 +1800,7 @@ def _build_compile_manifest(
     *,
     content_snapshot: CompileSessionSnapshot | None = None,
     digest_metrics: dict[str, int] | None = None,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> tuple[CompileInputManifest, tuple[str, ...], tuple[str, ...]]:
     if digest_metrics is None:
         digest_metrics = _empty_digest_metrics()
@@ -1811,7 +1832,11 @@ def _build_compile_manifest(
         simulator = "unknown"
     raw_cwd = compile_result.get("compile_cwd") or Path(compile_log).parent
     command_dir = Path(str(raw_cwd)).resolve(strict=False)
-    state = _TranslationState(simulator=simulator, command_dir=command_dir)
+    state = _TranslationState(
+        simulator=simulator,
+        command_dir=command_dir,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
+    )
     state.options.extend(_BASE_OPTIONS.get(simulator, ()))
     snapshot_incomplete = content_snapshot is not None and not content_snapshot.complete
     if snapshot_incomplete:
@@ -2101,6 +2126,11 @@ def _build_compile_manifest(
     if any(Path(path).suffix.lower() in _OPAQUE_HDL_SUFFIXES for path in state.inputs):
         state.gap_codes.add("opaque_vhdl_boundary")
         state.objective_exclusions.add("opaque_vhdl_boundary")
+    if any(
+        Path(path).suffix.lower() in PROTECTED_SYSTEMVERILOG_SOURCE_SUFFIXES
+        for path in state.inputs
+    ):
+        state.objective_exclusions.add("protected_region")
 
     material_warnings = warning_items
     if state.inferred_env_names and not env_unresolved and project_sequence_matches:
@@ -2195,6 +2225,7 @@ def _compile_manifest(
     compile_result: Mapping[str, Any],
     *,
     content_snapshot: CompileSessionSnapshot | None = None,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> tuple[
     CompileInputManifest,
     tuple[str, ...],
@@ -2218,6 +2249,7 @@ def _compile_manifest(
         compile_log,
         compile_result,
         content_snapshot,
+        runtime_plusarg_allowlist,
     )
     cached = _lookup_manifest_cache(snapshot_key)
     if cached is not None:
@@ -2237,6 +2269,7 @@ def _compile_manifest(
             compile_log,
             compile_result,
             content_snapshot,
+            runtime_plusarg_allowlist,
         )
         cached = _lookup_manifest_cache(snapshot_key)
         if cached is not None:
@@ -2254,11 +2287,13 @@ def _compile_manifest(
             compile_result,
             content_snapshot=content_snapshot,
             digest_metrics=digest_metrics,
+            runtime_plusarg_allowlist=runtime_plusarg_allowlist,
         )
         after_key = _manifest_snapshot_key(
             compile_log,
             compile_result,
             content_snapshot,
+            runtime_plusarg_allowlist,
         )
         if snapshot_key is not None and after_key != snapshot_key:
             manifest = CompileInputManifest(
@@ -2422,6 +2457,7 @@ def build_source_graph_plan(
     recursive: bool = False,
     include_expr: bool = True,
     kind_filter: Sequence[str] = (),
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> SourceGraphBuildPlan:
     """Build one bounded driver/load request or a fixed structured blocker."""
 
@@ -2455,6 +2491,7 @@ def build_source_graph_plan(
             hierarchy_result,
             normalized_hierarchy_snapshot,
         ),
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
     if "compile_session_snapshot_changed" in gaps:
         return _blocked_plan(
@@ -2817,6 +2854,7 @@ def build_source_graph_frontier_plan(
     kind_filter: Sequence[str] = (),
     max_instances: int = DEFAULT_SOURCE_GRAPH_FRONTIER_INSTANCE_LIMIT,
     semantic_context: SourceGraphSemanticContext | None = None,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> SourceGraphBuildPlan:
     """Expand one single-endpoint artifact at proved dynamic frontiers.
 
@@ -2847,6 +2885,7 @@ def build_source_graph_frontier_plan(
         recursive=recursive,
         include_expr=include_expr,
         kind_filter=kind_filter,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
     if base.status is AdapterStatus.BLOCKED:
         return base
@@ -3048,6 +3087,7 @@ def build_source_graph_initial_plan(
         DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INSTANCES
     ),
     semantic_context_max_inputs: int = DEFAULT_SOURCE_GRAPH_SEMANTIC_CONTEXT_MAX_INPUTS,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> SourceGraphBuildPlan:
     """Select a bounded first artifact for an interactive driver/load query.
 
@@ -3071,6 +3111,7 @@ def build_source_graph_initial_plan(
         recursive=recursive,
         include_expr=include_expr,
         kind_filter=kind_filter,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
     if base.status is AdapterStatus.BLOCKED:
         return base
@@ -3264,6 +3305,7 @@ def build_source_graph_trace_plan(
     top_hint: str | None,
     max_hops: int,
     frontend_version: str,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> SourceGraphBuildPlan:
     """Build one artifact for an exact, hierarchy-proved X-trace target union.
 
@@ -3306,6 +3348,7 @@ def build_source_graph_trace_plan(
         max_hops=max_hops,
         frontend_version=frontend_version,
         recursive=True,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
     if base.status is AdapterStatus.BLOCKED:
         return replace(
@@ -3506,6 +3549,7 @@ def build_source_graph_path_plan(
     top_hint: str | None,
     expand_assigns: bool,
     frontend_version: str,
+    runtime_plusarg_allowlist: frozenset[str] = frozenset(),
 ) -> SourceGraphBuildPlan:
     """Build one bounded, dual-endpoint structural path request.
 
@@ -3564,6 +3608,7 @@ def build_source_graph_path_plan(
             hierarchy_result,
             normalized_hierarchy_snapshot,
         ),
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
     )
     if "compile_session_snapshot_changed" in gaps:
         return _blocked_plan(

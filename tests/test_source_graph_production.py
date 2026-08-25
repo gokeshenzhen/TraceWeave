@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -68,6 +69,10 @@ def test_runtime_session_rejects_invalid_disabled_or_mutated_configuration():
     session.get(_config())
     with pytest.raises(RuntimeError, match="changed after initialization"):
         session.get(_config(python_bin="/different/python"))
+    with pytest.raises(RuntimeError, match="changed after initialization"):
+        session.get(
+            _config(runtime_plusarg_allowlist=frozenset({"+PROJECT+MODE"}))
+        )
 
 
 def test_opt_in_disk_store_is_lazy_and_part_of_session_identity(tmp_path):
@@ -116,6 +121,9 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
     monkeypatch.delenv(
         "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", raising=False
     )
+    monkeypatch.delenv(
+        "TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON", raising=False
+    )
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "1")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", "/tmp/pinned/bin/python")
     monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0")
@@ -138,6 +146,35 @@ def test_source_graph_execution_config_is_namespaced_and_validated(monkeypatch):
         monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", invalid)
         assert get_source_graph_execution_config().error_code == (
             "source_graph_execution_config_invalid"
+        )
+
+
+def test_runtime_plusarg_allowlist_is_exact_namespaced_and_validated(monkeypatch):
+    tokens = ["+PROJECT+MODE", "+UVM_TESTNAME=smoke"]
+    monkeypatch.setenv(
+        "TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON",
+        json.dumps(tokens),
+    )
+
+    config = get_source_graph_execution_config()
+
+    assert config.valid
+    assert config.runtime_plusarg_allowlist == frozenset(tokens)
+
+    for invalid in (
+        json.dumps({"token": "+PROJECT+MODE"}),
+        json.dumps(["PROJECT+MODE"]),
+        json.dumps(["+define+WIDTH=8"]),
+        json.dumps(["+DEFINE+WIDTH=8"]),
+        json.dumps(["+PROJECT MODE"]),
+        "not-json",
+    ):
+        monkeypatch.setenv(
+            "TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON",
+            invalid,
+        )
+        assert get_source_graph_execution_config().error_code == (
+            "source_graph_runtime_plusarg_config_invalid"
         )
 
 
