@@ -277,6 +277,65 @@ def test_incomplete_compile_options_invalidate_conditional_hierarchy(tmp_path):
     ]
 
 
+def test_embedded_double_slash_filelist_path_preserves_conditional_hierarchy(
+    monkeypatch, tmp_path
+):
+    library_root = tmp_path / "library"
+    nested = library_root / "lists" / "options.f"
+    outer = tmp_path / "design.f"
+    source = tmp_path / "top.sv"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("+define+SELECT_DUT\n")
+    outer.write_text(
+        "-f $TW_HIERARCHY_DOUBLE_SLASH_ROOT//lists/options.f\n"
+    )
+    source.write_text(
+        "module top;\n"
+        "`ifdef SELECT_DUT\n"
+        "  dut u_selected();\n"
+        "`else\n"
+        "  stub u_selected();\n"
+        "`endif\n"
+        "endmodule\n"
+    )
+    monkeypatch.setenv(
+        "TW_HIERARCHY_DOUBLE_SLASH_ROOT",
+        str(library_root),
+    )
+    command = f"vcs -f {outer} -top top"
+    compile_result = {
+        "compile_cwd": str(tmp_path),
+        "compile_command": command,
+        "compile_evidence": {
+            "ordered_compilation_units": [
+                {"path": str(source), "source_log_index": 0}
+            ],
+            "source_phases": [
+                {
+                    "source_log_index": 0,
+                    "compile_command": command,
+                    "compile_cwd": str(tmp_path),
+                }
+            ],
+        },
+    }
+
+    preprocessed = SystemVerilogPreprocessor(compile_result).preprocess(
+        str(source)
+    )
+    scan = tb_hierarchy_builder.scan_preprocessed_sv(
+        str(source),
+        preprocessed,
+    )
+
+    assert preprocessed.complete is True
+    assert preprocessed.issues == ()
+    assert preprocessed.hierarchy_evidence_status == "complete"
+    assert "dut u_selected" in preprocessed.trusted_hierarchy_text
+    assert "stub u_selected" not in preprocessed.trusted_hierarchy_text
+    assert scan["module_instance_map"]["top"][0]["module_name"] == "dut"
+
+
 def test_preprocessor_issues_map_to_distinct_hierarchy_gap_codes():
     expected = {
         "compile_options_incomplete": "hierarchy_compile_options_incomplete",

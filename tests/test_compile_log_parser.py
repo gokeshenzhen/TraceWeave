@@ -780,6 +780,42 @@ file: {root / "tb" / "top_tb.sv"}
         ]
         assert result["parse_warnings"] == []
 
+    def test_vcs_filelist_preserves_embedded_double_slash_path(
+        self, monkeypatch, tmp_path
+    ):
+        library_root = tmp_path / "library"
+        nested = library_root / "lists" / "nested.f"
+        source = library_root / "rtl" / "top.sv"
+        outer = tmp_path / "design.f"
+        _write(source, "module top; endmodule\n")
+        _write(nested, f"{source}\n")
+        _write(
+            outer,
+            "-f $TW_FILELIST_DOUBLE_SLASH_ROOT//lists/nested.f\n",
+        )
+        monkeypatch.setenv(
+            "TW_FILELIST_DOUBLE_SLASH_ROOT",
+            str(library_root),
+        )
+        log = tmp_path / "compile.log"
+        _write(
+            log,
+            "Chronologic VCS simulator\n"
+            f"Command: vcs -f {outer} -top top\n"
+            "The design hasn't changed and need not be recompiled.\n",
+        )
+
+        result = parse_compile_log(str(log), "vcs")
+
+        assert [item["path"] for item in result["files"]["user"]] == [
+            str(source.resolve())
+        ]
+        assert result["filelist_tree"] == {
+            "design.f": ["nested.f"],
+            "nested.f": [],
+        }
+        assert result["parse_warnings"] == []
+
     def test_vcs_incremental_filelist_cycle_is_bounded(self, tmp_path):
         rtl = tmp_path / "rtl" / "dut.sv"
         _write(rtl, "module dut; endmodule\n")

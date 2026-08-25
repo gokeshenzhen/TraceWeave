@@ -986,6 +986,44 @@ def test_vcs_uniquely_infers_nested_filelist_environment_and_validates_order(
     assert "compile_log_parse_warning" not in plan.receipt.gap_codes
 
 
+def test_vcs_manifest_preserves_embedded_double_slash_paths(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "project"
+    outer = project / "lists" / "outer.f"
+    nested = project / "lists" / "nested.f"
+    source = project / "rtl" / "top.sv"
+    _write(source, "module tb; endmodule\n")
+    _write(
+        outer,
+        "-f $TW_MANIFEST_DOUBLE_SLASH_ROOT//lists/nested.f\n",
+    )
+    _write(
+        nested,
+        "$TW_MANIFEST_DOUBLE_SLASH_ROOT//rtl/top.sv\n",
+    )
+    monkeypatch.setenv("TW_MANIFEST_DOUBLE_SLASH_ROOT", str(project))
+    log = tmp_path / "compile.log"
+    _write(
+        log,
+        "Chronologic VCS simulator\n"
+        f"Command: vcs -f {outer} -top tb\n"
+        f"Parsing design file '{source}'\n",
+    )
+
+    compile_result = parse_compile_log(str(log), "vcs")
+    plan = _plan(tmp_path, compile_result, signal_path="tb.q")
+
+    assert plan.request is not None
+    manifest = plan.request.identity.compile_inputs
+    assert manifest.ordered_inputs == (str(source.resolve()),)
+    assert manifest.complete is True
+    assert manifest.fingerprint is not None
+    assert plan.receipt.cross_request_reusable is True
+    assert "filelist_unavailable" not in plan.receipt.gap_codes
+    assert "compile_log_source_reconciliation_gap" not in plan.receipt.gap_codes
+
+
 def test_vcs_infers_environment_root_from_top_level_filelist_path(
     monkeypatch, tmp_path
 ):
