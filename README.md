@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>MCP server for simulation-failure debug through log parsing and waveform analysis</strong>
+  <strong>Workflow-oriented MCP server for evidence-driven RTL simulation debugging</strong>
 </p>
 
 <p align="center">
@@ -19,52 +19,54 @@
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
 </p>
 
-<h2 align="center">Waveform + log root-cause MCP — stop debugging by hand, use TraceWeave.</h2>
+<h2 align="center">Connect compile evidence, logs, waveforms, source, and elaborated connectivity in one verifiable debug workflow.</h2>
 
-What sets TraceWeave apart: when a Verdi license is available it engages KDB/NPI for accurate cross-hierarchy driver / load / connectivity analysis; without a license it still locates issues via the built-in Static backend, log parsing, and VCD/FSDB waveform reads. It supports driver backtracking, load/fanout lookup, value-at-time queries, cycle-aligned sampling, arbitrary signal-window queries, lightweight X/Z tracing, structural risk scanning, and failure-group diffing — and emits structured next-step debug recommendations for MCP clients.
+TraceWeave turns local VCS/Xcelium simulation artifacts into a guided investigation. It discovers the active compile, simulation, and VCD/FSDB waveform inputs; builds the compiled hierarchy and an independent structural-risk view; normalizes failures; runs a whole-design runtime handshake sweep; and recommends the next evidence-gathering call.
+
+For driver, load, structural-path, and X/Z-source questions, TraceWeave uses a provenance-preserving backend ladder: trusted Verdi NPI when a usable KDB is available, a bounded on-demand Slang Source Graph when NPI is unavailable or inconclusive, and Legacy Static as the final fallback. Results expose backend provenance, coverage, truncation, and fallback status rather than turning partial evidence into certainty.
 
 <p align="center">
   <img src="assets/onepage-en.png" alt="TraceWeave workflow overview" width="900">
 </p>
 
-<p align="center"><sub>Workflow illustration; timing and speedup depend on project scale and waveform availability.</sub></p>
+<p align="center"><sub>Default workflow and connectivity-routing overview; every conclusion remains bounded by reported coverage.</sub></p>
 
 TraceWeave is a workflow-oriented debug server rather than a loose collection of parsers. It combines:
 
-- An MCP server with session state, workflow gates, and recommended tool ordering
-- Path discovery for compile logs, simulation logs, and waveform artifacts
-- Compile-log-driven hierarchy building and source-aware driver correlation
-- VCD and FSDB waveform backends with signal search
-- Failure-centric recommendations, structural risk scanning, and X/Z propagation tracing
-- Structured output schemas designed for MCP clients
+- A guided MCP workflow from artifact discovery through parallel hierarchy/structural analysis, failure parsing, runtime protocol scanning, and focused verification
+- Compile-evidence hierarchy construction, handle-based browsing, and source-aware structural analysis
+- VCD/FSDB point, transition, window, cycle, divergence, and period queries
+- Whole-design handshake scanning, targeted protocol checks, temporal predicates, and transaction reconstruction
+- Driver/load/path/X tracing through `trusted NPI -> bounded Source Graph -> Legacy Static`
+- Structured next actions plus coverage, provenance, truncation, and resource receipts designed for MCP clients
 
 [Architecture](docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing) · [WeChat](#wechat)
 
 ## When TraceWeave helps most
 
-TraceWeave is not a universal speedup, and it is honest about that. In blind
-benchmarking against a capable LLM that only reads source and text logs:
+TraceWeave adds the most value when debugging requires correlating evidence
+across artifacts rather than reading one obvious RTL line. It is especially
+useful for:
 
-- **When the RTL is readable and the bug is a source-visible logic error**, an
-  LLM reading the source is already fast. Here TraceWeave mainly *confirms* the
-  hypothesis from the waveform — and `scan_structural_risks` can statically pin
-  the offending line. Useful, but not where the moat is.
-- **TraceWeave becomes the decisive — sometimes the only — way to localize when
-  the answer is not in readable source:**
-  - the design is **encrypted/protected IP** or too large to eyeball, so the bug
-    cannot be read or grep'd; or
-  - the failure is a **timing / handshake / X / connectivity bug with no static
-    signature** and an **opaque symptom** (timeout, stall, divergence — no value
-    pattern in the log).
+- **Opaque runtime symptoms** such as timeouts, hangs, scoreboard mismatches,
+  X/Z propagation, first divergence, or a broken cadence. Waveform queries and
+  protocol/transaction analysis locate the first bad time, interface, or beat.
+- **Cross-hierarchy cause-and-effect questions** where a suspicious signal must
+  be followed through ports, interfaces, assignments, drivers, and consumers.
+- **Large or interface-rich designs** where whole-design handshake sweeps and
+  bounded hierarchy/Source Graph scopes reduce an otherwise open-ended search.
+- **Falsifiable hypothesis checks** that need a concrete witness or
+  counterexample from `verify_window`, divergence, period, handshake, or
+  reconstructed-transaction evidence.
+- **License-constrained environments** where Source Graph provides semantic
+  connectivity without NPI, while a usable KDB can still enable deeper local or
+  LSF-hosted Verdi NPI analysis.
 
-  In those cases the clock-sampled waveform facts — cycle-aligned sampling,
-  `inspect_handshake`, `suggest_protocol_bundles`, `sweep_handshakes`,
-  `reconstruct_transactions`, `verify_window`, `diff_first_divergence`,
-  `period`, `trace_x_source`, structural scanning — localize the failing stage
-  and time directly, where
-  reading source or grepping cannot reach. Reading the source is a strong
-  baseline; TraceWeave earns its keep on **opaque symptoms and unreadable or
-  large designs.**
+For a small readable block with an obvious source-local logic error, direct
+source and log inspection may be faster. TraceWeave also cannot reveal behavior
+absent from every available source, log, waveform, and KDB artifact; with
+protected IP it can follow only the evidence exposed at visible boundaries, in
+the waveform, or in the elaborated database.
 
 ## Architecture
 

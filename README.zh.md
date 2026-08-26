@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>面向仿真失败调试的 MCP 服务器,基于日志解析与波形分析</strong>
+  <strong>面向证据链与工作流的 RTL 仿真调试 MCP 服务器</strong>
 </p>
 
 <p align="center">
@@ -19,45 +19,48 @@
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
 </p>
 
-<h2 align="center">波形日志根因分析 MCP,不想再调试,就用 TraceWeave。</h2>
+<h2 align="center">把编译证据、仿真日志、波形、源码与展开后的连线关系串成一条可验证的调试工作流。</h2>
 
-TraceWeave 的特色:有 Verdi license 时启用 KDB/NPI 获得更精确的跨层级 driver/load/connectivity 分析;没有 license 时也可用内置 Static 后端、日志解析、VCD/FSDB 波形读取继续定位问题;支持 driver 回溯、load/fanout 查找、指定时刻取值、指定周期数采样、任意信号窗口查询、轻量化 X/Z trace、结构风险扫描、失败分组对比,并给 MCP 客户端输出结构化的下一步调试建议。
+TraceWeave 将本地 VCS/Xcelium 仿真产物组织成一条有引导的调查路径：自动发现本次运行实际使用的编译日志、仿真日志和 VCD/FSDB 波形；构建已编译设计的层次结构和独立的结构风险视图；归一化失败事件；执行全设计运行期握手扫描；并推荐下一步可直接调用的证据采集动作。
+
+面对 driver、load、结构路径和 X/Z 源头问题，TraceWeave 按保留证据来源的后端阶梯执行：有可用 KDB 时优先使用可信 Verdi NPI；NPI 不可用或结论不充分时使用按需、有界的 Slang Source Graph；最后才回退 Legacy Static。结果显式报告 backend provenance、coverage、truncation 和 fallback 状态，不把局部证据包装成确定结论。
 
 <p align="center">
   <img src="assets/onepage.png" alt="TraceWeave 工作流概览" width="900">
 </p>
 
-<p align="center"><sub>工作流示意图;实际时序与加速比取决于工程规模与波形可用性。</sub></p>
+<p align="center"><sub>默认工作流与 connectivity 路由示意图；所有结论都受输出中 coverage 范围的约束。</sub></p>
 
-TraceWeave 是一个面向工作流的调试服务器,而不是一组零散的解析器。它包含:
+TraceWeave 是一个面向工作流的调试服务器，而不是一组零散的解析器。它包含：
 
-- 带会话状态、工作流约束和推荐调用顺序的 MCP 服务器
-- 编译日志、仿真日志、波形产物的路径自动发现
-- 基于编译日志的层次结构构建,以及源码感知的驱动关联
-- VCD 与 FSDB 波形后端,支持信号搜索
-- 以失败为中心的下一步建议、结构风险扫描、X/Z 传播追踪
-- 为 MCP 客户端设计的结构化输出 schema
+- 从产物发现、并行层次/结构分析、失败解析、运行期协议扫描到聚焦验证的 MCP 引导工作流
+- 基于编译证据的层次构建、handle 式按需浏览和源码感知的结构分析
+- VCD/FSDB 指定时刻、跳变、时间窗、周期、首次分叉和节拍查询
+- 全设计握手扫描、定向协议检查、时序谓词验证和事务重建
+- 通过 `trusted NPI -> bounded Source Graph -> Legacy Static` 完成 driver/load/path/X 追踪
+- 面向 MCP 客户端的结构化下一步动作，以及 coverage、provenance、truncation 和资源回执
 
 [架构](docs/architecture.md) · [安装](#安装) · [客户端配置](#客户端配置) · [标准 MCP 工作流](#标准-mcp-工作流) · [工具速查](#工具速查) · [测试](#测试) · [微信](#微信)
 
 ## TraceWeave 在什么场景最有用
 
-TraceWeave 并非万能加速器,这一点我们如实说明。在与"只读源码和文本日志的强 LLM"
-做盲测对比时:
+TraceWeave 的最大价值，是把分散在多个仿真产物中的证据关联起来，而不是只读取一行
+显而易见的 RTL。它尤其适合：
 
-- **当 RTL 可读、且 bug 是源码层面可见的逻辑错误时**,LLM 直接读源码就已经很快。
-  此时 TraceWeave 主要是用波形*佐证*假设,`scan_structural_risks` 还能静态点到出错
-  行——有用,但这不是它的护城河。
-- **当答案不在可读源码里时,TraceWeave 才成为决定性、甚至唯一的定位手段:**
-  - 设计是**加密/保护 IP**,或规模大到无法肉眼通读,bug 既读不到也 grep 不出;或
-  - 故障是**时序 / 握手 / X / 连线类、没有静态特征**的 bug,且**症状不透明**
-    (超时、卡死、分叉——日志里没有任何数值规律)。
+- **不透明的运行期症状**，例如超时、卡死、scoreboard mismatch、X/Z 传播、首次分叉
+  或节拍异常。波形查询和协议/事务分析可以定位第一个异常时刻、接口或 beat。
+- **跨层级因果追踪**，需要沿 port、interface、assignment、driver 和 consumer 追查
+  一个可疑信号的来源与影响范围。
+- **大型或多接口设计**，通过全设计握手扫描以及有界的 hierarchy/Source Graph scope，
+  把原本开放式的搜索收敛到可检查的范围。
+- **可证伪的假设验证**，需要从 `verify_window`、首次分叉、period、handshake 或事务重建
+  中取得具体 witness 或 counterexample。
+- **受 license 或执行环境限制的场景**，无 NPI 时仍可用 Source Graph 获得语义连线证据；
+  有可用 KDB 时则可进一步使用本地或 LSF 执行的 Verdi NPI。
 
-  这些情况下,时钟采样的波形事实——周期对齐采样、`inspect_handshake`、
-  `suggest_protocol_bundles`、`sweep_handshakes`、`reconstruct_transactions`、
-  `verify_window`、`diff_first_divergence`、`period`、`trace_x_source`、结构扫描——能直接定位到出问题
-  的那一级和那一刻,而读源码或 grep 根本够不着。读源码是个很强的基线;TraceWeave
-  的价值在于 **不透明症状,以及不可读或超大的设计。**
+对于小型可读 block 中明显的源码局部逻辑错误，直接阅读源码和日志可能更快。
+TraceWeave 也无法揭示所有可用源码、日志、波形和 KDB 都没有暴露的行为；面对
+protected IP，它只能沿可见边界、波形或 elaborated database 已暴露的证据继续追踪。
 
 ## 架构
 
