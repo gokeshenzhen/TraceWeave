@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import collections
 from dataclasses import dataclass
 import importlib.metadata
 import json
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shlex
 import stat
 import sys
 import tempfile
@@ -212,6 +214,114 @@ class SemanticFrontendSession:
     frontend_version: str
 
 
+def _configure_driver(driver_module: Any, frontend_args: Sequence[str]) -> Any:
+    """Configure Slang without importing the repository-only spike harness."""
+
+    driver = driver_module.Driver()
+    driver.addStandardArgs()
+    options = driver_module.CommandLineOptions()
+    options.ignoreProgramName = True
+    options.expandEnvVars = True
+    options.supportsComments = True
+    command = shlex.join(list(frontend_args))
+    parsed = bool(driver.parseCommandLine(command, options))
+    processed = bool(driver.processOptions()) if parsed else False
+    errors = list(driver.sourceLoader.errors)
+    if not parsed or not processed or errors:
+        raise RuntimeError(
+            "frontend rejected translated options: "
+            + json.dumps(
+                {"parsed": parsed, "processed": processed, "errors": errors},
+                ensure_ascii=False,
+            )
+        )
+    return driver
+
+
+def _diagnostic_location(source_manager: Any, location: Any) -> dict[str, Any]:
+    try:
+        file_name = str(source_manager.getFileName(location))
+        line = int(source_manager.getLineNumber(location))
+        column = int(source_manager.getColumnNumber(location))
+    except Exception:
+        return {"file": None, "line": None, "column": None}
+    if file_name:
+        path = Path(file_name)
+        if not path.is_absolute():
+            candidate = (Path.cwd() / path).resolve()
+            if candidate.exists():
+                file_name = str(candidate)
+    return {"file": file_name or None, "line": line, "column": column}
+
+
+def _diagnostic_code_name(code: Any) -> str:
+    rendered = str(code)
+    if rendered.startswith("DiagCode(") and rendered.endswith(")"):
+        return rendered[len("DiagCode(") : -1]
+    return rendered
+
+
+def _diagnostics_payload(
+    driver: Any,
+    diagnostics: Sequence[Any],
+) -> dict[str, Any]:
+    """Return the bounded diagnostic receipt used by the production worker."""
+
+    engine = driver.diagEngine
+    source_manager = driver.sourceManager
+    by_severity: collections.Counter[str] = collections.Counter()
+    by_code: collections.Counter[str] = collections.Counter()
+    blocking_items: list[dict[str, Any]] = []
+    warning_items: list[dict[str, Any]] = []
+    suppressed_items: list[dict[str, Any]] = []
+    suppressed_unknown = 0
+    for diagnostic in diagnostics:
+        code = _diagnostic_code_name(diagnostic.code)
+        try:
+            severity = engine.getSeverity(
+                diagnostic.code, diagnostic.location
+            ).name
+        except Exception:
+            severity = "Unknown"
+        by_severity[severity] += 1
+        by_code[code] += 1
+        option = engine.getOptionName(diagnostic.code)
+        if option == "unknown-sys-name" and severity == "Ignored":
+            suppressed_unknown += 1
+        if severity in {"Error", "Fatal", "Warning"} or option == "unknown-sys-name":
+            item = {
+                "code": code,
+                "option": option or None,
+                "severity": severity,
+                "message": engine.formatMessage(diagnostic),
+                **_diagnostic_location(source_manager, diagnostic.location),
+            }
+            if severity in {"Error", "Fatal"}:
+                blocking_items.append(item)
+            elif severity == "Warning":
+                warning_items.append(item)
+            else:
+                suppressed_items.append(item)
+    blocking = by_severity["Error"] + by_severity["Fatal"]
+    candidate_count = len(blocking_items) + len(warning_items) + len(suppressed_items)
+    items = [*blocking_items, *warning_items, *suppressed_items][:100]
+    return {
+        "total": len(diagnostics),
+        "blocking_error_count": blocking,
+        "by_effective_severity": dict(sorted(by_severity.items())),
+        "by_code": dict(sorted(by_code.items())),
+        "items": items,
+        "items_truncated": len(items) < candidate_count,
+        "item_ordering": "Error/Fatal, then Warning, then suppressed unknown-system",
+        "explicitly_suppressed_unknown_system_count": suppressed_unknown,
+        "suppression_receipt": {
+            "option": "-Wno-unknown-sys-name",
+            "scope": "external simulator runtime hooks only",
+            "not_modeled": "DPI/system-task behavior",
+        },
+    }
+
+
 def create_semantic_frontend_session(
     request: SourceGraphArtifactBuildRequest,
     *,
@@ -219,14 +329,6 @@ def create_semantic_frontend_session(
     frontend_version: str,
 ) -> SemanticFrontendSession:
     """Parse and elaborate one bounded semantic context."""
-
-    # This helper contains the already-validated Phase 0B command-line
-    # boundary. Importing it here keeps both it and pyslang out of the parent
-    # runtime module.
-    from scripts.spike_source_frontend import (
-        _configure_driver,
-        _diagnostics_payload,
-    )
 
     driver = _configure_driver(driver_module, _frontend_args(request))
     if not driver.parseAllSources():

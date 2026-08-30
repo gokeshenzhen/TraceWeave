@@ -1,5 +1,7 @@
 # 🐙 TraceWeave
 
+<!-- mcp-name: io.github.gokeshenzhen/traceweave -->
+
 <p align="right">
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
@@ -14,6 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/gokeshenzhen/TraceWeave/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gokeshenzhen/TraceWeave/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://pypi.org/project/traceweave-mcp/"><img src="https://img.shields.io/pypi/v/traceweave-mcp?style=for-the-badge" alt="PyPI version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
@@ -125,6 +128,37 @@ TraceWeave/
 
 TraceWeave 需要 Python `3.11+`。
 
+### 标准 PyPI 安装
+
+安装基础 MCP runtime，并从任意目录启动 stdio server：
+
+```bash
+python -m pip install traceweave-mcp
+traceweave-mcp
+```
+
+基础包包含日志/VCD 分析与不需要商业 license 的 Python fallback。若要安装固定版本的
+开源 Source Graph frontend：
+
+```bash
+python -m pip install "traceweave-mcp[source-graph]"
+```
+
+`pyslang` 被有意设计成 optional dependency：未安装时 server 仍可启动，Source Graph
+会返回结构化 dependency blocker，然后回退到 Legacy Static。PyPI 制品不会包含任何
+Synopsys/Cadence binary、FSDB runtime、license 信息、VCS/Xcelium 或 Verdi NPI；这些
+能力仍依赖用户本地已有并获授权的 EDA 安装与环境。
+
+Official MCP Registry 分发名称为
+[`io.github.gokeshenzhen/traceweave`](https://registry.modelcontextprotocol.io/)；发布后可在
+官网搜索框输入完整名称或 `traceweave`。
+
+### 仓库本地 EDA 安装
+
+若需要完整本地 EDA 工作流，特别是仓库内构建的 FSDB wrapper 和 repo-local Verdi
+runtime 链接，请 clone 本仓库并继续使用下面的既有安装方式。这仍是仿真主机上的
+推荐方案。
+
 推荐安装方式会包含 Source Graph 使用的固定版本 `pyslang` frontend，并把全部
 Python package 放进仓库本地 `.venv`：
 
@@ -177,8 +211,8 @@ bash scripts/verify_fsdb.sh
 
 任何支持 stdio 传输的 MCP 客户端都能连接本服务器。最小配置:
 
-- command:运行 `scripts/setup_source_graph.sh` 后使用 `<TRACEWEAVE_HOME>/.venv/bin/python`（若另行管理不含 Source Graph 的最小环境，仍可使用 `python3.11`）
-- args:`["<TRACEWEAVE_HOME>/server.py"]`
+- PyPI 安装：command 为 `traceweave-mcp`，args 为 `[]`
+- 仓库本地安装：运行 `scripts/setup_source_graph.sh` 后，command 使用 `<TRACEWEAVE_HOME>/.venv/bin/python`（若另行管理不含 Source Graph 的最小环境，仍可使用 `python3.11`），args 为 `["<TRACEWEAVE_HOME>/server.py"]`
 - env:如果需要 FSDB,提供仓库本地 `third_party/verdi_runtime/linux64` 或者 `VERDI_HOME`
 
 如果客户端支持 server instructions,可以直接遵循内置工作流;否则参考下方手动工作流。

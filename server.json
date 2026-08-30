@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.gokeshenzhen/traceweave",
+  "title": "TraceWeave",
+  "description": "Evidence-driven RTL simulation debugging for VCS/Xcelium logs, VCD/FSDB waveforms, and source",
+  "version": "2.0.1",
+  "websiteUrl": "https://github.com/gokeshenzhen/TraceWeave",
+  "repository": {
+    "url": "https://github.com/gokeshenzhen/TraceWeave",
+    "source": "github",
+    "id": "1168662293"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "traceweave-mcp",
+      "version": "2.0.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

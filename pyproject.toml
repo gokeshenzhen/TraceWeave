@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traceweave-mcp"
+version = "2.0.1"
+description = "Evidence-driven MCP server for local RTL simulation debugging"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "gokeshenzhen" },
+]
+keywords = [
+  "mcp",
+  "rtl",
+  "simulation",
+  "verification",
+  "vcd",
+  "fsdb",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Debuggers",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "anyio>=4.5,<5",
+  "mcp==1.27.0",
+  "pydantic>=2.7,<3",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+source-graph = [
+  "pyslang==11.0.0",
+]
+test = [
+  "pytest>=8,<10",
+]
+
+[project.scripts]
+traceweave-mcp = "traceweave_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/gokeshenzhen/TraceWeave"
+Documentation = "https://github.com/gokeshenzhen/TraceWeave#readme"
+Issues = "https://github.com/gokeshenzhen/TraceWeave/issues"
+Repository = "https://github.com/gokeshenzhen/TraceWeave.git"
+
+[tool.setuptools]
+include-package-data = true
+packages = [
+  "traceweave_mcp",
+  "traceweave_mcp._runtime",
+  "traceweave_mcp._runtime.src",
+]
+
+[tool.setuptools.package-dir]
+traceweave_mcp = "traceweave_mcp"
+"traceweave_mcp._runtime" = "."
+"traceweave_mcp._runtime.src" = "src"
+
+[tool.setuptools.package-data]
+traceweave_mcp = ["custom_patterns.yaml"]

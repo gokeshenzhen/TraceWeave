@@ -1,0 +1,14 @@
+include LICENSE
+include README.md
+include pyproject.toml
+
+prune assets
+prune benchmarks
+prune docs
+prune reference
+prune scripts
+prune tests
+
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude __pycache__

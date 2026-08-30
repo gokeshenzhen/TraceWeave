@@ -1,0 +1,19 @@
+# Packaged default for installed TraceWeave distributions.
+#
+# Repo-local development continues to use ../custom_patterns.yaml. Installed
+# users can copy this file elsewhere and set TRACEWEAVE_CUSTOM_PATTERNS_FILE to
+# that path when they need local extensions.
+
+# Pattern fields:
+#   name        : pattern identifier (English, no spaces)
+#   regex       : Python regular expression
+#                 Supported named capture groups:
+#                   (?P<file>...)       source file path (optional)
+#                   (?P<line>\d+)       source line number (optional)
+#                   (?P<time>[\d.]+)    numeric time value (optional)
+#                   (?P<time_unit>...)  time unit such as ps/ns/us (optional)
+#                   (?P<message>.+)     error message (required)
+#   severity    : ERROR / FATAL / WARNING
+#   description : free-form comment for maintainers
+
+patterns: []

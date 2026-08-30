@@ -1,0 +1,422 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Run test suite
+        run: >-
+          python -m pytest tests/ -v
+          --ignore=tests/test_fsdb_parser.py
+          --ignore=tests/test_fsdb_runtime.py
+
+  source-graph-setup:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install and verify the pinned Source Graph runtime
+        run: |
+          bash scripts/setup_source_graph.sh
+          bash scripts/setup_source_graph.sh --check
+
+  build:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: [test, source-graph-setup]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag and release metadata
+        env:
+          TRACEWEAVE_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import tomllib
+
+          root = Path.cwd()
+          project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+          registry = json.loads((root / "server.json").read_text(encoding="utf-8"))
+          version_scope = {}
+          exec((root / "traceweave_mcp" / "__init__.py").read_text(encoding="utf-8"), version_scope)
+
+          version = project["version"]
+          expected_tag = f"v{version}"
+          actual_tag = os.environ["TRACEWEAVE_RELEASE_TAG"]
+          package = registry["packages"][0]
+          marker = "<!-- mcp-name: io.github.gokeshenzhen/traceweave -->"
+
+          assert actual_tag == expected_tag, f"tag {actual_tag!r} must equal {expected_tag!r}"
+          assert project["name"] == "traceweave-mcp"
+          assert version_scope["__version__"] == version
+          assert registry["name"] == "io.github.gokeshenzhen/traceweave"
+          assert registry["version"] == version
+          assert package["registryType"] == "pypi"
+          assert package["identifier"] == project["name"]
+          assert package["version"] == version
+          assert marker in (root / "README.md").read_text(encoding="utf-8")
+          print(f"release metadata is consistent for {actual_tag}")
+          PY
+
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Verify wheel namespace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          with ZipFile(wheels[0]) as wheel:
+              names = set(wheel.namelist())
+              top_level_name = next(name for name in names if name.endswith(".dist-info/top_level.txt"))
+              top_levels = wheel.read(top_level_name).decode("utf-8").splitlines()
+
+          assert top_levels == ["traceweave_mcp"], top_levels
+          assert "server.py" not in names
+          assert "config.py" not in names
+          assert not any(name.startswith("src/") for name in names)
+          assert "traceweave_mcp/_runtime/server.py" in names
+          assert "traceweave_mcp/_runtime/config.py" in names
+          assert "traceweave_mcp/_runtime/src/__init__.py" in names
+          print(f"{wheels[0].name}: top-level namespace is traceweave_mcp only")
+          PY
+
+      - name: Store distributions
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  package-smoke:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Clean-install and smoke-test wheel outside the checkout
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/traceweave-clean"
+          "$RUNNER_TEMP/traceweave-clean/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          timeout 30 "$RUNNER_TEMP/traceweave-clean/bin/python" \
+            "$GITHUB_WORKSPACE/tests/installed_stdio_smoke.py"
+
+      - name: Smoke-test the installed Source Graph extra
+        if: matrix.python-version == '3.11'
+        shell: bash
+        run: |
+          wheels=(dist/*.whl)
+          "$RUNNER_TEMP/traceweave-clean/bin/python" -m pip install \
+            "${wheels[0]}[source-graph]"
+          cd "$RUNNER_TEMP"
+          timeout 30 "$RUNNER_TEMP/traceweave-clean/bin/python" \
+            "$GITHUB_WORKSPACE/tests/installed_source_graph_smoke.py"
+
+  publish-pypi:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: package-smoke
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/traceweave-mcp
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify-pypi:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Wait for and verify public PyPI metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import time
+          import tomllib
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          root = Path.cwd()
+          project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+          name = project["name"]
+          version = project["version"]
+          url = f"https://pypi.org/pypi/{name}/{version}/json"
+          marker = "<!-- mcp-name: io.github.gokeshenzhen/traceweave -->"
+          last_error = "not queried"
+
+          for attempt in range(1, 25):
+              try:
+                  request = Request(url, headers={"Accept": "application/json"})
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+                  if payload["info"]["version"] == version:
+                      break
+                  last_error = f"unexpected version {payload['info']['version']!r}"
+              except (HTTPError, URLError, TimeoutError, KeyError, ValueError) as exc:
+                  last_error = str(exc)
+              if attempt < 24:
+                  time.sleep(10)
+          else:
+              raise SystemExit(f"PyPI metadata did not become readable: {last_error}")
+
+          filenames = {item["filename"] for item in payload["urls"]}
+          assert marker in payload["info"]["description"]
+          assert any(filename.endswith("-py3-none-any.whl") for filename in filenames)
+          assert any(filename.endswith(".tar.gz") for filename in filenames)
+          print(json.dumps({"name": name, "version": version, "files": sorted(filenames)}, indent=2))
+          PY
+
+      - name: Clean-install and smoke-test the public wheel
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python -m venv "$RUNNER_TEMP/traceweave-public"
+          "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install \
+            --no-cache-dir --index-url https://pypi.org/simple --retries 12 \
+            "traceweave-mcp==$VERSION"
+          cd "$RUNNER_TEMP"
+          timeout 30 "$RUNNER_TEMP/traceweave-public/bin/python" \
+            "$GITHUB_WORKSPACE/tests/installed_stdio_smoke.py"
+
+  publish-registry:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: verify-pypi
+    runs-on: ubuntu-latest
+    environment:
+      name: mcp-registry
+      url: https://registry.modelcontextprotocol.io
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MCP_PUBLISHER_VERSION: "1.8.1"
+      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned current mcp-publisher
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/mcp-publisher_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$archive" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$MCP_PUBLISHER_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" mcp-publisher
+          "$RUNNER_TEMP/mcp-publisher" --version
+
+      - name: Validate Registry metadata
+        run: '"$RUNNER_TEMP/mcp-publisher" validate server.json'
+
+      - name: Authenticate with GitHub Actions OIDC
+        run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc'
+
+      - name: Publish to the Official MCP Registry
+        run: '"$RUNNER_TEMP/mcp-publisher" publish server.json'
+
+  verify-registry:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: publish-registry
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Query exact latest and search endpoints
+        run: |
+          curl --fail --silent --show-error --location \
+            --retry 30 --retry-all-errors --retry-delay 10 \
+            'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.gokeshenzhen%2Ftraceweave/versions/latest' \
+            --output registry-latest.json
+          curl --fail --silent --show-error --location \
+            --retry 30 --retry-all-errors --retry-delay 10 \
+            'https://registry.modelcontextprotocol.io/v0.1/servers?search=traceweave&version=latest' \
+            --output registry-search.json
+
+      - name: Verify Registry response metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import tomllib
+
+          root = Path.cwd()
+          version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          expected_name = "io.github.gokeshenzhen/traceweave"
+          expected_package = "traceweave-mcp"
+          expected_repository = "https://github.com/gokeshenzhen/TraceWeave"
+
+          latest = json.loads((root / "registry-latest.json").read_text(encoding="utf-8"))
+          server = latest["server"]
+          packages = server["packages"]
+          assert server["name"] == expected_name
+          assert server["version"] == version
+          assert server["repository"]["url"] == expected_repository
+          assert any(
+              package["registryType"] == "pypi"
+              and package["identifier"] == expected_package
+              and package["version"] == version
+              and package["transport"]["type"] == "stdio"
+              for package in packages
+          )
+
+          search = json.loads((root / "registry-search.json").read_text(encoding="utf-8"))
+          matches = [
+              item["server"]
+              for item in search["servers"]
+              if item.get("server", {}).get("name") == expected_name
+          ]
+          assert any(match["version"] == version for match in matches)
+          print(json.dumps({
+              "name": server["name"],
+              "version": server["version"],
+              "package": expected_package,
+              "repository": server["repository"]["url"],
+              "search_matches": len(matches),
+          }, indent=2))
+          PY
+
+      - name: Store Registry verification responses
+        uses: actions/upload-artifact@v5
+        with:
+          name: registry-verification
+          path: registry-*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  github-release:
+    if: github.repository == 'gokeshenzhen/TraceWeave'
+    needs: verify-registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "TraceWeave ${GITHUB_REF_NAME#v}"
+          --generate-notes

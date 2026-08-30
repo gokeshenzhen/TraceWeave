@@ -25,12 +25,22 @@ import time
 import anyio
 import anyio.to_thread
 
-# Ensure the TraceWeave repo root is on the Python path.
-sys.path.insert(0, os.path.dirname(__file__))
+# Repo-local execution keeps the historical absolute imports.  In a wheel,
+# setuptools maps this module and src/ into traceweave_mcp._runtime; aliases
+# preserve those imports without installing generic top-level packages.
+if __package__:
+    from . import config as _packaged_config
+    from . import src as _packaged_src
+
+    sys.modules.setdefault("config", _packaged_config)
+    sys.modules.setdefault("src", _packaged_src)
+else:
+    sys.path.insert(0, os.path.dirname(__file__))
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+from traceweave_mcp import __version__
 
 from config import (
     AUTO_DOWNGRADE_THRESHOLD,
@@ -1359,7 +1369,7 @@ Waveform debug workflow:
    - Does NOT execute any sub-steps; only reads cached results
 """.strip()
 
-app = Server("traceweave", instructions=SERVER_INSTRUCTIONS)
+app = Server("traceweave", version=__version__, instructions=SERVER_INSTRUCTIONS)
 
 # Global parser cache.
 _fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
@@ -4988,7 +4998,7 @@ async def list_tools():
                 "properties": {
                     "verif_root": {
                         "type": "string",
-                        "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif",
+                        "description": "Absolute path to the project's verif/ directory, for example /path/to/project/verif",
                     },
                     "case_name": {
                         "type": "string",

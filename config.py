@@ -56,8 +56,25 @@ WORK_CONTAINER_NAMES = (
 # 自定义报错格式配置文件路径
 # ═══════════════════════════════════════════════════════════════════
 
-# 相对于 TraceWeave/ 根目录
-CUSTOM_PATTERNS_FILE = os.path.join(os.path.dirname(__file__), "custom_patterns.yaml")
+def _default_custom_patterns_file() -> str:
+    """Resolve editable repo data first, then the installed package default."""
+
+    explicit = os.environ.get("TRACEWEAVE_CUSTOM_PATTERNS_FILE")
+    if explicit:
+        return os.fspath(Path(explicit).expanduser())
+
+    repo_default = REPO_ROOT / "custom_patterns.yaml"
+    if repo_default.is_file():
+        return os.fspath(repo_default)
+
+    installed_default = Path(__file__).resolve().parents[1] / "custom_patterns.yaml"
+    if installed_default.is_file():
+        return os.fspath(installed_default)
+
+    return os.fspath(REPO_ROOT / "traceweave_mcp" / "custom_patterns.yaml")
+
+
+CUSTOM_PATTERNS_FILE = _default_custom_patterns_file()
 
 # ═══════════════════════════════════════════════════════════════════
 # 解析行为配置

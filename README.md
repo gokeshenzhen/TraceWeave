@@ -1,11 +1,13 @@
 # 🐙 TraceWeave
 
+<!-- mcp-name: io.github.gokeshenzhen/traceweave -->
+
 <p align="right">
-  <strong>English</strong> · <a href="README.zh.md">简体中文</a>
+  <strong>English</strong> · <a href="https://github.com/gokeshenzhen/TraceWeave/blob/main/README.zh.md">简体中文</a>
 </p>
 
 <p align="center">
-  <img src="assets/logo.png" alt="TraceWeave" width="160">
+  <img src="https://raw.githubusercontent.com/gokeshenzhen/TraceWeave/main/assets/logo.png" alt="TraceWeave" width="160">
 </p>
 
 <p align="center">
@@ -14,7 +16,8 @@
 
 <p align="center">
   <a href="https://github.com/gokeshenzhen/TraceWeave/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gokeshenzhen/TraceWeave/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
+  <a href="https://pypi.org/project/traceweave-mcp/"><img src="https://img.shields.io/pypi/v/traceweave-mcp?style=for-the-badge" alt="PyPI version"></a>
+  <a href="https://github.com/gokeshenzhen/TraceWeave/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
 </p>
@@ -26,7 +29,7 @@ TraceWeave turns local VCS/Xcelium simulation artifacts into a guided investigat
 For driver, load, structural-path, and X/Z-source questions, TraceWeave uses a provenance-preserving backend ladder: trusted Verdi NPI when a usable KDB is available, a bounded on-demand Slang Source Graph when NPI is unavailable or inconclusive, and Legacy Static as the final fallback. Results expose backend provenance, coverage, truncation, and fallback status rather than turning partial evidence into certainty.
 
 <p align="center">
-  <img src="assets/onepage-en.png" alt="TraceWeave workflow overview" width="900">
+  <img src="https://raw.githubusercontent.com/gokeshenzhen/TraceWeave/main/assets/onepage-en.png" alt="TraceWeave workflow overview" width="900">
 </p>
 
 <p align="center"><sub>Default workflow and connectivity-routing overview; every conclusion remains bounded by reported coverage.</sub></p>
@@ -40,7 +43,7 @@ TraceWeave is a workflow-oriented debug server rather than a loose collection of
 - Driver/load/path/X tracing through `trusted NPI -> bounded Source Graph -> Legacy Static`
 - Structured next actions plus coverage, provenance, truncation, and resource receipts designed for MCP clients
 
-[Architecture](docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing) · [WeChat](#wechat)
+[Architecture](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md) · [Installation](#installation) · [Client Setup](#client-setup) · [Standard MCP Workflow](#standard-mcp-workflow) · [Tool Quick Reference](#tool-quick-reference) · [Testing](#testing) · [WeChat](#wechat)
 
 ## When TraceWeave helps most
 
@@ -131,6 +134,40 @@ TraceWeave/
 
 TraceWeave requires Python `3.11+`.
 
+### Standard PyPI installation
+
+Install the base MCP runtime and launch the stdio server from any directory:
+
+```bash
+python -m pip install traceweave-mcp
+traceweave-mcp
+```
+
+The base package includes log/VCD analysis and the unlicensed Python fallback
+stack. To add the pinned open-source Source Graph frontend:
+
+```bash
+python -m pip install "traceweave-mcp[source-graph]"
+```
+
+`pyslang` is intentionally an optional dependency: the server starts without
+it and reports a structured Source Graph dependency blocker before falling
+back to Legacy Static. PyPI distributions do not contain Synopsys or Cadence
+binaries, FSDB runtime libraries, license data, VCS/Xcelium, or Verdi NPI.
+Those capabilities continue to depend on the user's locally licensed EDA
+installation and environment.
+
+The Official MCP Registry distribution uses the name
+[`io.github.gokeshenzhen/traceweave`](https://registry.modelcontextprotocol.io/)
+After publication, use that exact name or `traceweave` in the registry search
+box.
+
+### Repository-local EDA installation
+
+For the full local EDA workflow, especially the repo-built FSDB wrapper and
+repo-local Verdi runtime links, clone this repository and use the existing
+setup below. This remains the recommended setup on simulation hosts.
+
 The recommended installation includes the pinned `pyslang` frontend used by
 Source Graph and keeps all Python packages in a repository-local `.venv`:
 
@@ -193,8 +230,8 @@ bash scripts/verify_fsdb.sh
 
 Any MCP client that supports stdio transport can connect to this server. The minimum configuration is:
 
-- command: `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/setup_source_graph.sh` (`python3.11` remains valid for a separately managed minimal environment)
-- args: `["<TRACEWEAVE_HOME>/server.py"]`
+- PyPI installation: command `traceweave-mcp`, args `[]`
+- Repo-local installation: command `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/setup_source_graph.sh` (`python3.11` remains valid for a separately managed minimal environment), args `["<TRACEWEAVE_HOME>/server.py"]`
 - env: provide either repo-local `third_party/verdi_runtime/linux64` or `VERDI_HOME` if FSDB support is required
 
 If the client supports server instructions, it can follow the built-in workflow directly. Otherwise, use the workflow below.
@@ -1306,5 +1343,5 @@ Recommended change flow:
 Follow the WeChat public account:
 
 <p align="center">
-  <img src="assets/QR.png" alt="WeChat public account QR code" width="200">
+  <img src="https://raw.githubusercontent.com/gokeshenzhen/TraceWeave/main/assets/QR.png" alt="WeChat public account QR code" width="200">
 </p>
