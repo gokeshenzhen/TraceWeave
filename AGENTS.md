@@ -26,13 +26,26 @@ For performance optimizations:
 
 ## Installation Discipline
 
-When a user explicitly asks to install TraceWeave, first run the read-only check:
+When a user supplies this repository URL and explicitly asks to install
+TraceWeave, treat that as the repository-local full EDA profile unless the user
+explicitly requests the portable PyPI profile. First run the read-only check:
 
 ```bash
-bash scripts/setup_source_graph.sh --check
+bash scripts/install.sh --check
 ```
 
-If the repository-local environment is missing or incompatible, run `bash scripts/setup_source_graph.sh` only as part of that requested installation. The setup creates/updates `.venv`, installs `requirements-source-graph.txt`, verifies the pinned `pyslang` frontend, and prints MCP registration commands. It never edits shell startup files, Codex configuration, or Claude configuration. Do not run dependency installation on ordinary analysis/debug tasks, and do not modify a user's MCP client configuration unless the user explicitly requests that additional action.
+If the full profile is missing or incompatible, run `bash scripts/install.sh`
+only as part of that requested installation. It orchestrates the existing
+`setup_source_graph.sh -> setup_fsdb.sh -> verify_fsdb.sh` workflow, then checks
+the repository MCP runtime. It never edits shell startup files or Codex,
+Claude, or Copilot configuration; `--print-config` only prints an absolute-path
+template. Do not run repository FSDB scripts to extend a PyPI installation. A
+portable installation uses `pip install traceweave-mcp` or
+`pip install "traceweave-mcp[source-graph]"`, does not include the FSDB wrapper,
+and is not the default when the repository URL was supplied. Do not install
+dependencies during ordinary analysis/debug tasks, and do not modify a user's
+MCP client configuration unless the user explicitly requests that additional
+action.
 
 ## TraceWeave Usage
 

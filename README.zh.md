@@ -85,7 +85,7 @@ TraceWeave/
 ├── custom_patterns.yaml      # 用户可扩展的日志匹配模式
 ├── fsdb_wrapper.cpp          # 原生 FSDB wrapper 源码
 ├── build_wrapper.sh          # 构建 libfsdb_wrapper.so
-├── scripts/                  # setup_fsdb.sh / verify_fsdb.sh
+├── scripts/                  # 完整安装器，以及 Source Graph / FSDB setup 与验证
 ├── tests/                    # 单元与集成测试
 └── src/
     ├── path_discovery.py
@@ -128,7 +128,95 @@ TraceWeave/
 
 TraceWeave 需要 Python `3.11+`。
 
-### 标准 PyPI 安装
+### 选择安装形态
+
+从一开始就选择一种安装形态：
+
+| 形态 | 适用场景 | 命令 |
+|---|---|---|
+| 仓库本地完整 EDA | 需要 Source Graph、FSDB、Verdi/NPI、VCS/Xcelium 或 LSF 的仿真主机 | clone 本仓库后运行 `bash scripts/install.sh` |
+| Portable PyPI | 日志/VCD 分析以及无需商业 license 的 Python fallback | `python -m pip install traceweave-mcp` |
+| Portable PyPI + Source Graph | Portable 能力加固定版本的开源 `pyslang` frontend | `python -m pip install "traceweave-mcp[source-graph]"` |
+
+当用户把本仓库 URL 交给 AI coding agent 并要求安装 TraceWeave 时，除非用户明确
+指定 portable PyPI，否则表示要安装**仓库本地完整 EDA 形态**。不要用仓库中的 FSDB
+setup 脚本去扩展 PyPI 环境：wheel 与仓库会从不同 runtime root 寻找 native wrapper。
+
+### 仓库本地完整 EDA 安装
+
+这是仿真主机以及已有本地 Verdi 安装的用户所推荐的形态。Python package、FSDB
+wrapper 和 runtime 链接会统一保存在同一个仓库根目录下：
+
+```bash
+git clone https://github.com/gokeshenzhen/TraceWeave.git
+cd TraceWeave
+export VERDI_HOME=/path/to/verdi
+bash scripts/install.sh
+```
+
+也可以只在本次安装进程中提供 Verdi 路径：
+
+```bash
+bash scripts/install.sh --verdi-home /path/to/verdi
+```
+
+安装器只是对既有本地流程的薄封装，可重复执行：
+
+```text
+scripts/setup_source_graph.sh
+→ scripts/setup_fsdb.sh
+→ scripts/verify_fsdb.sh
+→ 仓库 MCP runtime smoke check
+```
+
+它不会修改 shell startup 文件或 MCP client 配置。只读检查已有安装时，不会创建
+环境、编译或修改链接：
+
+```bash
+bash scripts/install.sh --check
+bash scripts/install.sh --check --json
+```
+
+安装成功后，可以只打印包含绝对路径的配置模板，不写入任何文件：
+
+```bash
+bash scripts/install.sh --print-config codex
+bash scripts/install.sh --print-config claude
+bash scripts/install.sh --print-config copilot
+```
+
+已经直接调用组件脚本的用户和站点自动化仍可继续使用原有流程：
+
+```bash
+bash scripts/setup_source_graph.sh
+bash scripts/setup_fsdb.sh
+bash scripts/verify_fsdb.sh
+```
+
+`setup_source_graph.sh` 会把 `requirements-source-graph.txt`（MCP runtime、PyYAML
+以及 `pyslang==11.0.0`）安装到 `.venv`。它自身的只读检查命令是：
+
+```bash
+bash scripts/setup_source_graph.sh --check
+```
+
+FSDB 仓库安装会把
+`VERDI_HOME/share/FsdbReader/linux64/{libnsys.so,libnffr.so}` 链接到
+`third_party/verdi_runtime/linux64`，并在仓库根目录构建
+`libfsdb_wrapper.so`。如果缺少这些前置条件，请改用 portable 形态和 VCD 波形。
+
+> **git pull 之后**：`libfsdb_wrapper.so` 是本地构建产物，不会进入 git。如果更新
+> 改动了 `fsdb_wrapper.cpp`，请重新运行 `bash scripts/setup_fsdb.sh`（或
+> `bash build_wrapper.sh`），然后执行 `bash scripts/verify_fsdb.sh`。ABI 过期会明确
+> 报错，避免静默产生错位的波形时间戳。
+
+不使用 Source Graph 的旧版 repo-local 最小依赖方式仍然保留：
+
+```bash
+python3.11 -m pip install "mcp==1.27.0" pyyaml --user
+```
+
+### Portable PyPI 安装
 
 安装基础 MCP runtime，并从任意目录启动 stdio server：
 
@@ -144,66 +232,26 @@ traceweave-mcp
 python -m pip install "traceweave-mcp[source-graph]"
 ```
 
-`pyslang` 被有意设计成 optional dependency：未安装时 server 仍可启动，Source Graph
-会返回结构化 dependency blocker，然后回退到 Legacy Static。PyPI 制品不会包含任何
-Synopsys/Cadence binary、FSDB runtime、license 信息、VCS/Xcelium 或 Verdi NPI；这些
-能力仍依赖用户本地已有并获授权的 EDA 安装与环境。
+`pyslang` 是 optional dependency：未安装时 server 仍可启动，Source Graph 会返回
+结构化 dependency blocker，然后回退到 Legacy Static。无需启动 stdio server 即可
+检查当前 portable 安装：
+
+```bash
+traceweave-mcp --doctor
+traceweave-mcp --doctor --json
+```
+
+PyPI 制品不包含 `fsdb_wrapper.cpp`、`build_wrapper.sh`、仓库 FSDB setup 脚本、
+`libfsdb_wrapper.so`、Synopsys/Cadence runtime library、license 信息、VCS/Xcelium
+或 proprietary Verdi `pynpi` runtime。设置 `VERDI_HOME` 可以提供外部 EDA library，
+但不会生成缺失的 TraceWeave FSDB wrapper。手工把 wrapper 注入 `site-packages`
+属于不受支持的混合 layout；需要完整 EDA 能力时请改用仓库本地安装。Verdi NPI
+探测独立于 FSDB reader，它仍然取决于站点完整的 KDB、`pynpi`、runtime、license
+以及 local/LSF 环境。
 
 Official MCP Registry 分发名称为
 [`io.github.gokeshenzhen/traceweave`](https://registry.modelcontextprotocol.io/)；发布后可在
 官网搜索框输入完整名称或 `traceweave`。
-
-### 仓库本地 EDA 安装
-
-若需要完整本地 EDA 工作流，特别是仓库内构建的 FSDB wrapper 和 repo-local Verdi
-runtime 链接，请 clone 本仓库并继续使用下面的既有安装方式。这仍是仿真主机上的
-推荐方案。
-
-推荐安装方式会包含 Source Graph 使用的固定版本 `pyslang` frontend，并把全部
-Python package 放进仓库本地 `.venv`：
-
-```bash
-bash scripts/setup_source_graph.sh
-```
-
-该脚本会把 `requirements-source-graph.txt`（MCP runtime、PyYAML 和
-`pyslang==11.0.0`）安装进 `.venv`。首次 clone 后运行一次；以后 pull 若改动了该
-requirements 文件，再运行一次即可。脚本可重复执行，不会修改 shell 或 MCP client
-配置；成功后会打印解释器绝对路径，以及可选的 Codex / Claude 注册命令。只读检查
-模式不会执行安装：
-
-```bash
-bash scripts/setup_source_graph.sh --check
-```
-
-若只需要不包含 Source Graph frontend 的最小安装：
-
-```bash
-python3.11 -m pip install "mcp==1.27.0" pyyaml --user
-```
-
-要使用 FSDB,需要以下任一运行时:
-
-- 仓库本地运行时:`third_party/verdi_runtime/linux64/libnsys.so` 与 `libnffr.so`
-- 外部 Verdi 安装,通过 `VERDI_HOME/share/FsdbReader/linux64` 暴露
-
-如果两者都不可用,TraceWeave 仍可运行,但 FSDB 解析会被禁用,工作流应优先使用 `.vcd` 波形。
-
-启用 FSDB 支持(将 Verdi 运行时链接到仓库并构建 `libfsdb_wrapper.so`,一步完成):
-
-```bash
-# 示例 —— 请替换为你所在站点的 Verdi 安装路径
-export VERDI_HOME=/path/to/verdi
-bash scripts/setup_fsdb.sh
-```
-
-> **git pull 之后**:`libfsdb_wrapper.so` 是本地构建产物,不入库。若拉取的更新改动了 `fsdb_wrapper.cpp`,首次 FSDB 查询会报 *"libfsdb_wrapper.so is outdated"* —— 重跑 `bash build_wrapper.sh` 并重连 MCP server 即可。这是有意的 fail-loud 设计:过期的 wrapper 可能静默返回错位的时间戳。重建也是启用 `sweep_handshakes` 可选 FSDB transition-group 优化的必要步骤。
-
-验证运行时与 wrapper 是否能正确加载。该脚本不依赖 `$VERDI_HOME`,在已具备仓库本地产物的任何主机上都可以运行:
-
-```bash
-bash scripts/verify_fsdb.sh
-```
 
 ## 客户端配置
 
@@ -211,9 +259,9 @@ bash scripts/verify_fsdb.sh
 
 任何支持 stdio 传输的 MCP 客户端都能连接本服务器。最小配置:
 
-- PyPI 安装：command 为 `traceweave-mcp`，args 为 `[]`
-- 仓库本地安装：运行 `scripts/setup_source_graph.sh` 后，command 使用 `<TRACEWEAVE_HOME>/.venv/bin/python`（若另行管理不含 Source Graph 的最小环境，仍可使用 `python3.11`），args 为 `["<TRACEWEAVE_HOME>/server.py"]`
-- env:如果需要 FSDB,提供仓库本地 `third_party/verdi_runtime/linux64` 或者 `VERDI_HOME`
+- Portable PyPI 安装：command 为 `traceweave-mcp`，args 为 `[]`
+- 仓库本地完整 EDA 安装：运行 `scripts/install.sh` 后，command 使用 `<TRACEWEAVE_HOME>/.venv/bin/python`，args 为 `["<TRACEWEAVE_HOME>/server.py"]`
+- EDA env：确保仓库本地 MCP 进程能获得站点提供的 Verdi/NPI、VCS/Xcelium、license 以及可选 LSF 变量
 
 如果客户端支持 server instructions,可以直接遵循内置工作流;否则参考下方手动工作流。
 

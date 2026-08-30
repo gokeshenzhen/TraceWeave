@@ -7,7 +7,7 @@
 # Checks:
 #   1. third_party/verdi_runtime/linux64/{libnsys.so,libnffr.so} exist & load
 #   2. libfsdb_wrapper.so exists, links cleanly, and exports fsdb_* symbols
-#   3. (best effort) Python `import` of src.fsdb_parser succeeds
+#   3. the repository Python parser resolves and loads that exact wrapper
 #
 # Usage: bash scripts/verify_fsdb.sh
 # Exit codes:
@@ -28,6 +28,11 @@ fail() { printf '  [FAIL] %s\n' "$*" >&2; FAILED=1; }
 FAILED=0
 
 PY="${PYTHON:-}"
+if [ -z "$PY" ]; then
+    if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+        PY="$REPO_ROOT/.venv/bin/python"
+    fi
+fi
 if [ -z "$PY" ]; then
     for cand in python3.11 python3 python; do
         if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
@@ -114,22 +119,55 @@ PYEOF
 fi
 echo
 
-# --- Check 3: Python parser importable --------------------------------------
-echo "[3/3] Python FSDB parser import"
-"$PY" - <<'PYEOF'
+# --- Check 3: repository parser resolves and loads the exact wrapper --------
+echo "[3/3] Repository Python FSDB runtime"
+if [ "$FAILED" -ne 0 ]; then
+    echo "  [SKIP] native prerequisites failed; parser load was not attempted"
+else
+    "$PY" - "$REPO_ROOT" "$WRAPPER" <<'PYEOF'
+from pathlib import Path
 import sys
-sys.path.insert(0, "src")
+
+repo_root = Path(sys.argv[1]).resolve()
+expected_wrapper = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(repo_root))
 try:
-    import fsdb_parser  # noqa: F401
+    import config
+    from src import fsdb_parser
 except Exception as e:
-    print(f"  [WARN] could not import src/fsdb_parser.py: {e}")
-    sys.exit(0)  # not fatal: parser may be optional in some checkouts
-print("  [ OK ] src/fsdb_parser imported")
+    print(f"  [FAIL] repository parser import failed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+actual_root = Path(config.REPO_ROOT).resolve()
+actual_wrapper = Path(fsdb_parser._WRAPPER_SO).resolve()
+if actual_root != repo_root:
+    print(
+        f"  [FAIL] config resolved {actual_root}, expected repository {repo_root}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if actual_wrapper != expected_wrapper:
+    print(
+        f"  [FAIL] parser resolved {actual_wrapper}, expected {expected_wrapper}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+try:
+    fsdb_parser._load_wrapper()
+except Exception as e:
+    print(f"  [FAIL] repository parser could not load wrapper: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("  [ OK ] src.fsdb_parser imported from the repository")
+print("  [ OK ] src.fsdb_parser loaded the repository libfsdb_wrapper.so")
 PYEOF
+    [ $? -eq 0 ] || FAILED=1
+fi
 echo
 
 if [ "$FAILED" -ne 0 ]; then
     echo "[verify_fsdb] FAILED — see messages above."
     exit 1
 fi
-echo "[verify_fsdb] All checks passed. FSDB support is ready."
+echo "[verify_fsdb] All checks passed. Repository-local FSDB support is ready."

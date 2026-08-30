@@ -121,14 +121,19 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from tarfile import open as open_tar
           from zipfile import ZipFile
 
           wheels = list(Path("dist").glob("*.whl"))
+          sdists = list(Path("dist").glob("*.tar.gz"))
           assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
           with ZipFile(wheels[0]) as wheel:
               names = set(wheel.namelist())
               top_level_name = next(name for name in names if name.endswith(".dist-info/top_level.txt"))
               top_levels = wheel.read(top_level_name).decode("utf-8").splitlines()
+          with open_tar(sdists[0], "r:gz") as sdist:
+              sdist_names = {member.name for member in sdist.getmembers()}
 
           assert top_levels == ["traceweave_mcp"], top_levels
           assert "server.py" not in names
@@ -137,7 +142,25 @@ jobs:
           assert "traceweave_mcp/_runtime/server.py" in names
           assert "traceweave_mcp/_runtime/config.py" in names
           assert "traceweave_mcp/_runtime/src/__init__.py" in names
-          print(f"{wheels[0].name}: top-level namespace is traceweave_mcp only")
+          assert "traceweave_mcp/doctor.py" in names
+
+          forbidden_basenames = {
+              "fsdb_wrapper.cpp",
+              "build_wrapper.sh",
+              "setup_fsdb.sh",
+              "verify_fsdb.sh",
+              "install.sh",
+              "libfsdb_wrapper.so",
+          }
+          assert not any(Path(name).name in forbidden_basenames for name in names)
+          assert not any(Path(name).name in forbidden_basenames for name in sdist_names)
+          assert not any("/scripts/" in name or "/tests/" in name for name in sdist_names)
+          assert not any(name.endswith((".so", ".pyc")) for name in names)
+          assert not any(name.endswith((".so", ".pyc")) for name in sdist_names)
+          print(
+              f"{wheels[0].name}: isolated traceweave_mcp namespace; "
+              "portable artifacts contain no FSDB build/runtime payload"
+          )
           PY
 
       - name: Store distributions

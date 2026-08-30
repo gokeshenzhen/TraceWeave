@@ -91,7 +91,7 @@ TraceWeave/
 ├── custom_patterns.yaml      # User-extensible log patterns
 ├── fsdb_wrapper.cpp          # Native FSDB wrapper source
 ├── build_wrapper.sh          # Builds libfsdb_wrapper.so
-├── scripts/                  # setup_fsdb.sh / verify_fsdb.sh
+├── scripts/                  # Full installer plus Source Graph / FSDB setup and verification
 ├── tests/                    # Unit and integration tests
 └── src/
     ├── path_discovery.py
@@ -134,7 +134,105 @@ TraceWeave/
 
 TraceWeave requires Python `3.11+`.
 
-### Standard PyPI installation
+### Choose an installation profile
+
+Use one installation profile from the start:
+
+| Profile | Intended use | Command |
+|---|---|---|
+| Repository-local full EDA | Simulation hosts with Source Graph, FSDB, Verdi/NPI, VCS/Xcelium, or LSF workflows | Clone this repository, then run `bash scripts/install.sh` |
+| Portable PyPI | Log/VCD analysis and the unlicensed Python fallback stack | `python -m pip install traceweave-mcp` |
+| Portable PyPI + Source Graph | Portable profile plus the pinned open-source `pyslang` frontend | `python -m pip install "traceweave-mcp[source-graph]"` |
+
+When a user gives an AI coding agent this repository URL and asks it to install
+TraceWeave, that means the **repository-local full EDA profile** unless the user
+explicitly asks for the portable PyPI profile. Do not extend a PyPI environment
+with repository FSDB setup scripts: the wheel and the repository resolve the
+native wrapper from different runtime roots.
+
+### Repository-local full EDA installation
+
+This is the recommended profile on simulation hosts and for users who have a
+local Verdi installation. It keeps Python packages, the FSDB wrapper, and the
+runtime links together under one repository root:
+
+```bash
+git clone https://github.com/gokeshenzhen/TraceWeave.git
+cd TraceWeave
+export VERDI_HOME=/path/to/verdi
+bash scripts/install.sh
+```
+
+Alternatively, pass the Verdi root for this installer process only:
+
+```bash
+bash scripts/install.sh --verdi-home /path/to/verdi
+```
+
+The installer is a thin, idempotent orchestration of the established local
+workflow:
+
+```text
+scripts/setup_source_graph.sh
+→ scripts/setup_fsdb.sh
+→ scripts/verify_fsdb.sh
+→ repository MCP runtime smoke check
+```
+
+It never edits shell startup files or MCP client configuration. Inspect an
+existing installation without creating an environment, compiling, or changing
+links:
+
+```bash
+bash scripts/install.sh --check
+bash scripts/install.sh --check --json
+```
+
+After a successful installation, print an absolute-path configuration template
+without writing it:
+
+```bash
+bash scripts/install.sh --print-config codex
+bash scripts/install.sh --print-config claude
+bash scripts/install.sh --print-config copilot
+```
+
+The existing component commands remain supported for users and site automation
+that already invoke them directly:
+
+```bash
+bash scripts/setup_source_graph.sh
+bash scripts/setup_fsdb.sh
+bash scripts/verify_fsdb.sh
+```
+
+`setup_source_graph.sh` installs `requirements-source-graph.txt` (the MCP
+runtime, PyYAML, and `pyslang==11.0.0`) into `.venv`. Its own read-only check is:
+
+```bash
+bash scripts/setup_source_graph.sh --check
+```
+
+For FSDB support, the repository setup links
+`VERDI_HOME/share/FsdbReader/linux64/{libnsys.so,libnffr.so}` under
+`third_party/verdi_runtime/linux64` and builds `libfsdb_wrapper.so` in the
+repository root. If those prerequisites are unavailable, use the portable
+profile with VCD waveforms instead.
+
+> **After `git pull`**: `libfsdb_wrapper.so` is built locally, not tracked in
+> git. If a pulled update changed `fsdb_wrapper.cpp`, rebuild it with
+> `bash scripts/setup_fsdb.sh` (or `bash build_wrapper.sh`) and rerun
+> `bash scripts/verify_fsdb.sh`. An outdated ABI deliberately fails loudly
+> rather than risking misaligned waveform timestamps.
+
+For a legacy repo-local minimal installation without Source Graph, the existing
+manual dependency setup remains available:
+
+```bash
+python3.11 -m pip install "mcp==1.27.0" pyyaml --user
+```
+
+### Portable PyPI installation
 
 Install the base MCP runtime and launch the stdio server from any directory:
 
@@ -150,79 +248,29 @@ stack. To add the pinned open-source Source Graph frontend:
 python -m pip install "traceweave-mcp[source-graph]"
 ```
 
-`pyslang` is intentionally an optional dependency: the server starts without
-it and reports a structured Source Graph dependency blocker before falling
-back to Legacy Static. PyPI distributions do not contain Synopsys or Cadence
-binaries, FSDB runtime libraries, license data, VCS/Xcelium, or Verdi NPI.
-Those capabilities continue to depend on the user's locally licensed EDA
-installation and environment.
+`pyslang` is intentionally optional: the server starts without it and reports a
+structured Source Graph dependency blocker before falling back to Legacy
+Static. Inspect this installation without starting the stdio server:
+
+```bash
+traceweave-mcp --doctor
+traceweave-mcp --doctor --json
+```
+
+PyPI distributions do not contain `fsdb_wrapper.cpp`, `build_wrapper.sh`, the
+repository FSDB setup scripts, `libfsdb_wrapper.so`, Synopsys/Cadence runtime
+libraries, license data, VCS/Xcelium, or the proprietary Verdi `pynpi` runtime.
+Setting `VERDI_HOME` can provide external EDA libraries, but it does not create
+the missing TraceWeave FSDB wrapper. A manually injected wrapper inside
+`site-packages` is an unsupported mixed layout; use the repository-local full
+EDA profile instead. Verdi NPI discovery is independent of the FSDB reader and
+remains conditional on the site's complete KDB, `pynpi`, runtime, license, and
+local/LSF environment.
 
 The Official MCP Registry distribution uses the name
-[`io.github.gokeshenzhen/traceweave`](https://registry.modelcontextprotocol.io/)
+[`io.github.gokeshenzhen/traceweave`](https://registry.modelcontextprotocol.io/).
 After publication, use that exact name or `traceweave` in the registry search
 box.
-
-### Repository-local EDA installation
-
-For the full local EDA workflow, especially the repo-built FSDB wrapper and
-repo-local Verdi runtime links, clone this repository and use the existing
-setup below. This remains the recommended setup on simulation hosts.
-
-The recommended installation includes the pinned `pyslang` frontend used by
-Source Graph and keeps all Python packages in a repository-local `.venv`:
-
-```bash
-bash scripts/setup_source_graph.sh
-```
-
-The script installs `requirements-source-graph.txt` (the MCP runtime, PyYAML,
-and `pyslang==11.0.0`) into `.venv`. Run it after the initial clone and rerun it
-after a pull that changes that requirements file. It is idempotent, never edits
-shell or MCP client configuration, and prints the absolute interpreter path and
-optional Codex / Claude registration commands when it succeeds. Its read-only
-check mode performs no installation:
-
-```bash
-bash scripts/setup_source_graph.sh --check
-```
-
-For a minimal installation without the optional Source Graph frontend:
-
-```bash
-python3.11 -m pip install "mcp==1.27.0" pyyaml --user
-```
-
-For FSDB support, one of these runtime sources must be available:
-
-- Repo-local runtime: `third_party/verdi_runtime/linux64/libnsys.so` and `libnffr.so`
-- External Verdi installation exposed via `VERDI_HOME/share/FsdbReader/linux64`
-
-If neither is available, TraceWeave still works, but FSDB parsing is disabled and the workflow should prefer `.vcd` waveforms.
-
-Enable FSDB support (links the Verdi runtime into the repo and builds
-`libfsdb_wrapper.so` in one step):
-
-```bash
-# Example only — replace with your site's Verdi install path
-export VERDI_HOME=/path/to/verdi
-bash scripts/setup_fsdb.sh
-```
-
-> **After `git pull`**: `libfsdb_wrapper.so` is built locally, not tracked in
-> git. If a pulled update changed `fsdb_wrapper.cpp`, the first FSDB query
-> fails with a *"libfsdb_wrapper.so is outdated"* error — rebuild with
-> `bash build_wrapper.sh` and reconnect the MCP server. This is deliberately
-> fail-loud: an outdated wrapper could silently return misaligned timestamps.
-> Rebuilding is also required to activate the optional FSDB transition-group
-> optimization used by `sweep_handshakes`.
-
-Verify the runtime and wrapper load correctly. This script does **not**
-require `$VERDI_HOME` and is safe to run on any host that already has the
-repo-local artefacts:
-
-```bash
-bash scripts/verify_fsdb.sh
-```
 
 ## Client Setup
 
@@ -230,9 +278,9 @@ bash scripts/verify_fsdb.sh
 
 Any MCP client that supports stdio transport can connect to this server. The minimum configuration is:
 
-- PyPI installation: command `traceweave-mcp`, args `[]`
-- Repo-local installation: command `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/setup_source_graph.sh` (`python3.11` remains valid for a separately managed minimal environment), args `["<TRACEWEAVE_HOME>/server.py"]`
-- env: provide either repo-local `third_party/verdi_runtime/linux64` or `VERDI_HOME` if FSDB support is required
+- Portable PyPI installation: command `traceweave-mcp`, args `[]`
+- Repository-local full EDA installation: command `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/install.sh`, args `["<TRACEWEAVE_HOME>/server.py"]`
+- EDA env: keep the site-provided Verdi/NPI, VCS/Xcelium, license, and optional LSF variables available to the repository-local MCP process
 
 If the client supports server instructions, it can follow the built-in workflow directly. Otherwise, use the workflow below.
 

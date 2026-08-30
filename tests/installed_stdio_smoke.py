@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import importlib.util
 from importlib.metadata import version
+import json
 from pathlib import Path
+import subprocess
 import sys
 
 import anyio
@@ -19,6 +21,20 @@ async def main() -> None:
     assert importlib.util.find_spec("traceweave_mcp._runtime.server") is not None
 
     executable = Path(sys.executable).with_name("traceweave-mcp")
+    doctor = subprocess.run(
+        [executable, "--doctor", "--json"],
+        cwd=Path.cwd(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    doctor_report = json.loads(doctor.stdout)
+    assert doctor.stderr == ""
+    assert doctor_report["installation_profile"] == "portable"
+    assert doctor_report["base_runtime"]["ready"] is True
+    assert doctor_report["fsdb"]["wrapper_present"] is False
+    assert doctor_report["fsdb"]["status"] == "wrapper_missing"
+
     params = StdioServerParameters(
         command=os.fspath(executable),
         args=[],

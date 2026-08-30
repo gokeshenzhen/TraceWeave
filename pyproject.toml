@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "traceweave-mcp"
-version = "2.0.1"
-description = "Evidence-driven MCP server for local RTL simulation debugging"
+version = "2.0.2"
+description = "Portable MCP runtime for evidence-driven RTL simulation debugging"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = "MIT"

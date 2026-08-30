@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 
 def main() -> None:
     """Run the same stdio server exposed by the repository-local server.py."""
+
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "--doctor":
+        if arguments not in (["--doctor"], ["--doctor", "--json"]):
+            print("usage: traceweave-mcp --doctor [--json]", file=sys.stderr)
+            raise SystemExit(64)
+        from .doctor import run_doctor
+
+        raise SystemExit(run_doctor(json_output="--json" in arguments))
 
     try:
         from ._runtime.server import main as server_main
