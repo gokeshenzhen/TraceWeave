@@ -424,7 +424,7 @@ fsdb_get_value_at_time(void *handle, const char *signal_path,
                        unsigned long long time_ps,
                        char *out_val, int val_buf_size)
 {
-    if (!handle || !signal_path || !out_val) return -1;
+    if (!handle || !signal_path || !out_val || val_buf_size <= 0) return -1;
     FsdbCtx *ctx = (FsdbCtx*)handle;
     if (ctx->scale_fs == 0) return FSDB_ERR_SCALE_UNKNOWN;
 
@@ -461,8 +461,13 @@ fsdb_get_value_at_time(void *handle, const char *signal_path,
     hdl->ffrFree();
     ctx->obj->ffrUnloadSignals();
 
-    strncpy(out_val, result.c_str(), val_buf_size - 1);
-    out_val[val_buf_size - 1] = '\0';
+    /* ctypes consumes a NUL-terminated string. strncpy would pad the entire
+     * remaining capacity (normally 64 MiB) even for a one-bit value. Keep the
+     * capacity for wide values, but touch only the result and its terminator. */
+    size_t bytes = result.size();
+    if (bytes >= (size_t)val_buf_size) bytes = (size_t)val_buf_size - 1;
+    memcpy(out_val, result.data(), bytes);
+    out_val[bytes] = '\0';
     return 0;
 }
 

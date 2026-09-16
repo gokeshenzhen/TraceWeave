@@ -292,7 +292,7 @@ class FSDBParser:
         self._open()
         # Use the shared 64 MB buffer (not a fixed 1024-byte one): a wide bus
         # such as 1024-bit AXI wdata renders to >1023 chars and would otherwise
-        # be silently truncated by strncpy on the C++ side.
+        # be silently truncated by a smaller native output capacity.
         buf = self._get_buf()
         rc  = self._lib.fsdb_get_value_at_time(
             self._handle, signal_path.encode(),

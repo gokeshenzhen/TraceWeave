@@ -93,6 +93,11 @@ Verification
   `cycle`). `--source-root` selects another checkout for before/after comparison.
   The script checks returned values and reports first-load versus repeated-read
   timing and Linux RSS; it excludes MCP transport, conversion and disk-cold I/O.
+- FSDB point output retains the shared 64 MiB capacity for wide values, but
+  copies only the actual value plus its NUL terminator. Unused capacity is not
+  zero-filled on each read; the allocation and native signal-loading costs are
+  unchanged. Native callers still receive a bounded, terminated prefix when
+  their buffer is smaller than the value, and nonpositive capacity is rejected.
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there. Simulation

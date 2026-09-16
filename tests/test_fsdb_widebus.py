@@ -18,6 +18,7 @@ valid/ready interfaces on a 10 ns clock:
   IF3 (vld3/rdy3/dat3,   64-bit): payload changes mid-stall -> 1 (narrow path)
 """
 
+import ctypes
 import os
 from pathlib import Path
 
@@ -69,6 +70,32 @@ def test_wide_bus_value_at_time_not_truncated(parser):
     assert v30["hex"] != v60["hex"]
     # top byte preserved (0x5a..); a dropped LSB would shift it to 0x2d..
     assert v30["hex"].startswith("0x5a")
+
+
+@pytest.mark.parametrize("capacity", [-1, 0, 1, 7, 1024, 1025, 4096])
+def test_native_point_copy_respects_capacity_and_tail(parser, capacity):
+    """Keep bounded C-string semantics without touching unused capacity."""
+    path = "tb.dat1[1023:0]"
+    expected = parser.get_value_at_time(path, 30000)["value"]["bin"].encode()
+    storage = max(0, capacity) + 16
+    buffer = ctypes.create_string_buffer(b"!" * storage, storage)
+    result = parser._lib.fsdb_get_value_at_time(
+        parser._handle, path.encode(), 30000, buffer, capacity)
+    if capacity <= 0:
+        assert result == -1
+        assert buffer.raw == b"!" * storage
+    else:
+        assert result == 0
+        size = min(len(expected), capacity - 1)
+        assert buffer.raw[:size + 1] == expected[:size] + b"\0"
+        assert buffer.raw[size + 1:] == b"!" * (storage - size - 1)
+
+
+def test_shared_buffer_terminates_short_values_after_wide_reads(parser):
+    parser.get_transitions("tb.dat1[1023:0]")
+    assert parser.get_value_at_time("tb.aclk", 0)["value"]["bin"] == "0"
+    parser.get_value_at_time("tb.dat1[1023:0]", 60000)
+    assert parser.get_value_at_time("tb.aclk", 5000)["value"]["bin"] == "1"
 
 
 def test_group_loaded_transitions_are_byte_equivalent(parser):
