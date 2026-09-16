@@ -11,7 +11,7 @@ from statistics import median
 from typing import Any
 
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
-from . import operation_metrics
+from . import clock_edge_cache, operation_metrics
 
 
 class EdgeSamplingSession:
@@ -254,10 +254,7 @@ def get_signals_by_cycle(
     if end_time_ps is not None and end_time_ps < 0:
         raise ValueError("end_time_ps must be >= 0")
 
-    clock_result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
-    clock_transitions = clock_result.get("transitions", [])
-    _validate_clock_width(parser, clock_path)
-    edge_times = _extract_edge_times(clock_transitions, edge)
+    edge_times, clock_period = _full_clock_edges(parser, clock_path, edge)
 
     resolved_from_time = start_time_ps is not None or end_time_ps is not None
     if start_time_ps is not None:
@@ -279,7 +276,7 @@ def get_signals_by_cycle(
         "clock_path": clock_path,
         "edge": edge,
         "sample_offset_ps": sample_offset_ps,
-        "clock_period_ps": _compute_clock_period_ps(edge_times),
+        "clock_period_ps": clock_period,
         "total_edges_found": len(edge_times),
         "start_cycle": start_cycle,
         "num_cycles_requested": original_num_cycles,
@@ -535,6 +532,30 @@ def _sample_signals_at_edges(
         except KeyError as exc:
             signal_errors[signal_path] = str(exc)
     return per_edge_signals, signal_errors, transition_signals_truncated
+
+
+def _full_clock_edges(parser, clock_path, edge):
+    """Retain global cycle numbering and period while reusing complete reads.
+
+    Only snapshot-owning parsers opt in; arbitrary mutable parser adapters keep
+    their previous uncached behavior. Native prefixes never enter the cache.
+    """
+    check_cancelled()
+    token = getattr(parser, "_clock_cache_token", None)
+    key = (clock_path, edge)
+    cached = clock_edge_cache.cache.get(token, key)
+    if cached is not None:
+        check_cancelled()
+        return cached
+    result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
+    check_cancelled()
+    _validate_clock_width(parser, clock_path)
+    edges = _extract_edge_times(result.get("transitions", []), edge)
+    period = _compute_clock_period_ps(edges)
+    check_cancelled()
+    if not (result.get("truncated") or result.get("transition_count_is_lower_bound")):
+        clock_edge_cache.cache.put(token, key, edges, period)
+    return edges, period
 
 
 def _validate_clock_width(parser, clock_path: str) -> None:

@@ -142,6 +142,12 @@ TRANSITIONS_MAX_RETURNED = 1000
 # get_signals_by_cycle 单次查询最大周期数
 MAX_CYCLES_PER_QUERY = 256
 
+# Complete clock indexes used by repeated get_signals_by_cycle calls. One
+# clock/edge per parser; limits bound retained arrays, not first-read scratch.
+CLOCK_EDGE_CACHE_MAX_BYTES = 32 * 1024 * 1024
+CLOCK_EDGE_CACHE_ENTRY_MAX_BYTES = 8 * 1024 * 1024
+CLOCK_EDGE_CACHE_MAX_ENTRIES = 64
+
 # parse_sim_log 最多返回的 error group 数
 DEFAULT_MAX_GROUPS = 20
 

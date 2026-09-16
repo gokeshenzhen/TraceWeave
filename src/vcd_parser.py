@@ -10,6 +10,7 @@ from operator import itemgetter
 from pathlib import Path
 
 from src.waveform_hints import annotate_signal_search_result, normalize_vcd_producer
+from src.clock_edge_cache import ClockCacheToken
 
 _transition_time = itemgetter(0)
 
@@ -17,6 +18,7 @@ _transition_time = itemgetter(0)
 class VCDParser:
     def __init__(self, file_path: str):
         self.file_path = file_path
+        self._clock_cache_token = ClockCacheToken()
         self._parsed          = False
         # fs per VCD time unit. Integer fs (not integer ps) so a sub-ps
         # $timescale like 100fs stays exact instead of truncating to 0 and

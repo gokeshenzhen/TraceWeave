@@ -69,6 +69,7 @@ from config import (
 import src.cancellation as cancellation
 import src.operation_metrics as operation_metrics
 from src.cancellation import OperationCancelled
+from src.clock_edge_cache import discard_clock_edges
 from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
@@ -4785,6 +4786,7 @@ def _get_parser(wave_path: str):
     if cached is not None and cached[0] == signature:
         return cached[1]
     if cached is not None:
+        discard_clock_edges(cached[1])
         _dispose_cached_object(cached[1])
     ext = wave_path.lower().rsplit(".", 1)[-1]
     if ext == "vcd":

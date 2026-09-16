@@ -98,6 +98,16 @@ Verification
   zero-filled on each read; the allocation and native signal-loading costs are
   unchanged. Native callers still receive a bounded, terminated prefix when
   their buffer is smaller than the value, and nonpositive capacity is rejected.
+- Repeated `get_signals_by_cycle` calls reuse a complete compact clock-edge
+  vector and its global median period. `src/clock_edge_cache.py` retains one
+  clock/edge per parser, with an 8 MiB entry limit, 32 MiB process array budget
+  and 64-entry LRU cap. Parser replacement, FSDB close and owner collection
+  discard indexes; incomplete native prefixes and oversized indexes bypass
+  caching. Cache hits still observe cancellation. The cache bookkeeping lock
+  never covers waveform I/O and does not replace the process-global FFR lock.
+  Initial full-clock reads and their temporary memory are unchanged; only
+  repeated reads avoid that work. Absolute cycle numbers, total edge counts,
+  global period and public result schemas remain unchanged.
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there. Simulation

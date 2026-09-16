@@ -160,6 +160,12 @@ def main() -> None:
             result["cycle_repeat"] = measure(cycle, [0, 0, 0])
         result["query_digest"] = digest.hexdigest()
         result["rss_peak_kib"] = rss("VmHWM:")
+        try:
+            from src.clock_edge_cache import cache
+        except ImportError:  # Baseline checkouts predate the clock cache.
+            result["clock_cache"] = {"entries": 0, "bytes": 0}
+        else:
+            result["clock_cache"] = cache.snapshot()
     finally:
         close = getattr(reader, "close", None)
         if close:

@@ -17,6 +17,7 @@ from config import (
     SIGNAL_SEARCH_MAX_RESULTS,
 )
 from . import operation_metrics
+from .clock_edge_cache import ClockCacheToken, discard_clock_edges
 
 # Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
@@ -235,6 +236,7 @@ def _transition_group_limit() -> int:
 class FSDBParser:
     def __init__(self, file_path: str):
         self.file_path = file_path
+        self._clock_cache_token = ClockCacheToken()
         self._lib    = None
         self._handle = None
         self._buf    = None
@@ -269,6 +271,7 @@ class FSDBParser:
         )
 
     def close(self):
+        discard_clock_edges(self)
         if self._handle and self._lib:
             if getattr(self, "_transition_group_active", False):
                 profile = _NativeTransitionGroupProfileV1()
