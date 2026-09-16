@@ -276,3 +276,32 @@ def test_transition_group_begin_error_falls_back_to_profiled_read():
     snapshot = operation_metrics.snapshot(metrics)
     assert snapshot["sweep_native_group_begin_error_count"] == 1
     assert snapshot["sweep_native_group_fallback_count"] == 1
+
+
+def test_point_cleanup_failure_closes_reader_before_next_query():
+    class PointLib(_FakeGroupLib):
+        fail = True
+
+        def fsdb_get_value_at_time(self, handle, path, timestamp, buffer, capacity):
+            if self.fail:
+                self.fail = False
+                return -6
+            buffer.value = b"1"
+            return 0
+
+        def fsdb_open(self, path):
+            self.calls.append("reopen")
+            return ctypes.c_void_p(2)
+
+        def fsdb_get_scale_info(self, handle, buffer, size):
+            buffer.value = b"1ps"
+            return 1000
+
+    parser = _fake_group_parser(PointLib())
+    parser._buf = ctypes.create_string_buffer(64)
+    with pytest.raises(RuntimeError, match="reader closed for recovery"):
+        parser.get_value_at_time("top.clk", 5)
+    assert parser._handle is None
+    assert parser._lib.calls == ["close"]
+    assert parser.get_value_at_time("top.clk", 5)["value"]["bin"] == "1"
+    assert parser._lib.calls == ["close", "reopen"]

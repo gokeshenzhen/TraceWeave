@@ -307,6 +307,11 @@ class FSDBParser:
             )
         if rc == -4:
             raise self._scale_unknown_error()
+        if rc == -6:
+            # Do not let a failed native view restoration poison later reads.
+            # A future call will open a fresh handle; close also drops indexes.
+            self.close()
+            raise RuntimeError("FSDB point-read cleanup failed; reader closed for recovery")
         if rc < 0:
             raise RuntimeError(f"fsdb_get_value_at_time failed, rc={rc}")
         return {

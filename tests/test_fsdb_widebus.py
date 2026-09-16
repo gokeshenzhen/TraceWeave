@@ -98,6 +98,20 @@ def test_shared_buffer_terminates_short_values_after_wide_reads(parser):
     assert parser.get_value_at_time("tb.aclk", 5000)["value"]["bin"] == "1"
 
 
+def test_point_reads_preserve_resident_transition_group(parser):
+    signals = ["tb.aclk", "tb.dat1[1023:0]"]
+    expected = {path: parser.get_transitions(path) for path in signals}
+    point = parser.get_value_at_time(signals[1], 30000)
+    with parser.transition_group(signals) as active:
+        assert active
+        assert parser.get_value_at_time(signals[1], 30000) == point
+        assert {path: parser.get_transitions(path) for path in signals} == expected
+        with pytest.raises(RuntimeError, match="rc=-5"):
+            parser.get_value_at_time("tb.vld1", 30000)
+        assert {path: parser.get_transitions(path) for path in signals} == expected
+    assert {path: parser.get_transitions(path) for path in signals} == expected
+
+
 def test_group_loaded_transitions_are_byte_equivalent(parser):
     """One native load for several signals must preserve each signal's legacy
     independent-buffer transition result, including the 1024-bit payload."""

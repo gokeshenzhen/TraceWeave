@@ -108,6 +108,22 @@ Verification
   Initial full-clock reads and their temporary memory are unchanged; only
   repeated reads avoid that work. Absolute cycle numbers, total edge counts,
   global period and public result schemas remain unchanged.
+- Standalone FSDB point reads temporarily restrict FFR loading to the queried
+  time. FFR loads whole flush sessions, so a single-session file gains little
+  from this restriction. `fsdb_point_read.h` saves the current bounds before
+  changing them, releases the traversal and load, then restores those bounds
+  on success, failure and exceptions. Missing bounds or unsupported windows
+  use the previous loading path; an empty partial read retries the original
+  view once. Cleanup failure closes the Python reader before any later query.
+  Active transition groups keep their existing load/view; point reads reuse
+  group members and reject nonmembers without disturbing the group. Range and
+  around-time reads keep their existing predecessor/history behavior. Native
+  calls still run under the global FSDB lock and cancellation is observed after
+  the native call returns. For a reproducible multi-session fixture, generate
+  the benchmark VCD, convert using local Verdi `vcd2fsdb` with
+  `FSDB_ENV_WRITER_MEM_LIMIT=4`, and point `TW_POINT_READ_FSDB` at the result when
+  running `tests/test_fsdb_point_window.py`. `--wrapper` on the benchmark selects
+  a separately compiled baseline library for A/B measurement.
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there. Simulation
