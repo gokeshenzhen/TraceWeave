@@ -82,6 +82,17 @@ Verification
 
 ## Notes
 
+- VCD point and window reads bisect the existing ordered transition records;
+  they do not rebuild a timestamp list or scan the preceding history. Equal
+  timestamps keep file order, including rounded sub-ps events. Query work is
+  O(log N + returned events) with no persistent duplicate time index; the first
+  full-file parse and its memory cost are unchanged. Reproduce reader timings
+  with `scripts/benchmark_waveform_reads.py`: generate a deterministic VCD using
+  `--generate --wave /tmp/activity.vcd --steps 1000000`, then run the same command
+  without `--generate` (optionally `--workload point`, `window`, `around`, or
+  `cycle`). `--source-root` selects another checkout for before/after comparison.
+  The script checks returned values and reports first-load versus repeated-read
+  timing and Linux RSS; it excludes MCP transport, conversion and disk-cold I/O.
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there. Simulation

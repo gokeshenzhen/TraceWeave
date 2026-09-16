@@ -6,6 +6,9 @@ test_vcd_parser.py
 from __future__ import annotations
 
 from pathlib import Path
+import random
+
+import pytest
 
 from src.vcd_parser import VCDParser
 
@@ -249,3 +252,83 @@ def test_missing_timescale_assumes_1ps_and_says_so(tmp_path: Path):
     summary = parser.get_summary()
     assert summary["scale_fs_per_tick"] == 1000
     assert summary["scale_unit"] == "1ps(assumed)"
+
+
+@pytest.mark.parametrize("scale,fs", [("100fs", 100), ("1ps", 1000), ("1ns", 1_000_000)])
+def test_reads_match_linear_oracle_with_duplicate_times(tmp_path, scale, fs):
+    """Preserve event order, X/Z, closed boundaries and strict predecessors."""
+    rng = random.Random(716)
+    content = [f"$timescale {scale} $end", "$scope module dut $end",
+               "$var wire 1 ! sig $end", "$var wire 1 ? empty $end",
+               "$upscope $end", "$enddefinitions $end"]
+    rows = []
+    tick = 7  # Also exercise queries before the first recorded value.
+    for _ in range(100):
+        tick += rng.randrange(4)
+        value = rng.choice("01xz")
+        timestamp = (tick * fs + 999) // 1000
+        enriched = {"bin": value, "hex": "0x" + value if value in "01" else None,
+                    "dec": int(value) if value in "01" else None}
+        rows.append({"time_ps": timestamp, "time_ns": timestamp / 1000, "value": enriched})
+        content.extend((f"#{tick}", value + "!"))
+    wave = tmp_path / "boundaries.vcd"
+    wave.write_text("\n".join(content))
+    parser = VCDParser(str(wave))
+    end = rows[-1]["time_ps"]
+    queries = [-1, 0, end, end + 1] + [row["time_ps"] for row in rows]
+    for timestamp in queries:
+        preceding = [r for r in rows if r["time_ps"] <= timestamp]
+        assert parser.get_value_at_time("sig", timestamp)["value"] == (preceding[-1]["value"] if preceding else None)
+        if timestamp < 0:  # -1 is the range API's end-of-file sentinel.
+            continue
+        for width in (0, 1, 1000):
+            start, stop = max(0, timestamp - width), timestamp + width
+            inside = [r for r in rows if start <= r["time_ps"] <= stop]
+            before = [r for r in rows if r["time_ps"] < start]
+            result = parser.get_transitions("dut.sig", start, stop)
+            assert result["transitions"] == inside
+            assert result["transition_count"] == len(inside)
+            assert result["predecessor"] == (before[-1] if before else None)
+            for extra in (0, 1, 5):
+                around = parser.get_signals_around_time(["dut.sig", "dut.empty"], timestamp, width, extra)
+                signal = around["signals"]["dut.sig"]
+                assert signal["value_at_center"] == (preceding[-1]["value"] if preceding else None)
+                assert signal["transitions_in_window"] == inside
+                assert signal["pre_window_transitions"] == (before[-extra:] if extra else [])
+                assert around["signals"]["dut.empty"] == {
+                    "value_at_center": None, "transitions_in_window": [], "pre_window_transitions": []}
+    assert parser.get_transitions("sig", end + 1, -1)["transitions"] == []
+    assert parser.get_value_at_time("empty", end)["value"] is None
+
+
+def test_small_reads_do_not_visit_full_signal_history(tmp_path):
+    """A million-event signal must support small reads with bounded work."""
+    class Records:
+        visits = 0
+
+        def __len__(self):
+            return 1_000_001
+
+        def __getitem__(self, index):
+            if isinstance(index, slice):
+                return [self[i] for i in range(*index.indices(len(self)))]
+            if index < 0:
+                index += len(self)
+            if not 0 <= index < len(self):
+                raise IndexError(index)
+            self.visits += 1
+            assert self.visits < 1000, "small query walked the full signal history"
+            return index * 10, str(index % 2)
+
+    wave = tmp_path / "wave.vcd"
+    wave.write_text(VCD_SAMPLE)
+    parser = VCDParser(str(wave))
+    parser._ensure_parsed()
+    records = Records()
+    parser._transitions["!"] = records
+    assert parser.get_value_at_time("top_tb.clk", 9_500_010)["value"]["bin"] == "1"
+    result = parser.get_transitions("top_tb.clk", 9_500_010, 9_500_030)
+    assert [r["time_ps"] for r in result["transitions"]] == [9_500_010, 9_500_020, 9_500_030]
+    signal = parser.get_signals_around_time(["top_tb.clk"], 9_500_020, 10, 2)["signals"]["top_tb.clk"]
+    assert signal["transitions_in_window"] == result["transitions"]
+    assert [r["time_ps"] for r in signal["pre_window_transitions"]] == [9_499_990, 9_500_000]

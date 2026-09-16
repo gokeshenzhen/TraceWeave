@@ -6,9 +6,12 @@ The public API matches FSDBParser.
 
 import re
 from bisect import bisect_left, bisect_right
+from operator import itemgetter
 from pathlib import Path
 
 from src.waveform_hints import annotate_signal_search_result, normalize_vcd_producer
+
+_transition_time = itemgetter(0)
 
 
 class VCDParser:
@@ -47,11 +50,10 @@ class VCDParser:
         self._ensure_parsed()
         sym   = self._resolve(signal_path)
         trans = self._transitions.get(sym, [])
-        times = [t for t, _ in trans]
         if end_ps == -1:
             end_ps = self._end_time_ps
-        lo = bisect_left(times, start_ps)
-        hi = bisect_right(times, end_ps)
+        lo = bisect_left(trans, start_ps, key=_transition_time)
+        hi = bisect_right(trans, end_ps, key=_transition_time)
         filtered = trans[lo:hi]
         predecessor = trans[lo - 1] if lo > 0 else None
         return {
@@ -83,13 +85,15 @@ class VCDParser:
             try:
                 sym   = self._resolve(path)
                 trans = self._transitions.get(sym, [])
-                filtered = [(t, v) for t, v in trans if start_ps <= t <= end_ps]
+                lo = bisect_left(trans, start_ps, key=_transition_time)
+                hi = bisect_right(trans, end_ps, key=_transition_time)
+                filtered = trans[lo:hi]
                 # extra_transitions=0 must mean ZERO pre-window history: a bare
                 # [-extra_transitions:] slice is the full list when extra is 0
                 # ([-0:] == [0:]), which leaked the entire pre-window history.
                 # The FSDB wrapper already guards `extra_transitions > 0`.
                 if extra_transitions > 0:
-                    pre_window = [(t, v) for t, v in trans if t < start_ps][-extra_transitions:]
+                    pre_window = trans[max(0, lo - extra_transitions):lo]
                 else:
                     pre_window = []
                 result[path] = {
@@ -257,11 +261,14 @@ class VCDParser:
 # ── Utility ────────────────────────────────────────────────────────
 
 def _value_at(transitions: list, time_ps: int):
-    """Return the value at time_ps using binary search over transitions."""
+    """Search existing records in O(log N), without copying their timestamps.
+
+    Search only the time key: rounded sub-ps events and multiple changes in
+    one tick may have equal timestamps and must retain their file order.
+    """
     if not transitions:
         return None
-    times = [t for t, _ in transitions]
-    idx = bisect_right(times, time_ps) - 1
+    idx = bisect_right(transitions, time_ps, key=_transition_time) - 1
     if idx < 0:
         return None
     return transitions[idx][1]
