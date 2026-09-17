@@ -13,11 +13,13 @@ registered with MCP, and does not alter production routing.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from .dynamic_evidence import Expr, TRUE, Assignment as DynamicAssignment
+from . import slang_dynamic
 
 from .connectivity_ir import (
     AssignmentFact,
@@ -1122,6 +1124,8 @@ class SlangConnectivityProjector:
             guard=None,
             generate_scope=generate_scope,
             fallback_location=self._location(symbol.location),
+            dynamic=slang_dynamic.assignment(self, assignment, record, aliases,
+                                             process=str(symbol.location)),
         )
 
     def _project_procedural_block(
@@ -1132,9 +1136,10 @@ class SlangConnectivityProjector:
         generate_scope: str | None,
     ) -> list[AssignmentFact]:
         procedure_kind = str(block.procedureKind.name)
+        clock, edge, dynamic_gaps = slang_dynamic.timing(self, block, record, aliases)
         boundary = (
             BoundaryKind.SEQUENTIAL
-            if procedure_kind == "AlwaysFF"
+            if procedure_kind == "AlwaysFF" or edge
             else BoundaryKind.COMBINATIONAL
         )
         facts: list[AssignmentFact] = []
@@ -1143,6 +1148,7 @@ class SlangConnectivityProjector:
             statement: Any,
             controls: tuple[SignalSelection, ...],
             guards: tuple[str, ...],
+            dynamic_guard: Expr = TRUE,
         ) -> None:
             if statement is None:
                 return
@@ -1156,15 +1162,15 @@ class SlangConnectivityProjector:
                     )
                 )
                 walk(
-                    statement.stmt, _merge_selections(controls, timing_controls), guards
+                    statement.stmt, _merge_selections(controls, timing_controls), guards, dynamic_guard
                 )
                 return
             if kind == "Block":
-                walk(statement.body, controls, guards)
+                walk(statement.body, controls, guards, dynamic_guard)
                 return
             if kind == "List":
                 for child in statement.list:
-                    walk(child, controls, guards)
+                    walk(child, controls, guards, dynamic_guard)
                 return
             if kind == "Conditional":
                 condition_exprs = tuple(
@@ -1182,8 +1188,12 @@ class SlangConnectivityProjector:
                 guard_text = " && ".join(_syntax_text(item) for item in condition_exprs)
                 next_controls = _merge_selections(controls, condition_controls)
                 next_guards = guards + ((guard_text or "conditional"),)
-                walk(statement.ifTrue, next_controls, next_guards)
-                walk(statement.ifFalse, next_controls, next_guards)
+                condition = TRUE
+                for item in condition_exprs:
+                    condition = Expr("and", 1, (condition, slang_dynamic.expression(self, item, record, aliases)))
+                walk(statement.ifTrue, next_controls, next_guards, Expr("and", 1, (dynamic_guard, condition)))
+                walk(statement.ifFalse, next_controls, guards + (f"!({guard_text})",),
+                     Expr("and", 1, (dynamic_guard, Expr("not", 1, (condition,)))))
                 return
             if kind == "ProceduralAssign":
                 runtime_facts = self._assignment_facts(
@@ -1246,6 +1256,10 @@ class SlangConnectivityProjector:
                         guard=" && ".join(guards) or None,
                         generate_scope=generate_scope,
                         fallback_location=self._location(block.location),
+                        dynamic=slang_dynamic.assignment(
+                            self, statement.expr, record, aliases, process=str(block.location),
+                            order=len(facts), guard=dynamic_guard, clock=clock, edge=edge,
+                            gaps=dynamic_gaps),
                     )
                 )
                 return
@@ -1279,6 +1293,16 @@ class SlangConnectivityProjector:
                     )
 
         walk(block.body, (), ())
+        if edge and any(fact.dynamic is not None and not fact.dynamic.nonblocking for fact in facts):
+            facts = [replace(fact, dynamic=replace(fact.dynamic,
+                     gaps=tuple(dict.fromkeys((*fact.dynamic.gaps, "procedural_temporary_unresolved")))))
+                     if fact.dynamic is not None else fact for fact in facts]
+        if edge is None:
+            written = {fact.target.symbol for fact in facts}
+            if any(dep.source.symbol in written for fact in facts for dep in fact.dependencies):
+                facts = [replace(fact, dynamic=replace(fact.dynamic,
+                         gaps=(*fact.dynamic.gaps, "procedural_temporary_unresolved")))
+                         if fact.dynamic is not None else fact for fact in facts]
         return facts
 
     def _assignment_facts(
@@ -1294,6 +1318,7 @@ class SlangConnectivityProjector:
         guard: str | None,
         generate_scope: str | None,
         fallback_location: SourceLocation | None,
+        dynamic: DynamicAssignment | None = None,
     ) -> list[AssignmentFact]:
         targets = self._template_exact_operands(assignment.left, record, aliases)
         if not targets:
@@ -1375,6 +1400,7 @@ class SlangConnectivityProjector:
             facts.append(
                 AssignmentFact(
                     assignment_id=assignment_id,
+                    dynamic=dynamic if len(targets) == 1 else None,
                     kind=kind,
                     target=target,
                     dependencies=all_dependencies,

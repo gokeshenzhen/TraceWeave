@@ -397,6 +397,10 @@ class SourceGraphConnectivityBackend:
         )
         return result
 
+    def get_dynamic_step(self, signal_path: str, **_kwargs) -> dict:
+        from .source_graph_dynamic import query_step
+        return query_step(self, signal_path)
+
     def find_loads(
         self,
         signal_path: str,

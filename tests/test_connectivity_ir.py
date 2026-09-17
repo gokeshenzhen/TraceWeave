@@ -133,7 +133,7 @@ def test_ir_serialization_roundtrip_and_fingerprint_are_deterministic():
     decoded = json.loads(payload)
     restored = ConnectivityIR.from_json_bytes(payload)
 
-    assert decoded["ir_version"] == "1.2"
+    assert decoded["ir_version"] == "1.3"
     assert restored.to_dict() == ir.to_dict()
     assert restored.fingerprint_sha256() == ir.fingerprint_sha256()
     assert len(ir.fingerprint_sha256()) == 64

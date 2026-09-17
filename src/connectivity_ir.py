@@ -14,9 +14,10 @@ from enum import Enum
 import hashlib
 import json
 from typing import Any, Iterable, Mapping
+from .dynamic_evidence import Assignment as DynamicAssignment
 
 
-CONNECTIVITY_IR_VERSION = "1.2"
+CONNECTIVITY_IR_VERSION = "1.3"
 
 
 class DefinitionKind(str, Enum):
@@ -388,6 +389,7 @@ class AssignmentFact:
     procedure_kind: str | None = None
     guard: str | None = None
     generate_scope: str | None = None
+    dynamic: DynamicAssignment | None = None
 
     def __post_init__(self) -> None:
         if not self.assignment_id:
@@ -901,6 +903,7 @@ def _dependency_from_dict(payload: Mapping[str, Any]) -> DependencyFact:
 def _assignment_from_dict(payload: Mapping[str, Any]) -> AssignmentFact:
     return AssignmentFact(
         assignment_id=str(payload["assignment_id"]),
+        dynamic=(DynamicAssignment.from_dict(payload["dynamic"]) if payload.get("dynamic") else None),
         kind=EdgeKind(payload["kind"]),
         target=_selection_from_dict(payload["target"]),
         dependencies=tuple(

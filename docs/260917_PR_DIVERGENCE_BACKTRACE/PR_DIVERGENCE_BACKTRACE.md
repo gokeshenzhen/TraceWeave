@@ -2,7 +2,9 @@
 
 状态：实施中。按文档、M1、M2、M3 分阶段验证并分别提交；本文中的验收要求不表示对应功能已经交付。
 
-已完成 M1：覆盖感知比较、同刻最终值合并、截断尾组保护、精确 A/B 上下文动作及执行时验证。亚 ps 数据目前保守标记 `time_precision_loss`，不证明无差异或最早性。M1 定向回归 419 项通过，包含既有 driver、NPI/LSF、Source Graph 路由和服务器并发测试。M2/M3 尚在实施。
+已完成 M1：覆盖感知比较、同刻最终值合并、截断尾组保护、精确 A/B 上下文动作及执行时验证。亚 ps 数据目前保守标记 `time_precision_loss`，不证明无差异或最早性。M1 定向回归 419 项通过，包含既有 driver、NPI/LSF、Source Graph 路由和服务器并发测试。
+
+已完成 M2：共享表达式/时间观察合同、NPI cell/pin 与 Source Graph AST 投影、LSF 单步请求、IR 1.3 序列化和缓存隔离。真实 VCS/NPI 验证 mux、复位/使能、双边沿、复合条件、常量/拼接、相等比较、异步边界和双 KDB 交错；Source Graph 真实前端验证条件极性、普通 always、未知/不支持语义。390 项相关回归通过（无 pyslang 启动检查单独在普通解释器运行），另有 5 项 NPI 动态/传输回归通过。M3 尚在实施。
 
 建议 PR 标题：`feat(debug): connect waveform divergence to bounded driver backtrace`
 
