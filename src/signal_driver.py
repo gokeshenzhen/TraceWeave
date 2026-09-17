@@ -65,10 +65,11 @@ def explain_signal_driver(
     recursive: bool = False,
     max_depth: int = 10,
     simulator: str = 'auto',
+    compile_result: dict | None = None,
 ) -> dict[str, Any]:
     check_cancelled()
     module_index, top_module = _build_module_index(
-        compile_log, top_hint, simulator, signal_path=signal_path,
+        compile_log, top_hint, simulator, signal_path=signal_path, compile_result=compile_result,
     )
     if recursive:
         return _explain_recursive(signal_path, wave_path, top_module, module_index, max_depth)
@@ -80,8 +81,10 @@ def _build_module_index(
     top_hint: str | None = None,
     simulator: str = 'auto',
     signal_path: str | None = None,
+    compile_result: dict | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str]:
-    compile_result = parse_compile_log(compile_log, simulator)
+    if compile_result is None:
+        compile_result = parse_compile_log(compile_log, simulator)
     file_entries = compile_result.get("files", {}).get("user", [])
     scans: list[dict[str, Any]] = []
     for entry in file_entries:

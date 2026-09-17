@@ -335,6 +335,10 @@ class VerdiNpiBackend:
 
     # ── public API matching ConnectivityBackend ────────────────────────
 
+    def bind_compile_context(self, compile_result: dict) -> None:
+        """Bind one immutable caller-validated compile context to this instance."""
+        self._bound_compile_result = compile_result
+
     def find_driver(
         self,
         signal_path: str,
@@ -348,7 +352,9 @@ class VerdiNpiBackend:
     ) -> dict[str, Any]:
         self._last_query_kdb_status = None
         try:
-            compile_result = parse_compile_log(compile_log, simulator)
+            compile_result = getattr(self, "_bound_compile_result", None)
+            if compile_result is None:
+                compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:

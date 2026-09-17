@@ -454,6 +454,9 @@ class LsfConnectivityBackend:
     name = "verdi_npi"
     uses_external_worker = True
 
+    def bind_compile_context(self, compile_result: dict) -> None:
+        self._bound_compile_result = compile_result
+
     def __init__(
         self,
         config: NpiExecutionConfig,
@@ -633,7 +636,9 @@ class LsfConnectivityBackend:
         if not self._config.valid:
             return None, "npi_lsf_config_invalid"
         try:
-            compile_result = parse_compile_log(compile_log, simulator)
+            compile_result = getattr(self, "_bound_compile_result", None)
+            if compile_result is None:
+                compile_result = parse_compile_log(compile_log, simulator)
             status = probe_verdi_backend(
                 compile_result,
                 compile_log_path=compile_log,

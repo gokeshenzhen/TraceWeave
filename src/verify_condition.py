@@ -81,78 +81,16 @@ def diff_first_divergence(
     deterministic on ``(wave_path_a, signal_a, wave_path_b, signal_b)``
     so repeated calls converge on the same name.
     """
-    parser_a = get_parser(wave_path_a)
-    parser_b = parser_a if wave_path_a == wave_path_b else get_parser(wave_path_b)
+    from .divergence_compare import compare_signals
 
-    tr_a = parser_a.get_transitions(signal_a, start_ps, end_ps)
-    tr_b = parser_b.get_transitions(signal_b, start_ps, end_ps)
-
-    # Resolve the effective window. Some backends (FSDB) echo end_ps=-1
-    # ("to end of sim") straight back instead of resolving it to the real
-    # end time; clamp such values against the actual transition extents so
-    # the window doesn't collapse. (VCD resolves -1 itself, which is why
-    # VCD-only unit tests did not surface this.)
-    eff_start = max(_resolve_start(tr_a, start_ps), _resolve_start(tr_b, start_ps))
-    eff_end = min(_resolve_end(tr_a), _resolve_end(tr_b))
-
-    result: dict[str, Any] = {
-        "diverged": False,
-        "wave_path_a": wave_path_a,
-        "wave_path_b": wave_path_b,
-        "signal_a": signal_a,
-        "signal_b": signal_b,
-        "start_ps": eff_start,
-        "end_ps": eff_end,
-        "first_divergence_time_ps": None,
-        "value_a": None,
-        "value_b": None,
-        "cursor": None,
-        "transitions_compared": 0,
-        "missing_a": False,
-        "missing_b": False,
-        "note": None,
-    }
-
-    if eff_end < eff_start:
-        result["note"] = "empty effective window (end_ps < start_ps after clamping)"
-        return result
-
-    events_a = _collect_transitions(tr_a, eff_start, eff_end)
-    events_b = _collect_transitions(tr_b, eff_start, eff_end)
-
-    # Seed values at the start of the effective window from the parser's
-    # last-known value, so a signal that diverges from the very first
-    # sample (no transitions inside the window) still surfaces.
-    val_a = _value_at(parser_a, signal_a, eff_start)
-    val_b = _value_at(parser_b, signal_b, eff_start)
-
-    # If both signals already hold concrete, comparable values at
-    # eff_start and they differ, the divergence point IS eff_start.
-    if _is_known(val_a) and _is_known(val_b) and val_a != val_b:
-        result["diverged"] = True
-        result["first_divergence_time_ps"] = eff_start
-        result["value_a"] = val_a
-        result["value_b"] = val_b
-        result["transitions_compared"] = 0
-        _attach_cursor(result, cursor_store, eff_start, val_a, val_b,
-                       wave_path_a, signal_a, wave_path_b, signal_b,
-                       cursor_name, cursor_note)
-        return result
-
-    div = _walk_first_divergence(events_a, events_b, val_a, val_b)
-    result["transitions_compared"] = div["events_seen"]
-
-    if div["time_ps"] is None:
-        result["note"] = "signals agree across the window"
-        return result
-
-    result["diverged"] = True
-    result["first_divergence_time_ps"] = div["time_ps"]
-    result["value_a"] = div["value_a"]
-    result["value_b"] = div["value_b"]
-    _attach_cursor(result, cursor_store, div["time_ps"], div["value_a"], div["value_b"],
-                   wave_path_a, signal_a, wave_path_b, signal_b,
-                   cursor_name, cursor_note)
+    result = compare_signals(
+        get_parser=get_parser, wave_path_a=wave_path_a, signal_a=signal_a,
+        wave_path_b=wave_path_b, signal_b=signal_b, start_ps=start_ps, end_ps=end_ps,
+    )
+    if result["diverged"]:
+        _attach_cursor(result, cursor_store, result["first_divergence_time_ps"],
+                       result["value_a"], result["value_b"], wave_path_a, signal_a,
+                       wave_path_b, signal_b, cursor_name, cursor_note)
     return result
 
 

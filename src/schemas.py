@@ -1390,6 +1390,26 @@ class CursorDeleteResult(SchemaModel):
     deleted: bool
 
 
+class DivergenceContext(SchemaModel):
+    compile_log: str = Field(min_length=1)
+    simulator: Literal["auto", "vcs", "xcelium"] = "auto"
+    supplementary_compile_logs: list[str] = Field(default_factory=list, max_length=16)
+    top_hint: str | None = None
+    hierarchy_handle: str | None = None
+    snapshot_sha256: str | None = None
+
+
+class DivergenceNextAction(SchemaModel):
+    side: Literal["a", "b", "both"]
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str
+    status: Literal["ready", "needs_context", "needs_prerequisite"]
+    missing_fields: list[str] = Field(default_factory=list)
+    prerequisite_calls: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class DiffFirstDivergenceResult(SchemaModel):
     diverged: bool
     wave_path_a: str
@@ -1406,6 +1426,16 @@ class DiffFirstDivergenceResult(SchemaModel):
     missing_a: bool = False
     missing_b: bool = False
     note: str | None = None
+    comparison_status: Literal["different", "equal", "inconclusive"] = "inconclusive"
+    coverage_status: Literal["complete", "partial", "none"] = "none"
+    earliest_difference_proven: bool = False
+    coverage_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    next_actions: list[DivergenceNextAction] = Field(default_factory=list)
+    requested_start_ps: int | None = None
+    requested_end_ps: int | None = None
+    width_a: int | None = None
+    width_b: int | None = None
+    excluded_intervals: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PeriodResult(SchemaModel):

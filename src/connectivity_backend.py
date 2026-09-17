@@ -73,6 +73,9 @@ class StaticConnectivityBackend:
 
     name = "static"
 
+    def bind_compile_context(self, compile_result: dict) -> None:
+        self._bound_compile_result = compile_result
+
     def find_driver(
         self,
         signal_path: str,
@@ -92,6 +95,8 @@ class StaticConnectivityBackend:
             recursive=recursive,
             max_depth=max_depth,
             simulator=simulator,
+            **({"compile_result": self._bound_compile_result}
+               if hasattr(self, "_bound_compile_result") else {}),
         )
 
     def find_loads(

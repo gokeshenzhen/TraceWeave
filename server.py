@@ -86,6 +86,7 @@ from src.compile_source_runtime import (
     compile_source_index_key,
 )
 from src.cursor_store import CursorStore
+from src.divergence_context import resolve_context as resolve_divergence_context, driver_action
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import (
     HandleStore,
@@ -790,6 +791,10 @@ async def _resolve_connectivity_hierarchy_context(
     simulator: str,
 ) -> tuple[dict | None, str, dict | None, str | None]:
     """Prefer a full hierarchy, then optionally prove a bounded one."""
+
+    bound = args.get("_bound_context")
+    if bound is not None:
+        return bound.hierarchy, bound.snapshot, None, None
 
     hierarchy_result, snapshot = _resolve_hierarchy_context(
         args["compile_log"], simulator
@@ -2723,8 +2728,10 @@ async def _route_public_connectivity(
         select_backend,
     )
 
+    bound = args.get("_bound_context")
     backend_status = await _run_in_cancellable_thread(
-        lambda: _safe_probe_backend(args["compile_log"], simulator)
+        lambda: (probe_verdi_backend(bound.compile_result, compile_log_path=args["compile_log"])
+                 if bound is not None else _safe_probe_backend(args["compile_log"], simulator))
     )
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
@@ -2736,6 +2743,8 @@ async def _route_public_connectivity(
         npi_backend = deferred
         npi_selection_reason = "npi_backend_initialization_failed"
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    if bound is not None and hasattr(npi_backend, "bind_compile_context"):
+        npi_backend.bind_compile_context(bound.compile_result)
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
     npi_execution: dict | None = None
@@ -3400,6 +3409,8 @@ async def _route_public_connectivity(
     source_graph_receipt["fallback_used"] = True
     final_reason = source_graph_reason
     static_backend = StaticConnectivityBackend()
+    if bound is not None:
+        static_backend.bind_compile_context(bound.compile_result)
     static_result = await _call_public_connectivity_operation(
         static_backend,
         operation=operation,
@@ -5719,6 +5730,7 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    "compile_context": schemas.DivergenceContext.model_json_schema(),
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
@@ -6115,7 +6127,9 @@ async def list_tools():
         Tool(
             name="diff_first_divergence",
             description=(
-                "Find the first time two signals hold unequal values. Works across "
+                "Find the first observed known-value difference, with explicit coverage "
+                "and earliest_difference_proven. X/Z, missing values, truncation and time "
+                "precision gaps never prove equality. Works across "
                 "two waveforms (passing run vs failing run) or within one waveform "
                 "between two signals (expected vs actual). Auto-registers a cursor at "
                 "the divergence time so downstream calls can reference it by name. "
@@ -6140,6 +6154,8 @@ async def list_tools():
                         "type": "string",
                         "description": "Full hierarchical signal path in wave_path_b.",
                     },
+                    "context_a": schemas.DivergenceContext.model_json_schema(),
+                    "context_b": schemas.DivergenceContext.model_json_schema(),
                     "start_time_ps": {
                         **_integer_or_string_schema(),
                         "description": "Start of comparison window. Default 0."
@@ -6887,7 +6903,27 @@ async def call_tool(name: str, arguments: dict):
 
 
 async def _dispatch(name: str, args: dict):
-    block = _check_prerequisites(name, args)
+    # An exact action is independent of the mutable most-recent session gate.
+    bound = None
+    if name == "explain_signal_driver" and args.get("compile_context") is not None:
+        bound, reason = await _run_in_cancellable_thread(
+            lambda: resolve_divergence_context(args["compile_context"], _handle_store)
+        )
+        if bound is None:
+            return schemas.PrerequisiteBlockResult.model_validate({
+                "ok": False, "error_code": reason, "missing_step": "build_tb_hierarchy",
+                "required_before": name, "reason": reason,
+                "suggested_call": {"tool": "build_tb_hierarchy", "arguments": {
+                    k: v for k, v in args["compile_context"].items()
+                    if k in {"compile_log", "simulator", "supplementary_compile_logs"}}},
+            })
+        if not _same_realpath(args["compile_log"], bound.context["compile_log"]):
+            raise ValueError("compile_context does not match compile_log")
+        if args.get("top_hint") not in (None, bound.context.get("top_hint")):
+            raise ValueError("compile_context does not match top_hint")
+        args = {**args, "_bound_context": bound, "simulator": bound.context["simulator"],
+                "top_hint": bound.context.get("top_hint")}
+    block = None if bound is not None else _check_prerequisites(name, args)
     if block is not None:
         return schemas.PrerequisiteBlockResult.model_validate(block)
 
@@ -7672,6 +7708,8 @@ async def _dispatch(name: str, args: dict):
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if bound is not None and not await _run_in_cancellable_thread(bound.current):
+            raise ValueError("compile_context_changed")
         return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "find_signal_loads":
@@ -7760,6 +7798,10 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "diff_first_divergence":
 
+        contexts = {side: (schemas.DivergenceContext.model_validate(args[f"context_{side}"]).model_dump(exclude_none=True)
+                           if args.get(f"context_{side}") is not None else None)
+                    for side in ("a", "b")}
+
         def _work():
             result = diff_first_divergence(
                 get_parser=_get_parser,
@@ -7769,15 +7811,29 @@ async def _dispatch(name: str, args: dict):
                 signal_b=args["signal_b"],
                 start_ps=_resolve_time(args.get("start_time_ps", 0)),
                 end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-                cursor_store=_cursor_store,
+                cursor_store=None,
                 cursor_name=args.get("cursor_name"),
                 cursor_note=args.get("cursor_note"),
             )
-            return schemas.DiffFirstDivergenceResult.model_validate(result)
+            return result
 
-        return await _run_in_wave_thread(
+        result = await _run_in_wave_thread(
             [args["wave_path_a"], args["wave_path_b"]], _work
         )
+        if result["diverged"]:
+            for side, ctx in contexts.items():
+                resolved, reason = (await _run_in_cancellable_thread(
+                    lambda ctx=ctx: resolve_divergence_context(ctx, _handle_store)
+                )) if ctx is not None else (None, "context_missing")
+                result["next_actions"].append(driver_action(result=result, side=side, context=ctx,
+                                                            bound=resolved, reason=reason))
+            from src.verify_condition import _attach_cursor
+            _attach_cursor(result, _cursor_store, result["first_divergence_time_ps"],
+                           result["value_a"], result["value_b"], args["wave_path_a"], args["signal_a"],
+                           args["wave_path_b"], args["signal_b"], args.get("cursor_name"), args.get("cursor_note"))
+            for action in result["next_actions"]:
+                action["evidence"]["cursor_name"] = result["cursor"]["name"]
+        return schemas.DiffFirstDivergenceResult.model_validate(result)
 
     elif name == "period":
 

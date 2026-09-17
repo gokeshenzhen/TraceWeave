@@ -2,6 +2,8 @@
 
 状态：实施中。按文档、M1、M2、M3 分阶段验证并分别提交；本文中的验收要求不表示对应功能已经交付。
 
+已完成 M1：覆盖感知比较、同刻最终值合并、截断尾组保护、精确 A/B 上下文动作及执行时验证。亚 ps 数据目前保守标记 `time_precision_loss`，不证明无差异或最早性。M1 定向回归 419 项通过，包含既有 driver、NPI/LSF、Source Graph 路由和服务器并发测试。M2/M3 尚在实施。
+
 建议 PR 标题：`feat(debug): connect waveform divergence to bounded driver backtrace`
 
 ## 1. 问题与目标
