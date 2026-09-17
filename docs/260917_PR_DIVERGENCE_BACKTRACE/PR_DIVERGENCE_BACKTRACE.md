@@ -1,10 +1,12 @@
 # PR 提案：首次差异与有界驱动回溯联动
 
-状态：实施中。按文档、M1、M2、M3 分阶段验证并分别提交；本文中的验收要求不表示对应功能已经交付。
+状态：M1、M2、M3 已实现并验证，按文档、M1、M2、M3 分别提交。实测范围和未验证集成项见第 14、16 节。
 
 已完成 M1：覆盖感知比较、同刻最终值合并、截断尾组保护、精确 A/B 上下文动作及执行时验证。亚 ps 数据目前保守标记 `time_precision_loss`，不证明无差异或最早性。M1 定向回归 419 项通过，包含既有 driver、NPI/LSF、Source Graph 路由和服务器并发测试。
 
-已完成 M2：共享表达式/时间观察合同、NPI cell/pin 与 Source Graph AST 投影、LSF 单步请求、IR 1.3 序列化和缓存隔离。真实 VCS/NPI 验证 mux、复位/使能、双边沿、复合条件、常量/拼接、相等比较、异步边界和双 KDB 交错；Source Graph 真实前端验证条件极性、普通 always、未知/不支持语义。390 项相关回归通过（无 pyslang 启动检查单独在普通解释器运行），另有 5 项 NPI 动态/传输回归通过。M3 尚在实施。
+已完成 M2：共享表达式/时间观察合同、NPI cell/pin 与 Source Graph AST 投影、LSF 单步请求、IR 1.3 序列化和缓存隔离。真实 VCS/NPI 验证 mux、复位/使能、双边沿、复合条件、常量/拼接、相等比较、异步边界和双 KDB 交错；Source Graph 真实前端验证条件极性、普通 always、未知/不支持语义。390 项相关回归通过（无 pyslang 启动检查单独在普通解释器运行），另有 5 项 NPI 动态/传输回归通过。
+
+已完成 M3：公开 `trace_divergence`、双侧冻结上下文、NPI 优先路由、整图降级/扩域重启、严格历史采样、有限证据图和共享总预算。最终主回归 960 项通过、40 项跳过；另用已有 Slang 环境与真实 VCS/NPI 跑通 42 项专项检查，包括同名层次的双 KDB 公共入口验证。两种路由均完成六类可复现基准。
 
 建议 PR 标题：`feat(debug): connect waveform divergence to bounded driver backtrace`
 
@@ -408,7 +410,7 @@ NPI 与 Source Graph 都是第一版动态语义的必选实现路径。默认�
 | NPI 动态证据 | `src/verdi_npi_backend.py`：单步 cell/pin 及必要 HDL 证据；`src/npi_lsf.py` / `src/npi_worker.py`：同一能力的 LSF 执行 |
 | 波形采样 | `src/cycle_query.py`、`src/waveform_batch.py` 及必要的 parser 证据扩展；不随意改已有 sampler 默认行为 |
 | 配置与指标 | `config.py`、`src/operation_metrics.py`：集中预算及允许的聚合指标 |
-| 回归 | 扩展现有测试，并新增 `tests/test_divergence_trace.py` 与双侧公开路由测试 |
+| 回归 | 扩展现有测试，并新增 `tests/test_trace_divergence.py` 与双侧公开路由测试 |
 | 基准 | 新增可重复的差异回溯基准脚本，使用独立构造的本地设计和波形 |
 | 使用文档 | 实现完成后更新已跟踪的 `README.md`、`README.zh.md`、`docs/architecture.md`、`docs/workflow.md` |
 
@@ -460,7 +462,7 @@ NPI 与 Source Graph 都是第一版动态语义的必选实现路径。默认�
 先运行无需真实 EDA 进程的聚焦测试。回归入口至少覆盖：
 
 ```bash
-pytest -q tests/test_verify_condition.py tests/test_divergence_trace.py tests/test_schemas.py tests/test_server.py
+pytest -q tests/test_verify_condition.py tests/test_trace_divergence.py tests/test_schemas.py tests/test_server.py
 pytest -q tests/test_cycle_query.py tests/test_connectivity_ir.py tests/test_source_graph_backend.py
 pytest -q tests/test_server_concurrency.py tests/test_source_graph_trace_public_routing.py
 ```
@@ -483,18 +485,83 @@ pytest -q tests/test_server_concurrency.py tests/test_source_graph_trace_public_
 
 如果没有测得性能提升，准确报告实际结果。本 PR 的功能价值可以是减少人工接力、改善证据完整性，不需要用未经测量的速度倍数证明。
 
+### 14.1 实测结果（2026-09-17）
+
+复现入口：`scripts/benchmark_divergence_trace.py`；独立 RTL、波形时序表和预期节点在 `scripts/divergence_benchmark_workloads.py`。基准同时校验首次差异、两侧输入值、实际时钟边沿、图节点及共享边；缺失 dump 必须保持 partial，不能产生本地逻辑排除结论。
+
+```bash
+python3.11 scripts/benchmark_divergence_trace.py --backend source_graph --workload all --repeats 3 --output /tmp/divergence-source.json
+python3.11 scripts/benchmark_divergence_trace.py --backend npi --workload all --repeats 3 --output /tmp/divergence-npi.json
+```
+
+条件：Python 3.11.13、Slang/pyslang 11、VCS/Verdi V-2023.12-SP2，本地 NPI；VCD 1 ps，8 位数据（菱形图输出 16 位），20–30 ps 窗口。每个工作负载的手工/自动方案分别启动新进程，依次独立运行；一次冷调用加三次热调用。层次构建、并行结构扫描、VCS 编译均在计时外；关闭磁盘和 semantic-session 缓存，热调用复用正常 parser/IR/NPI 缓存。使用公开默认预算 8/128/16/30 秒。计时范围为进程内公开 dispatch，包含工具 CPU/IO，不含 MCP 传输、模型推理或人工决策等待。单次冷值和三次热最大值仅为本轮观测，不作为尾延迟分位数。
+
+下表每个数值对都是“手工组合 / 自动回溯”；自动方案每次只需一个公开调用。
+
+| 请求路由 | 工作负载 | 冷调用 ms | 热中位数 ms | 热最大值 ms | 服务器峰值 RSS KiB | 自动状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Source Graph | 使能寄存器 | 207.561 / 209.528 | 6.793 / 5.395 | 7.852 / 5.471 | 70640 / 70696 | partial |
+| Source Graph | 组合链 | 205.924 / 203.297 | 9.489 / 6.218 | 9.538 / 6.542 | 70276 / 68676 | partial |
+| Source Graph | 两级流水线/保持 | 205.095 / 201.404 | 9.410 / 6.087 | 10.837 / 6.564 | 68660 / 68984 | partial |
+| Source Graph | 16 路无关扇入 | 229.092 / 228.852 | 6.961 / 6.786 | 7.835 / 7.366 | 69424 / 69524 | partial |
+| Source Graph | 共享上游菱形图 | 215.028 / 208.344 | 12.246 / 7.071 | 12.402 / 7.806 | 68924 / 69028 | partial |
+| Source Graph | 缺失输入 dump | 200.315 / 201.168 | 3.420 / 4.050 | 3.430 / 4.513 | 70760 / 68556 | partial |
+| NPI 优先 | 使能寄存器 | 4166.522 / 3067.648 | 13.844 / 10.812 | 14.150 / 10.945 | 170572 / 170560 | complete |
+| NPI 优先 | 组合链 | 3081.313 / 3074.533 | 21.279 / 11.941 | 21.711 / 12.133 | 170524 / 172108 | complete |
+| NPI 优先 | 两级流水线/保持 | 3251.693 / 3086.487 | 20.818 / 12.631 | 21.954 / 13.032 | 170704 / 172420 | complete |
+| NPI 优先 | 16 路无关扇入 | 3083.267 / 3305.819 | 20.575 / 24.751 | 21.506 / 25.488 | 171940 / 173472 | partial |
+| NPI 优先 | 共享上游菱形图 | 3093.111 / 3075.553 | 30.822 / 15.067 | 30.822 / 15.939 | 170012 / 173912 | complete |
+| NPI 优先 | 缺失输入 dump | 3060.635 / 3081.321 | 6.862 / 9.559 | 7.039 / 10.258 | 170060 / 171760 | partial |
+
+| 工作负载 | dump 信号/文件字节 | 手工/自动公开调用 | 手工/自动 transition 读取 | 手工/自动后端查询 | 自动新增波形缓存峰值 bytes |
+| --- | --- | --- | --- | --- | --- |
+| 使能寄存器 | 7 / 378 | 9 / 1 | 6 / 8 | 4 / 4 | 5286 |
+| 组合链 | 7 / 372 | 12 / 1 | 7 / 10 | 6 / 6 | 3006 |
+| 两级流水线/保持 | 8 / 484 | 13 / 1 | 8 / 12 | 6 / 6 | 8442 |
+| 16 路无关扇入 | 36 / 1359 | 8 / 1 | 5 / 6 | 4 / 4 | 3006 |
+| 共享上游菱形图 | 9 / 483 | 16 / 1 | 9 / 14 | 8 / 8 | 3556 |
+| 缺失输入 dump | 6 / 330 | 7 / 1 | 6 / 8 | 2 / 2 | 4186 |
+
+读取/查询计数表使用 Source Graph 路由。NPI 优先的数据相同，只有深层扇入用例因两侧分别回退而有 7 次后端查询、2 次整图重启；最终图仍是 2 个节点和 1 条边，累计准入为 4 个节点。共享上游用例保留 4 个节点、4 条边，叶节点只查询一次；第一版只在单节点内缓存波形，所以自动方案 transition 读取数仍高于手工去重方案。减少公开调用不等于减少底层读取。
+
+实际后端：NPI 的普通寄存器、组合链、流水线、共享上游和缺 dump 均保留 NPI；当前 Verdi 将较深条件树合并为不透明 `npiNlOpCell`，该用例按 `dynamic_evidence_unavailable` 整图降级到 Source Graph。默认 NPI 的其它成功用例没有准备 Source Graph。显式 Source Graph 的动态结果均保留现有范围排除项，因此为 partial；手工普通 driver 查询在输入边界可能降至 Static。两种方案均核查相同的节点与波形表，但这些能力/覆盖差异不能解释为后端等价证明。
+
+构建/内存：Source Graph 每个方案冷调用实际构建 1 次，热调用 0 次；NPI 仅深层扇入自动方案有这一次 Source Graph 构建，KDB 编译不计入查询时间。服务器 RSS 是各独立进程的高水位，包含各自缓存和 NPI 装载；JSON 另列 frontend 峰值 RSS 与 CPU，不把进程高水位相加冒充同时总峰值。自动新增波形缓存峰值为 3,006–8,442 bytes。脚本同时输出服务器 CPU、逐次热耗时、读取/查询/构建计数和重启数。
+
+这些小设计证明了工具接力可以从 7–16 次缩减为 1 次，没有证明大型设计的普遍加速。缺 dump 的自动方案更慢；NPI 深层扇入降级也增加时间。冷 NPI 耗时受初始化和许可证等影响，只有一次冷样本，不能推导稳定速度倍数。未测大型 FSDB/SoC 的吞吐或 LSF 排队性能。
+
 ## 15. 完成定义与实现者交付要求
 
-- [ ] M1 的兼容比较、覆盖语义和分侧动作全部完成。
-- [ ] M2 的 NPI 与 Source Graph 支持子集均有正向实现和负面边界测试，不能以所有节点都 unavailable 代替实现。
-- [ ] M3 的公开工具完成注册、输入校验、输出 schema、双侧上下文及证据图。
-- [ ] 所有自动继续/排除决定都能落到对应结构、波形、条件或时间证据。
-- [ ] 关键未知、截断、未映射和不支持情况不会变成一致、唯一驱动或根因结论。
-- [ ] 原有锁、取消、LSF、Source Graph 缓存与后端一致性回归保持通过。
-- [ ] 使用文档说明新流程、支持范围、比较模式及停止原因。
-- [ ] 完成可重复基准，提交实测条件和结果；未测项目明确列出。
-- [ ] 实现说明只描述本项目的问题、设计、行为、测试和限制。
+- [x] M1 的兼容比较、覆盖语义和分侧动作全部完成。
+- [x] M2 的 NPI 与 Source Graph 支持子集均有正向实现和负面边界测试，不能以所有节点都 unavailable 代替实现。
+- [x] M3 的公开工具完成注册、输入校验、输出 schema、双侧上下文及证据图。
+- [x] 所有自动继续/排除决定都能落到对应结构、波形、条件或时间证据。
+- [x] 关键未知、截断、未映射和不支持情况不会变成一致、唯一驱动或根因结论。
+- [x] 原有锁、取消、LSF、Source Graph 缓存与后端一致性回归保持通过。
+- [x] 使用文档说明新流程、支持范围、比较模式及停止原因。
+- [x] 完成可重复基准，提交实测条件和结果；未测项目明确列出。
+- [x] 实现说明只描述本项目的问题、设计、行为、测试和限制。
 
 实现者最终报告必须包含：新增能力、受支持的动态语义、未支持边界、兼容性变化、测试结果，以及基准数据。没有运行的能力不能写为已验证；没有完成的里程碑不能写为已交付。
 
 本提案要求独立实现，只依赖本仓库已有代码、明确的行为规格和独立构造的验证数据。
+
+
+## 16. 交付验证与明确限制
+
+- 文档提交 `464b96e`，M1 提交 `f6bc67c`，M2 提交 `e6a0c9e`；M3 与本节最终验收记录一起提交。
+- 主回归收集 1,000 项，**960 passed / 40 skipped**。覆盖公共工具、schemas、比较/映射/预算/上下文、既有 connectivity、NPI/LSF、Source Graph 缓存/共享构建/回退、服务器并发及 VCD/周期/FSDB runtime；包含 **12 项真实 FSDB 跨 timescale 回归**。
+- 其中 12 项跳过来自普通解释器未安装 pyslang，已在现有 `.venv` 的 site-packages 环境补跑；另 28 项依赖未提供的外部私有 `top_tb.fsdb`，未假称已验证。
+- 专项 **42 passed**：真实 Slang 投影、条件/时序合同、NPI 请求校验和传输、真实 VCS 编译的两个 KDB。验证 mux、取反/AND/OR、常量/拼接/相等、同步复位与使能、正负边沿、异步边界；公共 `trace_divergence` 同时验证普通 NPI 全链无 SG 和“不同 KDB、同名信号、最后会话指向 B”仍各自取得 A/B 复位常量。测试波形由独立时序表构造，不宣称这些测试重跑了完整用户仿真。
+- LSF 验证范围为版本化请求/结果、父进程回退和同一个真实 NPI worker 核心；**未向实际 LSF 集群提交作业**。无需 LSF 配置即可使用默认本地 NPI。
+- 原有 `diff_first_divergence` 必选参数和旧结果字段保持；新增覆盖/下一步字段及可选精确上下文，另注册 `trace_divergence`。IR 版本更新为 1.3，旧动态能力缓存不能被错误复用。
+- 第一版不解释不透明 NPI Op cell、任意算术/动态选择/异步事件等完整 HDL 语义；不支持时回退或保留 frontier。部分目标位覆盖不做猜测。亚 ps、同刻数据/时钟变化缺少调度顺序证明时停止；也不根据“写了 NBA”就推断整个跨过程采样顺序。
+- 上下文由调用者绑定波形与编译日志；工具校验当前日志、source snapshot、层次和 KDB 产物身份，不声称独立证明旧波形对应某个源码版本。KDB 身份使用目录身份和固定 elaboration 映射文件 stat，避开 NPI 临时锁文件造成的目录时间戳变化，不扫描全设计，也不是所有数据库文件的内容哈希。
+- 输出 complete 仅覆盖已支持且已配对的依赖。局部逻辑候选保留参考/映射不成立等竞争解释，不等于唯一根因。
+
+最终回归命令：
+
+```bash
+python3.11 -m pytest -q tests/test_trace_divergence.py tests/test_divergence_compare.py tests/test_divergence_context.py tests/test_dynamic_evidence.py tests/test_connectivity*.py tests/test_source_graph*.py tests/test_slang_connectivity_projector.py tests/test_npi_lsf.py tests/test_verdi_npi_backend.py tests/test_verify_condition.py tests/test_vcd_parser.py tests/test_cycle_query.py tests/test_fsdb_parser.py tests/test_fsdb_runtime.py tests/test_fsdb_timescale.py tests/test_server.py tests/test_server_concurrency.py tests/test_schemas.py tests/test_diagnostic_snapshot.py
+TRACEWEAVE_TEST_NPI_DYNAMIC=1 PYTHONPATH="$PWD/.venv/lib/python3.11/site-packages" python3.11 -m pytest -q tests/test_dynamic_evidence.py tests/test_slang_connectivity_projector.py tests/test_npi_dynamic.py
+```

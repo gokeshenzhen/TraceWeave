@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+import config as _config
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
@@ -1397,6 +1398,8 @@ class DivergenceContext(SchemaModel):
     top_hint: str | None = None
     hierarchy_handle: str | None = None
     snapshot_sha256: str | None = None
+    source_snapshot_sha256: str | None = None
+    compile_log_identity_sha256: str | None = None
 
 
 class DivergenceNextAction(SchemaModel):
@@ -1901,3 +1904,58 @@ class DiffValueDistributionResult(SchemaModel):
     bit_diff: list[DistBitDiff] = Field(default_factory=list)
     discriminative_bits: list[int] = Field(default_factory=list)
     note: str | None = None
+
+
+# Explicit dual-context divergence tracing; no mutable current-session defaults.
+class DivergenceSide(DivergenceContext):
+    wave_path: str = Field(min_length=1)
+    signal_path: str = Field(min_length=1)
+
+
+class DivergencePair(SchemaModel):
+    a: str = Field(min_length=1)
+    b: str = Field(min_length=1)
+
+
+class DivergenceLimits(SchemaModel):
+    max_depth: int = Field(default=_config.DIVERGENCE_DEFAULT_DEPTH, ge=0, le=_config.DIVERGENCE_MAX_DEPTH)
+    max_nodes: int = Field(default=_config.DIVERGENCE_DEFAULT_NODES, ge=1, le=_config.DIVERGENCE_MAX_NODES)
+    max_branches: int = Field(default=_config.DIVERGENCE_DEFAULT_BRANCHES, ge=1, le=_config.DIVERGENCE_MAX_BRANCHES)
+    timeout_sec: float = Field(default=_config.DIVERGENCE_DEFAULT_TIMEOUT, gt=0, le=_config.DIVERGENCE_MAX_TIMEOUT)
+
+
+class DivergenceComparison(SchemaModel):
+    mode: Literal["event", "clock"] = "event"
+    clock_a: str | None = None
+    clock_b: str | None = None
+    edge: Literal["posedge", "negedge"] = "posedge"
+    sample_offset_ps: int = Field(default=0, ge=0)
+
+
+class TraceDivergenceInput(SchemaModel):
+    side_a: DivergenceSide
+    side_b: DivergenceSide
+    start_time_ps: int | str = 0
+    end_time_ps: int | str = -1
+    reference_side: Literal["unspecified", "a", "b"] = "unspecified"
+    comparison: DivergenceComparison = Field(default_factory=DivergenceComparison)
+    signal_pairs: list[DivergencePair] = Field(default_factory=list, max_length=1024)
+    scope_pairs: list[DivergencePair] = Field(default_factory=list, max_length=128)
+    limits: DivergenceLimits = Field(default_factory=DivergenceLimits)
+    cursor_name: str | None = None
+    cursor_note: str | None = None
+
+
+class TraceDivergenceResult(SchemaModel):
+    status: Literal["complete", "partial", "blocked", "no_difference", "inconclusive"]
+    reference_side: Literal["unspecified", "a", "b"] = "unspecified"
+    comparison: dict[str, Any] = Field(default_factory=dict)
+    contexts: dict[str, Any] = Field(default_factory=dict)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    frontier: list[dict[str, Any]] = Field(default_factory=list)
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    next_actions: list[DivergenceNextAction] = Field(default_factory=list)
+    cursor: CursorRefSchema | None = None
+    operation_metrics: dict[str, int | float] = Field(default_factory=dict)

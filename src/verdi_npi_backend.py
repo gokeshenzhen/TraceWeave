@@ -33,6 +33,7 @@ from config import NPI_ALLOW_DEGRADED_KDB
 from .cancellation import OperationCancelled, check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
+from .kdb_identity import kdb_identity
 from .connectivity_limits import (
     DEFAULT_DRIVER_OUTPUT_LIMIT,
     DEFAULT_LOAD_OUTPUT_LIMIT,
@@ -63,7 +64,7 @@ _LOG = logging.getLogger(__name__)
 # unit tests that swap in a mock npisys do not leak init-state into
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
-_NPI_ACTIVE_DESIGNS: dict[int, tuple[str, str]] = {}
+_NPI_ACTIVE_DESIGNS: dict[int, tuple] = {}
 _BANNER_SILENCER_INSTALLED = False
 _NPI_FAN_IN_CALLBACK_LOCK = threading.Lock()
 
@@ -991,9 +992,10 @@ class VerdiNpiBackend:
     # ── lifecycle ─────────────────────────────────────────────────────
 
     def _ensure_loaded(self, kdb_path: str, top: str) -> bool:
+        identity = kdb_identity(kdb_path)
         if (self._state == "ready" and self._loaded_kdb == kdb_path and self._loaded_top == top
                 and self._npi_modules is not None
-                and _NPI_ACTIVE_DESIGNS.get(id(self._npi_modules[0])) == (kdb_path, top)):
+                and _NPI_ACTIVE_DESIGNS.get(id(self._npi_modules[0])) == (kdb_path, top, identity)):
             return True
         if self._state == "failed":
             return False
@@ -1053,7 +1055,7 @@ class VerdiNpiBackend:
                             and self._netlist_usable(netlist, old_top)
                         )
                         if restored:
-                            _NPI_ACTIVE_DESIGNS[npisys_id] = (old_kdb, old_top)
+                            _NPI_ACTIVE_DESIGNS[npisys_id] = (old_kdb, old_top, kdb_identity(old_kdb))
                             self._state = old_state
                             self._loaded_kdb = old_kdb
                             self._loaded_top = old_top
@@ -1065,7 +1067,7 @@ class VerdiNpiBackend:
                             self._clear_loaded_state(failed=True)
                     return False
             self._state = "ready"
-            _NPI_ACTIVE_DESIGNS[npisys_id] = (kdb_path, top)
+            _NPI_ACTIVE_DESIGNS[npisys_id] = (kdb_path, top, identity)
             self._loaded_kdb = kdb_path
             self._loaded_top = top
             self._loaded_degraded = degraded

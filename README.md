@@ -1291,10 +1291,32 @@ All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or 
 
 ### Cursors and Verification Primitives
 
-Time inputs on `get_signal_at_time`, `get_signal_transitions`, `get_signals_around_time`, `trace_x_source`, and `diff_first_divergence` accept a **TimeSpec**: a raw integer (ps), a cursor reference `@<name>`, or a unit literal such as `12.34ns` / `5us`.
+Time inputs on `get_signal_at_time`, `get_signal_transitions`, `get_signals_around_time`, `trace_x_source`, `diff_first_divergence`, and `trace_divergence` accept a **TimeSpec**: a raw integer (ps), a cursor reference `@<name>`, or a unit literal such as `12.34ns` / `5us`.
 
 - `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`: Named, process-scoped time anchors. Tools that locate an instant (e.g. `diff_first_divergence`, `period`) auto-register a cursor you can later reference as `@<name>` instead of copying ps timestamps across calls. Cursors are not persisted — server restart drops them.
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`: First time two waveform signals hold unequal values — across two waveforms (e.g. passing vs failing run) or within one (two signals that should match, e.g. lockstep / shadow registers). Auto-registers a cursor at the divergence. Requires both sides to be dumped waveform signals (it does not compare against a software reference model).
+- `trace_divergence(side_a, side_b, start_time_ps, end_time_ps, ...)`: Verify a difference and follow the active data/control dependencies on both sides. Both sides need `wave_path`, `signal_path`, and `compile_log`; optional fields include `simulator`, ordered `supplementary_compile_logs`, and `top_hint`. Build each exact hierarchy and run its structural scan in parallel first. NPI has the same priority as the normal trace tools, including the existing LSF execution policy; unavailable or unsupported NPI steps fall back to bounded Source Graph, then structural-only Static. An explicit `TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph` is honored.
+
+`diff_first_divergence` now separates `comparison_status`, `coverage_status`, and `earliest_difference_proven`. X/Z, missing signals, unequal widths, truncated transition prefixes and sub-ps precision loss cannot prove equality. Optional `context_a` / `context_b` produce executable, side-specific driver actions. Ready actions carry `compile_context` tokens that are revalidated when executed, including source snapshots and supplementary-log identity.
+
+For a same-run comparison, both sides can name the same waveform and compile log:
+
+```json
+{
+  "side_a": {"wave_path": "/run/waves.fsdb", "signal_path": "tb.left.q", "compile_log": "/run/compile.log"},
+  "side_b": {"wave_path": "/run/waves.fsdb", "signal_path": "tb.right.q", "compile_log": "/run/compile.log"},
+  "start_time_ps": "100ns",
+  "end_time_ps": "200ns",
+  "scope_pairs": [{"a": "tb.left", "b": "tb.right"}]
+}
+```
+
+Different designs require explicit `signal_pairs` or `scope_pairs`; equal names alone do not establish correspondence. Optional `comparison={"mode":"clock","clock_a":"...","clock_b":"...","edge":"posedge","sample_offset_ps":0}` requires aligned edges. Registers use their actual triggering edge and strict predecessor values; coincident input/clock changes remain `sampling_order_unresolved`. Enable-hold follows previous Q, within the requested history window.
+
+Read `nodes`, `edges`, `findings`, `frontier`, and each side's `contexts.*.backend_status`. A `local_logic_candidate` requires complete matching active inputs, controls, and required history. It remains a candidate: caller-supplied waveform/compile binding and signal correspondence are not independent semantic-equivalence proofs. Source Graph's existing coverage exclusions remain visible, including on positive traces. Backend/artifact changes restart the entire graph; cancellation never causes fallback. Only the final root difference registers a cursor.
+
+Default limits are depth 8, nodes 128, branches per node 16, and 30 seconds; hard maxima are 32, 1024, 64, and 120 seconds. A shared budget also caps transitions, per-node wave cache, and restarts. Native NPI calls honor cancellation/deadlines after returning. Unsupported expressions, asynchronous clocks/resets, missing dump data and exhausted history stay explicit frontiers. Reproduce the bounded benchmark with `python3.11 scripts/benchmark_divergence_trace.py --backend source_graph --workload all` (or `--backend npi`, which compiles the small fixture with VCS).
+
 - `period(wave_path, signal, edge?, ...)`: Dominant edge-to-edge period of a signal and the first beat that deviates from it (off-beat), auto-registered as a cursor. For "this signal should be periodic — where did the cadence first break?" (clocks, strobes, fixed-rate valids).
 - `suggest_handshakes(wave_path, scope?, ...)`: Scans the waveform and proposes ready-to-use `inspect_handshake` bundles — pairs `*valid`/`*ready` by scope and stem, finds the clock, and groups the channel payload buses. Run it first so you don't hand-assemble `{clock, valid, ready, payload}`. Covers AXI/generic valid-ready and req/ack. When it finds nothing, a lightweight name probe (`htrans`→AHB, `psel`+`penable`→APB) upgrades the empty-result hint into a copy-paste-ready `suggest_protocol_bundles` call.
 - `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?, ...)`: Scans for protocol-specific bundles where there is no literal `valid`. AHB candidates return ready-to-use `inspect_handshake` args with `valid_htrans`, `ready`, and payload; APB candidates return `psel`/`penable`/`pready` facts and loudly report that `inspect_handshake` still needs a derived valid signal for `psel && penable`. For AHB candidates the result also returns a `next_step` field — a copy-paste-ready `inspect_handshake(...)` call per interface — because discovery only locates the bundle; the analysis is the `inspect_handshake` run. Direction tags are mechanical discovery facts only (`initiator_side` / `responder_side` / `unknown`), with unknown/conflicting markers reported rather than guessed.

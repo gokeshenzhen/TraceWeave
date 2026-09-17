@@ -1141,3 +1141,35 @@ call lazily creates `$TRACEWEAVE_CACHE_DIR/telemetry/` and appends to
 `usage.jsonl`. Existing records remain readable, including older records with
 no Source Graph diagnostics, which are excluded from Source Graph hit-rate
 denominators. Telemetry is local-only; nothing is sent anywhere.
+
+
+### Divergence evidence and backtrace
+
+`src/divergence_compare.py` owns cursor-free, coverage-aware event comparison;
+`src/divergence_clock.py` adds explicitly aligned clock sampling. The server
+registers the final cursor after wave work and context validation.
+`src/divergence_context.py` freezes each side's exact hierarchy, ordered logs,
+source snapshot and top. Ready driver relays carry those identities into the
+normal public route instead of changing the mutable current session.
+
+`src/dynamic_evidence.py` defines a bounded typed expression contract.
+`src/npi_dynamic.py` obtains cell/port, mux polarity and edge facts from NPI and
+expands generated nets to declared signals/constants. `src/slang_dynamic.py`
+projects typed AST guards, priority and timing into Connectivity IR 1.3;
+`src/source_graph_dynamic.py` binds statements and positive port paths to one
+prepared artifact. Old IR versions are cache misses, not implicit dynamic proof.
+The LSF `dynamic_step` request calls the same NPI core. NPI's active-design
+identity is process-wide; fixed elaboration maps distinguish KDB changes while
+transient native lock files do not invalidate an unchanged design.
+
+`src/dynamic_observe.py` separates output observation, triggering edge and strict
+predecessor samples; it does not infer simulation scheduling order from integer
+picoseconds. `src/divergence_trace.py` pairs active dependencies and stores each
+node/edge once. Keys include side design identity, selection, time and phase.
+`src/divergence_routing.py` reuses normal backend selection, isolated Source Graph
+preparation/single-flight/cache and the exact artifact scope guard. Changes of
+backend or artifact discard the graph and restart the original pair with the same
+`src/divergence_budget.py` time/work budget. Compile and wave identities are checked
+again before return. Wave access uses existing locks; backend work stays outside
+them. Metrics contain numeric aggregates only. Static/unsupported semantics and
+incomplete positive Source Graph coverage remain explicit frontiers.

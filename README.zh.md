@@ -1122,10 +1122,32 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
 
 ### 游标与验证原语
 
-`get_signal_at_time`、`get_signal_transitions`、`get_signals_around_time`、`trace_x_source`、`diff_first_divergence` 的时间入参接受 **TimeSpec**:整数(ps)、游标引用 `@<name>`、或带单位的字面量(如 `12.34ns` / `5us`)。
+`get_signal_at_time`、`get_signal_transitions`、`get_signals_around_time`、`trace_x_source`、`diff_first_divergence`、`trace_divergence` 的时间入参接受 **TimeSpec**:整数(ps)、游标引用 `@<name>`、或带单位的字面量(如 `12.34ns` / `5us`)。
 
 - `cursor_set(name, time_ps, note?)` / `cursor_list()` / `cursor_delete(name)`:命名的、进程内的时间锚。定位到某时刻的工具(如 `diff_first_divergence`、`period`)会自动注册一个游标,后续可用 `@<name>` 引用,免去跨调用复制 ps 时间戳。游标不持久化——server 重启即丢。
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b, ...)`:两个波形信号首次取值不相等的时刻——可跨两个波形(如 passing vs failing run),也可在同一波形内(两个本应相等的信号,如 lockstep / shadow 寄存器)。在分叉处自动注册游标。要求两侧都是被 dump 的波形信号(它不与软件参考模型比对)。
+- `trace_divergence(side_a, side_b, start_time_ps, end_time_ps, ...)`：重新验证根差异，再比较两侧实际相关的数据、控制和历史状态。每侧必填 `wave_path`、`signal_path`、`compile_log`；可指定 `simulator`、有序的 `supplementary_compile_logs` 和 `top_hint`。先为各自的精确编译上下文并行执行 hierarchy 构建与结构扫描。路由与普通 trace 一致：可信 NPI 优先，支持已有 LSF 配置；NPI 不可用或不能支持该查询时降级到有界 Source Graph，最后保留 Static 结构证据。显式 `TRACEWEAVE_CONNECTIVITY_ROUTE=source_graph` 仍有效。
+
+`diff_first_divergence` 现在区分 `comparison_status`、`coverage_status` 和 `earliest_difference_proven`。X/Z、缺信号、位宽不匹配、transition 截断和亚 ps 精度不足不能证明相等。提供 `context_a` / `context_b` 后，后续 driver 动作携带 `compile_context`，执行时重新验证源码快照和补充日志身份，避免 A/B 查询串用上下文。
+
+同一次仿真内部可以这样比较：
+
+```json
+{
+  "side_a": {"wave_path": "/run/waves.fsdb", "signal_path": "tb.left.q", "compile_log": "/run/compile.log"},
+  "side_b": {"wave_path": "/run/waves.fsdb", "signal_path": "tb.right.q", "compile_log": "/run/compile.log"},
+  "start_time_ps": "100ns",
+  "end_time_ps": "200ns",
+  "scope_pairs": [{"a": "tb.left", "b": "tb.right"}]
+}
+```
+
+不同设计必须显式提供 `signal_pairs` 或 `scope_pairs`，不会按同名或后缀猜测对应关系。可选 `comparison={"mode":"clock","clock_a":"...","clock_b":"...","edge":"posedge","sample_offset_ps":0}`，两侧边沿必须对齐。寄存器回溯读取真实触发边沿及严格前值；输入与时钟同刻变化时保留 `sampling_order_unresolved`。enable 保持会追踪之前的 Q，并遵守请求的历史窗口。
+
+查看 `nodes`、`edges`、`findings`、`frontier` 和两侧 `contexts.*.backend_status`。只有相关输入、控制与必要历史完整且一致，才产生 `local_logic_candidate`；调用者提供的波形/编译绑定和名称映射仍不等于语义等价证明。Source Graph 的原有覆盖排除项继续保留，正向链也可能是 partial。后端或产物变化会整图重启，取消不会触发降级；仅最终根差异注册一次游标。
+
+默认预算为深度 8、节点 128、每节点分支 16、30 秒，硬上限分别为 32、1024、64、120 秒；transition、临时波形缓存和重启次数另有共享总预算。不可中断的 NPI native 调用返回后兑现取消/超时。不支持的表达式、异步时序、缺 dump 或历史不足均保留为 frontier。可运行 `python3.11 scripts/benchmark_divergence_trace.py --backend source_graph --workload all` 复现基准；`--backend npi` 会用 VCS 编译小型测试设计。
+
 - `period(wave_path, signal, edge?, ...)`:测信号边沿的主导周期,并标出第一个偏离该周期的拍(off-beat),自动注册为游标。用于"这个信号本应周期性——节奏第一次在哪里破"(时钟、strobe、定速 valid)。
 - `suggest_handshakes(wave_path, scope?, ...)`:扫描波形,提出可直接使用的 `inspect_handshake` bundle —— 按 scope 与 stem 配对 `*valid`/`*ready`、找到时钟、归组通道 payload 总线。先跑它,就不用手攒 `{clock, valid, ready, payload}`。覆盖 AXI/通用 valid-ready 与 req/ack。当什么都没找到时,会用一个轻量名字探测(`htrans`→AHB、`psel`+`penable`→APB)把空结果提示升级成可直接复制粘贴的 `suggest_protocol_bundles` 调用。
 - `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?, ...)`:扫描没有字面 `valid` 的协议 bundle。AHB candidate 会返回可直接传给 `inspect_handshake` 的 `valid_htrans`、`ready` 与 payload;APB candidate 返回 `psel`/`penable`/`pready` 事实,并明确标出 `inspect_handshake` 仍需要 `psel && penable` 的派生 valid 信号。对 AHB candidate,结果还会返回 `next_step` 字段 —— 每个接口一条可直接复制粘贴的 `inspect_handshake(...)` 调用,因为 discovery 只定位 bundle,真正的分析是跑 `inspect_handshake`。方向标签只来自 discovery 层的机械事实(`initiator_side` / `responder_side` / `unknown`),推不出或冲突时返回 unknown,不硬猜。

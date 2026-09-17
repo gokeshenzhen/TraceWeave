@@ -86,7 +86,7 @@ from src.compile_source_runtime import (
     compile_source_index_key,
 )
 from src.cursor_store import CursorStore
-from src.divergence_context import resolve_context as resolve_divergence_context, driver_action
+from src.divergence_context import resolve_context as resolve_divergence_context, driver_action, log_identity
 import src.usage_telemetry as usage_telemetry
 from src.hierarchy_handles import (
     HandleStore,
@@ -1403,15 +1403,15 @@ Simulation waveform debug workflow:
 app = Server("traceweave", version=__version__, instructions=SERVER_INSTRUCTIONS)
 
 # Global parser cache.
-_fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
+_fsdb_index_cache: dict[str, tuple[tuple[int, ...], FSDBSignalIndex]] = {}
 _parser_cache: dict[
-    str, tuple[tuple[int, int], object]
-] = {}  # wave_path → ((mtime_ns, size), parser)
+    str, tuple[tuple[int, ...], object]
+] = {}  # wave_path → (stat identity, parser)
 
 
-def _get_wave_signature(wave_path: str) -> tuple[int, int]:
+def _get_wave_signature(wave_path: str) -> tuple[int, ...]:
     stat = os.stat(wave_path)
-    return stat.st_mtime_ns, stat.st_size
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
 
 
 def _dispose_cached_object(obj: object):
@@ -6181,6 +6181,19 @@ async def list_tools():
             },
         ),
         Tool(
+            name="trace_divergence",
+            description=(
+                "Verify a waveform difference and backtrace its active data/control dependencies "
+                "on both sides within explicit time/work limits. Uses the normal trusted NPI, "
+                "Source Graph, Static route. Each side requires its exact compile context and "
+                "a current build_tb_hierarchy result. Explicit signal/scope mappings are required "
+                "across different designs. Reports evidence, candidates and honest frontiers; "
+                "does not claim a unique root cause or rerun simulation. Clock mode requires "
+                "aligned clock_a/clock_b edges. History never extends before start_time_ps."
+            ),
+            inputSchema=schemas.TraceDivergenceInput.model_json_schema(),
+        ),
+        Tool(
             name="period",
             description=(
                 "Estimate a signal's dominant period inside a window and flag the "
@@ -7204,6 +7217,8 @@ async def _dispatch(name: str, args: dict):
         simulator = _resolve_session_simulator(args)
         compile_log = args["compile_log"]
         supplementary_compile_logs = _validated_supplementary_compile_logs(args)
+        compile_logs_identity = log_identity({"compile_log":compile_log,
+                                              "supplementary_compile_logs":supplementary_compile_logs})
         hierarchy_config = get_hierarchy_execution_config()
         if not hierarchy_config.valid:
             return _blocked_hierarchy_result(
@@ -7440,6 +7455,10 @@ async def _dispatch(name: str, args: dict):
             ),
         }
         full_result["_hierarchy_snapshot_sha256"] = hierarchy_snapshot_sha256
+        if compile_logs_identity != log_identity({"compile_log":compile_log,
+                                                  "supplementary_compile_logs":supplementary_compile_logs}):
+            return _blocked_hierarchy_result(code="compile_context_changed", stage="compile_log_parse")
+        full_result["_compile_log_identity_sha256"] = compile_logs_identity
         _update_session_state(name, resolved_args, full_result)
         scan_call = None
         if _get_compatible_scan_cache(compile_log, context_simulator) is None:
@@ -7795,6 +7814,10 @@ async def _dispatch(name: str, args: dict):
                 "deleted": deleted,
             }
         )
+
+    elif name == "trace_divergence":
+        from src.divergence_trace import trace_divergence
+        return await trace_divergence(sys.modules[__name__], args)
 
     elif name == "diff_first_divergence":
 

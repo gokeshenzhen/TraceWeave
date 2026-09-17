@@ -447,3 +447,27 @@ used above.
 This document explains the recommended debug flow and the reasoning behind it.
 It is intentionally not a second copy of the runtime `Server(instructions=...)`
 text in `server.py`.
+
+
+### From a verified difference to its upstream evidence
+
+Use `diff_first_divergence` for a quick event comparison. Require `comparison_status`
+plus `coverage_status` when interpreting equality, and `earliest_difference_proven`
+when calling an observation the first difference. Supply `context_a` / `context_b`
+to receive exact driver relays; follow their `status` and `prerequisite_calls`.
+
+Use `trace_divergence` when the comparison needs repeated driver and temporal
+queries. Build hierarchy and scan structural risks in parallel on each compile
+context first, then specify both `side_a` and `side_b` explicitly. They may name
+the same run. Map distinct designs/scopes using `signal_pairs` / `scope_pairs`;
+`reference_side` labels the caller's intended reference, not which side is correct.
+Default NPI priority and LSF placement match normal trace tools.
+
+Inspect both sides' backend receipts and observations. Control differences are
+investigation candidates; a hold depends on previous Q. A strict predecessor with
+unresolved same-timestamp scheduling cannot establish the actual sampled value.
+Unknowns, unavailable mappings, incomplete driver sets and budget limits remain
+frontiers. Retain upstream input, local logic/control, and reference/mapping as
+competing explanations. A local candidate is never an exclusive root-cause verdict.
+Only `no_difference` denotes complete agreement in the declared comparison mode;
+clock-mode agreement does not exclude between-edge transients.

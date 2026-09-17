@@ -951,3 +951,16 @@ def _missing_fsdb_libs(lib_dir: Path) -> list[str]:
     if not lib_dir.is_dir():
         return list(FSDB_REQUIRED_LIBS)
     return [lib for lib in FSDB_REQUIRED_LIBS if not (lib_dir / lib).exists()]
+
+# Divergence tracing: one total budget, including backend and artifact restarts.
+DIVERGENCE_DEFAULT_DEPTH = 8
+DIVERGENCE_DEFAULT_NODES = 128
+DIVERGENCE_DEFAULT_BRANCHES = 16
+DIVERGENCE_DEFAULT_TIMEOUT = 30.0
+DIVERGENCE_MAX_DEPTH = 32
+DIVERGENCE_MAX_NODES = 1024
+DIVERGENCE_MAX_BRANCHES = 64
+DIVERGENCE_MAX_TIMEOUT = 120.0
+DIVERGENCE_MAX_TRANSITIONS = 1_000_000
+DIVERGENCE_MAX_WAVE_CACHE_BYTES = 32 * 1024 * 1024
+DIVERGENCE_MAX_RESTARTS = 3

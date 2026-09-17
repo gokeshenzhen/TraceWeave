@@ -103,7 +103,7 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
     result = dict(observation_time_ps=time, observation_phase=phase, sampling_time_ps=time,
                   sampling_phase=phase, trigger_time_ps=None, dependencies=[], branches=[],
                   value=None, complete=False, gaps=list(step.get("gaps", ())), boundary=step["boundary"])
-    if step["boundary"] in {"input", "unsupported"} or not step.get("complete"):
+    if step["boundary"] in {"input", "unsupported"}:
         return result
     sample_time, sample_phase = time, phase
     if step["boundary"] == "sequential":
@@ -154,5 +154,7 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             if not unresolved:
                 result["value"] = value.value
     result["gaps"] = list(dict.fromkeys(result["gaps"]))
+    if result["value"] is not None and len(result["value"]) != step.get("width"):
+        result["gaps"].append("dynamic_bit_mapping_unavailable")
     result["complete"] = not result["gaps"] and known(result["value"])
     return result

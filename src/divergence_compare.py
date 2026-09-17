@@ -130,12 +130,16 @@ def _seed(stream: SignalStream, signal: str, start: int) -> str | None:
 
 def compare_signals(*, get_parser: Callable, wave_path_a: str, signal_a: str,
                     wave_path_b: str, signal_b: str, start_ps: int = 0,
-                    end_ps: int = -1) -> dict:
+                    end_ps: int = -1, consume: Callable | None = None) -> dict:
     if start_ps < 0 or end_ps < -1 or (end_ps >= 0 and end_ps < start_ps):
         raise ValueError("comparison window requires 0 <= start <= end, or end=-1")
     identities = {p: file_identity(p) for p in (wave_path_a, wave_path_b)}
-    streams = [read_stream(get_parser, p, s, start_ps, end_ps) for p, s in
-               ((wave_path_a, signal_a), (wave_path_b, signal_b))]
+    streams = []
+    for p, s in ((wave_path_a, signal_a), (wave_path_b, signal_b)):
+        stream = read_stream(get_parser, p, s, start_ps, end_ps)
+        if consume:
+            consume(stream)
+        streams.append(stream)
     available_ends = [s.end for s in streams if not s.error and s.end >= 0]
     effective_end = min(available_ends) if available_ends else start_ps - 1
     if end_ps >= 0:
