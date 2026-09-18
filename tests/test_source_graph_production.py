@@ -307,10 +307,20 @@ def test_disabled_disk_cache_ignores_invalid_optional_capacity(monkeypatch):
 
 def test_server_startup_does_not_require_or_import_pyslang():
     script = """
-import importlib.util
 import sys
-assert importlib.util.find_spec('pyslang') is None
+
+# Simulate an absent frontend even when the test environment has the extra.
+attempted_imports = []
+class MissingFrontend:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'pyslang' or fullname.startswith('pyslang.'):
+            attempted_imports.append(fullname)
+            raise ModuleNotFoundError('optional frontend unavailable', name=fullname)
+        return None
+
+sys.meta_path.insert(0, MissingFrontend())
 import server
+assert not attempted_imports, attempted_imports
 assert 'pyslang' not in sys.modules
 print('ok')
 """

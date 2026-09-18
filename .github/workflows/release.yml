@@ -35,7 +35,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test]"
+          python -m pip install -e ".[test,source-graph]"
 
       - name: Run test suite
         run: >-

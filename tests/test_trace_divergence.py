@@ -1,7 +1,9 @@
 """Public divergence traces checked against hand-authored RTL and wave oracles."""
 
 import asyncio
+import importlib.util
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -10,7 +12,10 @@ from src.cursor_store import CursorStore
 from src.divergence_mapping import Mapping
 from src.hierarchy_handles import HandleStore
 
-ROOT = Path(__file__).resolve().parents[1]
+requires_source_graph = pytest.mark.skipif(
+    importlib.util.find_spec("pyslang") is None,
+    reason="requires the optional source-graph extra (pyslang)",
+)
 RTL = """module top(input logic clk, ena, enb, input logic [7:0] a,b,
                   output logic [7:0] qa,qb);
  always_ff @(posedge clk) if(ena) qa<=a;
@@ -64,7 +69,7 @@ def isolate(monkeypatch):
     monkeypatch.setattr(server, "_handle_store", HandleStore())
     monkeypatch.setattr(server, "_cursor_store", CursorStore())
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
-    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", str(ROOT / ".venv/bin/python"))
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", sys.executable)
     monkeypatch.setenv("TRACEWEAVE_AUTO_KDB", "0")
 
 
@@ -96,6 +101,7 @@ async def setup_case(tmp_path, source=RTL):
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_real_source_graph_seq_trace_reaches_changed_input(tmp_path):
     args = await setup_case(tmp_path)
     r = await server._dispatch("trace_divergence", args)
@@ -112,6 +118,7 @@ async def test_real_source_graph_seq_trace_reaches_changed_input(tmp_path):
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_same_timestamp_tb_change_is_an_explicit_sampling_gap(tmp_path):
     args = await setup_case(tmp_path)
     write_wave(Path(args["side_a"]["wave_path"]), change=5)
@@ -148,6 +155,7 @@ async def test_missing_exact_context_reports_both_prerequisites(tmp_path):
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_total_node_budget_and_depth_are_honest_frontiers(tmp_path):
     args = await setup_case(tmp_path)
     args["limits"] = {"max_nodes": 1}
@@ -158,7 +166,13 @@ async def test_total_node_budget_and_depth_are_honest_frontiers(tmp_path):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("limit,value", [("max_depth", 0), ("max_branches", 1)])
+@pytest.mark.parametrize(
+    "limit,value",
+    [
+        ("max_depth", 0),
+        pytest.param("max_branches", 1, marks=requires_source_graph),
+    ],
+)
 async def test_depth_and_branch_limits_report_truncation(tmp_path, limit, value):
     args = await setup_case(tmp_path)
     args["limits"] = {limit: value}
@@ -245,6 +259,7 @@ def fake_npi(*, fail_upstream=False, cancel=False, constants=False):
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_npi_failure_restarts_entire_graph_then_real_source_graph(
     tmp_path, monkeypatch
 ):
@@ -316,6 +331,7 @@ async def test_missing_mapping_cannot_become_a_local_candidate(tmp_path, monkeyp
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_hold_feedback_has_a_distinct_before_phase_node(tmp_path, monkeypatch):
     args = await setup_case(tmp_path)
     wave = Path(args["side_a"]["wave_path"])
@@ -463,6 +479,7 @@ async def test_clock_mismatch_does_not_fall_back_to_event_mode(tmp_path):
 
 
 @pytest.mark.anyio
+@requires_source_graph
 async def test_real_scope_expansion_restarts_without_mixing_artifacts(tmp_path):
     source = """module leaf(input wire [7:0] d, output wire [7:0] q); assign q=d; endmodule
     module top(input wire [7:0] a,b,output wire [7:0] qa,qb);
