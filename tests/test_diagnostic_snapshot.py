@@ -339,6 +339,8 @@ class TestDiagnosticSnapshot:
             "coverage_warnings": [],
             "total_risks": 3,
             "high_risk_count": 2,
+            "semantic_status": "not_run",
+            "semantic_fact_count": 0,
         }
         assert result.recommended_next.available is True
         assert result.total_errors == 3

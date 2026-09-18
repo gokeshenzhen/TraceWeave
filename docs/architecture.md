@@ -533,6 +533,28 @@ Verification
   The stored result occupied 739,443 bytes; cumulative process peak RSS was
   400 MiB. This is a single-process sample with warm filesystem pages; the cold
   identity cost is real and the cache does not accelerate an isolated first scan.
+- `structural_semantics.py` scans elaborated active instance bindings and
+  specialization templates directly, without a ConnectivityIR build. It reports
+  input/open-port facts, constant regions of input concatenations and continuous
+  assignments, and named/literal constant comparisons. Statement source and
+  enclosing consumer context remain evidence, not defect verdicts. Sequential
+  reset/initial values are not treated as permanent ties. Definition buffer
+  identity plus all value parameters form template identity; type parameters
+  and external hierarchical dependencies conservatively retain separate
+  instance templates. The isolated worker has time/RSS and instance/fact/AST/bit
+  bounds. `fast` stays lexical; default `auto` reuses a compatible completed
+  semantic result or explicitly reports `not_run`. `deep` requests construction.
+  Lexical and semantic coverage are independent; output trimming preserves
+  counts and marks `output_truncated`, while computation limits mark partial
+  analysis and prevent publishing a completed cache entry.
+  `scripts/benchmark_semantic_scan.py` exercises real dispatch. The 18,642 active
+  instance SoC case produced 14,475 structural facts in 10.17 s (worker peak
+  344 MiB), with no instance/fact/AST cap reached at the default budgets. Coverage
+  remained partial for runtime exclusions and incomplete include identity;
+  the following `auto` call took 8 ms and honestly reported a semantic miss.
+  This normal-design inventory includes legitimate constants and is not a bug
+  count. A 301-instance repeated-wrapper regression also checks that three
+  definition templates suffice when specialization/context actually match.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or

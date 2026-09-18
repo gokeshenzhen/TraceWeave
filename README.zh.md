@@ -1094,6 +1094,20 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
 - `build_tb_hierarchy`:流式读取编译证据并在服务端构建完整 testbench 层次结构，不保留源码正文；返回精简载荷(project、stats、深度 2 的 tree skeleton、interfaces、ambiguous_basenames、`build_metrics`、`hierarchy_handle`)。split VCS 流程可在这里一次性传入有序的 `supplementary_compile_logs`;后续 connectivity 查询仍使用 primary `compile_log`。配置的资源 guard 被触发时返回 `build_status="blocked"` 且没有 handle；成功构建的完整数据通过下方 handle 工具按需获取。
 - `scan_structural_risks`:在无 waveform lock、可协作取消的 worker 中扫描编译过的 RTL/TB 源码结构风险;返回 `eligible_file_count`、`files_scanned`、`coverage_status` 与 `coverage_warnings`,避免把零覆盖或部分覆盖误读为“扫描干净”
 
+  `analysis_mode="fast"` 执行或复用现有词法规则；默认 `auto` 另复用适用的
+  语义结果，缓存未命中明确返回 `not_run`，不会启动前端。显式 `deep` 才在隔离
+  进程内用 Slang 检查输入 tie（含部分常量位和 X/Z）、悬空输入、常量赋值、
+  命名常量比较及其源码和消费者上下文，不需要 Verdi/NPI license。
+  正常 tie-off、协议码点也会产生事实，不能直接认定为缺陷。
+  `semantic_scope="tb.dut.u_block"` 可限定实际展开的实例子树。
+  默认预算为 15 秒、worker RSS 512 MiB、25,000 个实例、20,000 条事实、
+  1,000,000 个 AST 节点。可用 `semantic_timeout_sec`、`semantic_max_rss_mib`、
+  `semantic_max_instances`、`semantic_max_facts`、`semantic_max_ast_nodes` 调整，
+  各自有硬上限。分别读取 `lexical_coverage_status` 与 `semantic.status/gaps`；
+  `semantic.output_truncated` 是展示裁剪，预算缺口则表示分析不完整。
+  deep 不完整时总体覆盖会降级；缺少 Slang 时仍返回词法结果和明确的语义不可用状态。
+  这一 pass 不构建全设计 ConnectivityIR。
+
 ### 层次结构 Handle 工具
 
 下列工具均接收 `build_tb_hierarchy` 返回的 `hierarchy_handle`。当 handle 过期或未知时返回 `{"error": "handle_expired"}`;此时重新运行 `build_tb_hierarchy` 即可刷新。

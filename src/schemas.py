@@ -311,7 +311,30 @@ class StructuralRisk(SchemaModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class SemanticScanResult(SchemaModel):
+    status: Literal["not_run", "complete", "partial", "unavailable"] = "not_run"
+    scope: str | None = None
+    categories_checked: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    total_facts: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+    facts: list[dict[str, Any]] = Field(default_factory=list)
+    instance_bindings: list[dict[str, str]] = Field(default_factory=list)
+    instances_visited: int = 0
+    template_count: int = 0
+    ast_nodes_visited: int = 0
+    blocking_diagnostics: int = 0
+    cache_disposition: str | None = None
+    metrics: dict[str, int | float] = Field(default_factory=dict)
+    note: str | None = None
+    error_type: str | None = None
+    output_truncated: bool = False
+
+
 class ScanStructuralRisksResult(TruncatableResult):
+    analysis_mode: Literal["fast", "auto", "deep"] = "auto"
+    lexical_coverage_status: Literal["complete", "zero_coverage", "degraded"] = "complete"
+    semantic: SemanticScanResult = Field(default_factory=SemanticScanResult)
     scan_scope: str = "scope1"
     eligible_file_count: int = 0
     files_scanned: int = 0

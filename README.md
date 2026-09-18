@@ -1263,6 +1263,24 @@ an exported VCD and discovering local files requires no JasperGold license.
 - `build_tb_hierarchy`: Stream compile evidence and build the full testbench hierarchy server-side without retaining raw source bodies; return a slim payload (project, stats, depth-2 tree skeleton, interfaces, ambiguous_basenames, `build_metrics`, `hierarchy_handle`). For split VCS flows, pass ordered `supplementary_compile_logs` once; later connectivity calls keep using the primary `compile_log`. A configured resource guard returns `build_status="blocked"` and no handle. Full completed data is reachable via the handle tools below.
 - `scan_structural_risks`: Scan compiled RTL/TB sources for structural risk patterns in a lock-free cancellable worker; returns `eligible_file_count`, `files_scanned`, `coverage_status`, and `coverage_warnings` so zero or partial source coverage cannot be mistaken for a clean scan
 
+  `analysis_mode="fast"` runs the cached lexical rules. The default `auto`
+  additionally reuses compatible semantic results and reports `not_run` on a
+  semantic cache miss, without building a frontend. Explicit `deep` uses Slang
+  in an isolated process, without a Verdi/NPI license, to report constant input
+  connections (including partial X/Z bits), open inputs, constant assignments,
+  and named constant comparisons with source/consumer context. These are facts
+  to investigate; normal tie-offs and protocol constants are also reported.
+  Use `semantic_scope="tb.dut.u_block"` to focus on one elaborated subtree.
+  Defaults are 15 seconds, 512 MiB worker RSS, 25,000 instances, 20,000 facts,
+  and 1,000,000 AST nodes; optional `semantic_timeout_sec`,
+  `semantic_max_rss_mib`, `semantic_max_instances`, `semantic_max_facts`, and
+  `semantic_max_ast_nodes` have hard upper bounds in the tool schema. Read
+  `lexical_coverage_status` and `semantic.status/gaps` independently.
+  `semantic.output_truncated` affects display, while a budget gap affects
+  analysis coverage. An incomplete deep scan never reports complete aggregate
+  coverage. Missing Slang still returns the lexical findings with an explicit
+  semantic unavailable receipt. This pass does not construct full ConnectivityIR.
+
 ### Hierarchy Handle Tools
 
 All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or unknown handle they return `{"error": "handle_expired"}`; re-run `build_tb_hierarchy` to refresh.

@@ -143,6 +143,8 @@ from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.structural_scan_runtime import StructuralScanRuntime
 from src.design_identity import DesignIdentity, DesignIdentityReader
+from src.structural_semantic_runtime import SemanticScanRuntime, validate_semantic_options
+from src.structural_semantics import SEMANTIC_CATEGORIES
 from src.x_trace import inspect_upstream_values, trace_x_source
 from src.cycle_query import (
     _compute_clock_period_ps,
@@ -204,6 +206,7 @@ _compile_context_cache: dict[str, dict] = {}
 _compile_source_index_runtime = CompileSourceIndexRuntime()
 _structural_scan_runtime = StructuralScanRuntime()
 _design_identity_reader = DesignIdentityReader()
+_semantic_scan_runtime = SemanticScanRuntime()
 
 # Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
 # is process-scoped — same semantics as _handle_store: no persistence,
@@ -5528,10 +5531,13 @@ async def list_tools():
         Tool(
             name="scan_structural_risks",
             description=(
-                "Run a Scope 1 regex-based structural risk scan on RTL/TB source files from the compile file list. "
+                "Scan compiled RTL/TB sources for structural risks. fast runs lexical rules; auto (default) "
+                "also reuses compatible semantic facts without a cold frontend build; deep explicitly requests "
+                "a bounded, license-free semantic pass for ties, open inputs and constant comparisons. "
                 "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes. "
                 "Always read coverage_status: only complete with total_risks=0 supports a clean-scan observation; "
-                "zero_coverage scanned no supported sources, and degraded covers only part of the source set."
+                "zero_coverage scanned no supported sources, and degraded covers only part of the source set. "
+                "Read lexical_coverage_status and semantic.status separately; not_run is not a semantic pass."
             ),
             inputSchema={
                 "type": "object",
@@ -5555,6 +5561,14 @@ async def list_tools():
                         "items": {"type": "string", "enum": ALL_CATEGORIES},
                         "description": "Optional list of risk categories to scan. If omitted, all categories are scanned.",
                     },
+                    "analysis_mode": {"type": "string", "enum": ["fast", "auto", "deep"], "default": "auto"},
+                    "semantic_categories": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}},
+                    "semantic_scope": {"type": "string", "description": "Exact elaborated instance path and its descendants; omitted scans all elaborated tops."},
+                    "semantic_timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 15},
+                    "semantic_max_rss_mib": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 512},
+                    "semantic_max_instances": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 25000},
+                    "semantic_max_facts": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
+                    "semantic_max_ast_nodes": {"type": "integer", "minimum": 1, "maximum": 5000000, "default": 1000000},
                 },
                 "required": ["compile_log"],
             },
@@ -7509,6 +7523,7 @@ async def _dispatch(name: str, args: dict):
         return validated
 
     elif name == "scan_structural_risks":
+        analysis_mode, semantic_options = validate_semantic_options(args)
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
         compile_result, context_simulator = await _run_in_cancellable_thread(
@@ -7542,7 +7557,7 @@ async def _dispatch(name: str, args: dict):
                 max_files=source_index_config.max_files, create_if_missing=False,
             )
         try:
-            if os.environ.get("TRACEWEAVE_STRUCTURAL_SCAN_CACHE", "1") != "0":
+            if os.environ.get("TRACEWEAVE_STRUCTURAL_SCAN_CACHE", "1") != "0" or analysis_mode == "deep":
                 identity = await _run_in_cancellable_thread(
                     lambda: _design_identity_reader.capture(
                         args["compile_log"], compile_result,
@@ -7612,6 +7627,19 @@ async def _dispatch(name: str, args: dict):
             "rule_execution_count": int(cache_disposition not in {"hit_memory", "coalesced"}),
             **_structural_scan_runtime.metrics(),
         })
+        result["analysis_mode"] = analysis_mode
+        result["lexical_coverage_status"] = result.get("coverage_status", "complete")
+        result["semantic"] = await _semantic_scan_runtime.scan(
+            identity=identity, mode=analysis_mode, options=semantic_options,
+            compile_log=args["compile_log"], compile_result=compile_result,
+            config=get_source_graph_execution_config(), run_thread=_run_in_cancellable_thread,
+        )
+        if analysis_mode == "deep" and result["semantic"]["status"] != "complete":
+            if result["coverage_status"] != "zero_coverage":
+                result["coverage_status"] = "degraded"
+            result.setdefault("coverage_warnings", []).append(
+                "Requested semantic checks are incomplete; inspect semantic.status and semantic.gaps."
+            )
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
             [
@@ -8273,6 +8301,8 @@ def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) 
         "files_scanned": result.files_scanned,
         "coverage_status": result.coverage_status,
         "coverage_warnings": result.coverage_warnings,
+        "semantic_status": result.semantic.status,
+        "semantic_fact_count": result.semantic.total_facts,
         "total_risks": result.total_risks,
         "high_risk_count": sum(1 for risk in result.risks if risk.risk_level == "high"),
     }
@@ -9398,6 +9428,20 @@ def _truncate_risk_payload(
     return payload
 
 
+def _trim_semantic_scan(model: schemas.SemanticScanResult, limit: int) -> dict:
+    payload = model.model_dump(exclude_none=True)
+    facts = payload["facts"][:limit]
+    template_ids = {f.get("template") for f in facts if f.get("template")}
+    bindings = [b for b in payload["instance_bindings"] if b["template"] in template_ids][:limit]
+    payload["output_truncated"] = (
+        payload["output_truncated"] or len(facts) < len(payload["facts"])
+        or len(bindings) < len(payload["instance_bindings"])
+    )
+    payload["facts"] = facts
+    payload["instance_bindings"] = bindings
+    return payload
+
+
 def _shrink_scan_structural_risks_stage1(
     model: schemas.TruncatableResult,
 ) -> schemas.TruncatableResult:
@@ -9409,7 +9453,8 @@ def _shrink_scan_structural_risks_stage1(
     return schemas.ScanStructuralRisksResult.model_validate(
         {
             **model.model_dump(exclude_none=True),
-            "detail_hint": "Re-run scan_structural_risks with narrower categories if you need the full risk list.",
+            "detail_hint": "Re-run with narrower categories or semantic_scope for complete displayed facts.",
+            "semantic": _trim_semantic_scan(model.semantic, 10),
             "risks": risks,
             "total_risks": model.total_risks,
             "skipped_files": [],
@@ -9429,6 +9474,7 @@ def _shrink_scan_structural_risks_stage2(
         {
             **model.model_dump(exclude_none=True),
             "detail_hint": "Response truncated. Re-run scan_structural_risks with narrower categories.",
+            "semantic": _trim_semantic_scan(model.semantic, 3),
             "risks": risks,
             "categories_scanned": model.categories_scanned[:3],
             "skipped_files": [],
@@ -9445,6 +9491,7 @@ def _shrink_scan_structural_risks_terminal(
             **model.model_dump(exclude_none=True),
             "detail_level": "summary",
             "detail_hint": "Response truncated to fit budget. Re-run scan_structural_risks with one category.",
+            "semantic": _trim_semantic_scan(model.semantic, 0),
             "risks": [],
             "categories_scanned": model.categories_scanned[:3],
             "skipped_files": [],
