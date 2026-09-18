@@ -109,7 +109,7 @@ from src.source_graph_contract import (
     compute_source_graph_build_key,
     compute_source_graph_query_key,
 )
-from src.source_graph_production import get_source_graph_runtime
+from src.source_graph_production import get_source_graph_runtime, source_graph_runtime_created
 from src.source_graph_runtime import PrepareStatus
 from src.source_graph_x_trace import (
     SourceGraphTraceConnectivityBackend,
@@ -1696,6 +1696,38 @@ async def _call_connectivity_backend(backend, fn: Callable):
     if getattr(backend, "uses_external_worker", False):
         return await _run_in_cancellable_thread(fn)
     return fn()
+
+
+async def _structural_query_context(compile_log, simulator, scope, mode, config):
+    """Prepare only a bounded artifact identity against an existing hierarchy.
+
+    Parallel default scanning never waits for or builds a hierarchy. Sharing
+    cannot turn a lexical identity or an incomplete query key into semantic
+    scope proof. Only explicit scoped semantic work is eligible.
+    """
+    if (not scope or mode == "fast" or not config.valid or not config.enabled
+            or os.environ.get("TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING", "1") == "0"
+            or (mode == "auto" and not source_graph_runtime_created())):
+        return None, None
+    hierarchy, snapshot = _resolve_hierarchy_context(compile_log, simulator)
+    if hierarchy is None:
+        return None, None
+    try:
+        plan = await _run_in_cancellable_thread(lambda: build_source_graph_plan(
+            compile_log=compile_log, compile_result=hierarchy["compile_result"],
+            hierarchy_result=hierarchy, hierarchy_snapshot_sha256=snapshot,
+            operation=QueryOperation.DRIVER, signal_path=scope + ".__structural_scan_anchor__",
+            top_hint=None, max_hops=10, frontend_version=config.frontend_version,
+            runtime_plusarg_allowlist=config.runtime_plusarg_allowlist,
+            max_instances=64, allow_adjacent=False,
+        ))
+        request = plan.request
+        if (request is None or not compute_source_graph_build_key(request).cross_request_reusable
+                or len(request.artifact_identity.scope.projection_instance_paths) > 64):
+            return None, None
+        return request, get_source_graph_runtime(config)
+    except (OSError, ValueError, KeyError, RuntimeError):
+        return None, None
 
 
 _NPI_FALLBACK_REASONS = {
@@ -7629,10 +7661,15 @@ async def _dispatch(name: str, args: dict):
         })
         result["analysis_mode"] = analysis_mode
         result["lexical_coverage_status"] = result.get("coverage_status", "complete")
+        semantic_config = get_source_graph_execution_config()
+        query_request, query_runtime = await _structural_query_context(
+            args["compile_log"], simulator, semantic_options["scope"], analysis_mode, semantic_config,
+        )
         result["semantic"] = await _semantic_scan_runtime.scan(
             identity=identity, mode=analysis_mode, options=semantic_options,
             compile_log=args["compile_log"], compile_result=compile_result,
-            config=get_source_graph_execution_config(), run_thread=_run_in_cancellable_thread,
+            config=semantic_config, run_thread=_run_in_cancellable_thread,
+            query_request=query_request, query_runtime=query_runtime,
         )
         if analysis_mode == "deep" and result["semantic"]["status"] != "complete":
             if result["coverage_status"] != "zero_coverage":

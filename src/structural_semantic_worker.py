@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import base64
 import json
 from pathlib import Path
 import sys
@@ -14,7 +15,9 @@ if str(ROOT) not in sys.path:
 
 from src.source_graph_worker import (  # noqa: E402
     SemanticFrontendSession, _configure_driver, _diagnostics_payload, _read_rss_kib,
+    _frontend_args, project_semantic_frontend_session,
 )
+from src.source_graph_contract import SourceGraphArtifactBuildRequest, SOURCE_GRAPH_WORKER_PROTOCOL_VERSION
 from src.structural_semantics import ScanLimits, scan_semantic_session  # noqa: E402
 
 
@@ -38,6 +41,29 @@ def execute(payload):
     frontend_ms = (time.perf_counter() - started) * 1000
     result = scan_semantic_session(session, scope=payload.get("scope"),
                                    categories=payload["categories"], limits=ScanLimits(**payload["limits"]))
+    result["query_artifact_status"] = "not_requested"
+    if payload.get("query_artifact_request"):
+        try:
+            request = SourceGraphArtifactBuildRequest.from_dict(payload["query_artifact_request"])
+            if (request.source.compile_inputs.to_dict() != payload["manifest"]
+                    or _frontend_args(request) != payload["frontend_args"]
+                    or len(request.scope.projection_instance_paths) > 64):
+                result["query_artifact_status"] = "incompatible_context"
+            else:
+                serialized, fingerprint, receipt, projection = project_semantic_frontend_session(session, request)
+                if len(serialized) <= 16 * 1024 * 1024:
+                    result["_query_artifact"] = {
+                        "protocol_version": SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
+                        "status": "ready", "ir_json_base64": base64.b64encode(serialized).decode("ascii"),
+                        "ir_fingerprint_sha256": fingerprint, "scope_receipt": receipt.to_dict(),
+                        "projection_receipt": projection, "metrics": {"frontend_launch_count": 0, "ir_bytes": len(serialized)},
+                        "fallback_used": False,
+                    }
+                    result["query_artifact_status"] = "prepared"
+                else:
+                    result["query_artifact_status"] = "artifact_size_limit"
+        except Exception:
+            result["query_artifact_status"] = "projection_unavailable"
     result["metrics"] = {"frontend_ms": frontend_ms, "total_ms": (time.perf_counter()-started)*1000,
                          "frontend_build_count": 1, "peak_rss_kib": _read_rss_kib()[1]}
     return result

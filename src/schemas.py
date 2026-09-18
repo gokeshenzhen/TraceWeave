@@ -325,6 +325,7 @@ class SemanticScanResult(SchemaModel):
     ast_nodes_visited: int = 0
     blocking_diagnostics: int = 0
     cache_disposition: str | None = None
+    query_artifact_status: str = "not_requested"
     metrics: dict[str, int | float] = Field(default_factory=dict)
     note: str | None = None
     error_type: str | None = None

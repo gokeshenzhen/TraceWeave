@@ -1781,6 +1781,34 @@ class SourceGraphRuntime:
             artifact_identity=artifact_identity,
         )
 
+    async def lookup_prepared(self, request: SourceGraphBuildRequest) -> SourceGraphCacheEntry | None:
+        """Read an applicable immutable artifact without admitting a build.
+
+        Callers still supply freshly validated compile/hierarchy identity.
+        Incomplete-key handoffs deliberately do not enter this sharing API.
+        """
+        key = compute_source_graph_build_key(request)
+        if not key.cross_request_reusable:
+            return None
+        async with self._state_lock:
+            found = self._find_cached_locked(request, key)
+            return found[0] if found else None
+
+    async def publish_prepared(self, request: SourceGraphBuildRequest, worker: WorkerBuildResult) -> bool:
+        """Accept a bounded scan-produced IR through the normal IR validator.
+
+        No special scope dominance, NPI conversion, disk publication, or
+        incomplete-key promotion is introduced by this path.
+        """
+        key = compute_source_graph_build_key(request)
+        if (not key.cross_request_reusable or worker.status is not PrepareStatus.READY
+                or len(worker.ir_json_bytes or b"") > min(self._max_cache_bytes, 32 * 1024 * 1024)):
+            return False
+        entry = await asyncio.to_thread(self._load_cache_entry, request, key, worker)
+        async with self._state_lock:
+            self._publish_cache_entry_locked(key.digest, entry)
+        return True
+
     async def wait_idle(self) -> None:
         while True:
             async with self._state_lock:

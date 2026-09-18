@@ -1281,6 +1281,15 @@ an exported VCD and discovering local files requires no JasperGold license.
   coverage. Missing Slang still returns the lexical findings with an explicit
   semantic unavailable receipt. This pass does not construct full ConnectivityIR.
 
+  With a current hierarchy and explicit `semantic_scope`, deep scans can also
+  publish bounded query IR from the same Slang build. A compatible later Source
+  Graph query reuses it; `semantic.query_artifact_status` reports the outcome.
+  Conversely, `auto` can reuse a query artifact's constant input connections,
+  with explicit partial coverage for the remaining checks. Identity, scope,
+  capability and size guards still apply. New scopes may require another build.
+  Set `TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING=0` to disable sharing. NPI keeps
+  its normal priority and KDB; the shared IR is not a replacement for KDB.
+
 ### Hierarchy Handle Tools
 
 All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or unknown handle they return `{"error": "handle_expired"}`; re-run `build_tb_hierarchy` to refresh.

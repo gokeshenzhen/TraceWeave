@@ -1108,6 +1108,14 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
   deep 不完整时总体覆盖会降级；缺少 Slang 时仍返回词法结果和明确的语义不可用状态。
   这一 pass 不构建全设计 ConnectivityIR。
 
+  已有当前 hierarchy 且显式指定 `semantic_scope` 时，deep 可以从同一次 Slang
+  构建发布有界的查询 IR，后续适用的 Source Graph 查询可直接复用；
+  `semantic.query_artifact_status` 报告共享状态。反向也可由 `auto` 从已有查询
+  IR 读取常量输入连接，但会明确报告其他检查尚未完成的部分覆盖。
+  编译身份、范围、能力和大小限制仍然生效；新范围可能需要重新构建。
+  `TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING=0` 可关闭共享。NPI 保持原有优先级，
+  使用自己的 KDB；共享 IR 不会替代 KDB，也不会被标记成 NPI 证据。
+
 ### 层次结构 Handle 工具
 
 下列工具均接收 `build_tb_hierarchy` 返回的 `hierarchy_handle`。当 handle 过期或未知时返回 `{"error": "handle_expired"}`;此时重新运行 `build_tb_hierarchy` 即可刷新。

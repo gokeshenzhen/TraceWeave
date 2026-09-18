@@ -555,6 +555,27 @@ Verification
   This normal-design inventory includes legitimate constants and is not a bug
   count. A 301-instance repeated-wrapper regression also checks that three
   definition templates suffice when specialization/context actually match.
+- Scoped semantic scans can publish compact query IR from the **same** Slang
+  frontend build. This requires an existing current hierarchy, an explicit
+  `semantic_scope`, an exact reusable query identity, identical ordered
+  compile manifests/frontend arguments, and at most 64 projected instances.
+  Projection is still charged to the worker time/RSS budget and capped at
+  16 MiB serialized IR. The normal Source Graph loader validates fingerprints,
+  schema, scope and capabilities before admission to its existing bounded LRU.
+  No full-design IR or retained frontend process is introduced. Deep scan and
+  query frontend launches share process-wide cold-build admission; cancellation
+  or timeout while waiting cannot release another operation's admission.
+  The `semantic.query_artifact_status` receipt distinguishes publication,
+  reuse, incompatibility and bypass. An `auto` scoped scan may consume positive
+  constant input mappings from a matching query artifact without constructing
+  a frontend; it always reports partial coverage and
+  `query_artifact_port_bindings_only`, rather than claiming the other semantic
+  checks ran. Its current primary-log manifest must also match, so a hierarchy
+  enriched by supplemental compile logs cannot silently change scan context.
+  `TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING=0` disables this optimization. No
+  incomplete-key handoff is promoted to a reusable entry; new scopes can still
+  require construction. NPI retains priority and uses its own KDB. Scan facts
+  may guide NPI queries, but are never labeled as NPI facts or converted to KDB.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or

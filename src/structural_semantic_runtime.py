@@ -11,7 +11,9 @@ import time
 from .design_identity import _digest
 from .hdl_suffixes import FRONTEND_HDL_SUFFIXES
 from .source_graph_adapter import _build_compile_manifest
-from .source_graph_runtime import _terminate_process_group
+from .source_graph_runtime import (
+    _PROCESS_COLD_BUILD_LOCK, _terminate_process_group, IsolatedSourceGraphProcessRunner,
+)
 from .source_graph_session_runtime import _process_rss_kib
 from .structural_semantics import SEMANTIC_CATEGORIES, SEMANTIC_RULE_VERSION, ScanLimits
 
@@ -55,6 +57,27 @@ def build_semantic_payload(compile_log, compile_result, options, frontend_versio
 
 
 async def run_isolated_scan(payload, python_bin):
+    # Deep scans and queries share the process-wide cold-build admission. A
+    # scoped scan must not double the large frontend RSS alongside a query.
+    started = time.monotonic()
+    admitted = False
+    try:
+        while not admitted:
+            admitted = _PROCESS_COLD_BUILD_LOCK.acquire(blocking=False)
+            if not admitted:
+                if time.monotonic() - started >= payload["timeout_sec"]:
+                    return {"status": "partial", "gaps": ["frontend_admission_timeout"]}
+                await asyncio.sleep(.005)
+        remaining = payload["timeout_sec"] - (time.monotonic() - started)
+        if remaining <= 0:
+            return {"status": "partial", "gaps": ["frontend_admission_timeout"]}
+        return await _run_admitted_scan({**payload, "timeout_sec": remaining}, python_bin)
+    finally:
+        if admitted:
+            _PROCESS_COLD_BUILD_LOCK.release()
+
+
+async def _run_admitted_scan(payload, python_bin):
     process = None
     communicate = None
     try:
@@ -96,7 +119,8 @@ class SemanticScanRuntime:
         self._bytes = 0
         self._admission = asyncio.Lock()
 
-    async def scan(self, *, identity, mode, options, compile_log, compile_result, config, run_thread):
+    async def scan(self, *, identity, mode, options, compile_log, compile_result, config, run_thread,
+                   query_request=None, query_runtime=None):
         if mode == "fast":
             return {"status": "not_run", "gaps": ["fast_mode"]}
         key = _digest({"identity": identity.digest, "options": options,
@@ -106,9 +130,21 @@ class SemanticScanRuntime:
             self._cache.move_to_end(key)
             result = json.loads(self._cache[key])
             result["cache_disposition"] = "hit_memory"
+            result["query_artifact_status"] = "not_requested_result_hit"
             result.setdefault("metrics", {})["frontend_build_count"] = 0
             return result
         if mode == "auto":
+            if reusable and query_request is not None and query_runtime is not None and await run_thread(identity.current):
+                entry = await query_runtime.lookup_prepared(query_request)
+                if entry is not None:
+                    payload = await run_thread(lambda: build_semantic_payload(compile_log, compile_result, options, config.frontend_version))
+                    # A hierarchy may include supplementary compile logs that
+                    # the standalone scan did not consume. Never borrow its
+                    # facts under the primary-log scan's different context.
+                    if (query_request.identity.compile_inputs.to_dict() == payload["manifest"]
+                            and await run_thread(identity.current)):
+                        from .structural_artifact import scan_ir_connections
+                        return await run_thread(lambda: scan_ir_connections(entry, options))
             return {"status": "not_run", "gaps": ["semantic_cache_miss"], "cache_disposition": "miss"}
         if not config.valid or not config.enabled:
             return {"status": "unavailable", "gaps": ["semantic_frontend_disabled_or_invalid"]}
@@ -116,13 +152,26 @@ class SemanticScanRuntime:
             if reusable and key in self._cache and await run_thread(identity.current):
                 result = json.loads(self._cache[key])
                 result["cache_disposition"] = "hit_after_admission"
+                result["query_artifact_status"] = "not_requested_result_hit"
                 result.setdefault("metrics", {})["frontend_build_count"] = 0
                 return result
             payload = await run_thread(lambda: build_semantic_payload(compile_log, compile_result, options, config.frontend_version))
             if not payload["manifest"]["ordered_tops"] or not payload["manifest"]["ordered_inputs"]:
                 return {"status": "unavailable", "gaps": ["compile_inputs_or_top_missing"]}
+            if query_request is not None:
+                payload["query_artifact_request"] = query_request.artifact_build_request.to_dict()
             result = await run_isolated_scan(payload, config.python_bin)
+            artifact = result.pop("_query_artifact", None)
             current = await run_thread(identity.current)
+            if artifact is not None and current and query_runtime is not None and query_request is not None:
+                try:
+                    worker = IsolatedSourceGraphProcessRunner._decode_response(artifact)
+                    published = await query_runtime.publish_prepared(query_request, worker)
+                    result["query_artifact_status"] = "published" if published else "identity_or_capacity_bypass"
+                except (ValueError, TypeError, KeyError):
+                    result["query_artifact_status"] = "invalid_artifact"
+            elif artifact is not None:
+                result["query_artifact_status"] = "identity_changed"
             if not current:
                 result["status"] = "partial"
                 result.setdefault("gaps", []).append("compile_identity_incomplete_or_changed")
