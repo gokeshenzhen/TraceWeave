@@ -511,6 +511,27 @@ Verification
   the event loop and checks cooperative cancellation between files and within
   its long Python loops. `scripts/benchmark_structural_scan.py` reports
   privacy-safe timing/RSS/I/O aggregates and a full-result equivalence hash.
+- `design_identity.py` and `structural_scan_runtime.py` cache the complete
+  lexical scan before MCP output trimming. Ordered compile context, exact raw
+  content, categories and rule version form the key; digest records are reused
+  only after full stat validation (including ctime/inode). Resolved literal
+  includes and earlier search candidates are checked again before publication
+  and reuse. Missing scanned inputs disable caching. Lexical identity covers
+  the exact texts consumed by regex rules; unresolved macro/library includes
+  separately prohibit treating it as a complete semantic identity.
+  The default process-local LRU retains at most eight results / 32 MiB of JSON
+  and 16 MiB of digest/include facts, never persistent source bodies. A warm hit
+  skips source preload and all rules. Exact concurrent callers share one build;
+  one cancellation preserves it, final-waiter cancellation stops it. Results
+  computed across a source change are degraded and never published. Set
+  `TRACEWEAVE_STRUCTURAL_SCAN_CACHE=0` to bypass this optimization.
+  `scripts/benchmark_structural_cache.py` compares full internal result hashes.
+  On the local OpenTitan 1,117-source workload (September 18, sequential calls
+  in one fresh process), uncached/cold calls took 4.28/5.84 s; three warm hits
+  took 0.90/0.96/0.90 s with zero rule executions and identical full results.
+  The stored result occupied 739,443 bytes; cumulative process peak RSS was
+  408 MiB. This is a single-process sample with warm filesystem pages; the cold
+  identity cost is real and the cache does not accelerate an isolated first scan.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or

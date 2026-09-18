@@ -141,6 +141,8 @@ from src.tb_hierarchy_builder import (
 )
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
+from src.structural_scan_runtime import StructuralScanRuntime
+from src.design_identity import DesignIdentity, DesignIdentityReader
 from src.x_trace import inspect_upstream_values, trace_x_source
 from src.cycle_query import (
     _compute_clock_period_ps,
@@ -200,6 +202,8 @@ _handle_store = HandleStore()
 _COMPILE_CONTEXT_CACHE_MAX = 4
 _compile_context_cache: dict[str, dict] = {}
 _compile_source_index_runtime = CompileSourceIndexRuntime()
+_structural_scan_runtime = StructuralScanRuntime()
+_design_identity_reader = DesignIdentityReader()
 
 # Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
 # is process-scoped — same semantics as _handle_store: no persistence,
@@ -7530,45 +7534,84 @@ async def _dispatch(name: str, args: dict):
             compile_snapshot_sha256=compile_snapshot_sha256,
             compile_result=compile_result,
         )
-        lease = None
-        source_index_disposition = (
-            source_index_config.error_code
-            or ("disabled" if not source_index_config.enabled else None)
-        )
+        identity_lease = None
         if source_index_config.valid and source_index_config.enabled:
-            lease = await _compile_source_index_runtime.acquire(
-                key=source_index_key,
-                paths=source_index_paths,
+            identity_lease = await _compile_source_index_runtime.acquire(
+                key=source_index_key, paths=source_index_paths,
                 max_bytes=source_index_config.max_bytes,
-                max_files=source_index_config.max_files,
+                max_files=source_index_config.max_files, create_if_missing=False,
             )
-            assert lease is not None
         try:
-            result = await _run_in_cancellable_thread(
-                lambda: scan_structural_risks(
-                    compile_log=args["compile_log"],
-                    simulator=simulator,
-                    scan_scope=args.get("scan_scope", "scope1"),
-                    categories=args.get("categories"),
-                    compile_result=compile_result,
-                    source_loader=(
-                        lease.index.read_text if lease is not None else None
-                    ),
+            if os.environ.get("TRACEWEAVE_STRUCTURAL_SCAN_CACHE", "1") != "0":
+                identity = await _run_in_cancellable_thread(
+                    lambda: _design_identity_reader.capture(
+                        args["compile_log"], compile_result,
+                        **({"reader": identity_lease.index.read} if identity_lease else {}),
+                    )
                 )
-            )
-            result["scan_metrics"] = {
-                **(
-                    lease.index.metrics_snapshot() if lease is not None else {}
-                ),
-                "compile_source_index_disposition": (
-                    lease.disposition
-                    if lease is not None
-                    else source_index_disposition
-                ),
-            }
+            else:
+                identity = DesignIdentity("disabled", (), (), ("cache_disabled",))
         finally:
-            if lease is not None:
-                await lease.release()
+            if identity_lease is not None:
+                await identity_lease.release()
+
+        async def build_scan():
+            lease = None
+            source_index_disposition = (
+                source_index_config.error_code
+                or ("disabled" if not source_index_config.enabled else None)
+            )
+            if source_index_config.valid and source_index_config.enabled:
+                lease = await _compile_source_index_runtime.acquire(
+                    key=source_index_key,
+                    paths=source_index_paths,
+                    max_bytes=source_index_config.max_bytes,
+                    max_files=source_index_config.max_files,
+                )
+                assert lease is not None
+            try:
+                result = await _run_in_cancellable_thread(
+                    lambda: scan_structural_risks(
+                        compile_log=args["compile_log"],
+                        simulator=simulator,
+                        scan_scope=args.get("scan_scope", "scope1"),
+                        categories=args.get("categories"),
+                        compile_result=compile_result,
+                        source_loader=(
+                            lease.index.read_text if lease is not None else None
+                        ),
+                    )
+                )
+                result["scan_metrics"] = {
+                    **(
+                        lease.index.metrics_snapshot() if lease is not None else {}
+                    ),
+                    "compile_source_index_disposition": (
+                        lease.disposition
+                        if lease is not None
+                        else source_index_disposition
+                    ),
+                }
+            finally:
+                if lease is not None:
+                    await lease.release()
+            return result
+
+        result, cache_disposition = await _structural_scan_runtime.run(
+            identity,
+            {"scan_scope": args.get("scan_scope", "scope1"),
+             "categories": args.get("categories"), "simulator": simulator},
+            build_scan,
+        )
+        if cache_disposition == "hit_memory":
+            result["scan_metrics"] = {
+                "compile_source_index_disposition": "not_requested_result_cache_hit",
+            }
+        result.setdefault("scan_metrics", {}).update({
+            "result_cache_disposition": cache_disposition,
+            "rule_execution_count": int(cache_disposition not in {"hit_memory", "coalesced"}),
+            **_structural_scan_runtime.metrics(),
+        })
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
             [
