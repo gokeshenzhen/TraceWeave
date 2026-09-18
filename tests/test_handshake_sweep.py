@@ -34,6 +34,19 @@ from src.vcd_parser import VCDParser
 from src.verify_condition import inspect_handshake
 
 
+def test_incomplete_discovery_cannot_report_complete(tmp_path, monkeypatch):
+    import src.handshake_suggest as suggest
+    path = tmp_path / "limited.vcd"
+    path.write_text(_multi_stage_vcd(["1", "1"]))
+    parser = VCDParser(str(path))
+    monkeypatch.setattr(suggest, "DISCOVERY_SIGNAL_LIMIT", 3)
+    result = sweep_handshake_anomalies(get_parser=lambda _: parser, wave_path=str(path))
+    assert result["interface_count"] == 1
+    assert result["flagged_count"] == 0
+    assert result["coverage_status"] == "degraded"
+    assert "lower bound" in " ".join(result["coverage_warnings"])
+
+
 def _multi_stage_vcd(ready_by_stage, *, n_cycles: int = 30, with_clock: bool = True) -> str:
     """One scope per stage (top.uN) with clk/in_valid/in_ready. valid is held
     high; ready is held at the given per-stage value ('0' = deadlock)."""

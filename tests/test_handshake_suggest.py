@@ -420,7 +420,7 @@ def test_suggest_protocol_bundles_wrapper_attaches_inspect_relay():
     }
 
     class _P:
-        def search_signals(self, kw):
+        def search_signals(self, kw, max_results=100):
             k = kw.lower()
             return {"results": [v for p, v in sigs.items() if k in p.lower()]}
 
@@ -474,3 +474,47 @@ def test_suggest_protocol_bundles_does_not_swallow_cancel():
             wave_path="/w/a.fsdb",
             protocol="ahb",
         )
+
+
+def test_scope_search_precedes_cap_and_keeps_ancestor_clock(monkeypatch):
+    import src.handshake_suggest as module
+    monkeypatch.setattr(module, "DISCOVERY_SIGNAL_LIMIT", 8)
+    sigs = [_sig("tb.clk")]
+    for i in range(120):
+        sigs += [_sig(f"tb.u{i}.valid"), _sig(f"tb.u{i}.ready"), _sig(f"tb.u{i}.data", 32)]
+    parser = _CappedParser(sigs, default_cap=4)
+    full = suggest_handshakes(get_parser=lambda _: parser, wave_path="a.vcd")
+    assert full["discovery"]["status"] == "partial"
+    scoped = suggest_handshakes(get_parser=lambda _: parser, wave_path="a.vcd", scope="tb.u119")
+    assert scoped["discovery"]["status"] == "complete"
+    assert len(scoped["candidates"]) == 1
+    assert scoped["candidates"][0]["clock"] == "tb.clk"
+    assert scoped["candidates"][0]["payload"] == ["tb.u119.data"]
+    assert len(propose_handshake_bundles(sigs, scope="tb.u1")) == 1
+
+
+def test_bit_channels_pair_by_index_without_guessing_payload():
+    sigs = [_sig("tb.clk"), _sig("tb.data0", 32), _sig("tb.data1", 32)]
+    sigs += [_sig("tb.valid[0]"), _sig("tb.valid[1]"), _sig("tb.ready[1]"), _sig("tb.ready[0]")]
+    bundles = propose_handshake_bundles(sigs)
+    assert len(bundles) == 2
+    for b in bundles:
+        assert b["valid"][-3:] == b["ready"][-3:]
+        assert b["payload"] == []
+        assert "explicit_payload_mapping_for_bit_channel" in b["needs"]
+
+
+def test_missing_channel_payload_does_not_borrow_other_channel():
+    sigs = [_sig("tb.clk"), _sig("tb.awvalid"), _sig("tb.awready"), _sig("tb.wdata", 32)]
+    assert propose_handshake_bundles(sigs)[0]["payload"] == []
+    sigs = [_sig("tb.hclk"), _sig("tb.mst_HTRANS", 2), _sig("tb.mst_HREADY"), _sig("tb.slv_HWDATA", 32)]
+    assert propose_protocol_bundles(sigs, "ahb")[0]["write_data"] is None
+
+
+def test_search_failure_is_partial_coverage():
+    class Broken:
+        def search_signals(self, *args, **kwargs):
+            raise OSError("unavailable")
+    result = suggest_handshakes(get_parser=lambda _: Broken(), wave_path="a.fsdb")
+    assert result["discovery"]["status"] == "partial"
+    assert result["discovery"]["reasons"] == ["search_failed"]

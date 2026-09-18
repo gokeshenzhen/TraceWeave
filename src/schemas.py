@@ -477,6 +477,7 @@ class WaveformSummaryResult(SchemaModel):
 class SearchSignalsResult(SchemaModel):
     keyword: str
     total_matched: int
+    truncated: bool = False
     results: list[dict[str, Any]] = Field(default_factory=list)
     hint: str | None = None
 
@@ -1605,11 +1606,19 @@ class HandshakeBundle(SchemaModel):
     needs: list[str] = Field(default_factory=list)
 
 
+class SignalDiscoveryCoverage(SchemaModel):
+    status: Literal["complete", "partial"] = "complete"
+    signal_limit: int = 65_536
+    signals_returned: int = 0
+    reasons: list[str] = Field(default_factory=list)
+
+
 class SuggestHandshakesResult(SchemaModel):
     wave_path: str
     scope: str | None = None
     candidate_count: int = 0
     candidates: list[HandshakeBundle] = Field(default_factory=list)
+    discovery: SignalDiscoveryCoverage = Field(default_factory=SignalDiscoveryCoverage)
     reason: str | None = None
 
 
@@ -1645,6 +1654,7 @@ class SuggestProtocolBundlesResult(SchemaModel):
     scope: str | None = None
     candidate_count: int = 0
     candidates: list[ProtocolBundle] = Field(default_factory=list)
+    discovery: SignalDiscoveryCoverage = Field(default_factory=SignalDiscoveryCoverage)
     reason: str | None = None
     # Copy-paste-ready inspect_handshake relay for the discovered candidates.
     # Discovery only LOCATES interfaces; the analysis step is inspect_handshake.
@@ -1666,6 +1676,7 @@ class SweptInterface(SchemaModel):
     ready: str
     payload: list[str] = Field(default_factory=list)
     confidence: str | None = None
+    discovery_needs: list[str] = Field(default_factory=list)
     coverage: HandshakeCoverage = Field(default_factory=HandshakeCoverage)
     # flags are factual observations, never verdicts
     flags: list[str] = Field(default_factory=list)
@@ -1730,6 +1741,7 @@ class HandshakeSweepResult(SchemaModel):
     flagged_count: int = 0
     transition_truncated_count: int = 0
     truncated: bool = False
+    discovery: dict[str, SignalDiscoveryCoverage] = Field(default_factory=dict)
     # Coverage facts for interpreting flagged_count. In particular,
     # zero_coverage means no protocol interfaces were checked, so flagged_count=0
     # is not evidence of a clean protocol run.

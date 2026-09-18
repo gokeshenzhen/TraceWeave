@@ -157,10 +157,12 @@ class VCDParser:
             if kw in p.lower() and (p not in self._range_aliases or "[" in kw)
         ]
         matched.sort(key=lambda item: (-_signal_rank(item["path"], kw), item["path"]))
+        total_matched = len(matched)
         matched = matched[:max_results]
         return annotate_signal_search_result({
             "keyword":        keyword,
-            "total_matched":  len(matched),
+            "total_matched":  total_matched,
+            "truncated": total_matched > len(matched),
             "results":        matched,
         })
 

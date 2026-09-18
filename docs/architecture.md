@@ -402,6 +402,24 @@ Verification
   result build/serialization cost, and process RSS start/peak/end. All fields
   are numeric or fixed-label aggregates; paths, scopes, signal names, values,
   and search keywords are never recorded.
+- Handshake discovery enumerates at most 65,536 signal descriptors per search,
+  applying the requested scope before that limit. It reports independent
+  `discovery` coverage; search failures or truncation make a sweep incomplete
+  even when its interface cap was not reached. `discovered_count` is then a
+  lower bound. Narrowing scope can recover interfaces that a global prefix
+  missed; raising `max_interfaces` alone cannot repair discovery truncation.
+  Valid/ready bit channels pair by identical index and carry an explicit payload
+  mapping need. Named channels never borrow another channel's payload, and an
+  ambiguous nearest clock is left unresolved. These are naming-based proposals,
+  with each inspected row retaining its actual check coverage.
+  The September 18 large SoC replay (18,641 lexical hierarchy nodes, 75,578
+  VCD IDs, fresh MCP server, NPI disabled, 64-interface cap) discovered at least
+  7,421 interfaces versus 297 in the original evaluation. It explicitly reported
+  partial discovery at the signal cap. The previously missed deep stage yielded
+  two interfaces in 94 ms; both had zero payload-hold violations. The whole
+  first sweep took 4.21 s, including VCD loading, versus the earlier 7.16 s;
+  process-tree peak RSS was 791 MiB versus about 711 MiB. These are individual
+  case measurements, not full-coverage or general speed/memory guarantees.
 - A full `sweep_handshakes` does not independently reread and re-extract the
   same clock for every interface. `handshake_sweep` groups discovered bundles
   by clock and creates one private `EdgeSamplingSession` per group;

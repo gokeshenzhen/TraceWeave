@@ -195,6 +195,7 @@ def _normalize_vr(b: dict[str, Any]) -> dict[str, Any]:
         "scope": b.get("scope", ""), "clock": b.get("clock"),
         "valid": b["valid"], "ready": b["ready"], "kind": "valid_ready",
         "payload": b.get("payload") or [], "confidence": b.get("confidence"),
+        "discovery_needs": b.get("needs") or [],
         "inspect_kwargs": {"valid": b["valid"]},
     }
 
@@ -206,6 +207,7 @@ def _normalize_ahb(b: dict[str, Any]) -> dict[str, Any]:
         "scope": b.get("scope", ""), "clock": b.get("clock"),
         "valid": b.get("valid_htrans"), "ready": b.get("ready"), "kind": "ahb",
         "payload": b.get("payload") or [], "confidence": b.get("confidence"),
+        "discovery_needs": b.get("needs") or [],
         "inspect_kwargs": {
             "valid_htrans": b.get("valid_htrans"),
             "htrans_rule": b.get("htrans_rule") or "active",
@@ -459,6 +461,8 @@ def sweep_handshake_anomalies(
     discovered = (int(vr.get("candidate_count", 0)) + int(ahb.get("candidate_count", 0))
                   - dropped_cb)
     truncated = discovered > len(normalized) or len(normalized) > max_interfaces
+    discovery = {"valid_ready": vr.get("discovery", {}), "ahb": ahb.get("discovery", {})}
+    discovery_incomplete = any(r.get("status") == "partial" for r in discovery.values())
     to_inspect = normalized[:max_interfaces]
 
     unique_clocks = {str(nb["clock"]) for nb in to_inspect if nb.get("clock")}
@@ -684,6 +688,7 @@ def sweep_handshake_anomalies(
                     "kind": nb["kind"],
                     "payload": nb["payload"],
                     "confidence": nb["confidence"],
+                    "discovery_needs": nb["discovery_needs"],
                     "flags": _flags(res, nb["kind"]),
                     "attribution": row_attribution,
                     **{k: res.get(k) for k in _FACT_KEYS},
@@ -788,6 +793,15 @@ def sweep_handshake_anomalies(
             "targeted check until bounded-memory streaming is available."
         )
 
+    if discovery_incomplete:
+        if coverage_status == "complete":
+            coverage_status = "degraded"
+        coverage_warnings.append(
+            "DISCOVERY INCOMPLETE: signal search was truncated or failed. "
+            "discovered_count is a lower bound; increasing max_interfaces alone "
+            "cannot recover missing signals. Retry with a narrower interface scope."
+        )
+
     if skipped:
         if coverage_status == "complete":
             coverage_status = "degraded"
@@ -815,6 +829,7 @@ def sweep_handshake_anomalies(
         "flagged_count": n_flagged,
         "transition_truncated_count": transition_truncated_count,
         "truncated": truncated,
+        "discovery": discovery,
         "coverage_status": coverage_status,
         "coverage_warnings": coverage_warnings,
         "suggested_next_actions": suggested_next_actions,

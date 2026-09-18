@@ -38,6 +38,11 @@ RESET_TOKENS = ("rst", "reset", "resetn", "rst_n")
 _NON_SIGNAL_VARTYPES = ("integer", "real", "time", "parameter", "string", "event")
 
 _RANGE_RE = re.compile(r"\[[^\]]*\]\s*$")
+DISCOVERY_SIGNAL_LIMIT = 65_536
+
+
+def _in_scope(path: str, scope: str | None) -> bool:
+    return not scope or path.startswith(scope.rstrip(".") + ".")
 
 
 def _leaf(path: str) -> str:
@@ -93,11 +98,12 @@ def propose_handshake_bundles(
     """
     # Index by role.
     valids: list[dict] = []
-    readys: list[dict] = []
-    clocks: list[dict] = []
+    readys: dict[tuple[str, str, str], list[dict]] = {}
+    clocks: dict[str, list[dict]] = {}
     by_scope: dict[str, list[dict]] = {}
 
     for s in signals:
+        check_cancelled()
         path = s.get("path")
         if not path:
             continue
@@ -106,35 +112,36 @@ def propose_handshake_bundles(
         role, marker = _classify(leaf, width)
         rec = {"path": path, "leaf": leaf, "width": width, "scope": _parent(path),
                "role": role, "marker": marker,
+               "selection": (m.group(0) if (m := _RANGE_RE.search(path.rsplit(".", 1)[-1])) else ""),
                "var_type": (s.get("var_type") or "").lower()}
         by_scope.setdefault(rec["scope"], []).append(rec)
         if role == "valid":
             valids.append(rec)
         elif role == "ready":
-            readys.append(rec)
+            key = (rec["scope"], _stem(leaf, marker), rec["selection"])
+            readys.setdefault(key, []).append(rec)
         elif role == "clock":
-            clocks.append(rec)
+            clocks.setdefault(rec["scope"], []).append(rec)
 
     bundles: list[dict] = []
     for v in valids:
-        if scope and not v["path"].startswith(scope):
+        check_cancelled()
+        if not _in_scope(v["path"], scope):
             continue
         v_stem = _stem(v["leaf"], v["marker"])
         # Find a ready in the same scope with a matching stem.
-        match = None
-        for r in readys:
-            if r["scope"] != v["scope"]:
-                continue
-            if _stem(r["leaf"], r["marker"]) == v_stem:
-                match = r
-                break
-        if match is None:
+        matches = readys.get((v["scope"], v_stem, v["selection"]), [])
+        if len(matches) != 1:
             continue
+        match = matches[0]
 
         clock = _pick_clock(clocks, v["scope"])
-        payload = _pick_payload(by_scope.get(v["scope"], []), v_stem, max_payload)
+        payload = [] if v["selection"] else _pick_payload(
+            by_scope.get(v["scope"], []), v_stem, max_payload)
 
         needs = []
+        if v["selection"]:
+            needs.append("explicit_payload_mapping_for_bit_channel")
         if clock is None:
             needs.append("clock")
         confidence = "high" if (clock and payload) else "medium" if clock else "low"
@@ -163,16 +170,15 @@ def propose_handshake_bundles(
     return bundles
 
 
-def _pick_clock(clocks: list[dict], scope: str) -> str | None:
+def _pick_clock(clocks: dict[str, list[dict]], scope: str) -> str | None:
     """Prefer a clock in the same scope, else the nearest ancestor scope."""
-    same = [c for c in clocks if c["scope"] == scope]
-    if same:
-        return same[0]["path"]
-    ancestors = [c for c in clocks if scope.startswith(c["scope"] + ".") or c["scope"] == ""]
-    if ancestors:
-        # nearest ancestor = longest scope prefix
-        ancestors.sort(key=lambda c: len(c["scope"]), reverse=True)
-        return ancestors[0]["path"]
+    while True:
+        same = clocks.get(scope, [])
+        if same:
+            return same[0]["path"] if len(same) == 1 else None
+        if not scope:
+            break
+        scope = _parent(scope)
     return None
 
 
@@ -185,9 +191,9 @@ def _pick_payload(scope_sigs: list[dict], stem: str, cap: int) -> list[str]:
         and s.get("var_type") not in _NON_SIGNAL_VARTYPES
     ]
     if stem:
-        prefixed = [s for s in cands if s["leaf"].startswith(stem)]
-        if prefixed:
-            cands = prefixed
+        cands = [s for s in cands if s["leaf"].startswith(stem)]
+    elif sum(s["role"] == "valid" for s in scope_sigs) != 1:
+        cands = []
     cands.sort(key=lambda s: (-s["width"], s["leaf"]))
     return [s["path"] for s in cands[:cap]]
 
@@ -245,6 +251,57 @@ def _search_signals(
     return result
 
 
+def _gather_scope(parser: Any, scope: str | None) -> tuple[list[dict], dict]:
+    """Bounded enumeration, with scope applied BEFORE the result cap.
+
+    One search replaces global role searches and one full-index sibling search
+    per interface. The cap is a coverage boundary, never a clean-design claim.
+    """
+    receipt = {"status": "complete", "signal_limit": DISCOVERY_SIGNAL_LIMIT,
+               "signals_returned": 0, "reasons": []}
+    sigs: dict[str, dict] = {}
+
+    def collect(keyword: str, *, ancestor: str | None = None) -> None:
+        try:
+            result = _search_signals(parser, keyword, max_results=DISCOVERY_SIGNAL_LIMIT)
+        except OperationCancelled:
+            raise
+        except Exception:
+            receipt["status"] = "partial"
+            if "search_failed" not in receipt["reasons"]:
+                receipt["reasons"].append("search_failed")
+            return
+        rows = result.get("results", [])
+        count = result.get("total_matched", len(rows))
+        if result.get("truncated") or count > len(rows) or len(rows) >= DISCOVERY_SIGNAL_LIMIT:
+            receipt["status"] = "partial"
+            if "signal_limit_or_native_truncation" not in receipt["reasons"]:
+                receipt["reasons"].append("signal_limit_or_native_truncation")
+        for row in rows:
+            check_cancelled()
+            path = row.get("path", "")
+            if path and (ancestor is None or _parent(path) == ancestor):
+                sigs[path] = row
+
+    collect(scope.rstrip(".") + "." if scope else "")
+    # Scoped enumeration excludes ancestor clocks. Search only clock prefixes
+    # at each ancestor, without a full-design role search or sibling walk.
+    local_clock = scope and any(
+        _parent(p) == scope.rstrip(".") and _classify(_leaf(p).lower(), int(s.get("width") or 1))[0] == "clock"
+        for p, s in sigs.items()
+    )
+    ancestor = _parent(scope.rstrip(".")) if scope and not local_clock else ""
+    while ancestor:
+        for name in ("clk", "clock", "aclk", "hclk", "pclk"):
+            collect(ancestor + "." + name, ancestor=ancestor)
+        if any(_parent(p) == ancestor and _classify(_leaf(p).lower(), int(s.get("width") or 1))[0] == "clock"
+               for p, s in sigs.items()):
+            break
+        ancestor = _parent(ancestor)
+    receipt["signals_returned"] = len(sigs)
+    return list(sigs.values()), receipt
+
+
 def suggest_handshakes(
     *,
     get_parser: Callable[[str], Any],
@@ -255,50 +312,16 @@ def suggest_handshakes(
     """Scan a waveform and propose inspect_handshake bundles. Reads existing
     waveforms only — does NOT rerun simulation."""
     parser = get_parser(wave_path)
-    sigs: dict[str, dict] = {}
-
-    def _add(results: list[dict]) -> None:
-        for r in results or []:
-            p = r.get("path")
-            if p and p not in sigs:
-                sigs[p] = r
-
-    # Pass 1: gather handshake + clock candidates by role keyword.
-    for kw in _GATHER_KEYWORDS:
-        try:
-            _add(_search_signals(parser, kw).get("results", []))
-        except OperationCancelled:
-            raise
-        except Exception:
-            continue
-
-    # Pass 2: for each scope that has a valid/ready pair, pull siblings so the
-    # payload buses (which won't match a role keyword) are visible to the core.
-    # Search by the FULL scope path, not just its leaf name: a leaf like
-    # "axi4_master_drv_bfm_h" repeats across every instance, so a leaf keyword
-    # under search_signals' result cap returns only the first instance's
-    # siblings and deeper instances' payload buses (e.g. master[3].wdata) are
-    # silently dropped -> empty payload -> payload-hold never runs on them.
-    seed = propose_handshake_bundles(list(sigs.values()), scope=scope)
-    searched_scopes: set[str] = set()
-    for b in seed:
-        scope_path = b["scope"]
-        if scope_path and scope_path not in searched_scopes:
-            searched_scopes.add(scope_path)
-            try:
-                _add(_search_signals(parser, scope_path, max_results=512).get("results", []))
-            except OperationCancelled:
-                raise
-            except Exception:
-                pass
+    sigs, discovery = _gather_scope(parser, scope)
 
     check_cancelled()
-    bundles = propose_handshake_bundles(list(sigs.values()), scope=scope)
+    bundles = propose_handshake_bundles(sigs, scope=scope)
     return {
         "wave_path": wave_path,
         "scope": scope,
         "candidate_count": len(bundles),
         "candidates": bundles[:max_candidates],
+        "discovery": discovery,
         "reason": None if bundles else _empty_result_reason(parser, wave_path, scope),
     }
 
@@ -314,7 +337,7 @@ def _probe_present(parser: Any, token: str, scope: str | None) -> bool:
         return False
     for r in results:
         p = r.get("path", "")
-        if scope and not p.startswith(scope):
+        if not _in_scope(p, scope):
             continue
         leaf = _leaf(p).lower()
         if leaf == token or leaf.endswith("_" + token) or leaf.endswith("." + token):
@@ -372,7 +395,7 @@ def propose_protocol_bundles(
     records = [_protocol_rec(s) for s in signals if s.get("path")]
     records = [r for r in records if r is not None]
     if scope:
-        records = [r for r in records if r["path"].startswith(scope)]
+        records = [r for r in records if _in_scope(r["path"], scope)]
 
     if protocol == "ahb":
         bundles = _propose_ahb_bundles(records, max_payload=max_payload)
@@ -457,9 +480,7 @@ def _pick_protocol_payload(
     source_prefix = _prefix_for_role(source["leaf_lower"], source["role"])
     for role in payload_roles:
         candidates = scope_records.get(role, [])
-        if source_prefix:
-            prefixed = [c for c in candidates if _prefix_for_role(c["leaf_lower"], role) == source_prefix]
-            candidates = prefixed or candidates
+        candidates = [c for c in candidates if _prefix_for_role(c["leaf_lower"], role) == source_prefix]
         for c in candidates:
             if c["path"] not in payload:
                 payload.append(c["path"])
@@ -508,7 +529,7 @@ def _pick_prefixed_path(roles: dict, role: str, anchor: dict) -> str | None:
     if not cands:
         return None
     prefixed = [c for c in cands if _same_prefix(anchor, c, c["role"])]
-    return (prefixed or cands)[0]["path"]
+    return prefixed[0]["path"] if len(prefixed) == 1 else None
 
 
 def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
@@ -520,7 +541,9 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
             if not ready_candidates:
                 continue
             prefixed = [r for r in ready_candidates if _same_prefix(htrans, r, r["role"])]
-            ready = (prefixed or ready_candidates)[0]
+            if not prefixed:
+                continue
+            ready = prefixed[0]
             clock = _pick_protocol_clock(roles, ("hclk", "clk", "clock"))
             reset = _pick_protocol_clock(roles, ("hresetn", "hreset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, htrans, _AHB_PAYLOAD_ROLES, max_payload)
@@ -588,10 +611,12 @@ def _propose_apb_bundles(records: list[dict], max_payload: int) -> list[dict]:
             if not ready_candidates:
                 continue
             prefixed = [r for r in ready_candidates if _same_prefix(psel, r, r["role"])]
-            ready = (prefixed or ready_candidates)[0]
+            if not prefixed:
+                continue
+            ready = prefixed[0]
             penable_candidates = roles.get("penable", [])
             prefixed_penable = [p for p in penable_candidates if _same_prefix(psel, p, p["role"])]
-            penable = (prefixed_penable or penable_candidates or [None])[0]
+            penable = prefixed_penable[0] if len(prefixed_penable) == 1 else None
             clock = _pick_protocol_clock(roles, ("pclk", "clk", "clock"))
             reset = _pick_protocol_clock(roles, ("presetn", "preset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, psel, _APB_PAYLOAD_ROLES, max_payload)
@@ -646,24 +671,10 @@ def suggest_protocol_bundles(
         raise ValueError("protocol must be 'ahb' or 'apb'")
 
     parser = get_parser(wave_path)
-    sigs: dict[str, dict] = {}
-
-    def _add(results: list[dict]) -> None:
-        for r in results or []:
-            p = r.get("path")
-            if p and p not in sigs:
-                sigs[p] = r
-
-    for kw in _PROTOCOL_GATHER_KEYWORDS[protocol]:
-        try:
-            _add(_search_signals(parser, kw).get("results", []))
-        except OperationCancelled:
-            raise
-        except Exception:
-            continue
+    sigs, discovery = _gather_scope(parser, scope)
 
     check_cancelled()
-    bundles = propose_protocol_bundles(list(sigs.values()), protocol=protocol, scope=scope)
+    bundles = propose_protocol_bundles(sigs, protocol=protocol, scope=scope)
     candidates = bundles[:max_candidates]
     return {
         "wave_path": wave_path,
@@ -671,6 +682,7 @@ def suggest_protocol_bundles(
         "scope": scope,
         "candidate_count": len(bundles),
         "candidates": candidates,
+        "discovery": discovery,
         "reason": None if bundles else (
             f"no {protocol.upper()} bundles found by protocol signal names"
             + (f" under scope {scope}" if scope else "")

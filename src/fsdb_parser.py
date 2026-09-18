@@ -563,10 +563,15 @@ class FSDBParser:
                     pass
             results.append(item)
         results.sort(key=lambda item: (-_signal_rank(item["path"], keyword.lower()), item["path"]))
+        # Older wrappers stop writing when their output buffer fills. Even
+        # without an explicit native truncation flag, a nearly full buffer is
+        # insufficient evidence of a complete search.
+        native_truncated = len(buf.value) >= _BUF_SIZE - 512
         results = results[:max_results]
         return {
             "keyword":       keyword,
             "total_matched": count,
+            "truncated": native_truncated or count > len(results),
             "results":       results,
             "hint": "Use the full path from the path field as the signal_path argument for tools such as get_signal_at_time.",
         }
