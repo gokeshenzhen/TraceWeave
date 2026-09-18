@@ -554,8 +554,8 @@ Verification
   but still reuses an exact completed result. `semantic_scope` limits basic
   fact extraction, not necessarily frontend parsing/elaboration. Reuse requires
   matching identity, scope, categories and budgets; the category list replaces
-  the default selection rather than extending it. See the README tool reference
-  for JSON invocation examples. The lexical scan still runs on a semantic miss.
+  the default selection rather than extending it. See [Structural Scan Invocation](#structural-scan-invocation)
+  for JSON examples. The lexical scan still runs on a semantic miss.
   Lexical and semantic coverage are independent; output trimming preserves
   counts and marks `output_truncated`, while computation limits mark partial
   analysis and prevent publishing a completed cache entry.
@@ -1310,3 +1310,294 @@ backend or artifact discard the graph and restart the original pair with the sam
 again before return. Wave access uses existing locks; backend work stays outside
 them. Metrics contain numeric aggregates only. Static/unsupported semantics and
 incomplete positive Source Graph coverage remain explicit frontiers.
+
+## Structural Scan Invocation
+
+`scan_structural_risks` selects its mode per invocation, not through an
+MCP client environment variable. Omitting `analysis_mode` is equivalent to:
+
+```json
+{"compile_log": "/path/to/build.log", "analysis_mode": "auto"}
+```
+
+To allow a semantic build when no compatible result is available:
+
+```json
+{
+  "compile_log": "/path/to/build.log",
+  "analysis_mode": "deep",
+  "semantic_scope": "tb.dut.u_block",
+  "semantic_timeout_sec": 15,
+  "semantic_max_rss_mib": 512
+}
+```
+
+`fast` runs or reuses lexical rules only. `auto` also reuses compatible semantic
+results; on a semantic miss it reports `semantic.status="not_run"` while the
+lexical scan still runs or reuses its cache. `deep` permits a cold semantic
+build but still reuses compatible completed results. Scope limits basic fact
+extraction, not necessarily frontend parsing or elaboration. Time, memory and
+coverage limits still apply; these modes do not require a full-design
+ConnectivityIR build.
+
+## Client Configuration Reference
+
+The [README](../README.md#client-setup) covers the quick setup. The following
+examples retain the detailed EDA environment and LSF configuration options.
+
+### Generic MCP Client
+
+Any MCP client that supports stdio transport can connect to this server. The minimum configuration is:
+
+- Portable PyPI installation: command `traceweave-mcp`, args `[]`
+- Repository-local full EDA installation: command `<TRACEWEAVE_HOME>/.venv/bin/python` after running `scripts/install.sh`, args `["<TRACEWEAVE_HOME>/server.py"]`
+- EDA env: keep the site-provided Verdi/NPI, VCS/Xcelium, license, and optional LSF variables available to the repository-local MCP process
+
+If the client supports server instructions, it can follow the built-in workflow directly. Otherwise, use the [debug workflow](workflow.md).
+
+### Claude Code
+
+Environment inheritance depends on how the MCP client itself is launched and on
+that client's environment policy. In one tested terminal-launched `tcsh`/LSF
+setup, Claude Code passed the shell-configured LSF, Verdi, and license variables
+to TraceWeave, and remote NPI driver/load/path queries worked without a separate
+MCP environment list. An IDE/GUI launch or another client setup may not inherit
+the same environment. For a deterministic Claude Code setup, list every variable
+the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the
+one most often missed; missing runtime libraries can prevent NPI from loading,
+so inspect `backend_status` when a query falls back).
+
+Add this to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "TraceWeave": {
+      "command": "<TRACEWEAVE_HOME>/.venv/bin/python",
+      "args": ["<TRACEWEAVE_HOME>/server.py"],
+      "env": {
+        "VERDI_HOME": "<verdi-install>",
+        "NOVAS_HOME": "<verdi-install>",
+        "VCS_HOME": "<vcs-install>",
+        "XLM_ROOT": "<xcelium-install>",
+        "CDS_INST_DIR": "<xcelium-install>",
+        "SNPSLMD_LICENSE_FILE": "xxxx@s-license.example.com",
+        "LM_LICENSE_FILE": "xxxx@s-license-server.example.com",
+        "CDS_LICENSE_FILE": "xxxx@c-license.example.com",
+        "LD_LIBRARY_PATH": "<library-path>",
+        "PATH": "<path>"
+      }
+    }
+  }
+}
+```
+
+Verify the connection:
+
+```bash
+claude mcp list
+# Should show TraceWeave (connected)
+```
+
+### Codex
+
+Codex supports two ways to provide environment variables to the TraceWeave MCP
+server:
+
+- Put fixed values in `[mcp_servers.TraceWeave.env]`. This suits stable tool and
+  license locations, or a Codex process that is not launched from a configured
+  terminal.
+- Use `env_vars` to allow and forward variables already inherited by the Codex
+  process. This suits EDA environments managed by `.bashrc`, `.tcshrc`, or a
+  site setup script.
+
+Choose one source for each variable; do not configure the same name in both
+`env` and `env_vars`. This matches the official
+[Codex MCP configuration](https://developers.openai.com/codex/mcp/). The example
+below uses fixed values in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.TraceWeave]
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
+args = ["<TRACEWEAVE_HOME>/server.py"]
+cwd = "<TRACEWEAVE_HOME>"
+
+[mcp_servers.TraceWeave.env]
+VERDI_HOME = "<verdi-install>"
+NOVAS_HOME = "<verdi-install>"
+VCS_HOME = "<vcs-install>"
+XLM_ROOT = "<xcelium-install>"
+CDS_INST_DIR = "<xcelium-install>"
+SNPSLMD_LICENSE_FILE = "xxxx@s-license.example.com"
+LM_LICENSE_FILE = "xxxx@s-license-server.example.com"
+CDS_LICENSE_FILE = "xxxx@c-license.example.com"
+LD_LIBRARY_PATH = "<library-path>"
+PATH = "<path>"
+```
+
+If a site setup script manages these values, do not copy its expanded values
+into `env`. Launch Codex from the configured terminal and use the inherited
+environment pattern in the LSF-only section below instead.
+
+Verify the connection:
+
+```bash
+codex mcp list
+# Should show TraceWeave with Status: enabled
+```
+
+### LSF-only NPI licenses
+
+Some EDA sites grant Verdi/NPI licenses only to scheduled compute nodes. NPI
+execution remains local by default; opt in to LSF at the **TraceWeave MCP
+server process** with:
+
+```bash
+export TRACEWEAVE_NPI_EXECUTION=lsf
+export TRACEWEAVE_NPI_LSF_QUEUE="digital"
+```
+
+Here `digital` is only an example; replace it with the user's licensed team
+queue. TraceWeave reads only the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`; it does
+not create, overwrite, or interpret a site's generic `LSF_QUEUE`. If the site
+already exports `LSF_QUEUE`, the user may map that existing value instead:
+
+```bash
+export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"
+```
+
+For `tcsh`:
+
+```tcsh
+setenv TRACEWEAVE_NPI_EXECUTION lsf
+setenv TRACEWEAVE_NPI_LSF_QUEUE "digital"
+```
+
+Or, only when `LSF_QUEUE` already exists:
+
+```tcsh
+setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
+```
+
+Putting these values in `.bashrc` / `.tcshrc` works only when the MCP client
+passes that shell environment to the TraceWeave server. In the tested
+terminal-launched setup, Claude Code did so and completed LSF-hosted NPI
+driver/load/path queries. Codex required the needed site variables to be named
+in `env_vars`; without them, the NPI attempt failed.
+
+The following Codex configuration is for an EDA environment already established
+by the parent shell. It is an alternative to the fixed-value EDA block in the
+Codex section above. The list reflects one tested LSF/EGO site; add or remove
+names to match the site's setup, and do not repeat any name under `env`:
+
+```toml
+[mcp_servers.TraceWeave]
+command = "<TRACEWEAVE_HOME>/.venv/bin/python"
+args = ["<TRACEWEAVE_HOME>/server.py"]
+cwd = "<TRACEWEAVE_HOME>"
+env_vars = [
+  "TRACEWEAVE_NPI_LSF_QUEUE",
+
+  "LSF_ENVDIR",
+  "LSF_BINDIR",
+  "LSF_SERVERDIR",
+  "LSF_LIBDIR",
+  "PATH",
+
+  "EGO_TOP",
+  "EGO_BINDIR",
+  "EGO_CONFDIR",
+  "EGO_ESRVDIR",
+  "EGO_LIBDIR",
+  "EGO_LOCAL_CONFDIR",
+  "EGO_SERVERDIR",
+
+  "VERDI_HOME",
+  "LD_LIBRARY_PATH",
+
+  "LM_LICENSE_FILE",
+  "SNPSLMD_LICENSE_FILE",
+]
+
+[mcp_servers.TraceWeave.env]
+TRACEWEAVE_NPI_EXECUTION = "lsf"
+```
+
+Values under `[mcp_servers.TraceWeave.env]` are copied literally by Codex, so do not write
+`TRACEWEAVE_NPI_LSF_QUEUE = "$LSF_QUEUE"` there. `env_vars` is the supported
+way to forward the value that the user's shell already expanded. If the Codex
+parent does not inherit the shell environment, omit the queue from `env_vars`
+and put a fixed `TRACEWEAVE_NPI_LSF_QUEUE = "digital"` directly under
+`[mcp_servers.TraceWeave.env]` instead. If some EDA values are intentionally
+fixed under `env`, omit those same names from `env_vars`.
+
+In the tested terminal-launched Claude Code setup, no extra MCP environment map
+was needed when the shell already exported both namespaced values and the full
+site environment. For a deterministic setup, or when the client does not inherit
+that shell, merge the following fixed values into the existing TraceWeave
+server's `"env"` object (replace `digital` with the user's queue):
+
+```json
+{
+  "TRACEWEAVE_NPI_EXECUTION": "lsf",
+  "TRACEWEAVE_NPI_LSF_QUEUE": "digital"
+}
+```
+
+JSON values are literal too; do not put `"$LSF_QUEUE"` in this static map.
+
+With this mode enabled, explicit connectivity operations
+(`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`,
+`trace_x_source`) and every `build_kdb` cache miss or forced rebuild submit a
+short `bsub -K` worker. Exact KDB cache hits, log parsing, waveform reads,
+structural scans, KDB detection, and Static analysis remain local because they
+do not invoke a licensed Verdi executable. Connectivity-worker failure or
+timeout falls through to the local Source Graph and then to Legacy Static if
+that bounded graph is unavailable or inconclusive. A KDB-build worker failure
+does **not** fall back to local `vericom`/`elabcom`; `build_kdb` returns a fixed
+failure receipt instead. Static still has no
+path API, so a final path fallback is explicitly unsupported. Routing is visible through fixed
+`backend_status.execution_mode` / `scheduler_status` / `worker_status` /
+`fallback_reason` labels; queue, host, command, and license details are not
+returned.
+
+After restarting or reconnecting the MCP server, ask the AI agent to run one
+explicit connectivity operation and report `backend_status`. A successful LSF
+NPI call has `execution_mode="lsf"`, `scheduler_status="completed"`,
+`worker_status="completed"`, and `actual_backend="verdi_npi"`. Otherwise inspect
+`fallback_reason`; a Static fallback is not an exact NPI result.
+
+For an Xcelium KDB cache miss, `build_kdb` exposes the same top-level
+`execution_mode` / `scheduler_status` / `worker_status` / `fallback_reason`
+labels. A successful remote build reports `execution_mode="lsf"` and both
+statuses as `"completed"`; a cache hit reports both statuses as
+`"not_started"` because no license-bearing process ran.
+
+An error-marked KDB may still complete the worker successfully. In that case
+`actual_backend="verdi_npi"` is paired with `kdb_degraded=true`; read the NPI
+attempt's `coverage_status="partial"` and the `kdb_error_count` /
+`kdb_error_log` diagnostics rather than treating scheduler completion alone as
+proof of complete elaboration.
+
+Optional settings:
+
+```bash
+export TRACEWEAVE_NPI_LSF_TIMEOUT=120
+export TRACEWEAVE_NPI_LSF_KDB_TIMEOUT=1260
+export TRACEWEAVE_NPI_LSF_BSUB=/path/to/bsub
+export TRACEWEAVE_NPI_LSF_BKILL=/path/to/bkill
+export TRACEWEAVE_NPI_LSF_PYTHON=/path/to/python3.11
+export TRACEWEAVE_NPI_LSF_STAGING_DIR=/shared/private/traceweave-npi
+export TRACEWEAVE_NPI_LSF_EXTRA_ARGS_JSON='["-R", "select[...]"]'
+```
+
+The compile log, every source/include input, TraceWeave checkout/installation,
+staging directory, and `TRACEWEAVE_CACHE_DIR` (including the generated KDB)
+must be visible at the same absolute paths on the submission and compute nodes.
+After a remote success the parent verifies that the returned KDB path is
+visible; otherwise it reports `npi_lsf_artifact_unavailable`. The staging
+directory defaults under TraceWeave's cache root; set it explicitly when that
+cache is not on a shared filesystem. `TRACEWEAVE_NPI_LSF_TIMEOUT` controls
+short connectivity jobs; `TRACEWEAVE_NPI_LSF_KDB_TIMEOUT` separately bounds
+queue wait plus both KDB phases (default 1260 seconds). Scheduler options are
+JSON argv, not shell text, and are limited to scheduler option/value pairs.
