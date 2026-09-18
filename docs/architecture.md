@@ -204,7 +204,11 @@ Verification
   triggers a whole-result Legacy Static recomputation. The Source Graph runtime
   is created lazily once per server process, keeps a bounded in-memory scoped
   IR cache, admits at most one cold build per process, and executes its optional
-  frontend in an isolated one-shot worker. An opt-in, default-disabled semantic
+  frontend in an isolated one-shot worker. Projection excludes uninstantiated
+  generate branches from both instance and assignment facts, independently for
+  each parameter specialization. Indexed instance-array elements retain their
+  elaborated leaf names. Projector version changes invalidate earlier artifacts.
+  An opt-in, default-disabled semantic
   session can instead retain one exact, bounded Slang compilation/root in that
   isolated child and project several narrow scoped IR artifacts without a
   second parse/elaboration. The broader proved context is part of artifact

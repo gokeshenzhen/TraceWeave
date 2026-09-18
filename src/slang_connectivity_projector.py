@@ -619,7 +619,9 @@ class SlangConnectivityProjector:
             )
         return InstanceDecl(
             path=record.path,
-            name=str(record.symbol.name),
+            # Slang array elements have no standalone name; their elaborated
+            # path supplies the stable indexed leaf (for example lane[1]).
+            name=str(record.symbol.name) or record.path.rsplit(".", 1)[-1],
             definition_id=record.definition_id,
             parent_path=record.parent_path,
             location=location,
@@ -2031,6 +2033,8 @@ def _direct_child_instances(
 ) -> Iterable[tuple[Any, str | None]]:
     for member in scope:
         kind = _kind_name(member)
+        if kind == "GenerateBlock" and getattr(member, "isUninstantiated", False):
+            continue
         if kind == "Instance":
             path = str(member.hierarchicalPath)
             between = path[len(parent_instance_path) + 1 :].rsplit(".", 1)
@@ -2046,6 +2050,8 @@ def _template_members(
 ) -> Iterable[tuple[Any, str | None]]:
     for member in scope:
         kind = _kind_name(member)
+        if kind == "GenerateBlock" and getattr(member, "isUninstantiated", False):
+            continue
         if kind in {"Instance", "InstanceArray"}:
             continue
         if kind in {"GenerateBlock", "GenerateBlockArray"}:

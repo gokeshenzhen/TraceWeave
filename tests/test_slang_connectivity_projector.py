@@ -257,6 +257,73 @@ endmodule
     ]
 
 
+@pytest.mark.parametrize("enabled,driver", [(1, "a"), (0, "b")])
+def test_inactive_generate_assignments_are_not_driver_facts(enabled, driver):
+    pyslang = pytest.importorskip("pyslang")
+    tree = pyslang.syntax.SyntaxTree.fromText(f"""
+module top(input logic a, b, output wire y);
+  if ({enabled}) begin : enabled
+    assign y = a;
+  end else begin : disabled
+    assign y = b;
+  end
+endmodule
+""")
+    comp = pyslang.ast.Compilation()
+    comp.addSyntaxTree(tree)
+    projection = SlangConnectivityProjector(source_manager=tree.sourceManager).project(comp.getRoot())
+    assignments = projection.ir.definitions[0].assignments
+    assert len(assignments) == 1
+    assert assignments[0].target.symbol == "y"
+    assert [dep.source.symbol for dep in assignments[0].dependencies] == [driver]
+    assert projection.ir.coverage.status is CoverageStatus.COMPLETE
+
+
+def test_nested_generate_excludes_inactive_instances_per_specialization():
+    pyslang = pytest.importorskip("pyslang")
+    tree = pyslang.syntax.SyntaxTree.fromText("""
+module leaf(input logic a); endmodule
+module branch #(parameter int Select=0)(input logic a, b, output wire y);
+  case (Select)
+    0: begin : zero
+      for (genvar i=0; i<2; i++) begin : lanes
+        if (i == 0) begin : selected
+          leaf active[1:0](.a(a));
+        end else begin : other
+          leaf active(.a(b));
+        end
+      end
+      assign y=a;
+    end
+    default: begin : nonzero
+      leaf active(.a(b));
+      assign y=b;
+    end
+  endcase
+endmodule
+module top(input logic a,b, output wire y0,y1);
+  branch #(.Select(0)) u0(.a(a),.b(b),.y(y0));
+  branch #(.Select(1)) u1(.a(a),.b(b),.y(y1));
+endmodule
+""")
+    comp = pyslang.ast.Compilation()
+    comp.addSyntaxTree(tree)
+    projection = SlangConnectivityProjector(source_manager=tree.sourceManager).project(comp.getRoot())
+    instances = {inst.path: inst for inst in projection.ir.instances}
+    assert set(instances) == {
+        "top", "top.u0", "top.u1",
+        "top.u0.zero.lanes[0].selected.active[1]",
+        "top.u0.zero.lanes[0].selected.active[0]",
+        "top.u0.zero.lanes[1].other.active",
+        "top.u1.nonzero.active",
+    }
+    definitions = {d.definition_id: d for d in projection.ir.definitions}
+    for path, expected in [("top.u0", "a"), ("top.u1", "b")]:
+        assignments = definitions[instances[path].definition_id].assignments
+        assert len(assignments) == 1
+        assert {dep.source.symbol for dep in assignments[0].dependencies} == {expected}
+
+
 def test_real_frontend_binding_evidence_points_to_actual_expression():
     pyslang = pytest.importorskip("pyslang")
     source = """\
