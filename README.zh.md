@@ -136,48 +136,186 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 通常只需描述调试目标，由助手选择工具。下表按用途列出全部工具；具体参数由 MCP 工具定义提供。
 
-| 类别 | 工具名 | 说明 |
-|---|---|---|
-| 会话与产物 | `get_sim_paths` | 发现仿真 case、编译日志、运行日志与波形 |
-| 会话与产物 | `get_formal_paths` | 发现 formal 工程、日志及导出的波形，当前支持 JasperGold |
-| 会话与产物 | `get_diagnostic_snapshot` | 查看当前已收集的调试信息与待完成步骤 |
-| 层次与源码 | `build_tb_hierarchy` | 根据编译记录建立 RTL / testbench 层次视图 |
-| 层次与源码 | `get_tb_subtree` | 查看指定实例的局部层次 |
-| 层次与源码 | `find_tb_instance` | 按路径或模块名查找实例 |
-| 层次与源码 | `lookup_tb_files` | 在实际编译文件集中查找源码 |
-| 层次与源码 | `get_tb_file_detail` | 查看源码文件定义的模块、接口和类 |
-| 层次与源码 | `get_tb_class_hierarchy` | 查看 UVM / SystemVerilog 类继承关系 |
-| 层次与源码 | `dump_tb_section` | 获取指定部分的完整层次分析数据 |
-| 日志与失败 | `parse_sim_log` | 将运行失败归类，提取时间与错误摘要 |
-| 日志与失败 | `get_error_context` | 查看错误附近的原始日志 |
-| 日志与失败 | `diff_sim_failure_results` | 比较两次运行中新增、持续和已消失的失败 |
-| 日志与失败 | `analyze_failures` | 汇总某组失败的日志与波形上下文 |
-| 日志与失败 | `analyze_failure_event` | 从一个失败事件定位相关实例、信号与源码候选 |
-| 日志与失败 | `recommend_failure_debug_next_steps` | 推荐下一步值得调查的目标与工具调用 |
-| 结构与追踪 | `scan_structural_risks` | 扫描可疑结构；语义模式可检查 tie、悬空输入与常量比较 |
-| 结构与追踪 | `explain_signal_driver` | 追踪信号的驱动来源与相关 RTL |
-| 结构与追踪 | `find_signal_loads` | 查找信号的消费者与影响范围 |
-| 结构与追踪 | `trace_signal_path` | 查询两个信号之间的结构连通路径 |
-| 结构与追踪 | `trace_x_source` | 沿上游驱动追踪 X/Z 的传播来源 |
-| 波形查询 | `get_waveform_summary` | 查看波形格式、时长、时间刻度和顶层模块 |
-| 波形查询 | `search_signals` | 根据名称查找完整信号路径 |
-| 波形查询 | `get_signal_at_time` | 读取指定时刻的信号值 |
-| 波形查询 | `get_signal_transitions` | 查看时间窗口内的信号跳变 |
-| 波形查询 | `get_signals_around_time` | 查看某时刻前后多个信号的变化 |
-| 波形查询 | `get_signals_by_cycle` | 按时钟沿逐周期采样多个信号 |
-| 差异与时序 | `diff_first_divergence` | 查找两个信号首次观测到的已知值差异 |
-| 差异与时序 | `trace_divergence` | 验证波形差异，追踪两侧相关的数据、控制与历史状态 |
-| 差异与时序 | `period` | 检查信号周期与节拍异常 |
-| 差异与时序 | `verify_window` | 在波形窗口中验证时序条件，返回具体证据 |
-| 协议与事务 | `suggest_handshakes` | 发现 valid/ready 接口及检查所需的信号组合 |
-| 协议与事务 | `suggest_protocol_bundles` | 发现 AHB / APB 接口信号组合 |
-| 协议与事务 | `sweep_handshakes` | 扫描全设计中发现的 valid/ready 与 AHB 接口，汇总异常 |
-| 协议与事务 | `inspect_handshake` | 检查指定接口的停顿、保持和握手异常 |
-| 协议与事务 | `reconstruct_transactions` | 重建请求与响应事务，查看延迟、未完成请求和顺序 |
-| 时间游标 | `cursor_set` | 为关键时刻命名，便于后续查询复用 |
-| 时间游标 | `cursor_list` | 列出当前会话的时间游标 |
-| 时间游标 | `cursor_delete` | 删除时间游标 |
-| EDA 集成 | `build_kdb` | 从编译记录构建并缓存 Verdi KDB，供 NPI 查询使用 |
+<table>
+  <thead>
+    <tr>
+      <th>类别</th>
+      <th>工具名</th>
+      <th>说明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="3">会话与产物</td>
+      <td><code>get_sim_paths</code></td>
+      <td>发现仿真 case、编译日志、运行日志与波形</td>
+    </tr>
+    <tr>
+      <td><code>get_formal_paths</code></td>
+      <td>发现 formal 工程、日志及导出的波形，当前支持 JasperGold</td>
+    </tr>
+    <tr>
+      <td><code>get_diagnostic_snapshot</code></td>
+      <td>查看当前已收集的调试信息与待完成步骤</td>
+    </tr>
+    <tr>
+      <td rowspan="7">层次与源码</td>
+      <td><code>build_tb_hierarchy</code></td>
+      <td>根据编译记录建立 RTL / testbench 层次视图</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_subtree</code></td>
+      <td>查看指定实例的局部层次</td>
+    </tr>
+    <tr>
+      <td><code>find_tb_instance</code></td>
+      <td>按路径或模块名查找实例</td>
+    </tr>
+    <tr>
+      <td><code>lookup_tb_files</code></td>
+      <td>在实际编译文件集中查找源码</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_file_detail</code></td>
+      <td>查看源码文件定义的模块、接口和类</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_class_hierarchy</code></td>
+      <td>查看 UVM / SystemVerilog 类继承关系</td>
+    </tr>
+    <tr>
+      <td><code>dump_tb_section</code></td>
+      <td>获取指定部分的完整层次分析数据</td>
+    </tr>
+    <tr>
+      <td rowspan="6">日志与失败</td>
+      <td><code>parse_sim_log</code></td>
+      <td>将运行失败归类，提取时间与错误摘要</td>
+    </tr>
+    <tr>
+      <td><code>get_error_context</code></td>
+      <td>查看错误附近的原始日志</td>
+    </tr>
+    <tr>
+      <td><code>diff_sim_failure_results</code></td>
+      <td>比较两次运行中新增、持续和已消失的失败</td>
+    </tr>
+    <tr>
+      <td><code>analyze_failures</code></td>
+      <td>汇总某组失败的日志与波形上下文</td>
+    </tr>
+    <tr>
+      <td><code>analyze_failure_event</code></td>
+      <td>从一个失败事件定位相关实例、信号与源码候选</td>
+    </tr>
+    <tr>
+      <td><code>recommend_failure_debug_next_steps</code></td>
+      <td>推荐下一步值得调查的目标与工具调用</td>
+    </tr>
+    <tr>
+      <td rowspan="5">结构与追踪</td>
+      <td><code>scan_structural_risks</code></td>
+      <td>扫描可疑结构；语义模式可检查 tie、悬空输入与常量比较</td>
+    </tr>
+    <tr>
+      <td><code>explain_signal_driver</code></td>
+      <td>追踪信号的驱动来源与相关 RTL</td>
+    </tr>
+    <tr>
+      <td><code>find_signal_loads</code></td>
+      <td>查找信号的消费者与影响范围</td>
+    </tr>
+    <tr>
+      <td><code>trace_signal_path</code></td>
+      <td>查询两个信号之间的结构连通路径</td>
+    </tr>
+    <tr>
+      <td><code>trace_x_source</code></td>
+      <td>沿上游驱动追踪 X/Z 的传播来源</td>
+    </tr>
+    <tr>
+      <td rowspan="6">波形查询</td>
+      <td><code>get_waveform_summary</code></td>
+      <td>查看波形格式、时长、时间刻度和顶层模块</td>
+    </tr>
+    <tr>
+      <td><code>search_signals</code></td>
+      <td>根据名称查找完整信号路径</td>
+    </tr>
+    <tr>
+      <td><code>get_signal_at_time</code></td>
+      <td>读取指定时刻的信号值</td>
+    </tr>
+    <tr>
+      <td><code>get_signal_transitions</code></td>
+      <td>查看时间窗口内的信号跳变</td>
+    </tr>
+    <tr>
+      <td><code>get_signals_around_time</code></td>
+      <td>查看某时刻前后多个信号的变化</td>
+    </tr>
+    <tr>
+      <td><code>get_signals_by_cycle</code></td>
+      <td>按时钟沿逐周期采样多个信号</td>
+    </tr>
+    <tr>
+      <td rowspan="4">差异与时序</td>
+      <td><code>diff_first_divergence</code></td>
+      <td>查找两个信号首次观测到的已知值差异</td>
+    </tr>
+    <tr>
+      <td><code>trace_divergence</code></td>
+      <td>验证波形差异，追踪两侧相关的数据、控制与历史状态</td>
+    </tr>
+    <tr>
+      <td><code>period</code></td>
+      <td>检查信号周期与节拍异常</td>
+    </tr>
+    <tr>
+      <td><code>verify_window</code></td>
+      <td>在波形窗口中验证时序条件，返回具体证据</td>
+    </tr>
+    <tr>
+      <td rowspan="5">协议与事务</td>
+      <td><code>suggest_handshakes</code></td>
+      <td>发现 valid/ready 接口及检查所需的信号组合</td>
+    </tr>
+    <tr>
+      <td><code>suggest_protocol_bundles</code></td>
+      <td>发现 AHB / APB 接口信号组合</td>
+    </tr>
+    <tr>
+      <td><code>sweep_handshakes</code></td>
+      <td>扫描全设计中发现的 valid/ready 与 AHB 接口，汇总异常</td>
+    </tr>
+    <tr>
+      <td><code>inspect_handshake</code></td>
+      <td>检查指定接口的停顿、保持和握手异常</td>
+    </tr>
+    <tr>
+      <td><code>reconstruct_transactions</code></td>
+      <td>重建请求与响应事务，查看延迟、未完成请求和顺序</td>
+    </tr>
+    <tr>
+      <td rowspan="3">时间游标</td>
+      <td><code>cursor_set</code></td>
+      <td>为关键时刻命名，便于后续查询复用</td>
+    </tr>
+    <tr>
+      <td><code>cursor_list</code></td>
+      <td>列出当前会话的时间游标</td>
+    </tr>
+    <tr>
+      <td><code>cursor_delete</code></td>
+      <td>删除时间游标</td>
+    </tr>
+    <tr>
+      <td>EDA 集成</td>
+      <td><code>build_kdb</code></td>
+      <td>从编译记录构建并缓存 Verdi KDB，供 NPI 查询使用</td>
+    </tr>
+  </tbody>
+</table>
 
 ## 常见问题
 

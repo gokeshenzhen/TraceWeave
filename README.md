@@ -136,48 +136,186 @@ For a first connection check, ask the assistant to call `get_sim_paths` and conf
 
 Usually, you describe the debugging goal and let the assistant select the tools. This table lists every tool by purpose; MCP tool definitions provide the parameters.
 
-| Category | Tool | Description |
-|---|---|---|
-| Session and artifacts | `get_sim_paths` | Find simulation cases, compile logs, runtime logs, and waveforms |
-| Session and artifacts | `get_formal_paths` | Find formal projects, logs, and exported waveforms; currently supports JasperGold |
-| Session and artifacts | `get_diagnostic_snapshot` | Review collected debugging information and outstanding steps |
-| Hierarchy and source | `build_tb_hierarchy` | Build an RTL / testbench hierarchy view from compile records |
-| Hierarchy and source | `get_tb_subtree` | Browse a selected instance's local hierarchy |
-| Hierarchy and source | `find_tb_instance` | Find instances by path or module name |
-| Hierarchy and source | `lookup_tb_files` | Find source files in the actual compiled file set |
-| Hierarchy and source | `get_tb_file_detail` | Inspect modules, interfaces, and classes defined in a source file |
-| Hierarchy and source | `get_tb_class_hierarchy` | Browse UVM / SystemVerilog class inheritance |
-| Hierarchy and source | `dump_tb_section` | Retrieve a complete section of hierarchy analysis data |
-| Logs and failures | `parse_sim_log` | Group runtime failures and extract timestamps and error summaries |
-| Logs and failures | `get_error_context` | Read the original log around an error |
-| Logs and failures | `diff_sim_failure_results` | Compare new, persistent, and resolved failures between runs |
-| Logs and failures | `analyze_failures` | Combine log and waveform context for a failure group |
-| Logs and failures | `analyze_failure_event` | Identify candidate instances, signals, and source files for one failure |
-| Logs and failures | `recommend_failure_debug_next_steps` | Recommend investigation targets and follow-up tool calls |
-| Structure and tracing | `scan_structural_risks` | Scan suspicious structures; semantic mode checks ties, open inputs, and constant comparisons |
-| Structure and tracing | `explain_signal_driver` | Trace a signal's driver and relevant RTL |
-| Structure and tracing | `find_signal_loads` | Find a signal's consumers and potential impact |
-| Structure and tracing | `trace_signal_path` | Query structural connectivity between two signals |
-| Structure and tracing | `trace_x_source` | Follow upstream drivers to trace X/Z propagation |
-| Waveform queries | `get_waveform_summary` | Inspect waveform format, duration, timescale, and top modules |
-| Waveform queries | `search_signals` | Find full signal paths by name |
-| Waveform queries | `get_signal_at_time` | Read a signal's value at a specific time |
-| Waveform queries | `get_signal_transitions` | Inspect signal transitions within a time window |
-| Waveform queries | `get_signals_around_time` | Inspect multiple signals around a selected time |
-| Waveform queries | `get_signals_by_cycle` | Sample multiple signals on clock edges |
-| Differences and timing | `diff_first_divergence` | Find the first observed known-value difference between two signals |
-| Differences and timing | `trace_divergence` | Verify a waveform difference and trace relevant data, control, and prior state on both sides |
-| Differences and timing | `period` | Check signal periods and cadence anomalies |
-| Differences and timing | `verify_window` | Verify temporal conditions within a waveform window and return concrete evidence |
-| Protocols and transactions | `suggest_handshakes` | Discover valid/ready interfaces and signal bundles for inspection |
-| Protocols and transactions | `suggest_protocol_bundles` | Discover AHB / APB interface signal bundles |
-| Protocols and transactions | `sweep_handshakes` | Scan discovered valid/ready and AHB interfaces across the design and summarize anomalies |
-| Protocols and transactions | `inspect_handshake` | Check one interface for stalls, stability, and handshake anomalies |
-| Protocols and transactions | `reconstruct_transactions` | Reconstruct requests and responses to inspect latency, outstanding requests, and ordering |
-| Time cursors | `cursor_set` | Name a key timestamp for reuse in later queries |
-| Time cursors | `cursor_list` | List time cursors in the current session |
-| Time cursors | `cursor_delete` | Remove a time cursor |
-| EDA integration | `build_kdb` | Build and cache a Verdi KDB from compile records for NPI queries |
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Tool</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="3">Session and artifacts</td>
+      <td><code>get_sim_paths</code></td>
+      <td>Find simulation cases, compile logs, runtime logs, and waveforms</td>
+    </tr>
+    <tr>
+      <td><code>get_formal_paths</code></td>
+      <td>Find formal projects, logs, and exported waveforms; currently supports JasperGold</td>
+    </tr>
+    <tr>
+      <td><code>get_diagnostic_snapshot</code></td>
+      <td>Review collected debugging information and outstanding steps</td>
+    </tr>
+    <tr>
+      <td rowspan="7">Hierarchy and source</td>
+      <td><code>build_tb_hierarchy</code></td>
+      <td>Build an RTL / testbench hierarchy view from compile records</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_subtree</code></td>
+      <td>Browse a selected instance&#x27;s local hierarchy</td>
+    </tr>
+    <tr>
+      <td><code>find_tb_instance</code></td>
+      <td>Find instances by path or module name</td>
+    </tr>
+    <tr>
+      <td><code>lookup_tb_files</code></td>
+      <td>Find source files in the actual compiled file set</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_file_detail</code></td>
+      <td>Inspect modules, interfaces, and classes defined in a source file</td>
+    </tr>
+    <tr>
+      <td><code>get_tb_class_hierarchy</code></td>
+      <td>Browse UVM / SystemVerilog class inheritance</td>
+    </tr>
+    <tr>
+      <td><code>dump_tb_section</code></td>
+      <td>Retrieve a complete section of hierarchy analysis data</td>
+    </tr>
+    <tr>
+      <td rowspan="6">Logs and failures</td>
+      <td><code>parse_sim_log</code></td>
+      <td>Group runtime failures and extract timestamps and error summaries</td>
+    </tr>
+    <tr>
+      <td><code>get_error_context</code></td>
+      <td>Read the original log around an error</td>
+    </tr>
+    <tr>
+      <td><code>diff_sim_failure_results</code></td>
+      <td>Compare new, persistent, and resolved failures between runs</td>
+    </tr>
+    <tr>
+      <td><code>analyze_failures</code></td>
+      <td>Combine log and waveform context for a failure group</td>
+    </tr>
+    <tr>
+      <td><code>analyze_failure_event</code></td>
+      <td>Identify candidate instances, signals, and source files for one failure</td>
+    </tr>
+    <tr>
+      <td><code>recommend_failure_debug_next_steps</code></td>
+      <td>Recommend investigation targets and follow-up tool calls</td>
+    </tr>
+    <tr>
+      <td rowspan="5">Structure and tracing</td>
+      <td><code>scan_structural_risks</code></td>
+      <td>Scan suspicious structures; semantic mode checks ties, open inputs, and constant comparisons</td>
+    </tr>
+    <tr>
+      <td><code>explain_signal_driver</code></td>
+      <td>Trace a signal&#x27;s driver and relevant RTL</td>
+    </tr>
+    <tr>
+      <td><code>find_signal_loads</code></td>
+      <td>Find a signal&#x27;s consumers and potential impact</td>
+    </tr>
+    <tr>
+      <td><code>trace_signal_path</code></td>
+      <td>Query structural connectivity between two signals</td>
+    </tr>
+    <tr>
+      <td><code>trace_x_source</code></td>
+      <td>Follow upstream drivers to trace X/Z propagation</td>
+    </tr>
+    <tr>
+      <td rowspan="6">Waveform queries</td>
+      <td><code>get_waveform_summary</code></td>
+      <td>Inspect waveform format, duration, timescale, and top modules</td>
+    </tr>
+    <tr>
+      <td><code>search_signals</code></td>
+      <td>Find full signal paths by name</td>
+    </tr>
+    <tr>
+      <td><code>get_signal_at_time</code></td>
+      <td>Read a signal&#x27;s value at a specific time</td>
+    </tr>
+    <tr>
+      <td><code>get_signal_transitions</code></td>
+      <td>Inspect signal transitions within a time window</td>
+    </tr>
+    <tr>
+      <td><code>get_signals_around_time</code></td>
+      <td>Inspect multiple signals around a selected time</td>
+    </tr>
+    <tr>
+      <td><code>get_signals_by_cycle</code></td>
+      <td>Sample multiple signals on clock edges</td>
+    </tr>
+    <tr>
+      <td rowspan="4">Differences and timing</td>
+      <td><code>diff_first_divergence</code></td>
+      <td>Find the first observed known-value difference between two signals</td>
+    </tr>
+    <tr>
+      <td><code>trace_divergence</code></td>
+      <td>Verify a waveform difference and trace relevant data, control, and prior state on both sides</td>
+    </tr>
+    <tr>
+      <td><code>period</code></td>
+      <td>Check signal periods and cadence anomalies</td>
+    </tr>
+    <tr>
+      <td><code>verify_window</code></td>
+      <td>Verify temporal conditions within a waveform window and return concrete evidence</td>
+    </tr>
+    <tr>
+      <td rowspan="5">Protocols and transactions</td>
+      <td><code>suggest_handshakes</code></td>
+      <td>Discover valid/ready interfaces and signal bundles for inspection</td>
+    </tr>
+    <tr>
+      <td><code>suggest_protocol_bundles</code></td>
+      <td>Discover AHB / APB interface signal bundles</td>
+    </tr>
+    <tr>
+      <td><code>sweep_handshakes</code></td>
+      <td>Scan discovered valid/ready and AHB interfaces across the design and summarize anomalies</td>
+    </tr>
+    <tr>
+      <td><code>inspect_handshake</code></td>
+      <td>Check one interface for stalls, stability, and handshake anomalies</td>
+    </tr>
+    <tr>
+      <td><code>reconstruct_transactions</code></td>
+      <td>Reconstruct requests and responses to inspect latency, outstanding requests, and ordering</td>
+    </tr>
+    <tr>
+      <td rowspan="3">Time cursors</td>
+      <td><code>cursor_set</code></td>
+      <td>Name a key timestamp for reuse in later queries</td>
+    </tr>
+    <tr>
+      <td><code>cursor_list</code></td>
+      <td>List time cursors in the current session</td>
+    </tr>
+    <tr>
+      <td><code>cursor_delete</code></td>
+      <td>Remove a time cursor</td>
+    </tr>
+    <tr>
+      <td>EDA integration</td>
+      <td><code>build_kdb</code></td>
+      <td>Build and cache a Verdi KDB from compile records for NPI queries</td>
+    </tr>
+  </tbody>
+</table>
 
 ## FAQ
 
