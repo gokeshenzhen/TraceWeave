@@ -526,6 +526,11 @@ Verification
   one cancellation preserves it, final-waiter cancellation stops it. Results
   computed across a source change are degraded and never published. Set
   `TRACEWEAVE_STRUCTURAL_SCAN_CACHE=0` to bypass this optimization.
+  An already joined source lease survives identity capture and transfers into
+  the rule build on a miss, even if hierarchy finishes first. Cache hits and
+  coalesced callers release unused leases. The source-index A/B benchmark
+  disables result caching and uses `fast` so it measures source sharing;
+  result-cache byte validation is measured by the separate cache benchmark.
   `scripts/benchmark_structural_cache.py` compares full internal result hashes.
   On the local OpenTitan 1,117-source workload (September 18, sequential calls
   in one fresh process), uncached/cold calls took 4.26/5.99 s; three warm hits
@@ -544,6 +549,13 @@ Verification
   instance templates. The isolated worker has time/RSS and instance/fact/AST/bit
   bounds. `fast` stays lexical; default `auto` reuses a compatible completed
   semantic result or explicitly reports `not_run`. `deep` requests construction.
+  `analysis_mode` is a per-invocation MCP argument, defaulting to `auto`; no
+  environment setting selects this mode. `deep` permits a cold frontend build
+  but still reuses an exact completed result. `semantic_scope` limits basic
+  fact extraction, not necessarily frontend parsing/elaboration. Reuse requires
+  matching identity, scope, categories and budgets; the category list replaces
+  the default selection rather than extending it. See the README tool reference
+  for JSON invocation examples. The lexical scan still runs on a semantic miss.
   Lexical and semantic coverage are independent; output trimming preserves
   counts and marks `output_truncated`, while computation limits mark partial
   analysis and prevent publishing a completed cache entry.

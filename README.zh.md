@@ -1099,7 +1099,8 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
   进程内用 Slang 检查输入 tie（含部分常量位和 X/Z）、悬空输入、常量赋值、
   命名常量比较及其源码和消费者上下文，不需要 Verdi/NPI license。
   正常 tie-off、协议码点也会产生事实，不能直接认定为缺陷。
-  `semantic_scope="tb.dut.u_block"` 可限定实际展开的实例子树。
+  `semantic_scope="tb.dut.u_block"` 可限定基础语义检查的实例子树；前端解析和
+  elaboration 仍可能覆盖整个编译上下文。
   默认预算为 15 秒、worker RSS 512 MiB、25,000 个实例、20,000 条事实、
   1,000,000 个 AST 节点。可用 `semantic_timeout_sec`、`semantic_max_rss_mib`、
   `semantic_max_instances`、`semantic_max_facts`、`semantic_max_ast_nodes` 调整，
@@ -1124,6 +1125,31 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
   `semantic_max_propagation_steps` 默认 100,000 个按位宽计费的工作单位，
   `semantic_max_propagation_bits` 默认 262,144 个信号位。复杂 SoC 可能触发预算或
   未支持语义边界，部分覆盖不代表设计干净；正常固定控制同样会产生事实。
+
+  模式通过每次 MCP 工具调用的 JSON 参数设置，无需设置环境变量或修改客户端配置。
+  省略 `analysis_mode` 等价于：
+
+  ```json
+  {"compile_log": "/path/to/build.log", "analysis_mode": "auto"}
+  ```
+
+  如果希望没有可复用语义结果时也执行语义检查，调用：
+
+  ```json
+  {
+    "compile_log": "/path/to/build.log",
+    "analysis_mode": "deep",
+    "semantic_scope": "tb.dut.u_block",
+    "semantic_timeout_sec": 15,
+    "semantic_max_rss_mib": 512
+  }
+  ```
+
+  `deep` 命中适用语义结果缓存时也会复用，不会强制重建。“冷构建”指没有可复用
+  结果，需要启动 Slang 解析源码并 elaboration。`auto` 遇到语义缓存未命中，返回
+  `semantic.status="not_run"` 和 `semantic_cache_miss`；词法扫描仍会执行或命中缓存。
+  后续 `auto` 只有在身份、scope、类别及预算匹配时才能复用已完成的 `deep` 结果。
+  `semantic_categories` 会替换默认类别列表；若需全部五类检查，也要列入三类基础类别。
 
 ### 层次结构 Handle 工具
 

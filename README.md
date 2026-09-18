@@ -1270,7 +1270,8 @@ an exported VCD and discovering local files requires no JasperGold license.
   connections (including partial X/Z bits), open inputs, constant assignments,
   and named constant comparisons with source/consumer context. These are facts
   to investigate; normal tie-offs and protocol constants are also reported.
-  Use `semantic_scope="tb.dut.u_block"` to focus on one elaborated subtree.
+  Use `semantic_scope="tb.dut.u_block"` to focus basic checks on one elaborated
+  subtree. Frontend parsing/elaboration may still cover the compile context.
   Defaults are 15 seconds, 512 MiB worker RSS, 25,000 instances, 20,000 facts,
   and 1,000,000 AST nodes; optional `semantic_timeout_sec`,
   `semantic_max_rss_mib`, `semantic_max_instances`, `semantic_max_facts`, and
@@ -1302,6 +1303,34 @@ an exported VCD and discovering local files requires no JasperGold license.
   SoCs can exceed these budgets or encounter unsupported effects; partial
   coverage is not a clean-design conclusion. Normal fixed controls also yield
   facts and are not automatically bugs.
+
+  Set the mode in each MCP tool call's JSON arguments; no environment variable
+  or client configuration edit is required. Omitting it is equivalent to:
+
+  ```json
+  {"compile_log": "/path/to/build.log", "analysis_mode": "auto"}
+  ```
+
+  To obtain semantic evidence even when there is no reusable semantic result:
+
+  ```json
+  {
+    "compile_log": "/path/to/build.log",
+    "analysis_mode": "deep",
+    "semantic_scope": "tb.dut.u_block",
+    "semantic_timeout_sec": 15,
+    "semantic_max_rss_mib": 512
+  }
+  ```
+
+  `deep` can still hit an exact semantic result cache; it does not force a
+  rebuild. A cold build means starting Slang to parse/elaborate because there
+  is no reusable result. In `auto`, a semantic miss returns
+  `semantic.status="not_run"` with `semantic_cache_miss`; the lexical scan
+  still runs or returns its cached result. A later `auto` call can reuse a
+  completed `deep` result only when identity, scope, categories and budgets
+  match. `semantic_categories` replaces the default category selection; include
+  the three basic categories as well if requesting all five checks.
 
 ### Hierarchy Handle Tools
 

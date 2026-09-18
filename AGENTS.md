@@ -58,6 +58,9 @@ Rules:
 - `build_tb_hierarchy` and `scan_structural_risks` must run in parallel on the same `compile_log`
 - `scan_structural_risks` should not be skipped by default
 - It may only be skipped if the user explicitly asks to skip it
+- `scan_structural_risks.analysis_mode` is a per-call argument, not an environment setting. Omit it for `auto`: run/reuse lexical rules and reuse applicable semantic results or scoped query IR without a cold frontend build. `fast` runs/reuses lexical rules only. Use `deep` when semantic evidence is needed; it may reuse an exact result or launch the budgeted, license-free Slang worker. `semantic.status="not_run"` does not mean the lexical scan was skipped or the semantic checks passed.
+- Read `lexical_coverage_status`, `semantic.status/gaps` and `semantic.propagation` separately. `semantic_scope` selects basic semantic facts; frontend elaboration may still span the compile context. Explicit `propagated_constant` / `constant_control` categories require a bounded full writer inventory even for scoped output. Missing drivers, sequential/initial state and conflicting or unmodeled writes cannot become permanent ties. Facts are investigation evidence, not confirmed defects; display truncation is distinct from analysis limits.
+- Structural scans cache exact source/context results before output trimming. Scoped deep scans may publish compatible compact IR for Source Graph queries through the normal identity/scope/capability checks; `semantic.query_artifact_status` reports reuse or bypass. The default parallel hierarchy/scan workflow never waits for a hierarchy or forces full-design IR. NPI retains its KDB and priority; scan/Source Graph facts do not become NPI facts. See `README.zh.md` and `docs/architecture.md` for per-call examples and budgets.
 - Run `sweep_handshakes` after `parse_sim_log` whenever a failed run has a waveform; skip only when no waveform exists or the user asks. It returns AHB and valid/ready facts, not a verdict. Always inspect `coverage_status`: `zero_coverage` checked nothing; `truncated`/`degraded` is partial, so `flagged_count=0` is not clean. Retry only a `suggested_next_action` that changes scope/window/edge/interface cap; otherwise report the missing prerequisite instead of replaying the same call. Use `finding_summary` before opening all rows. Never collapse global findings plus a clean targeted interface into “protocol clean”; state both. Any `transition_data_truncated` row forces non-complete coverage—narrow the FSDB window and never treat prefix zero counts as clean.
 - Do not analyze or recommend fixes before MCP output is available
 - On protocol or scoreboard mismatches, carry at least two competing hypotheses and verify the opposite side with waveform evidence before assigning root cause; state which sides were checked. See `docs/workflow.md`.
@@ -133,6 +136,13 @@ For any new session, read these files first to build the project map:
 44. `src/compile_source_index.py`
 45. `src/compile_source_runtime.py`
 46. `src/compile_session_snapshot.py`
+47. `src/design_identity.py`
+48. `src/structural_scan_runtime.py`
+49. `src/structural_semantics.py`
+50. `src/structural_semantic_runtime.py`
+51. `src/structural_semantic_worker.py`
+52. `src/structural_artifact.py`
+53. `src/structural_propagation.py`
 
 If the task involves FSDB or native integration, also read:
 
@@ -158,6 +168,10 @@ If the task involves behavior validation or regression checks, also read:
 - `tests/test_kdb_builder.py`
 - `tests/test_waveform_batch.py`
 - `tests/test_structural_scanner.py`
+- `tests/test_structural_scan_runtime.py`
+- `tests/test_structural_semantics.py`
+- `tests/test_structural_artifact.py`
+- `tests/test_structural_propagation.py`
 - `tests/test_x_trace.py`
 - `tests/test_cycle_query.py`
 - `tests/test_schemas.py`
