@@ -15,14 +15,14 @@ from .source_graph_runtime import (
     _PROCESS_COLD_BUILD_LOCK, _terminate_process_group, IsolatedSourceGraphProcessRunner,
 )
 from .source_graph_session_runtime import _process_rss_kib
-from .structural_semantics import SEMANTIC_CATEGORIES, SEMANTIC_RULE_VERSION, ScanLimits
+from .structural_semantics import DEFAULT_SEMANTIC_CATEGORIES, SEMANTIC_CATEGORIES, SEMANTIC_RULE_VERSION, ScanLimits
 
 
 def validate_semantic_options(args):
     mode = args.get("analysis_mode", "auto")
     if mode not in {"fast", "auto", "deep"}:
         raise ValueError("analysis_mode must be fast, auto, or deep")
-    categories = args.get("semantic_categories", list(SEMANTIC_CATEGORIES))
+    categories = args.get("semantic_categories", list(DEFAULT_SEMANTIC_CATEGORIES))
     if not isinstance(categories, list) or not categories or any(c not in SEMANTIC_CATEGORIES for c in categories):
         raise ValueError("unsupported semantic_categories")
     scope = args.get("semantic_scope")
@@ -35,7 +35,8 @@ def validate_semantic_options(args):
     if isinstance(rss_mib, bool) or not isinstance(rss_mib, int) or not 64 <= rss_mib <= 4096:
         raise ValueError("semantic_max_rss_mib must be in [64, 4096]")
     limits = asdict(ScanLimits())
-    for key, maximum in (("max_instances", 100_000), ("max_facts", 50_000), ("max_ast_nodes", 5_000_000)):
+    for key, maximum in (("max_instances", 100_000), ("max_facts", 50_000), ("max_ast_nodes", 5_000_000),
+                         ("max_propagation_steps", 1_000_000), ("max_propagation_bits", 1_048_576)):
         value = args.get("semantic_" + key, limits[key])
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
             raise ValueError(f"semantic_{key} must be in [1, {maximum}]")

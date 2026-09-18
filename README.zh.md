@@ -1116,6 +1116,15 @@ backend。发现本地文件和读取已导出的 VCD 不需要 JasperGold licen
   `TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING=0` 可关闭共享。NPI 保持原有优先级，
   使用自己的 KDB；共享 IR 不会替代 KDB，也不会被标记成 NPI 证据。
 
+  若需有界组合常量传播和恒定控制条件检查，在 `semantic_categories` 中显式加入
+  `propagated_constant` 和/或 `constant_control`；默认仍只检查上述三类基础事实。
+  传播区分实际 X/Z、证据不足与驱动冲突，顺序状态、初始化和未建模写入是边界。
+  此时 `semantic_scope` 限定输出范围；为避免漏掉其他模块的层级写入，仍需在预算内
+  收集全设计写入者。查看 `semantic.propagation` 获取实际覆盖和缺口。
+  `semantic_max_propagation_steps` 默认 100,000 个按位宽计费的工作单位，
+  `semantic_max_propagation_bits` 默认 262,144 个信号位。复杂 SoC 可能触发预算或
+  未支持语义边界，部分覆盖不代表设计干净；正常固定控制同样会产生事实。
+
 ### 层次结构 Handle 工具
 
 下列工具均接收 `build_tb_hierarchy` 返回的 `hierarchy_handle`。当 handle 过期或未知时返回 `{"error": "handle_expired"}`;此时重新运行 `build_tb_hierarchy` 即可刷新。

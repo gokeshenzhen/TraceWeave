@@ -311,6 +311,23 @@ class StructuralRisk(SchemaModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class StructuralPropagationReceipt(SchemaModel):
+    status: Literal["not_run", "complete", "partial"] = "not_run"
+    gaps: list[str] = Field(default_factory=list)
+    inventory_complete: bool = False
+    instances: int = 0
+    signal_count: int = 0
+    signal_bits: int = 0
+    driver_count: int = 0
+    driver_bits: int = 0
+    ast_nodes: int = 0
+    work_steps: int = 0
+    boundary_count: int = 0
+    unknown_bits: int = 0
+    conflict_bits: int = 0
+    note: str | None = None
+
+
 class SemanticScanResult(SchemaModel):
     status: Literal["not_run", "complete", "partial", "unavailable"] = "not_run"
     scope: str | None = None
@@ -326,6 +343,7 @@ class SemanticScanResult(SchemaModel):
     blocking_diagnostics: int = 0
     cache_disposition: str | None = None
     query_artifact_status: str = "not_requested"
+    propagation: StructuralPropagationReceipt = Field(default_factory=StructuralPropagationReceipt)
     metrics: dict[str, int | float] = Field(default_factory=dict)
     note: str | None = None
     error_type: str | None = None

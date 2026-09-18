@@ -1290,6 +1290,19 @@ an exported VCD and discovering local files requires no JasperGold license.
   Set `TRACEWEAVE_STRUCTURAL_ARTIFACT_SHARING=0` to disable sharing. NPI keeps
   its normal priority and KDB; the shared IR is not a replacement for KDB.
 
+  To request bounded combinational propagation and constant control facts, add
+  `"propagated_constant"` and/or `"constant_control"` to `semantic_categories`.
+  The three basic categories remain the default. Propagation distinguishes
+  actual X/Z from missing evidence and conflicting drivers, and stops at
+  sequential/initial state and unmodeled writes. `semantic_scope` filters its
+  output; a bounded whole-design writer inventory is still required to detect
+  external hierarchical writers. Read `semantic.propagation` for coverage and
+  limits. `semantic_max_propagation_steps` defaults to 100,000 bit-weighted work
+  units and `semantic_max_propagation_bits` to 262,144 signal bits. Full complex
+  SoCs can exceed these budgets or encounter unsupported effects; partial
+  coverage is not a clean-design conclusion. Normal fixed controls also yield
+  facts and are not automatically bugs.
+
 ### Hierarchy Handle Tools
 
 All take the `hierarchy_handle` returned by `build_tb_hierarchy`. On a stale or unknown handle they return `{"error": "handle_expired"}`; re-run `build_tb_hierarchy` to refresh.

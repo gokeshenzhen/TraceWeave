@@ -7,7 +7,7 @@ template; consumers resolve relative to each recorded instance binding.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 
 from .cancellation import check_cancelled
@@ -16,8 +16,9 @@ from .slang_connectivity_projector import (
     _parameterization, _unwrap_expression,
 )
 
-SEMANTIC_RULE_VERSION = "1"
-SEMANTIC_CATEGORIES = ("constant_connection", "open_input", "constant_comparison")
+SEMANTIC_RULE_VERSION = "2"
+DEFAULT_SEMANTIC_CATEGORIES = ("constant_connection", "open_input", "constant_comparison")
+SEMANTIC_CATEGORIES = (*DEFAULT_SEMANTIC_CATEGORIES, "propagated_constant", "constant_control")
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class ScanLimits:
     max_facts: int = 20_000
     max_ast_nodes: int = 1_000_000
     max_width: int = 4096
+    max_propagation_steps: int = 100_000
+    max_propagation_bits: int = 262_144
 
 
 class _Budget(Exception):
@@ -44,7 +47,7 @@ def _members(scope):
             yield member
 
 
-def scan_semantic_session(session, *, scope=None, categories=SEMANTIC_CATEGORIES, limits=ScanLimits()):
+def scan_semantic_session(session, *, scope=None, categories=DEFAULT_SEMANTIC_CATEGORIES, limits=ScanLimits()):
     sm = session.driver.sourceManager
     facts, bindings = [], []
     counts = Counter()
@@ -227,6 +230,16 @@ def scan_semantic_session(session, *, scope=None, categories=SEMANTIC_CATEGORIES
         gaps.add("frontend_diagnostics")
     if not bindings:
         gaps.add("scope_not_elaborated")
+    propagation = {"status": "not_run"}
+    if set(categories) & {"propagated_constant", "constant_control"}:
+        from .structural_propagation import propagate_session
+        propagated = propagate_session(session, scope=scope, categories=categories,
+            limits=replace(limits, max_ast_nodes=max(0, limits.max_ast_nodes-nodes),
+                           max_facts=max(0, limits.max_facts-len(facts))))
+        propagation = propagated["receipt"]
+        gaps.update(propagation["gaps"])
+        facts.extend(propagated["facts"])
+        counts.update(f["kind"] for f in propagated["facts"])
     return {
         "status": "partial" if gaps else "complete",
         "scope": scope, "categories_checked": list(categories), "gaps": sorted(gaps),
@@ -234,5 +247,6 @@ def scan_semantic_session(session, *, scope=None, categories=SEMANTIC_CATEGORIES
         "instance_bindings": bindings, "instances_visited": min(visited_instances, limits.max_instances),
         "template_count": template_count, "ast_nodes_visited": min(nodes, limits.max_ast_nodes),
         "blocking_diagnostics": int(diagnostics.get("blocking_error_count", 0)),
+        "propagation": propagation,
         "note": "Structural facts, not confirmed defects. No sequential-state inference or trigger-probability estimate.",
     }

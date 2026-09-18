@@ -19,6 +19,9 @@ async def benchmark(args):
             "semantic_timeout_sec": args.timeout, "semantic_max_rss_mib": args.rss_mib}
     if args.scope:
         base["semantic_scope"] = args.scope
+    if args.propagation:
+        from src.structural_semantics import SEMANTIC_CATEGORIES
+        base["semantic_categories"] = list(SEMANTIC_CATEGORIES)
     rows = []
     for mode in ("auto", "deep", "auto"):
         start = time.perf_counter()
@@ -28,6 +31,8 @@ async def benchmark(args):
                      "status": sem.status, "gaps": sem.gaps, "facts": sem.total_facts,
                      "counts": sem.counts, "instances": sem.instances_visited,
                      "templates": sem.template_count, "metrics": sem.metrics,
+                     "propagation": sem.propagation.model_dump(),
+                     "query_artifact_status": sem.query_artifact_status,
                      "cache": sem.cache_disposition, "display_truncated": sem.output_truncated})
     return rows
 
@@ -37,6 +42,7 @@ if __name__ == "__main__":
     parser.add_argument("--compile-log", required=True)
     parser.add_argument("--simulator", default="auto")
     parser.add_argument("--scope")
+    parser.add_argument("--propagation", action="store_true", help="Also request bounded constant propagation/control checks")
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--rss-mib", type=int, default=512)
     args = parser.parse_args()

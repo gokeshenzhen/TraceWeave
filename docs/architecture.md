@@ -576,6 +576,39 @@ Verification
   incomplete-key handoff is promoted to a reusable entry; new scopes can still
   require construction. NPI retains priority and uses its own KDB. Scan facts
   may guide NPI queries, but are never labeled as NPI facts or converted to KDB.
+- `structural_propagation.py` adds explicitly requested `propagated_constant`
+  and `constant_control` categories. It inventories writers before solving a
+  finite work queue for input/output bindings, continuous assignments, integral
+  conversions, static selections/concatenations, basic arithmetic, Boolean and
+  bitwise operations, comparisons and conditional expressions. Actual X/Z,
+  insufficient evidence and conflicting writers are distinct states. Partial
+  vectors produce constant regions, never a whole-vector tie claim. Sequential
+  and initial values remain unknown boundaries. Unsupported global write
+  effects, force/release, interface/primitive/alias constructs and ambiguous
+  net-port reverse drive prevent propagation facts; ordinary unsupported
+  expressions remain unknown and mark partial coverage. Procedural assignment
+  targets are boundaries, including `always_comb` in this initial pass.
+  The writer inventory covers all elaborated tops even for a scoped output:
+  an unvisited sibling can write a hierarchical target. A budget interruption
+  during inventory or solving emits no propagation prefix. After convergence,
+  a fact/output limit can retain a positively proved prefix with partial or
+  display-truncated coverage respectively. The default additional limits are
+  100,000 bit-weighted work steps and 262,144 signal bits, with configurable hard
+  maxima of 1,000,000 and 1,048,576. Instance/AST/fact limits and isolated worker
+  time/RSS guards still apply. `semantic.propagation` reports inventory status,
+  work, bits, unknown/conflict counts, boundaries and gaps. A complete traversal
+  does not imply every signal is constant or every design behavior is covered.
+  Tests compare 768 four-state operator cases with Slang's independent
+  constant evaluator, plus multilevel, signed/ascending-bit, multiple-writer,
+  external hierarchical write, sequential, cancellation and budget controls.
+  `scripts/benchmark_structural_propagation.py` completed a generated 18,001
+  instance / five-wrapper-level case in 9.92 s with 39,000 facts and 248 MiB
+  worker peak RSS (one fresh process, 50,000 fact / 1,000,000 work-step limits).
+  This controlled combinational case is not the real SoC. On the 18,642
+  instance OpenTitan/PicoRV32 composition, `benchmark_semantic_scan.py
+  --propagation` took 10.20 s / 349 MiB and retained 14,475 basic facts, but
+  propagation explicitly stopped at unmodeled call write effects. It did not
+  prove full-SoC propagation coverage or publish a completed semantic cache hit.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or

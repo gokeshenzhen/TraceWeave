@@ -79,6 +79,11 @@ endmodule
     runtime = production.get_source_graph_runtime(server.get_source_graph_execution_config())
     assert runtime.stats_snapshot()["cache_entry_count"] == 1
     runtime._worker_runner = NoBuild()
+    queried = await server._dispatch("explain_signal_driver", {
+        **args, "signal_path": "top.u.en", "wave_path": str(tmp_path / "unused.vcd"),
+    })
+    assert queried.backend_status.actual_backend == "source_graph"
+    assert queried.backend_status.source_graph.cache_disposition in {"hit_exact", "hit_scope_superset"}
     request, _ = await server._structural_query_context(str(log), "vcs", "top.u", "auto", server.get_source_graph_execution_config())
     outcome = await runtime.prepare(request, timeout_seconds=1)
     driver = outcome.entry.query_engine.query_driver("top.u.en")
