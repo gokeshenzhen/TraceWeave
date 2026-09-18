@@ -27,6 +27,7 @@ class VCDParser:
         self._timescale_raw   = None        # raw $timescale text, e.g. "100fs"
         self._signals: dict   = {}          # symbol → {path, width}
         self._path_to_sym: dict = {}        # full_path → symbol
+        self._range_aliases: set[str] = set()  # exact ranges hidden from search when a base alias exists
         self._transitions: dict = {}        # symbol → [(time_ps, value)]
         self._end_time_ps     = 0
         self._top_modules: list = []
@@ -153,7 +154,7 @@ class VCDParser:
              "direction": None,
              "var_type": self._signals[s].get("var_type") or None}
             for p, s in self._path_to_sym.items()
-            if kw in p.lower()
+            if kw in p.lower() and (p not in self._range_aliases or "[" in kw)
         ]
         matched.sort(key=lambda item: (-_signal_rank(item["path"], kw), item["path"]))
         matched = matched[:max_results]
@@ -205,6 +206,7 @@ class VCDParser:
         scope_stack   = []
         current_ps    = 0
         tokens        = content.split()
+        ranged_declarations: dict[str, set[str]] = {}
         i = 0
         while i < len(tokens):
             tok = tokens[i]
@@ -219,18 +221,27 @@ class VCDParser:
                     scope_stack.pop()
                 i += 2
             elif tok == "$var":
-                # $var <var_type> <size> <id> <reference> $end
+                # $var <var_type> <size> <id> <reference> [index/range] $end
                 # var_type is the language-level type (wire/reg/integer/real/parameter/...).
                 # VCD has no port direction, so direction stays None at higher layers.
                 var_type = tokens[i + 1] if i + 1 < len(tokens) else ""
                 width  = int(tokens[i + 2]) if tokens[i + 2].isdigit() else 1
                 symbol = tokens[i + 3]
                 name   = tokens[i + 4]
-                full   = ".".join(scope_stack + [name])
+                end = tokens.index("$end", i + 5)
+                selection = "".join(tokens[i + 5:end])
+                if selection and not re.fullmatch(r"\[-?\d+(?::-?\d+)?\]", selection):
+                    raise ValueError("Unsupported VCD declaration selection")
+                base = ".".join(scope_stack + [name])
+                full = base + selection
+                if full in self._path_to_sym and self._path_to_sym[full] != symbol:
+                    raise ValueError(f"Conflicting VCD declarations for '{full}'")
+                if selection:
+                    ranged_declarations.setdefault(base, set()).add(full)
                 self._signals[symbol]     = {"path": full, "width": width, "var_type": var_type}
                 self._path_to_sym[full]   = symbol
-                self._transitions[symbol] = []
-                i += 6
+                self._transitions.setdefault(symbol, [])
+                i = end + 1
             elif tok.startswith("#"):
                 try:
                     # ceil to ps, matching the FSDB wrapper's convention: a
@@ -258,6 +269,16 @@ class VCDParser:
                 i += 1
             else:
                 i += 1
+
+        # Preserve the traditional bare-name access for one dumped vector.
+        # A separately dumped bit is never a scalar alias of the whole bus;
+        # multiple slices also cannot supply one unambiguous whole-bus value.
+        for base, paths in ranged_declarations.items():
+            if len(paths) == 1 and base not in self._path_to_sym:
+                full = next(iter(paths))
+                if ":" in full[len(base):]:
+                    self._path_to_sym[base] = self._path_to_sym[full]
+                    self._range_aliases.add(full)
 
 
 # ── Utility ────────────────────────────────────────────────────────

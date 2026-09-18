@@ -83,7 +83,12 @@ Verification
 ## Notes
 
 - VCD point and window reads bisect the existing ordered transition records;
-  they do not rebuild a timestamp list or scan the preceding history. Equal
+  separately dumped bits retain their declared indices (`valid[0]`, `valid[1]`)
+  and disjoint slices retain their ranges. A unique vector range remains
+  accessible by its traditional base name as well as its exact declared range;
+  multiple bit/slice declarations never silently overwrite that base name.
+  Symbol aliases continue sharing the same transition records. Point/window reads
+  do not rebuild a timestamp list or scan the preceding history. Equal
   timestamps keep file order, including rounded sub-ps events. Query work is
   O(log N + returned events) with no persistent duplicate time index; the first
   full-file parse and its memory cost are unchanged. Reproduce reader timings

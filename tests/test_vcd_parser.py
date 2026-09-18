@@ -187,6 +187,83 @@ def test_summary_uses_transition_end_time_fallback(tmp_path: Path):
     assert summary["simulation_duration_ps"] == 15000
 
 
+def test_separately_dumped_bits_keep_indices_and_alias_values(tmp_path):
+    wave = tmp_path / "bits.vcd"
+    wave.write_text('''$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! valid [1] $end
+$var wire 1 " valid [0] $end
+$scope module child $end
+$var wire 1 ! observed $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+1!
+0"
+#5
+0!
+1"
+''')
+    parser = VCDParser(str(wave))
+    names = {r['path'] for r in parser.search_signals('valid')['results']}
+    assert names == {'top.valid[0]', 'top.valid[1]'}
+    assert parser.get_value_at_time('top.valid[1]', 0)['value']['dec'] == 1
+    assert parser.get_value_at_time('top.valid[0]', 0)['value']['dec'] == 0
+    assert parser.get_value_at_time('top.child.observed', 5)['value']['dec'] == 0
+    assert parser.get_transitions('top.valid[0]')['transitions'][-1]['value']['dec'] == 1
+    with pytest.raises(KeyError):
+        parser.get_value_at_time('top.valid', 0)
+
+
+def test_vector_base_alias_and_distinct_slices_are_unambiguous(tmp_path):
+    wave = tmp_path / "ranges.vcd"
+    wave.write_text('''$timescale 1ps $end
+$scope module top $end
+$var wire 8 ! data [0:7] $end
+$var wire 4 " split [7:4] $end
+$var wire 4 # split [3:0] $end
+$var wire 1 $ valid [-1] $end
+$upscope $end
+$enddefinitions $end
+#0
+b10100101 !
+b1010 "
+b0101 #
+1$
+''')
+    parser = VCDParser(str(wave))
+    assert parser.get_value_at_time('top.data', 0)['value']['dec'] == 165
+    assert parser.get_value_at_time('top.data[0:7]', 0)['value']['dec'] == 165
+    assert parser.get_signal_width('top.data') == 8
+    assert [r['path'] for r in parser.search_signals('data')['results']] == ['top.data']
+    assert [r['path'] for r in parser.search_signals('data[0:7]')['results']] == ['top.data[0:7]']
+    assert parser.get_value_at_time('top.split[7:4]', 0)['value']['dec'] == 10
+    assert parser.get_value_at_time('top.split[3:0]', 0)['value']['dec'] == 5
+    assert parser.get_value_at_time('top.valid[-1]', 0)['value']['dec'] == 1
+    with pytest.raises(KeyError):
+        parser.get_value_at_time('top.split', 0)
+
+
+def test_same_named_whole_bus_and_bit_declarations_do_not_overwrite(tmp_path):
+    wave = tmp_path / "whole_and_bit.vcd"
+    wave.write_text('''$timescale 1ps $end
+$scope module top $end
+$var wire 2 ! data [1:0] $end
+$var wire 1 " data [0] $end
+$upscope $end
+$enddefinitions $end
+#0
+b10 !
+0"
+''')
+    parser = VCDParser(str(wave))
+    assert parser.get_value_at_time('top.data[1:0]', 0)['value']['dec'] == 2
+    assert parser.get_value_at_time('top.data[0]', 0)['value']['dec'] == 0
+    assert parser.get_signal_width('top.data[1:0]') == 2
+    assert parser.get_signal_width('top.data[0]') == 1
+
+
 # ── 跨 timescale 回归（sub-ps 刻度曾把 timescale_ps 截成 0，所有时间戳坍缩到 0）──
 
 def _scaled_vcd(timescale: str) -> str:
