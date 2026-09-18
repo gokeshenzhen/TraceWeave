@@ -514,7 +514,8 @@ Verification
 - `design_identity.py` and `structural_scan_runtime.py` cache the complete
   lexical scan before MCP output trimming. Ordered compile context, exact raw
   content, categories and rule version form the key; digest records are reused
-  only after full stat validation (including ctime/inode). Resolved literal
+  only after full stat validation (including ctime/inode) and byte hashing;
+  even coarsened mount timestamps cannot hide same-size content edits. Resolved literal
   includes and earlier search candidates are checked again before publication
   and reuse. Missing scanned inputs disable caching. Lexical identity covers
   the exact texts consumed by regex rules; unresolved macro/library includes
@@ -527,10 +528,10 @@ Verification
   `TRACEWEAVE_STRUCTURAL_SCAN_CACHE=0` to bypass this optimization.
   `scripts/benchmark_structural_cache.py` compares full internal result hashes.
   On the local OpenTitan 1,117-source workload (September 18, sequential calls
-  in one fresh process), uncached/cold calls took 4.28/5.84 s; three warm hits
-  took 0.90/0.96/0.90 s with zero rule executions and identical full results.
+  in one fresh process), uncached/cold calls took 4.26/5.99 s; three warm hits
+  took 1.03/1.06/1.01 s with zero rule executions and identical full results.
   The stored result occupied 739,443 bytes; cumulative process peak RSS was
-  408 MiB. This is a single-process sample with warm filesystem pages; the cold
+  400 MiB. This is a single-process sample with warm filesystem pages; the cold
   identity cost is real and the cache does not accelerate an isolated first scan.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`

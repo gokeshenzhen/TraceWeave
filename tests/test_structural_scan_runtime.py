@@ -65,6 +65,17 @@ def test_missing_scanned_source_has_incomplete_identity(tmp_path):
     assert not DesignIdentityReader().capture(str(log), result).complete
 
 
+def test_coarsened_stat_identity_cannot_hide_content_change(tmp_path, monkeypatch):
+    from src.compile_session_snapshot import FileContentSnapshot
+    log, source, result = context(tmp_path, "module top; wire a; endmodule\n")
+    reader = DesignIdentityReader()
+    first = reader.capture(str(log), result)
+    monkeypatch.setattr(FileContentSnapshot, "current", lambda _: True)
+    source.write_text("module top; wire b; endmodule\n")
+    assert not first.current()
+    assert reader.capture(str(log), result).digest != first.digest
+
+
 @pytest.mark.anyio
 async def test_hit_returns_copy_and_rules_are_not_reexecuted(tmp_path):
     log, source, context_ = context(tmp_path)

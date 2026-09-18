@@ -38,6 +38,21 @@ def _resolve(name: str, directories: tuple[str, ...]) -> str | None:
     return None
 
 
+def _content_current(record: FileContentSnapshot) -> bool:
+    """Recheck bytes too: some mounted filesystems coarsen even ctime_ns."""
+    if not record.current():
+        return False
+    digest = hashlib.sha256()
+    try:
+        with open(record.path, "rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                check_cancelled()
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == record.sha256 and record.current()
+
+
 @dataclass(frozen=True)
 class DesignIdentity:
     digest: str
@@ -55,7 +70,7 @@ class DesignIdentity:
             return False
         for path, record in self.records:
             check_cancelled()
-            if os.path.realpath(path) != record.path or not record.current():
+            if os.path.realpath(path) != record.path or not _content_current(record):
                 return False
         return all(_resolve(name, dirs) == chosen for name, dirs, chosen in self.includes)
 
@@ -74,7 +89,7 @@ class DesignIdentityReader:
         canonical = os.path.realpath(path)
         with self._lock:
             fact = self._facts.get(canonical)
-            if fact and fact[0].current():
+            if fact and _content_current(fact[0]):
                 self._facts.move_to_end(canonical)
                 return fact[:3]
         content = reader(path)
