@@ -56,6 +56,8 @@ def test_trial_reports_shared_index_and_stable_path_free_oracles(tmp_path):
 
     assert enabled["benchmark"] == BENCHMARK_NAME
     assert enabled["workload"]["source_file_count"] == 1
+    assert enabled["workload"]["structural_result_cache"] is False
+    assert enabled["workload"]["structural_analysis_mode"] == "fast"
     assert enabled["source_index"]["runtime"][
         "compile_source_runtime_build_count"
     ] == 1

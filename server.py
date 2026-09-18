@@ -7600,17 +7600,22 @@ async def _dispatch(name: str, args: dict):
                 )
             else:
                 identity = DesignIdentity("disabled", (), (), ("cache_disabled",))
-        finally:
+        except BaseException:
             if identity_lease is not None:
                 await identity_lease.release()
+            raise
 
         async def build_scan():
-            lease = None
+            nonlocal identity_lease
+            # Transfer the active preload lease into the shared rule build.
+            # Releasing after identity capture would clear its source bodies
+            # when hierarchy has finished, forcing a second preload on a miss.
+            lease, identity_lease = identity_lease, None
             source_index_disposition = (
                 source_index_config.error_code
                 or ("disabled" if not source_index_config.enabled else None)
             )
-            if source_index_config.valid and source_index_config.enabled:
+            if lease is None and source_index_config.valid and source_index_config.enabled:
                 lease = await _compile_source_index_runtime.acquire(
                     key=source_index_key,
                     paths=source_index_paths,
@@ -7646,12 +7651,20 @@ async def _dispatch(name: str, args: dict):
                     await lease.release()
             return result
 
-        result, cache_disposition = await _structural_scan_runtime.run(
-            identity,
-            {"scan_scope": args.get("scan_scope", "scope1"),
-             "categories": args.get("categories"), "simulator": simulator},
-            build_scan,
-        )
+        try:
+            result, cache_disposition = await _structural_scan_runtime.run(
+                identity,
+                {"scan_scope": args.get("scan_scope", "scope1"),
+                 "categories": args.get("categories"), "simulator": simulator},
+                build_scan,
+            )
+        finally:
+            # Cache hits/coalesced callers never transfer their lease. Clear
+            # ownership before yielding so a late shared build cannot take an
+            # already released index after its original caller was cancelled.
+            unused_lease, identity_lease = identity_lease, None
+            if unused_lease is not None:
+                await unused_lease.release()
         if cache_disposition == "hit_memory":
             result["scan_metrics"] = {
                 "compile_source_index_disposition": "not_requested_result_cache_hit",

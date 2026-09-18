@@ -118,6 +118,7 @@ def run_trial(args: argparse.Namespace) -> dict[str, Any]:
         "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES",
         "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES",
         "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+        "TRACEWEAVE_STRUCTURAL_SCAN_CACHE",
     )
     saved_environment = {name: os.environ.get(name) for name in environment_names}
     enabled = args.trial_index == "enabled"
@@ -125,6 +126,10 @@ def run_trial(args: argparse.Namespace) -> dict[str, Any]:
     os.environ["TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES"] = str(args.max_bytes)
     os.environ["TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES"] = str(args.max_files)
     os.environ["TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY"] = "off"
+    # Isolate transient source sharing. A result-cache hit would skip the
+    # scanner entirely; its byte-validation reads are measured separately by
+    # benchmark_structural_cache.py, not attributed to source preloading here.
+    os.environ["TRACEWEAVE_STRUCTURAL_SCAN_CACHE"] = "0"
 
     import server
     from src.compile_source_runtime import CompileSourceIndexRuntime
@@ -184,6 +189,7 @@ def run_trial(args: argparse.Namespace) -> dict[str, Any]:
                     {
                         "compile_log": str(args.compile_log),
                         "simulator": args.simulator,
+                        "analysis_mode": "fast",
                     },
                 ),
             )
@@ -225,6 +231,8 @@ def run_trial(args: argparse.Namespace) -> dict[str, Any]:
                 "scan_structural_risks",
             ],
             "npi_source_overlay": False,
+            "structural_result_cache": False,
+            "structural_analysis_mode": "fast",
         },
         "measurement": {
             "parallel_wall_ms": round(parallel_wall_ms, 3),

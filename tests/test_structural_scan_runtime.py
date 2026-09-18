@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 import pytest
 
@@ -177,3 +178,51 @@ async def test_dispatch_hit_skips_scan_and_source_preload(tmp_path, monkeypatch)
     assert second.risks == first.risks
     assert second.scan_metrics["result_cache_disposition"] == "hit_memory"
     assert second.scan_metrics["rule_execution_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_identity_lease_survives_hierarchy_completion_on_scan_miss(tmp_path, monkeypatch):
+    import server
+    from src.compile_source_runtime import CompileSourceIndexRuntime, compile_source_index_key
+    log, _, result = context(tmp_path)
+    monkeypatch.setattr(server, "_parse_merged_compile_context", lambda **_: (result, "vcs"))
+    monkeypatch.setattr(server, "_structural_scan_runtime", StructuralScanRuntime())
+    runtime = CompileSourceIndexRuntime()
+    monkeypatch.setattr(server, "_compile_source_index_runtime", runtime)
+    monkeypatch.setenv("TRACEWEAVE_STRUCTURAL_SCAN_CACHE", "1")
+    monkeypatch.setenv("TRACEWEAVE_COMPILE_SOURCE_INDEX", "1")
+    config = server.get_compile_source_index_config()
+    key, paths = compile_source_index_key(
+        compile_snapshot_sha256=server.compute_snapshot_fingerprint(str(log), "vcs"),
+        compile_result=result,
+    )
+    hierarchy_lease = await runtime.acquire(key=key, paths=paths,
+        max_bytes=config.max_bytes, max_files=config.max_files)
+    entered = asyncio.Event()
+    resume = threading.Event()
+    loop = asyncio.get_running_loop()
+    reader = DesignIdentityReader()
+    class GatedIdentityReader:
+        def capture(self, *args, **kwargs):
+            loop.call_soon_threadsafe(entered.set)
+            assert resume.wait(5)
+            return reader.capture(*args, **kwargs)
+    monkeypatch.setattr(server, "_design_identity_reader", GatedIdentityReader())
+    task = asyncio.create_task(server._dispatch("scan_structural_risks", {
+        "compile_log": str(log), "simulator": "vcs",
+    }))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # Hierarchy finishes while scan still owns the shared source lease.
+        await hierarchy_lease.release()
+        resume.set()
+        scan = await asyncio.wait_for(task, 5)
+        assert scan.scan_metrics["rule_execution_count"] == 1
+        assert runtime.metrics_snapshot()["compile_source_runtime_build_count"] == 1
+        assert runtime.metrics_snapshot()["compile_source_runtime_active_session_count"] == 0
+    finally:
+        resume.set()
+        await hierarchy_lease.release()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
