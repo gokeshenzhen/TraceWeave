@@ -132,6 +132,50 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 首次连接时，可先要求助手调用 `get_sim_paths`，确认客户端能够执行真实的 MCP 工具调用。完整流程见[调试工作流](docs/workflow.md)。
 
+### 自定义运行期报错格式
+
+`parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
+
+如果日志使用同一个标签，后面的内容每次不同，只匹配标签就够了：
+
+```text
+MY_CHECK_FAIL @ 12.5 ns expected=0x12 actual=0x34
+MY_CHECK_FAIL @ 20 ns timeout waiting for response
+```
+
+将默认的 `patterns: []` 替换为以下内容；如果已有规则，在原来的 `patterns` 列表中追加即可：
+
+```yaml
+patterns:
+  - name: my_checker
+    severity: ERROR
+    regex: '^MY_CHECK_FAIL'
+```
+
+`^` 表示行首；标签之后可以是不同的内容，无需继续写正则。如果标签前面还有时间戳或其他前缀，改用 `regex: 'MY_CHECK_FAIL'` 即可在整行中查找标签。
+- `name` 标识失败分组。`severity` 默认为 `ERROR`，也支持 `FATAL` 和 `WARNING`；匹配到的自定义 warning 也会计入运行期失败统计。`description` 是供维护者阅读的说明。
+- `regex` 逐行匹配，建议用 YAML 单引号保留反斜杠。解析顺序是内置断言和 UVM 格式、自定义规则、通用 `ERROR` 匹配；自定义规则按列表顺序取第一条命中。已识别为编译或展开诊断的记录仍会被过滤。
+
+上面的 `expected=0x12 actual=0x34` 已经能自动识别，用简单的标签规则就够了，无需命名捕获组。如果日志改用自己的字段名：
+
+```text
+MY_CHECK_FAIL @ 12.5 ns want=0x12 have=0x34
+```
+
+`regex: '^MY_CHECK_FAIL'` 仍能识别报错并保留整行消息。如果还希望把 `want` 和 `have` 的值单独提取为期望值和实际值，将上面规则中的 `regex` 替换为：
+
+```yaml
+regex: '^MY_CHECK_FAIL.*want=(?P<expected>\S+)\s+have=(?P<actual>\S+)'
+```
+
+仓库安装默认读取根目录的 `custom_patterns.yaml`。如果希望单独维护项目规则，或使用 PyPI 安装，将上面的 YAML 保存为自己的配置文件，并向 MCP 服务进程传入其绝对路径：
+
+```bash
+export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
+```
+
+该设置会替换默认的自定义规则文件，内置格式继续生效。客户端需要继承或显式传入这个变量；更改变量后重启或重新连接服务，再解析日志。只修改已选中的 YAML 内容时，下次调用 `parse_sim_log` 就会重新加载。
+
 ## 工具速查
 
 通常只需描述调试目标，由助手选择工具。下表按用途列出全部工具；具体参数由 MCP 工具定义提供。

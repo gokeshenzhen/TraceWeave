@@ -132,6 +132,57 @@ The assistant's default investigation follows these steps:
 
 For a first connection check, ask the assistant to call `get_sim_paths` and confirm that actual MCP tool calls run. See the [debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) for the full procedure.
 
+### Custom Runtime Error Formats
+
+`parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
+
+If your messages share a label but the text after it varies, matching that label is enough:
+
+```text
+MY_CHECK_FAIL @ 12.5 ns expected=0x12 actual=0x34
+MY_CHECK_FAIL @ 20 ns timeout waiting for response
+```
+
+Replace the default `patterns: []` with the following, or append the rule to your existing `patterns` list:
+
+```yaml
+patterns:
+  - name: my_checker
+    severity: ERROR
+    regex: '^MY_CHECK_FAIL'
+```
+
+`^` means the start of the line; everything after the label may vary, with no extra regex needed. If a timestamp or other text precedes the label, use `regex: 'MY_CHECK_FAIL'` to match it anywhere in the line.
+
+Call `parse_sim_log` on that log with the matching simulator (`vcs` or `xcelium`). Both messages belong to `CUSTOM: my_checker`, with a count of `2`; each failure event retains its full message. Common timestamps and expected / actual values are still extracted automatically: the first event has `time_ps=12500`, `expected="0x12"`, and `actual="0x34"`. Use `detail_level="full"` to inspect the events. A message without a recognizable timestamp is still recorded, with an unknown time.
+
+- `name` identifies the failure group. `severity` defaults to `ERROR`; `FATAL` and `WARNING` are also supported. Matched custom warnings are included in runtime failure counts. `description` is for maintainers.
+- `regex` matches one log line at a time. Use YAML single quotes to preserve backslashes. Built-in assertion and UVM parsing runs first, followed by custom rules in list order (first match wins), then the generic `ERROR` fallback. Recognized compile / elaboration diagnostics remain excluded.
+
+The `expected=0x12 actual=0x34` format above is already recognized automatically, so the simple label rule is enough and no named captures are needed. Suppose your log uses its own field names instead:
+
+```text
+MY_CHECK_FAIL @ 12.5 ns want=0x12 have=0x34
+```
+
+`regex: '^MY_CHECK_FAIL'` still recognizes the error and preserves the full message. To also extract `want` and `have` as the expected and actual values, replace the `regex` in the rule above with:
+
+```yaml
+regex: '^MY_CHECK_FAIL.*want=(?P<expected>\S+)\s+have=(?P<actual>\S+)'
+```
+
+The named captures tell the parser to call the value after `want=` `expected`, and the value after `have=` `actual`. This produces `expected="0x12"` and `actual="0x34"`; the timestamp `12.5 ns` is still recognized automatically.
+
+To extract a source file, line number, or instance path into its own field, use the capture names `source_file`, `source_line`, or `instance_path`, respectively. Additional captures, such as a signal name captured as `signal`, are stored in the result's `structured_fields`.
+
+Repository installations use the root `custom_patterns.yaml` by default. To keep project rules elsewhere, or when using the PyPI installation, save the YAML above in your own file and pass its absolute path to the MCP server process:
+
+```bash
+export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
+```
+
+This selects that file instead of the default custom rules; built-in formats remain active. The MCP client must inherit or explicitly forward the variable. Restart or reconnect the server after changing it, then parse the log again. Edits to the selected YAML are loaded on the next `parse_sim_log` call.
+
 ## Tool Quick Reference
 
 Usually, you describe the debugging goal and let the assistant select the tools. This table lists every tool by purpose; MCP tool definitions provide the parameters.

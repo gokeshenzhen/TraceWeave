@@ -8,12 +8,16 @@
 #   name        : pattern identifier (English, no spaces)
 #   regex       : Python regular expression
 #                 Supported named capture groups:
-#                   (?P<file>...)       source file path (optional)
-#                   (?P<line>\d+)       source line number (optional)
+#                   (?P<source_file>...) source file path (optional)
+#                   (?P<source_line>\d+) source line number (optional)
+#                   (?P<instance_path>...) instance/reporter path (optional)
 #                   (?P<time>[\d.]+)    numeric time value (optional)
 #                   (?P<time_unit>...)  time unit such as ps/ns/us (optional)
-#                   (?P<message>.+)     error message (required)
-#   severity    : ERROR / FATAL / WARNING
+#                   (?P<message>.+)     message (optional; defaults to whole line)
+#                 Other named groups are retained in structured_fields, e.g.
+#                 signal, expected, actual.
+#   severity    : ERROR (default) / FATAL / WARNING
+#                 Matched custom warnings also count as runtime failures.
 #   description : free-form comment for maintainers
 
 patterns: []
