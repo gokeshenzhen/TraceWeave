@@ -39,11 +39,19 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 | 仿真超时、卡死，不知道从哪里查起 | 汇总失败日志，扫描多接口握手行为，缩小异常接口和时间窗口 |
 | Scoreboard mismatch、两次运行结果不同 | 对比失败记录与波形，定位已观测到的差异，并追踪两侧数据和控制来源 |
 | 信号出现 X/Z | 查看异常前后的波形，沿驱动关系追踪未知值的传播路径 |
-| 怀疑 tie 值、悬空输入或 magic word 条件 | 扫描源码结构，提取常量连接、未连接输入和常量比较等线索，供进一步核查 |
+| 怀疑 tie 值、悬空输入或 magic word 条件 | 静态扫描源码，提取常量连接、未连接输入和常量比较等线索，供进一步核查；无需运行仿真或提供波形 |
 | SoC 层级深、模块和接口多 | 按需浏览层次、查找实例与源码，追踪信号的驱动、消费者和连通路径 |
 | 想验证一个调试假设 | 按周期采样，检查时序条件、握手保持和事务完成情况，取得具体证据 |
 
-支持 VCS / Xcelium 仿真日志及 VCD / FSDB 波形。结构查询可使用无需商业 license 的 Source Graph，也可接入 Verdi NPI。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
+支持 VCS / Xcelium 仿真日志及 VCD / FSDB 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
+
+信号追踪（驱动、负载与连通路径查询）默认采用 **Verdi NPI → Source Graph → 基础静态分析（Legacy Static）** 三级路由：优先查询已展开的 KDB；NPI 不可用或无法提供可信结果时，尝试免商业 license 的 Source Graph，必要时再按支持范围回退到基础静态分析。
+
+面向大型设计的能力与已验证的部分规模：
+
+- **层次与源码按需浏览**：服务端建立并保留层次和文件索引，助手按实例、子树或文件获取局部结果，减少大型 SoC 的上下文开销。已用 **50,500 个逻辑实例**的合成设计验证层次构建与局部查询；初次构建仍需扫描编译记录和源码。
+- **批量握手检查**：`sweep_handshakes` 自动发现 AHB / valid-ready 接口，检查停顿、数据/控制保持和 valid/HTRANS 提前撤销等行为。已有 **78,817 个总信号、2.59 ms 波形时长**的设计记录：发现 49 个候选接口，涉及 262 个时钟/协议信号，约 **4.65 分钟**检查了 35 个接口；另有 14 个跳过，属于部分覆盖。实际耗时和覆盖范围取决于波形、接口类型与资源限制。
+- **GiB 级日志解析**：`parse_sim_log` 已通过 **1 GiB、2,097,152 行**合成日志验证，识别了分布在文件开头、中间和末尾的全部 4 条报错。
 
 ## 安装
 
@@ -257,11 +265,12 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
       <td>推荐下一步值得调查的目标与工具调用</td>
     </tr>
     <tr>
-      <td rowspan="5">结构与追踪</td>
+      <td>静态结构扫描</td>
       <td><code>scan_structural_risks</code></td>
-      <td>扫描可疑结构；语义模式可检查 tie、悬空输入与常量比较</td>
+      <td>静态扫描源码中的可疑结构；语义模式可检查 tie、悬空输入与常量比较</td>
     </tr>
     <tr>
+      <td rowspan="4">信号追踪</td>
       <td><code>explain_signal_driver</code></td>
       <td>追踪信号的驱动来源与相关 RTL</td>
     </tr>
@@ -365,11 +374,19 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
 
 **没有商业 license 也能用吗？**
 
-日志分析、VCD 查询和 Source Graph 不需要商业 license。FSDB 读取需要本地 Verdi 读取库；Verdi NPI 和 KDB 构建需要相应的 EDA 环境与 license。NPI 不可用时，结构查询会尝试 Source Graph，再按支持范围回退到基础静态分析。
+日志分析、VCD 查询、静态结构扫描和 Source Graph 不需要商业 license。**直接查询已有波形中的信号值或跳变，不需要 NPI license**：VCD 使用内置解析器，FSDB 使用本地 Verdi FSDB Reader 库和 wrapper。Verdi NPI 信号追踪和 KDB 构建需要相应的 EDA 环境与 license。
 
-**结构扫描的 auto / deep 怎么选？**
+**信号追踪结果的准确性如何判断？**
 
-默认 `auto` 执行静态扫描，并复用已有的适用语义结果；需要新做语义检查时，告诉助手使用 `deep`。这是每次调用的 `analysis_mode` 参数，无需修改客户端配置。扫描发现的是待核查线索，正常 tie-off 或协议常量也可能被列出。
+NPI 基于与当前设计匹配的已展开 KDB；Source Graph 从源码构建语义连接图。在编译上下文完整、目标语义受支持，且查询满足**覆盖完整、解析精确、未截断**时，返回结果可作为**当前查询范围内的精确结构连接事实**，用于驱动、负载和连通路径分析。
+
+**没有仿真结果，也能做静态结构扫描吗？**
+
+可以。`scan_structural_risks` 对源码做静态分析，无需运行仿真，也不需要仿真运行日志或 VCD / FSDB 波形。当前接口需要提供编译/展开日志（`compile_log`），并保证对应的源码和 include 文件可访问，因此可以在编译/展开之后、仿真运行之前使用。
+
+**静态结构扫描的 auto / deep 怎么选？**
+
+默认 `auto` 执行源码文本规则扫描，并复用已有的适用语义结果；需要新做常量连接、未连接输入等语义检查时，告诉助手使用 `deep`。这是每次调用的 `analysis_mode` 参数，无需修改客户端配置。扫描发现的是待核查线索，正常 tie-off 或协议常量也可能被列出。
 
 **扫描没有发现，就说明设计没有问题吗？**
 

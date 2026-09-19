@@ -39,11 +39,19 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 | A simulation times out or hangs, with no clear starting point | Summarize failures and scan interface handshakes to narrow down the affected interfaces and time window |
 | A scoreboard mismatch or different results between runs | Compare failure records and waveforms, locate observed differences, and trace data and control sources on both sides |
 | A signal becomes X/Z | Inspect the surrounding waveform and follow upstream drivers to trace unknown-value propagation |
-| Suspected ties, unconnected inputs, or magic-word conditions | Extract constant connections, open inputs, and constant comparisons as leads for further investigation |
+| Suspected ties, unconnected inputs, or magic-word conditions | Statically scan source code for constant connections, open inputs, and constant comparisons as investigation leads; no simulation run or waveform required |
 | A deep SoC hierarchy with many modules and interfaces | Browse hierarchy on demand, locate instances and source files, and follow drivers, consumers, and connectivity paths |
 | A debugging hypothesis needs evidence | Sample by cycle and check timing conditions, handshake stability, and transaction completion |
 
-Supports VCS / Xcelium simulation logs and VCD / FSDB waveforms. Structural queries can use Source Graph without a commercial license, or integrate with Verdi NPI. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
+Supports VCS / Xcelium simulation logs and VCD / FSDB waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
+
+Signal tracing (driver, load, and connectivity path queries) follows **Verdi NPI → Source Graph → basic static analysis (Legacy Static)** by default. It first queries the elaborated KDB; when NPI is unavailable or cannot provide a trustworthy result, it tries Source Graph without a commercial license, then falls back to basic static analysis where supported.
+
+Capabilities for large designs, with selected examples of validated scale:
+
+- **Hierarchy and source browsing on demand**: the server builds and retains hierarchy and file indexes, then returns local results by instance, subtree, or file to keep large SoC queries manageable in the assistant's context. Hierarchy construction and local queries have been verified on a synthetic design with **50,500 logical instances**; the initial build still scans compilation records and sources.
+- **Bulk handshake checks**: `sweep_handshakes` discovers AHB / valid-ready interfaces and checks stalls, payload stability, and premature valid/HTRANS deassertion. A recorded design with **78,817 total signals and a 2.59 ms waveform** yielded 49 candidate interfaces involving 262 clock/protocol signals; **35 interfaces were checked in about 4.65 minutes**, with 14 skipped and partial coverage. Runtime and coverage depend on the waveform, interface types, and resource limits.
+- **GiB-scale log parsing**: `parse_sim_log` has been verified on a **1 GiB synthetic log with 2,097,152 lines**, finding all four errors at the beginning, middle, and end.
 
 ## Installation
 
@@ -154,8 +162,6 @@ patterns:
 
 `^` means the start of the line; everything after the label may vary, with no extra regex needed. If a timestamp or other text precedes the label, use `regex: 'MY_CHECK_FAIL'` to match it anywhere in the line.
 
-Call `parse_sim_log` on that log with the matching simulator (`vcs` or `xcelium`). Both messages belong to `CUSTOM: my_checker`, with a count of `2`; each failure event retains its full message. Common timestamps and expected / actual values are still extracted automatically: the first event has `time_ps=12500`, `expected="0x12"`, and `actual="0x34"`. Use `detail_level="full"` to inspect the events. A message without a recognizable timestamp is still recorded, with an unknown time.
-
 - `name` identifies the failure group. `severity` defaults to `ERROR`; `FATAL` and `WARNING` are also supported. Matched custom warnings are included in runtime failure counts. `description` is for maintainers.
 - `regex` matches one log line at a time. Use YAML single quotes to preserve backslashes. Built-in assertion and UVM parsing runs first, followed by custom rules in list order (first match wins), then the generic `ERROR` fallback. Recognized compile / elaboration diagnostics remain excluded.
 
@@ -170,10 +176,6 @@ MY_CHECK_FAIL @ 12.5 ns want=0x12 have=0x34
 ```yaml
 regex: '^MY_CHECK_FAIL.*want=(?P<expected>\S+)\s+have=(?P<actual>\S+)'
 ```
-
-The named captures tell the parser to call the value after `want=` `expected`, and the value after `have=` `actual`. This produces `expected="0x12"` and `actual="0x34"`; the timestamp `12.5 ns` is still recognized automatically.
-
-To extract a source file, line number, or instance path into its own field, use the capture names `source_file`, `source_line`, or `instance_path`, respectively. Additional captures, such as a signal name captured as `signal`, are stored in the result's `structured_fields`.
 
 Repository installations use the root `custom_patterns.yaml` by default. To keep project rules elsewhere, or when using the PyPI installation, save the YAML above in your own file and pass its absolute path to the MCP server process:
 
@@ -264,11 +266,12 @@ Usually, you describe the debugging goal and let the assistant select the tools.
       <td>Recommend investigation targets and follow-up tool calls</td>
     </tr>
     <tr>
-      <td rowspan="5">Structure and tracing</td>
+      <td>Static structural scanning</td>
       <td><code>scan_structural_risks</code></td>
-      <td>Scan suspicious structures; semantic mode checks ties, open inputs, and constant comparisons</td>
+      <td>Statically scan source code for suspicious structures; semantic mode checks ties, open inputs, and constant comparisons</td>
     </tr>
     <tr>
+      <td rowspan="4">Signal tracing</td>
       <td><code>explain_signal_driver</code></td>
       <td>Trace a signal&#x27;s driver and relevant RTL</td>
     </tr>
@@ -372,11 +375,19 @@ Usually, you describe the debugging goal and let the assistant select the tools.
 
 **Can I use TraceWeave without a commercial license?**
 
-Log analysis, VCD queries, and Source Graph do not need a commercial license. FSDB reading requires local Verdi reader libraries; Verdi NPI and KDB builds require the corresponding EDA environment and license. When NPI is unavailable, structural queries try Source Graph, then fall back to basic static analysis where supported.
+Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses local Verdi FSDB Reader libraries and the wrapper. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
 
-**How do I choose auto or deep for structural scanning?**
+**How should I judge signal-tracing accuracy?**
 
-The default `auto` mode runs static checks and reuses compatible semantic results already available. Ask the assistant to use `deep` when you need a new semantic scan. The `analysis_mode` parameter applies to each call; no client configuration change is needed. Findings are leads to investigate: legitimate tie-offs and protocol constants may also appear.
+NPI uses an elaborated KDB matching the current design; Source Graph builds a semantic connectivity graph from source. With complete compilation context, supported target semantics, and **complete query coverage, exact resolution, and no truncation**, the results can be treated as **exact structural connectivity facts within the current query scope** for driver, load, and connectivity path analysis.
+
+**Can I run static structural scans without simulation results?**
+
+Yes. `scan_structural_risks` performs static source analysis without running a simulation or reading simulation run logs or VCD / FSDB waveforms. The current interface requires a compile/elaboration log (`compile_log`) and access to the corresponding sources and include files, so it can be used after compilation/elaboration, before running the simulation.
+
+**How do I choose auto or deep for static structural scanning?**
+
+The default `auto` mode runs source-text checks and reuses compatible semantic results already available. Ask the assistant to use `deep` when you need a new semantic scan for constant connections, open inputs, and similar facts. The `analysis_mode` parameter applies to each call; no client configuration change is needed. Findings are leads to investigate: legitimate tie-offs and protocol constants may also appear.
 
 **Does a scan with no findings mean the design is correct?**
 
