@@ -73,7 +73,7 @@ def _load_wrapper():
     if not os.path.exists(so_path):
         raise RuntimeError(
             f"libfsdb_wrapper.so not found: {so_path}\n"
-            "Run `bash build_wrapper.sh` from the TraceWeave repo root."
+            "Run `bash scripts/build_wrapper.sh` from the TraceWeave repo root."
         )
     runtime_info = get_fsdb_runtime_info()
     if not runtime_info["enabled"]:
@@ -210,7 +210,7 @@ def _setup(lib):
     except AttributeError:
         raise RuntimeError(
             "libfsdb_wrapper.so is outdated: missing fsdb_get_scale_info "
-            "(FSDB time-scale support). Rebuild it with `bash build_wrapper.sh` "
+            "(FSDB time-scale support). Rebuild it with `bash scripts/build_wrapper.sh` "
             "and reconnect the MCP server."
         )
 

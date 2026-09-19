@@ -1,12 +1,16 @@
 #!/bin/bash
-# build_wrapper.sh
+# scripts/build_wrapper.sh
 # Build fsdb_wrapper.cpp into libfsdb_wrapper.so
-# Usage: run `bash build_wrapper.sh` from the TraceWeave repo root
+# Usage: bash scripts/build_wrapper.sh from the TraceWeave repo root,
+# or use the script's absolute path from any directory.
 
 set -e
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
 if [ -z "$VERDI_HOME" ]; then
-    echo "ERROR: build_wrapper.sh requires VERDI_HOME for Verdi headers and link-time libraries."
+    echo "ERROR: scripts/build_wrapper.sh requires VERDI_HOME for Verdi headers and link-time libraries."
     echo "Set VERDI_HOME before running this script."
     exit 1
 fi

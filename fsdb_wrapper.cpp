@@ -3,11 +3,7 @@
  * C++ wrapper for Verdi ffrAPI → exposes C interface for Python ctypes
  *
  * Build:
- *   g++ -shared -fPIC -o libfsdb_wrapper.so fsdb_wrapper.cpp \
- *       -I$VERDI_HOME/share/FsdbReader \
- *       -L$VERDI_HOME/share/FsdbReader/linux64 \
- *       -lnffr -lnsys -lz \
- *       -Wl,-rpath,$VERDI_HOME/share/FsdbReader/linux64
+ *   bash scripts/build_wrapper.sh
  */
 
 #ifdef NOVAS_FSDB

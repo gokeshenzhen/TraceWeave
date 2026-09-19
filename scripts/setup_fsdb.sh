@@ -40,7 +40,7 @@ fi
 
 command -v g++ >/dev/null 2>&1 || fail "g++ not found in PATH. Install a C++11-capable g++ (e.g. devtoolset / build-essential)."
 
-BUILD_SCRIPT="$REPO_ROOT/build_wrapper.sh"
+BUILD_SCRIPT="$REPO_ROOT/scripts/build_wrapper.sh"
 [ -f "$BUILD_SCRIPT" ] || fail "missing $BUILD_SCRIPT"
 
 log "VERDI_HOME = $VERDI_HOME"
@@ -60,7 +60,7 @@ done
 # --- Step 2: build wrapper --------------------------------------------------
 log "Step 2/2: building libfsdb_wrapper.so"
 if ! bash "$BUILD_SCRIPT"; then
-    fail "build_wrapper.sh failed; see output above." 2
+    fail "scripts/build_wrapper.sh failed; see output above." 2
 fi
 
 log "FSDB setup complete."

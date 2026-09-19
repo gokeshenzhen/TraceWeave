@@ -147,7 +147,7 @@ For any new session, read these files first to build the project map:
 If the task involves FSDB or native integration, also read:
 
 - `fsdb_wrapper.cpp`
-- `build_wrapper.sh`
+- `scripts/build_wrapper.sh`
 
 If the task involves behavior validation or regression checks, also read:
 
