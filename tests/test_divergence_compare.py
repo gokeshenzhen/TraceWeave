@@ -119,8 +119,11 @@ $enddefinitions $end
     parser = VCDParser(str(wave))
     r = compare_signals(get_parser=lambda _: parser, wave_path_a=str(wave), signal_a="top.a",
                         wave_path_b=str(wave), signal_b="top.b")
-    assert r["comparison_status"] == "inconclusive"
-    assert "time_precision_loss" in reasons(r)
+    assert r["comparison_status"] == "different"
+    assert r["first_divergence_time_fs"] == 100
+    assert r["first_divergence_time_ps"] == 1
+    assert r["earliest_difference_proven"]
+    assert "time_precision_loss" not in reasons(r)
 
 
 def test_cancellation_is_not_missing_data():

@@ -81,6 +81,11 @@ class _NativeScopePageV1(ctypes.Structure):
                 ("returned", "visited", "output_bytes", "complete", "stop_reason")]
 
 
+class _NativeEventPageV1(ctypes.Structure):
+    _fields_ = [("next_tick", ctypes.c_uint64)] + [(name, ctypes.c_uint) for name in
+        ("has_next", "complete", "truncated", "events", "output_bytes")]
+
+
 def _profile_dict(profile: ctypes.Structure) -> dict[str, int]:
     return {name: int(getattr(profile, name)) for name, _ in profile._fields_}
 
@@ -136,6 +141,26 @@ def _setup(lib):
     # void fsdb_close(void*)
     lib.fsdb_close.restype  = None
     lib.fsdb_close.argtypes = [ctypes.c_void_p]
+
+    lib._traceweave_has_event_pages_v1 = False
+    try:
+        lib.fsdb_event_page_version.restype = ctypes.c_int
+        lib.fsdb_event_page_version.argtypes = []
+        if lib.fsdb_event_page_version() == 1:
+            signatures = {
+                'fsdb_event_end_tick_v1': [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64)],
+                'fsdb_event_open_v1': [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint64,
+                    ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)],
+                'fsdb_event_page_v1': [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint,
+                    ctypes.c_char_p, ctypes.c_uint, ctypes.POINTER(_NativeEventPageV1), ctypes.c_uint],
+                'fsdb_event_close_v1': [ctypes.c_void_p, ctypes.c_uint64],
+            }
+            for name, args in signatures.items():
+                fn = getattr(lib, name)
+                fn.restype, fn.argtypes = ctypes.c_int, args
+            lib._traceweave_has_event_pages_v1 = True
+    except AttributeError:
+        pass
 
     # int fsdb_search_signals(void*, const char*, char*, int)
     lib.fsdb_search_signals.restype  = ctypes.c_int
@@ -311,6 +336,21 @@ class FSDBParser:
         stat = os.stat(self.file_path)
         return (os.path.realpath(self.file_path), stat.st_dev, stat.st_ino,
                 stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def _supports_event_pages(self):
+        self._open()
+        return bool(getattr(self._lib, '_traceweave_has_event_pages_v1', False))
+
+    @contextmanager
+    def _event_pages(self, path, start=0, end=-1, *, max_events=1024, max_bytes=262144):
+        from .event_pages import FsdbEventReader
+        if not self._supports_event_pages() or not self._transition_group_active:
+            raise RuntimeError('event pages require a supported resident FSDB group')
+        reader = FsdbEventReader(self, path, start, end, max_events, max_bytes)
+        try:
+            yield reader
+        finally:
+            reader.close()
 
     def _check_metadata_identity(self, expected):
         check_cancelled()

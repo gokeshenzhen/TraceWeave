@@ -379,6 +379,14 @@ Usually, you describe the debugging goal and let the assistant select the tools.
   </tbody>
 </table>
 
+`diff_first_divergence` compares one explicit signal pair using bounded event
+pages when supported. Its `reading` receipt distinguishes streaming native
+reads, VCD index pages, and an older wrapper's whole-window fallback. Exact
+sub-ps differences appear in `first_divergence_time_fs`; the ps cursor rounds
+up. Unknown prefixes still prevent `earliest_difference_proven`.
+`trace_divergence` reuses observations within the request and releases them
+on graph restart or completion. See [the comparison contract](docs/architecture.md#divergence-evidence-and-backtrace).
+
 ## Packed fields and TL-UL
 
 Point, transition, around-time, cycle, handshake, and transaction queries accept

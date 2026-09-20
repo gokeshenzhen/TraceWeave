@@ -1516,6 +1516,16 @@ class DivergenceNextAction(SchemaModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class ComparisonReading(SchemaModel):
+    mode_a: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed']
+    mode_b: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed']
+    events_read: int = Field(default=0, ge=0)
+    pages_read: int = Field(default=0, ge=0)
+    native_read_calls: int | None = Field(default=None, ge=0)
+    record_bytes_read: int | None = Field(default=None, ge=0)
+    byte_basis: Literal['native_abi', 'record_estimate', 'unavailable'] = 'unavailable'
+
+
 class DiffFirstDivergenceResult(SchemaModel):
     diverged: bool
     wave_path_a: str
@@ -1525,6 +1535,7 @@ class DiffFirstDivergenceResult(SchemaModel):
     start_ps: int
     end_ps: int
     first_divergence_time_ps: int | None = None
+    first_divergence_time_fs: int | None = None
     value_a: str | None = None
     value_b: str | None = None
     cursor: CursorRefSchema | None = None
@@ -1542,6 +1553,7 @@ class DiffFirstDivergenceResult(SchemaModel):
     width_a: int | None = None
     width_b: int | None = None
     excluded_intervals: list[dict[str, Any]] = Field(default_factory=list)
+    reading: ComparisonReading | None = None
 
 
 class PeriodResult(SchemaModel):

@@ -40,22 +40,39 @@ def clock_edges(stream, edge: str, *, start: int, end: int, before=False):
 
 
 class ObservationReader:
-    """Per-node cache; no transition arrays escape this object."""
-    def __init__(self, get_parser, wave, start, end, consume=None):
+    """Local view over optional request-owned, immutable observation windows."""
+    def __init__(self, get_parser, wave, start, end, consume=None, session=None):
         self.get_parser, self.wave, self.start, self.end = get_parser, wave, start, end
         self.streams = {}
         self.consume = consume
+        self.session = session
 
     def stream(self, signal):
         check_cancelled()
         if signal not in self.streams:
-            stream = read_stream(self.get_parser, self.wave, signal, self.start, self.end)
-            if self.consume:
-                self.consume(stream)
+            if self.session is not None:
+                stream = self.session.stream(self.get_parser, self.wave, signal, self.start, self.end, self.consume)
+            else:
+                stream = read_stream(self.get_parser, self.wave, signal, self.start, self.end)
+                if self.consume:
+                    self.consume(stream)
             self.streams[signal] = stream
         return self.streams[signal]
 
-    def sample(self, expr: Expr, time: int, phase="after") -> dict:
+    def sample(self, expr: Expr, time: int, phase="after", offset=0) -> dict:
+        key = None
+        if self.session is not None:
+            key = self.session.sample_key(self.get_parser(self.wave), self.wave, expr,
+                self.start, self.end, time, phase, offset)
+            cached = self.session.sample_get(key)
+            if cached is not None:
+                return cached
+        result = self._sample(expr, time + offset, phase)
+        if self.session is not None and not result['gaps']:
+            self.session.sample_put(key, result)
+        return result
+
+    def _sample(self, expr: Expr, time: int, phase="after") -> dict:
         stream = self.stream(expr.signal)
         gaps = []
         event = stream.predecessor
@@ -98,8 +115,8 @@ class ObservationReader:
 
 
 def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start: int,
-                 phase="after", consume=None) -> dict:
-    reader = ObservationReader(get_parser, wave, history_start, time, consume)
+                 phase="after", consume=None, session=None) -> dict:
+    reader = ObservationReader(get_parser, wave, history_start, time, consume, session)
     result = dict(observation_time_ps=time, observation_phase=phase, sampling_time_ps=time,
                   sampling_phase=phase, trigger_time_ps=None, dependencies=[], branches=[],
                   value=None, complete=False, gaps=list(step.get("gaps", ())), boundary=step["boundary"])

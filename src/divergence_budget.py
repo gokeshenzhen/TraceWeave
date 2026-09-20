@@ -72,10 +72,17 @@ class Budget:
             )
             if isinstance(value, dict):
                 size += sum(sys.getsizeof(v) for v in value.values())
-        self.cache_bytes += size
-        self.cache_peak = max(self.cache_peak, self.cache_bytes)
-        if self.cache_bytes > DIVERGENCE_MAX_WAVE_CACHE_BYTES:
-            raise BudgetExceeded("max_wave_cache_bytes")
+        # A cache capacity is an optimization limit, not an analysis limit.
+        # Misses/oversized windows still run with the same coverage semantics.
+        self.cache_peak = max(self.cache_peak, self.cache_bytes + size)
+
+    def consume_page(self, page):
+        self.check()
+        self.transitions += len(page.events) + int(page.predecessor is not None)
+        if self.transitions > DIVERGENCE_MAX_TRANSITIONS:
+            raise BudgetExceeded('max_transitions')
+        self.cache_peak = max(self.cache_peak, self.cache_bytes + page.output_bytes +
+                              256 * (len(page.events) + bool(page.predecessor)))
 
     def node(self):
         self.check()
@@ -92,6 +99,7 @@ class Budget:
 
     def metrics(self):
         return dict(
+            **(self.observations.metrics() if hasattr(self, 'observations') else {}),
             elapsed_ms=round((time.monotonic() - self.started) * 1000, 3),
             admitted_node_count=self.nodes,
             backend_query_count=self.queries,

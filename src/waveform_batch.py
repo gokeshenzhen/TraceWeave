@@ -15,6 +15,7 @@ fixtures can assert byte-equal output across backends.
 from __future__ import annotations
 
 import ctypes
+from contextlib import contextmanager, ExitStack
 from bisect import bisect_left
 from typing import Any, Protocol, runtime_checkable
 
@@ -47,6 +48,36 @@ class WaveformBatchReader(Protocol):
             }
         """
         ...
+
+
+class EventPagingUnavailable(Exception):
+    """The active wrapper/group configuration only supports materialized reads."""
+
+
+@contextmanager
+def event_readers(requests, start, end, *, max_events=1024, max_bytes=262144):
+    """Private batch session over existing parsers, under the caller's wave lock.
+
+    Reuse transition_group for one load per file; free every cursor before group
+    unload. The old time-based batch ABI lacks predecessor/raw tick evidence and
+    is intentionally not used to manufacture a streaming capability.
+    """
+    with ExitStack() as stack:
+        groups = {}
+        for parser, path in requests:
+            if not getattr(parser, '_supports_event_pages', lambda: False)():
+                raise EventPagingUnavailable()
+            base = getattr(parser, '_event_source_path', lambda p: p)(path)
+            owner = getattr(parser, '_event_owner', parser)
+            groups.setdefault(id(owner), (owner, []))[1].append(base)
+        for parser, paths in groups.values():
+            group = getattr(parser, 'transition_group', None)
+            if group is not None and not getattr(parser, '_transition_group_active', False):
+                if not stack.enter_context(group(paths)):
+                    raise EventPagingUnavailable()
+        readers = [stack.enter_context(parser._event_pages(path, start, end,
+                   max_events=max_events, max_bytes=max_bytes)) for parser, path in requests]
+        yield readers
 
 
 # ---------------------------------------------------------------------------

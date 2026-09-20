@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from typing import Any, Callable
+from collections.abc import Mapping
 
 from .cancellation import OperationCancelled, check_cancelled
 
@@ -23,7 +24,7 @@ def file_identity(path: str) -> tuple | None:
 
 def bit_value(value: Any, width: int | None) -> str | None:
     """Normalize a digital value without changing its declared width."""
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         value = value.get("bin", value.get("raw"))
     if value is None:
         return None
@@ -131,7 +132,7 @@ def _seed(stream: SignalStream, signal: str, start: int) -> str | None:
     return bit_value(value, stream.width)
 
 
-def compare_signals(*, get_parser: Callable, wave_path_a: str, signal_a: str,
+def _compare_legacy(*, get_parser: Callable, wave_path_a: str, signal_a: str,
                     wave_path_b: str, signal_b: str, start_ps: int = 0,
                     end_ps: int = -1, consume: Callable | None = None) -> dict:
     if start_ps < 0 or end_ps < -1 or (end_ps >= 0 and end_ps < start_ps):
@@ -157,6 +158,10 @@ def compare_signals(*, get_parser: Callable, wave_path_a: str, signal_a: str,
         earliest_difference_proven=False, coverage_gaps=[], next_actions=[],
         width_a=streams[0].width, width_b=streams[1].width,
         excluded_intervals=[],
+        reading={"mode_a": "legacy_materialized", "mode_b": "legacy_materialized",
+                 "events_read": sum(len(s.transitions) + bool(s.predecessor) for s in streams),
+                 "pages_read": 0, "native_read_calls": None, "record_bytes_read": None,
+                 "byte_basis": "unavailable"},
     )
     gaps = result["coverage_gaps"]
 
@@ -258,4 +263,156 @@ def compare_signals(*, get_parser: Callable, wave_path_a: str, signal_a: str,
         result["coverage_status"] = "partial"
         gaps.append({"reason": "stopped_at_difference", "side": "both",
                      "start_ps": result["first_divergence_time_ps"], "end_ps": effective_end})
+    return result
+
+
+def compare_signals(*, get_parser: Callable, wave_path_a: str, signal_a: str,
+                    wave_path_b: str, signal_b: str, start_ps: int = 0,
+                    end_ps: int = -1, consume: Callable | None = None) -> dict:
+    """One explicitly mapped pair. Never infer a global earliest across pairs."""
+    from .waveform_batch import event_readers, EventPagingUnavailable
+    if start_ps < 0 or end_ps < -1 or (end_ps >= 0 and end_ps < start_ps):
+        raise ValueError('comparison window requires 0 <= start <= end, or end=-1')
+    args = dict(get_parser=get_parser, wave_path_a=wave_path_a, signal_a=signal_a,
+                wave_path_b=wave_path_b, signal_b=signal_b, start_ps=start_ps,
+                end_ps=end_ps, consume=consume)
+    identities = {p: file_identity(p) for p in (wave_path_a, wave_path_b)}
+    failed_side = 'both'
+    try:
+        parsers = {p: get_parser(p) for p in identities}
+        requests = [(parsers[p], signal) for p, signal in
+                    ((wave_path_a, signal_a), (wave_path_b, signal_b))]
+        # Header is prepared before loading a group: legacy duration recovery
+        # may load/unload signals and must never invalidate a resident cursor.
+        for side, (parser, signal) in zip(('a', 'b'), requests):
+            failed_side = side
+            if not getattr(parser, '_supports_event_pages', lambda: False)():
+                raise EventPagingUnavailable()
+            parser.get_header()
+            parser.get_signal_width(signal)
+        failed_side = 'both'
+        with event_readers(requests, start_ps, end_ps) as readers:
+            result = _compare_pages(readers, args)
+    except EventPagingUnavailable:
+        result = _compare_legacy(**args)
+    except OperationCancelled:
+        raise
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
+        # A failed iterator is not permission to replay the request against a
+        # different file generation or hide an incomplete time group.
+        result = dict(diverged=False, wave_path_a=wave_path_a, wave_path_b=wave_path_b,
+            signal_a=signal_a, signal_b=signal_b, start_ps=start_ps, end_ps=end_ps,
+            first_divergence_time_ps=None, first_divergence_time_fs=None, value_a=None, value_b=None,
+            cursor=None, comparison_status='inconclusive', coverage_status='none',
+            earliest_difference_proven=False, transitions_compared=0,
+            missing_a=isinstance(exc, KeyError) and failed_side == 'a',
+            missing_b=isinstance(exc, KeyError) and failed_side == 'b',
+            coverage_gaps=[dict(reason='signal_not_found' if isinstance(exc, KeyError)
+                else 'read_failed', side=failed_side, start_ps=start_ps)], next_actions=[],
+            reading=dict(mode_a='event_pages_failed', mode_b='event_pages_failed'))
+    if any(identity is not None and identity != file_identity(path)
+           for path, identity in identities.items()):
+        result.update(diverged=False, comparison_status='inconclusive', coverage_status='partial',
+                      earliest_difference_proven=False, first_divergence_time_ps=None,
+                      first_divergence_time_fs=None, value_a=None, value_b=None)
+        result['coverage_gaps'].append(dict(reason='waveform_changed', side='both', start_ps=start_ps))
+    return result
+
+
+def _compare_pages(readers, args):
+    from .event_pages import GroupCursor, IncompleteGroup
+    start, end = args['start_ps'], args['end_ps']
+    ends = [r.end_fs for r in readers if r.end_fs is not None]
+    stop = min(ends) if ends else start*1000 - 1
+    if end >= 0:
+        stop = min(stop, end*1000)
+    public_end = (stop + 999)//1000
+    result = dict(diverged=False, wave_path_a=args['wave_path_a'], wave_path_b=args['wave_path_b'],
+        signal_a=args['signal_a'], signal_b=args['signal_b'], start_ps=start, end_ps=public_end,
+        requested_start_ps=start, requested_end_ps=end, first_divergence_time_ps=None,
+        first_divergence_time_fs=None, value_a=None, value_b=None, cursor=None,
+        transitions_compared=0, missing_a=False, missing_b=False, note=None,
+        comparison_status='inconclusive', coverage_status='none', earliest_difference_proven=False,
+        coverage_gaps=[], next_actions=[], width_a=readers[0].width, width_b=readers[1].width,
+        excluded_intervals=[], reading=dict(mode_a=readers[0].mode, mode_b=readers[1].mode,
+            events_read=0, pages_read=0, native_read_calls=0, record_bytes_read=0,
+            byte_basis='native_abi' if all(r.native for r in readers) else 'record_estimate'))
+    gaps = result['coverage_gaps']
+    def gap(reason, side='both', at=None):
+        at = start*1000 if at is None else at
+        previous = next((g for g in gaps if g['reason'] == reason and g['side'] == side), None)
+        if previous is None:
+            gaps.append(dict(reason=reason, side=side, start_ps=(at+999)//1000, start_fs=at))
+        else:
+            previous['end_ps'] = (at+999)//1000
+    requested_stop = end*1000 if end >= 0 else max(ends, default=stop)
+    for side, reader in zip(('a', 'b'), readers):
+        if reader.end_fs is None:
+            gap('recorded_range_unavailable', side)
+        elif requested_stop > reader.end_fs:
+            gap('outside_recorded_range', side, reader.end_fs)
+            result['excluded_intervals'].append(dict(side=side, start_ps=(reader.end_fs+999)//1000,
+                end_ps=(requested_stop+999)//1000, reason='outside_recorded_range'))
+    if stop < start*1000:
+        gap('empty_window')
+        result['note'] = 'empty effective comparison window'
+        return result
+    if readers[0].width != readers[1].width:
+        gap('width_mismatch')
+        return result
+    consume = args['consume']
+    owner = getattr(consume, '__self__', None)
+    checkpoint = getattr(owner, 'check', check_cancelled)
+    def account(page):
+        if consume is None:
+            return
+        if hasattr(owner, 'consume_page'):
+            owner.consume_page(page)
+        else:
+            consume(SignalStream(transitions=[dict(time_ps=e.time_ps, value=e.value) for e in page.events]))
+    cursors = [GroupCursor(reader, checkpoint, account) for reader in readers]
+    values = [bit_value(c.predecessor.value, r.width) if c.predecessor else None
+              for c, r in zip(cursors, readers)]
+    at, examined = start*1000, False
+    try:
+        while at <= stop:
+            checkpoint()
+            for i, (cursor, reader) in enumerate(zip(cursors, readers)):
+                if cursor.peek() is not None and cursor.peek() < at:
+                    # An oversized predecessor can be the unread first row.
+                    # Its physical time is correctly before the window; the
+                    # missing evidence is a capacity limit, not bad ordering.
+                    raise IncompleteGroup('transition_data_truncated' if cursor.page.truncated
+                                          else 'transition_order_invalid')
+                if cursor.peek() == at:
+                    values[i] = bit_value(cursor.take_group(at), reader.width)
+            examined = True
+            for side, value in zip(('a', 'b'), values):
+                if value is None:
+                    gap('value_unavailable', side, at)
+                elif not known(value):
+                    gap('value_unknown', side, at)
+            if all(known(v) for v in values) and values[0] != values[1]:
+                result.update(diverged=True, comparison_status='different', value_a=values[0], value_b=values[1],
+                    first_divergence_time_ps=(at+999)//1000, first_divergence_time_fs=at,
+                    earliest_difference_proven=not any(g['start_fs'] <= at for g in gaps))
+                if at % 1000:
+                    result['note'] = 'exact difference is at first_divergence_time_fs; the rounded ps cursor may observe a later value'
+                break
+            upcoming = [c.peek() for c in cursors if c.peek() is not None]
+            if not upcoming:
+                break
+            at = min(upcoming)
+    except IncompleteGroup as exc:
+        gap(str(exc), at=at)
+    result['transitions_compared'] = sum(c.compared for c in cursors)
+    result['reading'].update(events_read=sum(c.events for c in cursors), pages_read=sum(c.pages for c in cursors),
+        record_bytes_read=sum(c.nbytes for c in cursors),
+        native_read_calls=sum(c.pages for c in cursors if c.reader.native))
+    if not result['diverged'] and examined and not gaps:
+        result.update(comparison_status='equal', note='known values agree across the complete comparison window')
+    result['coverage_status'] = 'none' if not examined else ('partial' if gaps else 'complete')
+    if result['diverged'] and at < stop:
+        result['coverage_status'] = 'partial'
+        gaps.append(dict(reason='stopped_at_difference', side='both', start_ps=(at+999)//1000, end_ps=public_end))
     return result

@@ -15,6 +15,7 @@ from .divergence_context import resolve_context, driver_action
 from .divergence_mapping import Mapping, selected_path, split_selection
 from .divergence_routing import DynamicRoute
 from .dynamic_observe import observe_step
+from .observation_session import ObservationSession
 from .schemas import TraceDivergenceInput, TraceDivergenceResult
 
 _COMPETING = [
@@ -98,6 +99,8 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
         raise ValueError("clock_policy_requires_clock_mode")
     sides = {s: request[f"side_{s}"] for s in ("a", "b")}
     budget = Budget(request["limits"])
+    observations = ObservationSession(budget)
+    budget.observations = observations
     result = dict(
         status="blocked",
         reference_side=request["reference_side"],
@@ -133,15 +136,11 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
                 result["coverage"]["gaps"].append(reason)
 
     async def wave(fn):
-        budget.cache_bytes = 0
-        try:
-            return await budget.run(
-                lambda: services._run_in_wave_thread(
-                    [s["wave_path"] for s in sides.values()], fn
-                )
+        return await budget.run(
+            lambda: services._run_in_wave_thread(
+                [s["wave_path"] for s in sides.values()], fn
             )
-        finally:
-            budget.cache_bytes = 0
+        )
 
     try:
         # Mapping syntax is validated even before a root diff can early-return.
@@ -229,6 +228,11 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
                 if comparison["comparison_status"] == "equal"
                 else "inconclusive"
             )
+        elif comparison.get('first_divergence_time_fs', 0) % 1000:
+            # A rounded public cursor is not an exact dynamic sample. Keep the
+            # raw-time positive but do not trace a potentially different value.
+            result['status'] = 'partial'
+            frontier(None, 'sampling_order_unresolved', source='root_comparison')
         else:
             routes = {
                 s: route_factory(services, s, side, bounds[s], budget)
@@ -256,9 +260,11 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
                         wave,
                         services,
                         frontier,
+                        observations,
                     )
                     break
                 except TraceRestart as restart:
+                    observations.clear()
                     (
                         result["nodes"],
                         result["edges"],
@@ -285,6 +291,8 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
             if node["status"] == "pending":
                 node["status"] = "frontier"
                 frontier(node["id"], "budget_exhausted", budget=exc.limit)
+    finally:
+        observations.clear()
 
     # Revalidation runs after the bounded work, even after a timeout. It performs
     # only exact local stat checks and never prepares/retries another backend.
@@ -303,13 +311,17 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
         if label in routes and not routes[label].current():
             changed.append((label, "compile_context_changed"))
     if changed:
-        result.update(status="inconclusive", nodes=[], edges=[], findings=[])
+        result.update(status="inconclusive", nodes=[], edges=[], findings=[], frontier=[], next_actions=[])
+        result['coverage'].update(checks=[], gaps=[])
         if comparison:
             comparison.update(
                 diverged=False,
                 comparison_status="inconclusive",
+                coverage_status="none",
+                coverage_gaps=[dict(reason=reason, side=label, start_ps=start) for label,reason in changed],
                 earliest_difference_proven=False,
                 first_divergence_time_ps=None,
+                first_divergence_time_fs=None,
                 value_a=None,
                 value_b=None,
             )
@@ -426,6 +438,7 @@ async def _walk(
     wave,
     services,
     frontier,
+    observation_session,
 ):
     queue = deque()
     seen = {}
@@ -556,6 +569,8 @@ async def _walk(
             continue
 
         def observe():
+            observation_session.bind(tuple((ids[label], steps[label].get('backend'),
+                steps[label].get('artifact_sha256')) for label in ('a', 'b')))
             return {
                 label: observe_step(
                     steps[label],
@@ -565,6 +580,7 @@ async def _walk(
                     history_start=start,
                     phase=node[label]["phase"],
                     consume=budget.consume,
+                    session=observation_session,
                 )
                 for label in ("a", "b")
             }

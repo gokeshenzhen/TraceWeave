@@ -1357,6 +1357,70 @@ denominators. Telemetry is local-only; nothing is sent anywhere.
 `src/divergence_compare.py` owns cursor-free, coverage-aware event comparison;
 `src/divergence_clock.py` adds explicitly aligned clock sampling. The server
 registers the final cursor after wave work and context validation.
+
+Event comparison uses the private `event_readers` session in
+`src/waveform_batch.py` and `src/event_pages.py`. A supported FSDB wrapper exposes
+the optional event-page ABI v1: one existing transition group load per file,
+one traversal cursor per explicitly supplied signal, and bounded subsequent
+pages without repeated seeks. Default pages hold at most 1,024 records and
+256 KiB; hard bounds are 4,096 records and 1 MiB. Native cursors are subordinate
+to the group and are freed before unloading, including cancellation, timeout,
+exceptions and parser close. The global FSDB lock covers the entire session.
+Initial FFR loading can still decompress whole flush sessions; fewer returned
+events do not prove fewer physical disk reads. Cancellation is checked between
+pages and after native returns; opening/loading remains non-preemptible.
+
+Each page keeps a separate strict predecessor and the next unread **raw** time.
+The comparator folds a whole raw-time group, carrying only its last value when
+the group spans pages. A byte-limited, unrepresentable event marks an incomplete
+tail; it cannot establish a difference or equality. Native ticks retain the
+header scale, with public ps still converted through `_ToTag` / `_TagToPs`.
+VCD pages bisect existing records; only non-integral-ps scales add an 8-byte
+raw-tick array per event. Initial VCD parsing and its full-file memory remain.
+Internal ordering uses integer fs, so two sub-ps events are never merged just
+because their public ps timestamps coincide. `first_divergence_time_fs` carries
+the exact positive observation; the compatible integer-ps time/cursor rounds
+up. Cursor metadata marks that rounding, and dynamic tracing retains a sampling
+frontier for a non-integral-ps difference instead of sampling the rounded value.
+Unknown or missing earlier intervals still prevent an earliest-difference proof.
+
+The additive `reading` receipt distinguishes `native_event_pages_v1`,
+`vcd_index_pages`, and `legacy_materialized`, with actual page/record counts and
+record-byte basis. Native bytes count ABI records, VCD bytes conservatively
+estimate records, and unavailable legacy byte counts stay null. Old wrappers,
+or a resident-group configuration that cannot admit the pair, use the existing
+whole-window fallback; their merge early-exit is **not** streaming I/O. No
+multi-pair search is introduced: the comparison proves a result for exactly the
+caller-supplied pair, and trace mappings continue to govern dependency pairing.
+Clock-aligned root comparison keeps its existing materialized clock/sample
+algorithm; event-page gains do not describe that mode.
+
+`src/observation_session.py` reuses immutable windows and samples within one
+`trace_divergence` graph attempt. Keys contain file stat identity, parser
+generation, real declaration/storage identity, ordered selection bits,
+artifact/backend namespace, time coverage, sample time, phase and offset.
+Display keys such as `@bits(...)` alone never identify a selection. A complete
+covering window may supply a smaller window with a newly sliced predecessor;
+truncated/error streams are not retained. The LRU caps both 65,536 retained
+events/samples and 32 MiB of conservative Python/key bytes. Oversized entries
+bypass caching; eviction never changes unknown/coverage/earliest semantics.
+The cumulative transition/time analysis budgets remain independent. Whole-graph
+backend/artifact restarts and request exit release cached observations; final
+wave/compile validation still discards changed evidence. No cross-request
+observation or transaction repository is created. Numeric cache metrics expose
+hits, misses, evictions, bypasses and peaks without names/paths/values.
+
+`scripts/benchmark_divergence_reads.py` compares identical inputs against a
+specified checkout/native library and records first/warm wall time, CPU,
+process peak RSS, read volume, OS I/O counters, cancellation latency and loaded
+source/library hashes. Native dlopen and Python imports are outside its timing;
+first waveform open/index or VCD parse are inside. It never flushes OS caches.
+The existing `benchmark_divergence_trace.py --source-root ...` additionally
+checks independent temporal/graph oracles while counting public calls, event
+reads, native reads and semantic builds; its VCD workloads have zero native
+reads. Hierarchy/scan preparation is outside those trace timings. Reducing
+read calls alone is not a claim of lower elapsed time.
+
 `src/divergence_context.py` freezes each side's exact hierarchy, ordered logs,
 source snapshot and top. Ready driver relays carry those identities into the
 normal public route instead of changing the mutable current session.

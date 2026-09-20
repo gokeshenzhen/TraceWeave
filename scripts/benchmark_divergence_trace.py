@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import hashlib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -25,6 +26,7 @@ from divergence_benchmark_workloads import workloads
 
 
 async def measure(args):
+    sys.path.insert(0, str(Path(args.source_root).resolve()))
     import server
     from src.divergence_context import resolve_context
 
@@ -59,7 +61,26 @@ async def measure(args):
 
         def get_transitions(self, *a, **kw):
             counters["transition_reads"] += 1
-            return self.parser.get_transitions(*a, **kw)
+            result = self.parser.get_transitions(*a, **kw)
+            counters['event_records_read'] += len(result.get('transitions', ())) + bool(result.get('predecessor'))
+            return result
+
+        def _event_pages(self, *a, **kw):
+            from contextlib import contextmanager
+            @contextmanager
+            def pages():
+                with self.parser._event_pages(*a, **kw) as reader:
+                    original = reader.read_page
+                    def read():
+                        result = original()
+                        counters['event_page_reads'] += 1
+                        counters['native_reads'] += int(reader.native)
+                        counters['event_records_read'] += len(result.events) + bool(result.predecessor)
+                        counters['record_bytes_read'] += result.output_bytes
+                        return result
+                    reader.read_page = read
+                    yield reader
+            return pages()
 
     def prepare_receipt(plan, outcome, **kwargs):
         metrics = outcome.metrics
@@ -80,6 +101,7 @@ async def measure(args):
             source_graph_builds=0,
             frontend_cpu_ms=0,
             frontend_peak_rss_kib=0,
+            native_reads=0, event_page_reads=0, event_records_read=0, record_bytes_read=0,
         )
         started, cpu = time.perf_counter(), time.process_time()
         if args.arm == "automatic":
@@ -157,6 +179,7 @@ async def measure(args):
             counters["returned_nodes"] = len(result.nodes)
             counters["returned_edges"] = len(result.edges)
             counters["graph_restarts"] = result.operation_metrics["restart_count"]
+            counters.update({k:v for k,v in result.operation_metrics.items() if k.startswith('observation_cache_')})
         else:
             diff = await server._dispatch(
                 "diff_first_divergence",
@@ -250,6 +273,8 @@ async def measure(args):
         actual_backends=backends,
         verified_root_time_ps=oracle.root_time,
         verified_nodes=oracle.nodes,
+        loaded_source={name:{'path':m.__file__, 'sha256':hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()}
+            for name,m in list(sys.modules.items()) if (name=='server' or name.startswith('src.')) and getattr(m,'__file__',None)},
     )
 
 
@@ -319,6 +344,7 @@ def run_case(args, oracle):
                     oracle.name,
                     "--repeats",
                     str(args.repeats),
+                    '--source-root', args.source_root,
                 ],
                 env=environment,
                 cwd=ROOT,
@@ -355,6 +381,7 @@ def main():
         "--backend", choices=("source_graph", "npi"), default="source_graph"
     )
     parser.add_argument("--source-python", default=str(ROOT / ".venv/bin/python"))
+    parser.add_argument('--source-root', default=str(ROOT))
     parser.add_argument("--workload", choices=["all", *workloads()], default="register")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output")

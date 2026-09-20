@@ -378,6 +378,12 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
   </tbody>
 </table>
 
+`diff_first_divergence` 对调用方明确指定的一对信号使用有界事件页比较。
+`reading` 回执区分原生流式读取、VCD 索引分页与旧 wrapper 的整窗读取。
+亚 ps 差异的精确时间在 `first_divergence_time_fs`，ps 游标向上取整；未知前缀仍会
+阻止 `earliest_difference_proven`。`trace_divergence` 只在本次请求内复用观察，
+整图重启或请求结束时释放。详见[比较合同](docs/architecture.md#divergence-evidence-and-backtrace)。
+
 ## 打包字段与 TL-UL
 
 点查询、跳变、时间邻域、逐拍采样、握手及事务工具兼容原 signal string，

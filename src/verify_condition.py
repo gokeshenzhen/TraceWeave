@@ -70,12 +70,11 @@ def diff_first_divergence(
     two paths MAY be identical — that's the within-run self-diff case
     (e.g. expected vs actual signals in the same FSDB).
 
-    Algorithm: walk the union of the two signals' transition timelines
-    chronologically. Seed both running values from
-    ``get_value_at_time(signal, start_ps)`` so the comparison begins from
-    the actual pre-window state, not from "unknown". At every event time
-    apply all coincident transitions before comparing — if the values
-    differ then, that time is the first divergence.
+    Supported parsers read bounded event pages and seed from a separate
+    predecessor. Fold every event at the same raw time before comparing;
+    stop further reads at the first known difference. Unknown prefixes keep
+    earliest_difference_proven false. Old wrappers retain the materialized
+    path and report that capability explicitly.
 
     When divergence is found and ``cursor_store`` is provided, register
     an anchor at the divergence time. Auto-generated names are
@@ -646,6 +645,9 @@ def _attach_cursor(
         "wave_path_a": wave_path_a,
         "wave_path_b": wave_path_b,
     }
+    exact_fs = result.get('first_divergence_time_fs')
+    if exact_fs is not None and exact_fs % 1000:
+        metadata.update(first_divergence_time_fs=exact_fs, cursor_time_rounded_up=True)
     if cursor_name:
         ref: CursorRef = cursor_store.set(
             cursor_name, time_ps, note=note, metadata=metadata

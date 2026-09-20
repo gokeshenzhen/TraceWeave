@@ -397,19 +397,34 @@ async def test_wave_lock_only_covers_wave_reads(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "limit", ["DIVERGENCE_MAX_TRANSITIONS", "DIVERGENCE_MAX_WAVE_CACHE_BYTES"]
-)
 async def test_internal_scan_budget_stops_before_connectivity(
-    tmp_path, monkeypatch, limit
+    tmp_path, monkeypatch
 ):
     import src.divergence_budget as budgets
 
     args = await setup_case(tmp_path)
-    monkeypatch.setattr(budgets, limit, 1)
+    monkeypatch.setattr(budgets, 'DIVERGENCE_MAX_TRANSITIONS', 1)
     r = await server._dispatch("trace_divergence", args)
     assert r.status == "inconclusive" and r.coverage["truncated"]
     assert r.operation_metrics["backend_query_count"] == 0 and r.cursor is None
+
+
+@pytest.mark.anyio
+@requires_source_graph
+async def test_tiny_observation_cache_bypasses_without_changing_evidence(tmp_path, monkeypatch):
+    import src.divergence_budget as budgets
+    args = await setup_case(tmp_path)
+    original = await server._dispatch('trace_divergence', args)
+    monkeypatch.setattr(budgets, 'DIVERGENCE_MAX_WAVE_CACHE_BYTES', 1)
+    bypass = await server._dispatch('trace_divergence', args)
+    assert original.nodes == bypass.nodes
+    assert original.edges == bypass.edges
+    assert original.findings == bypass.findings
+    assert original.comparison == bypass.comparison
+    assert original.coverage['gaps'] == bypass.coverage['gaps']
+    assert original.status == bypass.status
+    assert bypass.operation_metrics['observation_cache_peak_bytes'] == 0
+    assert bypass.operation_metrics['observation_cache_bypasses'] > 0
 
 
 @pytest.mark.anyio
@@ -459,6 +474,25 @@ async def test_wave_replacement_discards_graph_and_cursor(tmp_path, monkeypatch)
     r = await server._dispatch("trace_divergence", args)
     assert r.status == "inconclusive" and not r.nodes and not r.edges
     assert r.cursor is None and "waveform_changed" in r.coverage["gaps"]
+    assert r.comparison['first_divergence_time_fs'] is None
+    assert r.comparison['coverage_status'] == 'none'
+    assert all(f['node_id'] is None for f in r.frontier)
+    assert not r.coverage['checks']
+
+
+@pytest.mark.anyio
+async def test_subps_positive_stops_before_rounded_dynamic_sampling(tmp_path):
+    args = await setup_case(tmp_path)
+    wave = Path(args['side_a']['wave_path'])
+    wave.write_text(wave.read_text().replace('$timescale 1ps', '$timescale 100fs'))
+    args['end_time_ps'] = 2
+    r = await server._dispatch('trace_divergence', args)
+    assert r.status == 'partial' and not r.nodes
+    assert r.comparison['first_divergence_time_fs'] == 500
+    assert r.comparison['earliest_difference_proven']
+    assert r.operation_metrics['backend_query_count'] == 0
+    assert 'sampling_order_unresolved' in r.coverage['gaps']
+    assert r.cursor.metadata['cursor_time_rounded_up']
 
 
 @pytest.mark.anyio

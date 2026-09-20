@@ -3,6 +3,28 @@
 from dataclasses import dataclass, field
 
 
+def write_read_workloads(directory, steps=160000):
+    """Create deterministic event-read inputs without running a simulator."""
+    from pathlib import Path
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    if steps < 4:
+        raise ValueError('steps must be at least four')
+    header = ('$timescale 1ps $end\n$scope module top $end\n'
+              '$var wire 1 ! a $end\n$var wire 1 @ b $end\n'
+              '$upscope $end\n$enddefinitions $end\n')
+    for name in ('early', 'late', 'equal', 'sparse', 'short'):
+        stop = steps//2 if name == 'short' else steps
+        stride = max(1,steps//4) if name == 'sparse' else 1
+        with (directory/(name+'.vcd')).open('x') as f:
+            f.write(header)
+            for t in range(0,stop,stride):
+                a=t%2
+                b=1-a if name=='early' or name=='late' and t==steps-2 else a
+                f.write(f'#{t}\n{a}!\n{b}@\n')
+            f.write(f'#{stop}\n')
+
+
 @dataclass
 class Workload:
     name: str

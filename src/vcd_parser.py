@@ -5,6 +5,8 @@ The public API matches FSDBParser.
 """
 
 import re
+from array import array
+from contextlib import contextmanager
 from bisect import bisect_left, bisect_right
 from operator import itemgetter
 from itertools import islice
@@ -33,6 +35,9 @@ class VCDParser:
         self._path_to_sym: dict = {}        # full_path → symbol
         self._range_aliases: set[str] = set()  # exact ranges hidden from search when a base alias exists
         self._transitions: dict = {}        # symbol → [(time_ps, value)]
+        self._raw_ticks = {}  # Only sub-ps scales need an extra compact index.
+        self._end_time_fs = 0
+        self._event_order_valid = True
         self._end_time_ps     = 0
         self._top_modules: list = []
         self._producer_hint: str | None = None
@@ -45,6 +50,18 @@ class VCDParser:
         self._declaration_aliases = {}
 
     # ── Public API ────────────────────────────────────────────────
+
+    def _supports_event_pages(self):
+        return True
+
+    @contextmanager
+    def _event_pages(self, path, start=0, end=-1, *, max_events=1024, max_bytes=262144):
+        from .event_pages import VcdEventReader
+        reader = VcdEventReader(self, path, start, end, max_events, max_bytes)
+        try:
+            yield reader
+        finally:
+            reader.close()
 
     def get_value_at_time(self, signal_path: str, time_ps: int) -> dict:
         self._ensure_parsed()
@@ -303,6 +320,7 @@ class VCDParser:
         scope_stack   = []
         scope_ends = ()
         current_ps    = 0
+        ticks         = 0
         tokens        = content.split()
         ranged_declarations: dict[str, set[str]] = {}
         i = 0
@@ -347,6 +365,8 @@ class VCDParser:
                 self._declared_ranges[full] = (declared.left, declared.right)
                 self._scope_ends[full] = scope_ends
                 self._transitions.setdefault(symbol, [])
+                if self._timescale_fs % 1000:
+                    self._raw_ticks.setdefault(symbol, array('Q'))
                 i = end + 1
             elif tok.startswith("#"):
                 try:
@@ -354,9 +374,13 @@ class VCDParser:
                     # sub-ps transition time is reported as the next integer
                     # ps, so querying at a reported timestamp always lands
                     # at-or-after the transition. Exact for >=1ps timescales.
-                    ticks = int(tok[1:])
+                    next_ticks = int(tok[1:])
+                    if next_ticks < ticks:
+                        self._event_order_valid = False
+                    ticks = next_ticks
                     current_ps = (ticks * self._timescale_fs + 999) // 1000
                     self._end_time_ps = max(self._end_time_ps, current_ps)
+                    self._end_time_fs = max(self._end_time_fs, ticks * self._timescale_fs)
                 except ValueError:
                     pass
                 i += 1
@@ -366,12 +390,16 @@ class VCDParser:
                     sym = tokens[i + 1]
                     if sym in self._transitions:
                         self._transitions[sym].append((current_ps, val))
+                        if sym in self._raw_ticks:
+                            self._raw_ticks[sym].append(ticks)
                 i += 2
             elif len(tok) >= 2 and tok[0] in "01xXzZ":
                 val = tok[0]
                 sym = tok[1:]
                 if sym in self._transitions:
                     self._transitions[sym].append((current_ps, val))
+                    if sym in self._raw_ticks:
+                        self._raw_ticks[sym].append(ticks)
                 i += 1
             else:
                 i += 1

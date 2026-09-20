@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import wraps, cached_property
+from contextlib import contextmanager
 import hashlib
 import json
 import re
@@ -99,6 +100,40 @@ class SelectionParser:
 
     def __getattr__(self, name):
         return getattr(self.parser, name)
+
+    @property
+    def _event_owner(self):
+        return self.parser
+
+    def _event_source_path(self, path):
+        p = self.projections.get(path)
+        return p.path if p else path
+
+    @contextmanager
+    def _event_pages(self, path, start=0, end=-1, **limits):
+        from dataclasses import replace
+        from .event_pages import EventPage
+        p = self.projections.get(path)
+        if p:
+            self._validate(p)
+        with self.parser._event_pages(p.path if p else path, start, end, **limits) as reader:
+            if not p:
+                yield reader
+                return
+            adapter = self
+            class ProjectedReader:
+                width = p.selection.width
+                end_fs, mode, native = reader.end_fs, reader.mode, reader.native
+                def read_page(self):
+                    adapter._validate(p)
+                    page = reader.read_page()
+                    def project(event):
+                        value = p.value(event.value)
+                        return replace(event, value=value['bin'] if value else None)
+                    return EventPage(tuple(project(e) for e in page.events),
+                        project(page.predecessor) if page.predecessor else None,
+                        page.next_time, page.complete, page.truncated, page.output_bytes)
+            yield ProjectedReader()
 
     def bind(self, spec):
         if spec is None or isinstance(spec, str):

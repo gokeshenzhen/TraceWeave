@@ -6259,6 +6259,9 @@ async def list_tools():
                 "two waveforms (passing run vs failing run) or within one waveform "
                 "between two signals (expected vs actual). Auto-registers a cursor at "
                 "the divergence time so downstream calls can reference it by name. "
+                "Reports actual event-page capability and read volume in reading. "
+                "When present, first_divergence_time_fs is exact; the integer-ps cursor "
+                "rounds up and may observe a later value. "
                 "Reads existing waveforms only — does NOT rerun simulation."
             ),
             inputSchema={
@@ -6316,6 +6319,8 @@ async def list_tools():
                 "across different designs. Reports evidence, candidates and honest frontiers; "
                 "does not claim a unique root cause or rerun simulation. Clock mode requires "
                 "aligned clock_a/clock_b edges. History never extends before start_time_ps."
+                " Observations are reused only within this request and graph artifact; "
+                "a sub-ps event difference remains a sampling frontier for dynamic tracing."
             ),
             inputSchema=schemas.TraceDivergenceInput.model_json_schema(),
         ),
