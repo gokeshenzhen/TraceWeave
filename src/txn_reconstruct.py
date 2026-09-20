@@ -38,6 +38,7 @@ from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancell
 from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _hs_repr, _hs_truth, _resolve_signal_path
+from .waveform_selection import selection_inputs
 
 DEFAULT_MAX_TRANSACTIONS = 256
 _MAX_UNMATCHED_SHOWN = 32
@@ -46,6 +47,9 @@ _MAX_UNMATCHED_SHOWN = 32
 _FIFO_KEY = 0
 
 
+@selection_inputs("clock", "req_valid", "req_ready", "req_id", "cmp_valid", "cmp_ready", "cmp_id",
+                  "req_fields", "req_len", "cmp_last", "cmp_fields", "data_valid",
+                  "data_ready", "data_last", "data_fields", "reset")
 def reconstruct_transactions(
     *,
     get_parser: Callable[[str], Any],
@@ -77,6 +81,7 @@ def reconstruct_transactions(
     cursor_store: CursorStore | None = None,
     cursor_name: str | None = None,
     cursor_note: str | None = None,
+    _sampled: dict | None = None,
 ) -> dict[str, Any]:
     parser = get_parser(wave_path)
     req_fields = list(req_fields or [])
@@ -161,7 +166,7 @@ def reconstruct_transactions(
         set(resolved.values()) | set(keep_req_fields)
         | set(keep_cmp_fields) | set(keep_data_fields)
     )
-    sampled = sample_signals_on_edges(
+    sampled = _sampled if _sampled is not None else sample_signals_on_edges(
         parser, clock_r, all_signals, start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
     signal_errors = {k: str(v) for k, v in sampled.get("signal_errors", {}).items()}
@@ -232,6 +237,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
     cmp_count = 0
     reorder = 0
     reset_clears = 0
+    unknown_history_clears = 0
     orphan_data_beats = 0
     beat_count_mismatch = 0
     per_id_out: dict[int, int] = {}
@@ -264,7 +270,10 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
         if rst is not None:
             if _hs_truth(sig.get(rst), active_high=not cfg.reset_active_low) is True:
                 if pending_order or data_buffer:
-                    reset_clears += 1
+                    if s.get("_uncertain_boundary"):
+                        unknown_history_clears += 1
+                    else:
+                        reset_clears += 1
                 pending.clear()
                 pending_order.clear()
                 data_buffer.clear()
@@ -391,6 +400,7 @@ def _walk(result, samples, cfg: _WalkCfg) -> dict[str, Any]:
         "reorder_count": reorder,
         "unknown_id_beats": unknown_id_beats,
         "reset_clears": reset_clears,
+        "unknown_history_clears": unknown_history_clears,
         "orphan_data_beats": orphan_data_beats,
         "beat_count_mismatch_count": beat_count_mismatch,
     })

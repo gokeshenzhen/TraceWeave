@@ -130,6 +130,9 @@ from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.handshake_sweep import sweep_handshake_anomalies
 from src.window_verify import verify_window
 from src.txn_reconstruct import reconstruct_transactions
+from src.tlul import inspect_tlul
+from src.waveform_selection import prepare_selections, attach_selections
+from src.packed_layout import packed_field_selections
 from src.formal_path_discovery import discover_formal_paths
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
@@ -5053,6 +5056,66 @@ def _integer_or_string_schema() -> dict:
     return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
 
 
+def _signal_selection_schema() -> dict:
+    return {"anyOf": [{"type": "string"}, schemas.WaveformSelection.model_json_schema()]}
+
+
+async def _resolve_packed_fields(args):
+    """Semantic work stays outside the wave lock; dump validation stays inside."""
+    def blocked(reason):
+        return schemas.PackedFieldsResult(status="mapping_required", reasons=[reason])
+    fields = args["fields"]
+    if not isinstance(fields, list) or not 1 <= len(fields) <= 128 or not all(isinstance(f, str) and f for f in fields):
+        raise ValueError("fields must contain 1..128 names")
+    simulator = _resolve_session_simulator(args)
+    hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
+    if hierarchy is None:
+        return blocked("current_hierarchy_required")
+    config = get_source_graph_execution_config()
+    if not config.enabled or not config.valid:
+        return blocked("semantic_runtime_unavailable")
+    # Use the established identity/scope adapter, without an NPI driver query
+    # or a guessed layout from names, widths, or port-binding-only artifacts.
+    from src.source_graph_adapter import build_source_graph_plan as exact_plan
+    def plan_now():
+        return exact_plan(compile_log=args["compile_log"], compile_result=hierarchy["compile_result"],
+                          hierarchy_result=hierarchy, hierarchy_snapshot_sha256=snapshot,
+                          operation=QueryOperation.DRIVER, signal_path=args["source_signal"],
+                          top_hint=args.get("top_hint"), max_hops=0,
+                          frontend_version=config.frontend_version,
+                          runtime_plusarg_allowlist=config.runtime_plusarg_allowlist)
+    plan = await _run_in_cancellable_thread(plan_now)
+    if plan.status is AdapterStatus.BLOCKED:
+        return blocked(plan.receipt.blocker.code)
+    if not compute_source_graph_build_key(plan.request).cross_request_reusable:
+        return blocked("compile_identity_incomplete")
+    outcome = await get_source_graph_runtime(config).prepare(plan.request, timeout_seconds=config.timeout_sec)
+    if outcome.status is PrepareStatus.CANCELLED:
+        raise asyncio.CancelledError
+    if outcome.status is not PrepareStatus.READY:
+        return blocked("semantic_" + outcome.status.value)
+    # Revalidate current compile bytes after the worker/cache lookup as well.
+    current = await _run_in_cancellable_thread(plan_now)
+    if current.request != plan.request:
+        return blocked("compile_identity_changed")
+    try:
+        result = await _run_in_cancellable_thread(lambda: packed_field_selections(
+            outcome.entry, args["source_signal"], args["signal_path"], fields))
+    except (ValueError, KeyError) as exc:
+        return blocked(str(exc))
+    def validate_dump():
+        parser = _get_parser(args["wave_path"])
+        declaration = parser.get_signal_declaration(args["signal_path"])
+        if declaration["declared_range"] != result["evidence"]["declared_range"]:
+            raise ValueError("dump_and_type_range_mismatch")
+        prepare_selections(parser, result["fields"])
+    try:
+        await _run_in_wave_thread(args["wave_path"], validate_dump)
+    except (KeyError, ValueError) as exc:
+        return blocked(str(exc))
+    return schemas.PackedFieldsResult.model_validate(result)
+
+
 def _bounded_bootstrap_input_properties() -> dict:
     return {
         "supplementary_compile_logs": {
@@ -6888,6 +6951,60 @@ async def list_tools():
         # / schemas.py / tests so it can be re-registered here in one block if a
         # real use-case appears.
     ]
+    # Shared selection input contract; legacy string schemas remain a branch.
+    selectable = {
+        "get_signal_at_time": ("signal_path",),
+        "get_signal_transitions": ("signal_path",),
+        "get_signals_around_time": ("signal_paths",),
+        "get_signals_by_cycle": ("clock_path", "signal_paths"),
+        "inspect_handshake": ("clock", "valid", "ready", "valid_htrans", "payload", "hwrite", "write_data"),
+        "reconstruct_transactions": ("clock", "req_valid", "req_ready", "req_id", "req_fields", "req_len",
+                                     "cmp_valid", "cmp_ready", "cmp_id", "cmp_last", "cmp_fields",
+                                     "data_valid", "data_ready", "data_last", "data_fields", "reset"),
+    }
+    for tool in _tools:
+        for name in selectable.get(tool.name, ()):
+            prop = tool.inputSchema["properties"][name]
+            if prop.get("type") == "array":
+                prop["items"] = _signal_selection_schema()
+            else:
+                prop.pop("type", None)
+                prop.update(_signal_selection_schema())
+            prop["description"] = prop.get("description", "") + (
+                " Accepts a string or {path,lsb,width}/{path,bits}. Structured path must be an exact "
+                "dump declaration; lsb is a declared index and width extends toward its left bound. "
+                "bits are ordered MSB first. Results identify projections in selections.")
+    _tools.extend([
+        Tool(name="inspect_tlul", description=(
+            "Inspect explicitly mapped TL-UL A/D fields with the existing handshake and transaction "
+            "engines. Missing mappings return mapping_required; packed widths are never guessed. "
+            "Reports accepted fields, stalls, source pairing and latency, reset/unknown history, "
+            "carry-in and tail boundaries. Read checks and gaps; no integrity or full compliance claim."),
+            inputSchema={"type": "object", "properties": {
+                "wave_path": {"type": "string"}, "clock": {"type": "string"},
+                "fields": {"type": "object", "additionalProperties": False,
+                           "properties": {n: _signal_selection_schema() for n in schemas.TlulFields.model_fields}},
+                "reset": _signal_selection_schema(), "reset_active_low": {"type": "boolean", "default": True},
+                "edge": {"type": "string", "enum": ["posedge", "negedge"]},
+                "start_time_ps": _integer_or_string_schema(), "end_time_ps": _integer_or_string_schema(),
+                "max_cycles": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 65536},
+                "max_transactions": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 256},
+                "max_wait_cycles": {"type": "integer", "minimum": 0, "default": 16},
+            }, "required": ["wave_path", "clock"]}),
+        Tool(name="resolve_packed_fields", description=(
+            "Resolve requested named packed members from the current content-anchored Source Graph "
+            "artifact and an exact dump declaration. Requires current hierarchy and complete semantic "
+            "type evidence; may run the bounded license-free worker. Returns mapping_required when "
+            "identity, active instance specialization, type or range cannot be proved. Returned explicit "
+            "selections are a compile snapshot: re-resolve after input changes. No waveform/source version inferred."),
+            inputSchema={"type": "object", "properties": {
+                "wave_path": {"type": "string"}, "compile_log": {"type": "string"},
+                "simulator": {"type": "string"}, "top_hint": {"type": "string"},
+                "signal_path": {"type": "string", "description": "Exact dump declaration path."},
+                "source_signal": {"type": "string", "description": "Exact whole aggregate in the compiled hierarchy."},
+                "fields": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 128},
+            }, "required": ["wave_path", "compile_log", "signal_path", "source_signal", "fields"]}),
+    ])
     # A/B harness toggle: hide the WHOLE handshake feature (suggestion and
     # inspection tools) from list_tools so a cold
     # "baseline" session cannot see or be hinted by it. Enabled by either
@@ -6899,6 +7016,7 @@ async def list_tools():
         "/tmp/tw_ab_hide_handshake"
     ):
         hidden = {
+            "inspect_tlul",
             "inspect_handshake",
             "suggest_handshakes",
             "suggest_protocol_bundles",
@@ -7127,7 +7245,8 @@ async def _dispatch(name: str, args: dict):
 
         def _work():
             parser = _get_parser(args["wave_path"])
-            raw_path = args["signal_path"]
+            parser, selected = prepare_selections(parser, {"signal_path": args["signal_path"]})
+            raw_path = selected["signal_path"]
             resolved_path = _resolve_signal_path(parser, raw_path)
             try:
                 result = parser.get_value_at_time(
@@ -7142,15 +7261,16 @@ async def _dispatch(name: str, args: dict):
                 raise
             if resolved_path != raw_path:
                 result["resolved_from"] = raw_path
-            return schemas.SignalAtTimeResult.model_validate(result)
+            return schemas.SignalAtTimeResult.model_validate(attach_selections(result, parser))
 
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signal_transitions":
 
         def _work():
-            result = _get_parser(args["wave_path"]).get_transitions(
-                args["signal_path"],
+            parser, selected = prepare_selections(_get_parser(args["wave_path"]), {"signal_path": args["signal_path"]})
+            result = parser.get_transitions(
+                selected["signal_path"],
                 _resolve_time(args.get("start_time_ps", 0)),
                 _resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
             )
@@ -7158,7 +7278,7 @@ async def _dispatch(name: str, args: dict):
             # .get_transitions() still see the full list. Telemetry showed a
             # single uncapped call returning 8.9MB into the model context.
             max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
-            return _prepare_signal_transitions_result(result, max_transitions)
+            return _prepare_signal_transitions_result(attach_selections(result, parser), max_transitions)
 
         return await _run_in_wave_thread(args["wave_path"], _work)
 
@@ -7173,7 +7293,8 @@ async def _dispatch(name: str, args: dict):
                 raise ValueError(
                     f"unknown return_mode {return_mode!r}; expected 'full' or 'values_only'"
                 )
-            raw_paths = args.get("signal_paths") or []
+            parser, selected = prepare_selections(parser, {"signal_paths": args.get("signal_paths") or []})
+            raw_paths = selected["signal_paths"]
             signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
             _validate_signals_around_time_args(
                 parser, center_ps, window_ps, signal_paths
@@ -7202,7 +7323,7 @@ async def _dispatch(name: str, args: dict):
                     if hits:
                         suggestions[raw_path] = hits
             result["signal_suggestions"] = suggestions
-            return schemas.SignalsAroundTimeResult.model_validate(result)
+            return schemas.SignalsAroundTimeResult.model_validate(attach_selections(result, parser))
 
         return await _run_in_wave_thread(args["wave_path"], _work)
 
@@ -7233,14 +7354,15 @@ async def _dispatch(name: str, args: dict):
             ):
                 raise ValueError("end_time_ps must be >= start_time_ps")
             parser = _get_parser(args["wave_path"])
-            raw_paths = args["signal_paths"]
+            parser, selected = prepare_selections(parser, {"signal_paths": args["signal_paths"], "clock_path": args["clock_path"]})
+            raw_paths = selected["signal_paths"]
             signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
             if end_time_ps is not None:
                 # Count derived from the time window; the function applies the cap via
                 # max_cycles since the count is unknown until clock edges resolve.
                 result = get_signals_by_cycle(
                     parser=parser,
-                    clock_path=args["clock_path"],
+                    clock_path=selected["clock_path"],
                     signal_paths=signal_paths,
                     edge=args.get("edge", "posedge"),
                     start_cycle=args.get("start_cycle", 0),
@@ -7254,7 +7376,7 @@ async def _dispatch(name: str, args: dict):
                 effective_num_cycles = min(requested_num_cycles, MAX_CYCLES_PER_QUERY)
                 result = get_signals_by_cycle(
                     parser=parser,
-                    clock_path=args["clock_path"],
+                    clock_path=selected["clock_path"],
                     signal_paths=signal_paths,
                     edge=args.get("edge", "posedge"),
                     start_cycle=args.get("start_cycle", 0),
@@ -7271,7 +7393,7 @@ async def _dispatch(name: str, args: dict):
                 for hits in [_suggest_signal_paths(parser, path)]
                 if hits
             }
-            return schemas.GetSignalsByCycleResult.model_validate(result)
+            return schemas.GetSignalsByCycleResult.model_validate(attach_selections(result, parser))
 
         return await _run_in_wave_thread(args["wave_path"], _work)
 
@@ -8080,6 +8202,22 @@ async def _dispatch(name: str, args: dict):
             name, args, validated
         )
         return validated
+
+    elif name == "resolve_packed_fields":
+        return await _resolve_packed_fields(args)
+
+    elif name == "inspect_tlul":
+        def _work():
+            return inspect_tlul(
+                get_parser=_get_parser, wave_path=args["wave_path"], clock=args["clock"],
+                fields=args.get("fields"), reset=args.get("reset"),
+                reset_active_low=args.get("reset_active_low", True), edge=args.get("edge", "posedge"),
+                start_ps=_resolve_time(args.get("start_time_ps", 0)),
+                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                max_cycles=args.get("max_cycles", 65536), max_transactions=args.get("max_transactions", 256),
+                max_wait_cycles=args.get("max_wait_cycles", 16))
+        result = await _run_in_wave_thread(args["wave_path"], _work)
+        return schemas.TlulInspectResult.model_validate(result)
 
     elif name == "inspect_handshake":
 

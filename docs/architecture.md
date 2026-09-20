@@ -47,6 +47,7 @@ Waveform backends
   src/fsdb_signal_index.py
   src/cycle_query.py
   src/waveform_batch.py           # FSDB+VCD batch reader (time-window)
+  src/waveform_selection.py       # request-local declared-coordinate projections
   src/waveform_hints.py           # producer and exact tool pseudo-signal hints
   src/cancellation.py             # cooperative cancel checkpoints for worker-thread scans
   src/operation_metrics.py        # privacy-safe lock/discovery/cancel timings
@@ -63,6 +64,8 @@ Auto-debug primitives (cursors + verification)
   src/window_verify.py            # verify_window: temporal predicate over a clock window
   src/handshake_suggest.py        # suggest_handshakes / suggest_protocol_bundles
   src/handshake_sweep.py          # sweep_handshakes: whole-design handshake anomaly sweep
+  src/tlul.py                     # explicit A/D mapping over handshake/transaction engines
+  src/packed_layout.py            # packed-member export from trusted semantic artifacts
   src/txn_reconstruct.py          # reconstruct_transactions: id-correlated transaction layer
 
 Native integration
@@ -1670,3 +1673,91 @@ cache is not on a shared filesystem. `TRACEWEAVE_NPI_LSF_TIMEOUT` controls
 short connectivity jobs; `TRACEWEAVE_NPI_LSF_KDB_TIMEOUT` separately bounds
 queue wait plus both KDB phases (default 1260 seconds). Scheduler options are
 JSON argv, not shell text, and are limited to scheduler option/value pairs.
+
+## Packed waveform selections and TL-UL
+
+`WaveformSelection` is an additive input to point, transition, around-time,
+cycle, handshake, and transaction queries. The original string branch retains
+its existing behavior. Structured inputs use one exact dump declaration and
+either `{path, lsb, width}` or `{path, bits}`. A trailing dump range belongs to
+the declaration; it is never interpreted as the requested subfield. `lsb` is
+a declared index and width extends toward the left bound. `bits` is an explicit
+MSB-first ordering of distinct declared indices. Nonzero and negative bounds,
+ascending declarations, existing unambiguous VCD aliases, and separately dumped
+bits/slices retain their identities. No suffix search or fragment concatenation
+proves an otherwise absent declaration.
+
+`SelectionParser` reuses `BitRange` / `SignalSelection` from connectivity IR.
+It checks exact metadata and the parser's file identity before reading, projects
+binary four-state strings before any integer conversion, and returns `bin` plus
+numeric `hex`/`dec` only when every selected bit is known. Result keys ending in
+`@bits(...)` are display keys, not reusable signal paths; the additive
+`selections` receipt carries the declaration, range and ordered bits. Driver
+followups retain real source bit paths and an explicit `signal_selection`.
+Projected transitions coalesce changes in unrelated bits. A pre-window
+`predecessor_kind="declaration_anchor"` anchors the backing declaration's last
+change, not a proven historical change of the selected field. Around-time
+history likewise contains projected backing events, which may repeat a value.
+
+Limits are 128 distinct selections, 4,096 bits per field, 65,536 total selected
+bits and backing-declaration width, 1,048,576 projected sample cells, 16 Mi bits
+of projected work, and 262,144 projected transition rows per field. Exceeding
+projection budgets requests a narrower window instead of silently dropping
+fields. Edge sampling reads each backing declaration once and projects its
+sampled column; VCD storage aliases share that read even with different declared
+coordinates. Only request-local data are retained. A truncated transition
+prefix becomes unknown from its final, possibly incomplete time group onward.
+Cycle results expose `transition_data_truncated` and affected signals; structured
+cycle queries reject an incomplete full-clock read. Window inspections can
+instead return partial evidence over a narrower interval.
+
+`resolve_packed_fields` exports named, including nested, members from the
+existing Source Graph runtime. It requires a reusable content-anchored build
+key, a current compile snapshot, active elaborated instance specialization,
+packed-member type facts, and matching dump/source declaration coordinates.
+Only explicitly projected instances can supply layouts; ancestor port-binding
+fragments cannot. A scoped hierarchy gap alone is acceptable for an explicitly
+projected instance with complete type facts; other semantic gaps and blocking
+diagnostics require an explicit mapping. Compile identity is checked again
+after worker preparation. Missing hierarchy, an unresolved generate edge,
+inactive branches, stale source inputs, budget limits, or missing type evidence
+return `mapping_required`, never a guessed bus profile. Exported selections are
+a snapshot, not a live type handle or proof that a historical waveform was
+generated from today's source. Callers establish that association and re-resolve
+after changes. Semantic preparation runs outside the wave lock; exact dump
+validation uses the normal wave worker and lock.
+
+`inspect_tlul` requires six explicitly mapped controls/IDs:
+`a_valid`, `a_ready`, `a_source`, `d_valid`, `d_ready`, `d_source`. Optional
+opcode/param/size/address/mask/data/user/sink/error fields use the same selection
+contract. It samples the union once, then passes those samples to the existing
+`inspect_handshake` and `reconstruct_transactions` engines. A and D payloads
+belong to their respective valid producers; ready is the opposite side.
+The checks list names acceptance, stall, valid hold, payload hold **during
+continuing stall**, source-ID pairing within known history, matched latency,
+mapped accepted-field capture and, if supplied, sampled reset boundaries.
+It does not add payload-hold checking on the accepting edge, opcode legality,
+request/response opcode or size consistency, source uniqueness, mask/alignment,
+or integrity-code validation. Unknown payloads are retained as evidence rather
+than automatically called illegal data. Missing optional fields are separately
+listed in `unmapped_fields`; `complete` covers only the named implemented checks.
+
+Reset and unknown-reset cycles break handshake history. Reset, uncertain
+acceptance controls, and accepted unknown IDs break transaction correlation;
+the latter conservatively discard both channels' correlation events on that
+edge, while top-level known acceptance counts remain separate. `correlation_breaks`
+counts uncertain boundaries; `unknown_history_clears` counts boundaries that
+actually discarded pending work, separately from observed `reset_clears`.
+Same-edge request/response pairs may have zero latency. Without an initial
+observed reset, carry-in remains unknown even when all visible endpoints match.
+Unmatched responses may predate the window; tail pending requests do not prove
+a hang. The 65,536-cycle analysis cap, unknown history and truncated transitions
+produce partial coverage, with explicit tail labels. `max_transactions` limits
+display, not the checked edge count; all state is bounded by the cycle cap.
+
+These paths keep FSDB's process-global lock, cancellation checkpoints, native
+time conversion, strict windows and predecessor semantics. No new native ABI,
+cross-request waveform result cache or licensed frontend is introduced. The
+existing discovery scope/page budgets, partial coverage, clock ambiguity,
+payload ownership and unconfirmed req/ack exclusions are unchanged. A clean
+mapped interface does not override partial or flagged global sweep evidence.

@@ -330,7 +330,7 @@ Usually, you describe the debugging goal and let the assistant select the tools.
       <td>Verify temporal conditions within a waveform window and return concrete evidence</td>
     </tr>
     <tr>
-      <td rowspan="5">Protocols and transactions</td>
+      <td rowspan="7">Protocols and transactions</td>
       <td><code>suggest_handshakes</code></td>
       <td>Discover valid/ready interfaces and signal bundles for inspection</td>
     </tr>
@@ -349,6 +349,14 @@ Usually, you describe the debugging goal and let the assistant select the tools.
     <tr>
       <td><code>reconstruct_transactions</code></td>
       <td>Reconstruct requests and responses to inspect latency, outstanding requests, and ordering</td>
+    </tr>
+    <tr>
+      <td><code>resolve_packed_fields</code></td>
+      <td>Export explicit field selections from current compiled packed types, or request a mapping when evidence is missing</td>
+    </tr>
+    <tr>
+      <td><code>inspect_tlul</code></td>
+      <td>Inspect explicitly mapped A/D fields, acceptance, stalls, source pairing, and window boundaries</td>
     </tr>
     <tr>
       <td rowspan="3">Time cursors</td>
@@ -370,6 +378,39 @@ Usually, you describe the debugging goal and let the assistant select the tools.
     </tr>
   </tbody>
 </table>
+
+## Packed fields and TL-UL
+
+Point, transition, around-time, cycle, handshake, and transaction queries accept
+existing signal strings or a structured selection such as
+`{"path":"tb.packet[15:8]","lsb":8,"width":4}`. The path names the **dump
+declaration**; `lsb` is a declared index, not an offset. Width extends toward
+the declaration's left bound. For `[0:7]`, `lsb=7,width=4` selects `[4:7]`.
+Alternatively, `bits` lists declared indices in output MSB-first order.
+X/Z remain fixed-width binary values; their numeric forms are null.
+The `selections` receipt relates result keys to declarations and bit lists.
+Separate dumped fragments are never combined into an invented vector.
+
+Use `resolve_packed_fields` with an exact `source_signal`, dump `signal_path`,
+`compile_log`, and requested member names (including nested names). It requires
+a current hierarchy and content-anchored semantic type evidence for the active
+instance and parameter specialization. Missing or stale evidence returns
+`mapping_required`. The returned selections describe the current compile snapshot;
+the caller must establish its association with the waveform and re-resolve after
+source changes. An explicit mapping can be used without the optional frontend.
+
+`inspect_tlul` takes `wave_path`, `clock`, and a `fields` mapping. Required keys are
+`a_valid`, `a_ready`, `a_source`, `d_valid`, `d_ready`, and `d_source`; each value
+is a signal string or selection. Add opcode, size, address, mask, data, user,
+sink, param, and error fields as available, plus `reset` and a time window.
+Read `checks`, `gaps`, and `unmapped_fields`: acceptance and source pairing do
+not certify opcode legality, response size agreement, integrity coding, or the
+whole protocol. Unknown history breaks pairing; pending work at the window end
+and responses with no observed request are boundary facts. A window without an
+initial observed reset retains unknown carry-in. Existing discovery budgets and
+role/clock ambiguity rules still apply; this tool does not expand global discovery.
+See [architecture](docs/architecture.md#packed-waveform-selections-and-tl-ul) for
+limits, read reuse, and the precise coverage contract.
 
 ## FAQ
 

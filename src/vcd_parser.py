@@ -41,6 +41,8 @@ class VCDParser:
         self._scope_index = None
         self._scope_epoch = object()
         self._parsed_identity = None
+        self._declared_ranges = {}
+        self._declaration_aliases = {}
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -245,6 +247,21 @@ class VCDParser:
         sym = self._resolve(signal_path)
         return int(self._signals[sym]["width"])
 
+    def get_signal_declaration(self, signal_path: str) -> dict:
+        """Exact path/alias metadata for projection, without suffix guessing."""
+        check_cancelled()
+        self._ensure_parsed()
+        if file_identity(self.file_path) != self._parsed_identity:
+            raise ScopeIdentityChanged("VCD changed after parsing; obtain a new parser")
+        if signal_path not in self._path_to_sym:
+            raise KeyError(f"Exact dump declaration not found: {signal_path}")
+        path = self._declaration_aliases.get(signal_path, signal_path)
+        symbol = self._path_to_sym[path]
+        left, right = self._declared_ranges[path]
+        return {"path": path, "width": self._signals[symbol]["width"],
+                "declared_range": {"left": left, "right": right},
+                "identity": self._parsed_identity, "storage_key": symbol}
+
     # ── Internal ────────────────────────────────────────────────────
 
     def _ensure_parsed(self):
@@ -323,6 +340,11 @@ class VCDParser:
                     ranged_declarations.setdefault(base, set()).add(full)
                 self._signals[symbol]     = {"path": full, "width": width, "var_type": var_type}
                 self._path_to_sym[full]   = symbol
+                from .waveform_selection import declaration_range
+                # Parse separately supplied range syntax independently of an
+                # escaped identifier. Preserve attached bit/slice declarations.
+                declared = declaration_range("v" + selection if selection else full, width)
+                self._declared_ranges[full] = (declared.left, declared.right)
                 self._scope_ends[full] = scope_ends
                 self._transitions.setdefault(symbol, [])
                 i = end + 1
@@ -364,6 +386,7 @@ class VCDParser:
                     self._path_to_sym[base] = self._path_to_sym[full]
                     self._scope_ends[base] = self._scope_ends[full]
                     self._range_aliases.add(full)
+                    self._declaration_aliases[base] = full
 
 
 # ── Utility ────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ from . import operation_metrics
 from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancelled
 from .cursor_store import CursorRef, CursorStore
 from .cycle_query import EdgeSamplingSession, sample_signals_on_edges
+from .waveform_selection import selection_inputs
 
 
 class _SignalColumnView:
@@ -668,6 +669,7 @@ DEFAULT_MAX_WAIT_CYCLES = 16
 DEFAULT_MAX_HANDSHAKE_FINDINGS = 20
 
 
+@selection_inputs("clock", "ready", "valid", "valid_htrans", "payload", "hwrite", "write_data")
 def inspect_handshake(
     *,
     get_parser: Callable[[str], Any],
@@ -694,6 +696,7 @@ def inspect_handshake(
     _sampling_session: EdgeSamplingSession | None = None,
     _resolution_cache: dict[str, str] | None = None,
     _compact_sampling: bool = False,
+    _sampled: dict | None = None,
 ) -> dict[str, Any]:
     """Classify a valid/ready handshake cycle-by-cycle and surface protocol
     facts an LLM cannot get from a transition dump or a scoreboard log.
@@ -806,7 +809,7 @@ def inspect_handshake(
     wdata_sig = resolve(write_data) if want_write_data_hold else None
     extra_signals = [s for s in (hwrite_sig, wdata_sig) if s]
 
-    sampled = sample_signals_on_edges(
+    sampled = _sampled if _sampled is not None else sample_signals_on_edges(
         parser, clock, [valid_signal, ready, *payload, *extra_signals],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
         sampling_session=_sampling_session,
@@ -1042,6 +1045,14 @@ def inspect_handshake(
         else:
             sig = samples[cycle_index]["signals"]
             sample_time_ps = samples[cycle_index]["time_ps"]
+        if cycle_index in sampled.get("inactive_cycles", {}):
+            # An adapter can provide an explicit reset/unknown-reset boundary.
+            # It breaks history without manufacturing a producer deassertion.
+            _close_stall(sample_time_ps)
+            wd_phase_open = False
+            wd_outstanding_write = None
+            x_while_valid_active.clear()
+            continue
         if use_htrans:
             v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
         else:

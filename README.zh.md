@@ -329,7 +329,7 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
       <td>在波形窗口中验证时序条件，返回具体证据</td>
     </tr>
     <tr>
-      <td rowspan="5">协议与事务</td>
+      <td rowspan="7">协议与事务</td>
       <td><code>suggest_handshakes</code></td>
       <td>发现 valid/ready 接口及检查所需的信号组合</td>
     </tr>
@@ -348,6 +348,14 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
     <tr>
       <td><code>reconstruct_transactions</code></td>
       <td>重建请求与响应事务，查看延迟、未完成请求和顺序</td>
+    </tr>
+    <tr>
+      <td><code>resolve_packed_fields</code></td>
+      <td>从当前编译类型导出字段选择；证据不足时要求显式映射</td>
+    </tr>
+    <tr>
+      <td><code>inspect_tlul</code></td>
+      <td>检查显式映射的 A/D 字段、接受事件、停滞、source 配对及窗口边界</td>
     </tr>
     <tr>
       <td rowspan="3">时间游标</td>
@@ -369,6 +377,31 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
     </tr>
   </tbody>
 </table>
+
+## 打包字段与 TL-UL
+
+点查询、跳变、时间邻域、逐拍采样、握手及事务工具兼容原 signal string，
+也接受 `{"path":"tb.packet[15:8]","lsb":8,"width":4}`。
+`path` 指向原始 **dump 声明**；`lsb` 是声明下标，`width` 向声明左边界展开。
+例如 `[0:7]` 的 `lsb=7,width=4` 选择 `[4:7]`。
+也可用 `bits` 按输出从高到低的顺序列出下标。X/Z 保留为定宽二进制，数值形式为空。
+返回的 `selections` 将结果键对应到真实声明和位列表；独立 dump 片段不会被拼成虚构总线。
+
+`resolve_packed_fields` 接受精确的源码 `source_signal`、dump `signal_path`、
+`compile_log` 和字段名列表（支持嵌套字段）。自动布局需要当前层次、内容身份、
+有效实例/参数特化及语义类型证据，缺失或过期时返回 `mapping_required`。
+导出的选择对应当前编译快照；调用方须确认它与历史波形的关联，源码变化后重新解析。
+无可选语义前端时仍可使用显式映射。
+
+`inspect_tlul` 的必需字段是 `a_valid/a_ready/a_source/d_valid/d_ready/d_source`，
+通过 `fields` 映射到信号字符串或位段选择，并提供 `wave_path` 和 `clock`。
+可继续映射 opcode、size、address、mask、data、user、sink、param、error，
+并指定 `reset` 和窗口。必须分别阅读 `checks`、`gaps` 和 `unmapped_fields`：
+接受事件与 source 配对不证明 opcode 合法性、响应 size 一致性、完整性编码或完整协议合规。
+未知控制/ID/复位会断开关联历史；窗口末尾 pending 和未找到窗口内请求的响应仅是边界事实。
+窗口开始未观察到复位时保留 carry-in 未知。原有发现预算、角色/时钟歧义和 req/ack
+语义边界仍有效，本工具不会自动扩大全设计发现范围。
+具体预算与复用/覆盖合同见[架构说明](docs/architecture.md#packed-waveform-selections-and-tl-ul)。
 
 ## 常见问题
 

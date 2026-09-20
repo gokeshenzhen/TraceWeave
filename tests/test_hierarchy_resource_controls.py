@@ -207,6 +207,18 @@ async def test_parallel_hierarchy_and_structural_scan_share_source_index(
         encoding="utf-8",
     )
     runtime = CompileSourceIndexRuntime()
+    # Identity capture can join the active index before the rule scan, adding
+    # a legitimate compile-log read. Count source reads independently instead
+    # of assuming that the aggregate contains only preloaded source files.
+    from src import compile_source_index
+    index_reads = []
+    real_read = compile_source_index.read_source_content
+
+    def measured_read(path):
+        index_reads.append(path)
+        return real_read(path)
+
+    monkeypatch.setattr(compile_source_index, "read_source_content", measured_read)
     monkeypatch.setattr(server, "_compile_source_index_runtime", runtime)
     monkeypatch.setattr(server, "apply_npi_source_overlay", lambda *_args: None)
     hierarchy_entered = threading.Event()
@@ -258,7 +270,9 @@ async def test_parallel_hierarchy_and_structural_scan_share_source_index(
     assert dispositions <= {"miss_build", "coalesced", "hit_active_session"}
     assert len(dispositions) == 2
     assert runtime.metrics_snapshot()["compile_source_runtime_build_count"] == 1
-    assert scan.scan_metrics["compile_source_index_physical_read_count"] == 1
+    assert index_reads.count(str(source)) == 1
+    assert set(index_reads) <= {str(source), str(compile_log)}
+    assert scan.scan_metrics["compile_source_index_physical_read_count"] == len(index_reads)
     assert runtime.metrics_snapshot()[
         "compile_source_runtime_active_session_count"
     ] == 0

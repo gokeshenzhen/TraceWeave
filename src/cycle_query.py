@@ -293,10 +293,12 @@ def get_signals_by_cycle(
     if not target_edges:
         return result
 
-    per_cycle_signals, signal_errors, _ = _sample_signals_at_edges(
+    per_cycle_signals, signal_errors, limited = _sample_signals_at_edges(
         parser, signal_paths, target_edges, sample_offset_ps
     )
     result["signal_errors"] = signal_errors
+    result["transition_data_truncated"] = bool(limited)
+    result["transition_signals_truncated"] = limited
 
     result["cycles"] = [
         {
@@ -320,6 +322,8 @@ def sample_signals_on_edges(
     sample_offset_ps: int = 1,
     sampling_session: EdgeSamplingSession | None = None,
     compact: bool = False,
+    max_edges: int | None = None,
+    safe_prefix_only: bool = False,
 ) -> dict[str, Any]:
     """Sample ``signal_paths`` on every ``clock_path`` edge inside a *time
     window* (as opposed to ``get_signals_by_cycle``, which slices by cycle
@@ -337,6 +341,9 @@ def sample_signals_on_edges(
         raise ValueError("sample_offset_ps must be >= 0")
 
     check_cancelled()
+    from .waveform_selection import SelectionParser
+    if isinstance(parser, SelectionParser):
+        safe_prefix_only = True
     if sampling_session is not None:
         clock_result, edge_times, sample_times, clock_period_ps = (
             sampling_session.clock_context(
@@ -368,6 +375,16 @@ def sample_signals_on_edges(
         sample_times = [edge_time + sample_offset_ps for edge_time in edge_times]
         clock_period_ps = _compute_clock_period_ps(edge_times)
 
+    if safe_prefix_only and clock_result.get("truncated"):
+        rows = clock_result.get("transitions", [])
+        safe_before = rows[-1]["time_ps"] if rows else -1
+        keep = bisect_left(sample_times, safe_before)
+        edge_times, sample_times = edge_times[:keep], sample_times[:keep]
+    sample_limit_reached = max_edges is not None and len(edge_times) > max_edges
+    if sample_limit_reached:
+        edge_times = edge_times[:max_edges]
+        sample_times = sample_times[:max_edges]
+
     if compact:
         signal_columns, signal_errors, signal_transition_truncations = (
             _sample_signal_columns_at_edges(
@@ -377,6 +394,7 @@ def sample_signals_on_edges(
                 sample_offset_ps,
                 sample_times=sample_times,
                 sampling_session=sampling_session,
+                safe_prefix_only=safe_prefix_only,
             )
         )
         per_edge_signals: list[dict[str, Any]] = []
@@ -389,6 +407,7 @@ def sample_signals_on_edges(
                 sample_offset_ps,
                 sample_times=sample_times,
                 sampling_session=sampling_session,
+                safe_prefix_only=safe_prefix_only,
             )
         )
         signal_columns = {}
@@ -423,6 +442,8 @@ def sample_signals_on_edges(
         # by inspect_handshake and remain unchanged.
         result["edge_times"] = edge_times
         result["signal_columns"] = signal_columns
+    if max_edges is not None:
+        result["sample_limit_reached"] = sample_limit_reached
     return result
 
 
@@ -434,6 +455,7 @@ def _sample_signal_columns_at_edges(
     *,
     sample_times: list[int] | None = None,
     sampling_session: EdgeSamplingSession | None = None,
+    safe_prefix_only: bool = False,
 ) -> tuple[dict[str, list[Any]], dict[str, str], list[str]]:
     """Compact sweep-only counterpart of :func:`_sample_signals_at_edges`."""
     columns: dict[str, list[Any]] = {}
@@ -441,6 +463,11 @@ def _sample_signal_columns_at_edges(
     transition_signals_truncated: list[str] = []
     if not target_edges:
         return columns, signal_errors, transition_signals_truncated
+
+    from .waveform_selection import SelectionParser
+    if isinstance(parser, SelectionParser):
+        return parser.sample_columns(signal_paths, target_edges, sample_offset_ps,
+                                     sample_times, sampling_session)
 
     range_start = target_edges[0]
     range_end = target_edges[-1] + sample_offset_ps + 1
@@ -467,6 +494,11 @@ def _sample_signal_columns_at_edges(
                 sample_times,
                 predecessor=transitions_result.get("predecessor"),
             )
+            if safe_prefix_only and transitions_result.get("truncated"):
+                rows = transitions_result.get("transitions", [])
+                safe_before = rows[-1]["time_ps"] if rows else -1
+                first_unknown = bisect_left(sample_times, safe_before)
+                columns[signal_path][first_unknown:] = [None] * (len(sample_times) - first_unknown)
         except KeyError as exc:
             signal_errors[signal_path] = str(exc)
     return columns, signal_errors, transition_signals_truncated
@@ -480,6 +512,7 @@ def _sample_signals_at_edges(
     *,
     sample_times: list[int] | None = None,
     sampling_session: EdgeSamplingSession | None = None,
+    safe_prefix_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """Sample each signal at ``edge + offset`` for the given edge times.
 
@@ -493,6 +526,19 @@ def _sample_signals_at_edges(
     transition_signals_truncated: list[str] = []
     if not target_edges:
         return per_edge_signals, signal_errors, transition_signals_truncated
+
+    from .waveform_selection import SelectionParser
+    if isinstance(parser, SelectionParser) or safe_prefix_only:
+        columns, errors, truncated = _sample_signal_columns_at_edges(
+            parser, signal_paths, target_edges, sample_offset_ps,
+            sample_times=sample_times, sampling_session=sampling_session,
+            safe_prefix_only=safe_prefix_only)
+        for path, values in columns.items():
+            for index, value in enumerate(values):
+                if not index % CANCEL_CHECK_STRIDE:
+                    check_cancelled()
+                per_edge_signals[index][path] = _normalize_signal_value(value)
+        return per_edge_signals, errors, truncated
 
     range_start = target_edges[0]
     range_end = target_edges[-1] + sample_offset_ps + 1
@@ -549,6 +595,9 @@ def _full_clock_edges(parser, clock_path, edge):
         return cached
     result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
     check_cancelled()
+    from .waveform_selection import SelectionParser
+    if isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
+        raise ValueError("incomplete clock transitions for selection; use a narrower time-window inspection")
     _validate_clock_width(parser, clock_path)
     edges = _extract_edge_times(result.get("transitions", []), edge)
     period = _compute_clock_period_ps(edges)

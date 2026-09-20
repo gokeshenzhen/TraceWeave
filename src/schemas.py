@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 import config as _config
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_serializer, model_validator
 
 
 class SchemaModel(BaseModel):
@@ -547,7 +547,58 @@ class SignalValue(SchemaModel):
     dec: int | None = None
 
 
+class WaveformSelection(SchemaModel):
+    """One exact dump declaration, with ordered declared bits or lsb + width."""
+    path: str = Field(min_length=1, max_length=16384)
+    bits: list[StrictInt] | None = Field(default=None, min_length=1, max_length=4096)
+    lsb: StrictInt | None = None
+    width: StrictInt | None = Field(default=None, ge=1, le=4096)
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if self.bits is not None:
+            if self.lsb is not None or self.width is not None:
+                raise ValueError("provide bits OR lsb + width")
+            if len(set(self.bits)) != len(self.bits):
+                raise ValueError("selection bits must be unique")
+        elif self.lsb is None or self.width is None:
+            raise ValueError("provide ordered bits or both lsb and width")
+        return self
+
+
+class WaveformSelectionReceipt(SchemaModel):
+    key: str
+    path: str
+    declared_range: dict[str, int]
+    bits: list[int]
+    width: int
+
+
+class TlulFields(SchemaModel):
+    a_valid: str | WaveformSelection | None = None
+    a_ready: str | WaveformSelection | None = None
+    a_source: str | WaveformSelection | None = None
+    a_opcode: str | WaveformSelection | None = None
+    a_param: str | WaveformSelection | None = None
+    a_size: str | WaveformSelection | None = None
+    a_address: str | WaveformSelection | None = None
+    a_mask: str | WaveformSelection | None = None
+    a_data: str | WaveformSelection | None = None
+    a_user: str | WaveformSelection | None = None
+    d_valid: str | WaveformSelection | None = None
+    d_ready: str | WaveformSelection | None = None
+    d_source: str | WaveformSelection | None = None
+    d_opcode: str | WaveformSelection | None = None
+    d_param: str | WaveformSelection | None = None
+    d_size: str | WaveformSelection | None = None
+    d_sink: str | WaveformSelection | None = None
+    d_data: str | WaveformSelection | None = None
+    d_user: str | WaveformSelection | None = None
+    d_error: str | WaveformSelection | None = None
+
+
 class SignalAtTimeResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     signal: str
     time_ps: int
     time_ns: float
@@ -558,6 +609,7 @@ class SignalAtTimeResult(SchemaModel):
 
 
 class SignalTransitionsResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     signal: str
     start_ps: int
     end_ps: int
@@ -569,12 +621,14 @@ class SignalTransitionsResult(SchemaModel):
     # remains a strict closed-window list while clock samplers can classify the
     # first in-window edge without rereading the waveform.
     predecessor: dict[str, Any] | None = None
+    predecessor_kind: Literal["declaration_anchor"] | None = None
     truncated: bool = False
     transition_count_is_lower_bound: bool = False
     hint: str | None = None
 
 
 class SignalsAroundTimeResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     center_time_ps: int
     center_time_ns: float
     window_ps: int
@@ -603,6 +657,9 @@ class CycleEntry(SchemaModel):
 
 
 class GetSignalsByCycleResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    transition_data_truncated: bool = False
+    transition_signals_truncated: list[str] = Field(default_factory=list)
     clock_path: str
     edge: Literal["posedge", "negedge"]
     sample_offset_ps: int = 1
@@ -1511,6 +1568,7 @@ class NextAction(SchemaModel):
     tool: str
     reason: str
     signal_path: str | None = None
+    signal_selection: WaveformSelection | None = None
 
 
 class HandshakeFinding(SchemaModel):
@@ -1580,6 +1638,7 @@ class HandshakeCoverage(SchemaModel):
 
 
 class HandshakeInspectResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
     valid: str
@@ -1900,6 +1959,7 @@ class TxnEndpoint(SchemaModel):
 
 
 class TxnReconstructResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
     edge: str = "posedge"
@@ -1916,6 +1976,7 @@ class TxnReconstructResult(SchemaModel):
     reorder_count: int = 0
     unknown_id_beats: int = 0
     reset_clears: int = 0
+    unknown_history_clears: int = 0
     orphan_data_beats: int = 0
     # transactions whose observed beat_count != AxLEN+1 (needs req_len). 0 when
     # req_len was not supplied — a fact, not a clean-burst verdict in that case.
@@ -1933,6 +1994,44 @@ class TxnReconstructResult(SchemaModel):
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)
     signal_errors: dict[str, str] = Field(default_factory=dict)
+
+
+class TlulInspectResult(SchemaModel):
+    wave_path: str
+    clock: str
+    start_ps: int
+    end_ps: int
+    coverage_status: Literal["zero_coverage", "partial", "complete"]
+    mapping_status: Literal["explicit", "mapping_required"]
+    required_fields: list[str] = Field(default_factory=list)
+    unmapped_fields: list[str] = Field(default_factory=list)
+    checks: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    channels: dict[str, HandshakeInspectResult] = Field(default_factory=dict)
+    transactions: TxnReconstructResult | None = None
+    field_facts: dict[str, dict[str, int]] = Field(default_factory=dict)
+    sample_count: int = 0
+    sample_limit_reached: bool = False
+    transition_data_truncated: bool = False
+    unknown_fields: dict[str, int] = Field(default_factory=dict)
+    unknown_control_cycles: int = 0
+    unknown_reset_cycles: int = 0
+    unknown_id_beats: int = 0
+    reset_cycles: int = 0
+    correlation_breaks: int = 0
+    accepted_a_count: int = 0
+    accepted_d_count: int = 0
+    carry_in: str
+    tail: str
+    warnings: list[str] = Field(default_factory=list)
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+
+
+class PackedFieldsResult(SchemaModel):
+    status: Literal["resolved", "mapping_required"]
+    fields: dict[str, WaveformSelection] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class DistValueCount(SchemaModel):

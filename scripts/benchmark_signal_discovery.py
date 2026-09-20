@@ -32,7 +32,10 @@ def main():
     cli.add_argument("--wave", type=Path, required=True)
     cli.add_argument("--wrapper", type=Path)
     cli.add_argument("--scope")
-    cli.add_argument("--mode", choices=("discovery", "sweep"), required=True)
+    cli.add_argument("--mode", choices=("discovery", "sweep", "tlul"), required=True)
+    cli.add_argument("--fields-json", type=Path, help="Explicit A/D field mapping for tlul mode")
+    cli.add_argument("--clock")
+    cli.add_argument("--reset")
     cli.add_argument("--start", type=int, default=0)
     cli.add_argument("--end", type=int, default=-1)
     cli.add_argument("--max-interfaces", type=int, default=64)
@@ -54,13 +57,13 @@ def main():
     class Metered:
         def __getattr__(self, name):
             target = getattr(parser, name)
-            if name not in ("search_signals", "enumerate_scope_page"):
+            if name not in ("search_signals", "enumerate_scope_page", "get_transitions"):
                 return target
             def measured(*a, **kw):
                 begin = time.perf_counter()
                 result = target(*a, **kw)
                 calls.append({"kind": name, "elapsed_ms": (time.perf_counter() - begin) * 1000,
-                              "returned": len(result.get("results", [])),
+                              "returned": len(result.get("results", result.get("transitions", []))),
                               "visited": result.get("visited"), "bytes": result.get("bytes_returned")})
                 return result
             return measured
@@ -77,6 +80,14 @@ def main():
                 common = dict(get_parser=lambda _: metered, wave_path=str(args.wave), scope=args.scope)
                 if args.mode == "discovery":
                     facts = suggest_handshakes(**common, max_candidates=args.max_interfaces)
+                elif args.mode == "tlul":
+                    from src.tlul import inspect_tlul
+                    if not args.fields_json or not args.clock:
+                        cli.error("tlul requires --fields-json and --clock")
+                    facts = inspect_tlul(get_parser=lambda _: metered, wave_path=str(args.wave),
+                                         clock=args.clock, reset=args.reset,
+                                         fields=json.loads(args.fields_json.read_text()),
+                                         start_ps=args.start, end_ps=args.end, max_transactions=32)
                 else:
                     facts = sweep_handshake_anomalies(**common, start_ps=args.start, end_ps=args.end,
                                                      max_interfaces=args.max_interfaces)

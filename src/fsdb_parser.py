@@ -854,6 +854,36 @@ class FSDBParser:
         self._check_metadata_identity(identity)
         raise KeyError(f"Signal not found: '{signal_path}'")
 
+    def get_signal_declaration(self, signal_path: str) -> dict:
+        """Projection requires an exact dump key, never legacy suffix fallback."""
+        from .waveform_selection import declaration_range
+        check_cancelled()
+        self._open()
+        identity = self._file_identity
+        width = None
+        if getattr(self._lib, "_traceweave_has_metadata_v1", False):
+            metadata = _NativeSignalMetadataV1()
+            rc = self._lib.fsdb_get_signal_metadata_v1(
+                self._handle, signal_path.encode(), ctypes.byref(metadata), ctypes.sizeof(metadata)
+            )
+            check_cancelled()
+            if rc == 0:
+                width = int(metadata.width)
+            elif rc != -2:
+                raise RuntimeError(f"fsdb_get_signal_metadata_v1 failed, rc={rc}")
+        else:
+            rows = self.search_signals(signal_path, max_results=64).get("results", [])
+            exact = [r for r in rows if r["path"] == signal_path]
+            if len(exact) == 1:
+                width = int(exact[0]["width"])
+        if width is None:
+            raise KeyError(f"Exact dump declaration not found: {signal_path}")
+        self._check_metadata_identity(identity)
+        declared = declaration_range(signal_path, width)
+        return {"path": signal_path, "width": width,
+                "declared_range": {"left": declared.left, "right": declared.right},
+                "identity": identity}
+
     def _cache_width(self, path, item, identity):
         width = int(item["width"])
         self._check_metadata_identity(identity)
