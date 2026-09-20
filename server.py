@@ -4896,6 +4896,8 @@ def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
         for keyword in ("clk", "clock"):
             try:
                 search = parser.search_signals(keyword, max_results=20)
+            except OperationCancelled:
+                raise
             except Exception as exc:
                 if detect_reason is None:
                     detect_reason = (
@@ -4926,6 +4928,8 @@ def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
                             is_tool_pseudo_signal(candidate),
                         )
                     )
+            except OperationCancelled:
+                raise
             except Exception as exc:
                 if detect_reason is None:
                     detect_reason = (
@@ -4946,6 +4950,8 @@ def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
             )
             clock_path, period_ps, _, _ = scored[0]
             detect_reason = None
+    except OperationCancelled:
+        raise
     except Exception as exc:
         detect_reason = f"{type(exc).__name__}: {exc}"
 
@@ -4999,7 +5005,10 @@ def _validate_signals_around_time_args(
 
     sim_end_ps = 0
     try:
-        sim_end_ps = int(parser.get_summary().get("simulation_duration_ps") or 0)
+        header = getattr(parser, "get_header", None) or parser.get_summary
+        sim_end_ps = int(header().get("simulation_duration_ps") or 0)
+    except OperationCancelled:
+        raise
     except Exception:
         pass
 
@@ -5516,7 +5525,9 @@ async def list_tools():
         ),
         Tool(
             name="get_waveform_summary",
-            description="Return basic waveform metadata such as format, duration, and top modules. FSDB support depends on fsdb_runtime.enabled.",
+            description=("Return waveform format, duration, scale, top modules and a bounded signal sample. "
+                         "For FSDB, read metadata_query_mode, sample_signals_order and top_modules_complete; "
+                         "a sample never proves full-design coverage. FSDB support depends on fsdb_runtime.enabled."),
             inputSchema={
                 "type": "object",
                 "properties": {

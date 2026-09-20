@@ -34,7 +34,7 @@ from __future__ import annotations
 from statistics import mean, median
 from typing import Any, Callable
 
-from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
+from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancelled
 from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _hs_repr, _hs_truth, _resolve_signal_path
@@ -515,6 +515,8 @@ def _exists(parser: Any, path: str) -> bool:
     try:
         parser.get_signal_width(path)
         return True
+    except OperationCancelled:
+        raise
     except Exception:
         return False
 

@@ -726,6 +726,34 @@ Verification
   ABI is optional and detected by symbol presence, so an old locally built
   wrapper remains functional through the legacy path; rebuilding the wrapper
   and reconnecting the server is required to activate group loading.
+- FSDB metadata ABI v1 is separately optional and version-probed. Exact width,
+  direction and type lookups use the existing native ordered path map in
+  O(log N), without keyword search or a duplicate Python design index. Width
+  misses and older wrappers retain the existing exact/suffix search fallback.
+  A positive metadata LRU per parser is limited to 1,024 entries and 256 KiB
+  of estimated retained bytes; misses are not cached. Immutable header facts
+  and bounded summary lists are separate from this LRU. Comparison and window
+  validation use `get_header`, with `get_summary` compatibility for other
+  parsers. Normal headers do not enumerate signals; the existing zero-duration
+  recovery can still inspect up to eight sample signals and remains best effort.
+  FSDB open still constructs the native full-design index.
+  Every parser access checks real path, device/inode, size and nanosecond
+  mtime/ctime; replacement/reopen/close invalidates retained metadata and clock
+  indexes. These stat identities are not content hashes. An update during a
+  resident group is refused until its normal cleanup; the process-global FSDB
+  lock, cancellation checkpoints and native-call cancellation limit remain.
+  New summary samples are the first 20 full paths in lexical order, read into
+  a bounded 64 KiB buffer. Actual top scopes are collected during the existing
+  native tree walk and listed separately (256 entries / 64 KiB). Check the
+  additive `metadata_query_mode`, `sample_signals_order` and
+  `top_modules_complete` fields: legacy ranked samples cannot establish the
+  complete top set, and a capped top listing explicitly reports false.
+  Rebuild with `bash scripts/build_wrapper.sh` and reconnect to activate the
+  native ABI. `scripts/benchmark_fsdb_metadata.py --help` describes independent
+  fresh-process metadata, sweep and diff workloads, loaded module/library
+  fingerprints, first preparation, hot queries, RSS and complete fact digests.
+  Timings include nested phases; do not sum them. No OS cache flushing or MCP
+  transport timing is implied.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single

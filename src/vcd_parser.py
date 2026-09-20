@@ -7,6 +7,7 @@ The public API matches FSDBParser.
 import re
 from bisect import bisect_left, bisect_right
 from operator import itemgetter
+from itertools import islice
 from pathlib import Path
 
 from src.waveform_hints import annotate_signal_search_result, normalize_vcd_producer
@@ -117,7 +118,7 @@ class VCDParser:
             "truncated":      False,
         }
 
-    def get_summary(self) -> dict:
+    def get_header(self) -> dict:
         self._ensure_parsed()
         if self._end_time_ps == 0:
             for transitions in self._transitions.values():
@@ -132,11 +133,13 @@ class VCDParser:
             "simulation_duration_ps": self._end_time_ps,
             "simulation_duration_ns": self._end_time_ps / 1000,
             "total_signals":          len(self._signals),
-            "top_modules":            self._top_modules,
-            "sample_signals":         list(self._path_to_sym.keys())[:20],
             "producer_hint":           self._producer_hint,
             "producer_evidence":       self._producer_evidence,
         }
+
+    def get_summary(self) -> dict:
+        return {**self.get_header(), "top_modules": list(self._top_modules),
+                "sample_signals": list(islice(self._path_to_sym, 20))}
 
     def search_signals(self, keyword: str, max_results: int = 100) -> dict:
         """Search signals in a VCD using the in-memory path index.

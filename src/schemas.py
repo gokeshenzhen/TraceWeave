@@ -512,6 +512,9 @@ class WaveformSummaryResult(SchemaModel):
     total_signals: int
     top_modules: list[str] | None = None
     sample_signals: list[str] | None = None
+    metadata_query_mode: Literal["native_v1", "legacy_search"] | None = None
+    sample_signals_order: Literal["lexical", "legacy_ranked"] | None = None
+    top_modules_complete: bool | None = None
     producer_hint: str | None = None
     producer_evidence: str | None = None
 

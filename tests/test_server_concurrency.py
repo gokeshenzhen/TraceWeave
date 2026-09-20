@@ -46,6 +46,23 @@ def _wait_event(event: threading.Event, timeout: float) -> bool:
     return event.wait(timeout)
 
 
+@pytest.mark.parametrize("phase", ["search", "transitions"])
+def test_clock_detection_cancellation_never_caches_absence(phase):
+    class Parser:
+        def search_signals(self, *args, **kwargs):
+            if phase == "search":
+                raise OperationCancelled("cancelled")
+            return {"results": [{"path": "tb.clk", "width": 1}]}
+
+        def get_transitions(self, *args, **kwargs):
+            raise OperationCancelled("cancelled")
+
+    parser = Parser()
+    with pytest.raises(OperationCancelled):
+        server._detect_wave_clock(parser)
+    assert not hasattr(parser, "_cached_clock_info")
+
+
 class TestWaveLocks:
     def test_fsdb_paths_share_one_global_lock(self):
         locks = server._wave_locks_for(["/a/x.fsdb", "/b/y.fsdb"])

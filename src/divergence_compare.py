@@ -78,8 +78,11 @@ def read_stream(get_parser: Callable, wave: str, signal: str,
             )
         if hasattr(stream.parser, "get_signal_width"):
             stream.width = int(stream.parser.get_signal_width(signal))
-        if hasattr(stream.parser, "get_summary"):
-            summary = stream.parser.get_summary()
+        header = getattr(stream.parser, "get_header", None)
+        if header is None:
+            header = getattr(stream.parser, "get_summary", None)
+        if header is not None:
+            summary = header()
             stream.end = int(summary.get("simulation_duration_ps", -1))
             stream.range_known = stream.end >= 0
             stream.scale_fs = summary.get("scale_fs_per_tick")

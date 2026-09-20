@@ -30,9 +30,8 @@ def test_load_wrapper_fails_cleanly_without_fsdb_runtime(monkeypatch):
 
 
 def test_get_signal_width_prefers_exact_path_match(monkeypatch):
-    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
-    parser._handle = None
-    parser._lib = None
+    parser = fsdb_parser.FSDBParser("/fake/test.fsdb")
+    parser._open = lambda: None
 
     calls: list[str] = []
 
@@ -52,9 +51,8 @@ def test_get_signal_width_prefers_exact_path_match(monkeypatch):
 
 
 def test_get_signal_width_uses_suffix_fallback_when_exact_search_misses(monkeypatch):
-    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
-    parser._handle = None
-    parser._lib = None
+    parser = fsdb_parser.FSDBParser("/fake/test.fsdb")
+    parser._open = lambda: None
 
     calls: list[str] = []
     responses = {
@@ -82,9 +80,8 @@ def test_get_signal_width_uses_suffix_fallback_when_exact_search_misses(monkeypa
 
 
 def test_get_signal_width_raises_keyerror_when_signal_missing(monkeypatch):
-    parser = fsdb_parser.FSDBParser.__new__(fsdb_parser.FSDBParser)
-    parser._handle = None
-    parser._lib = None
+    parser = fsdb_parser.FSDBParser("/fake/test.fsdb")
+    parser._open = lambda: None
     monkeypatch.setattr(parser, "search_signals", lambda keyword, max_results=0: {"results": []})
 
     with pytest.raises(KeyError, match="Signal not found"):
@@ -170,6 +167,7 @@ def _fake_group_parser(lib=None):
     parser._handle = ctypes.c_void_p(1)
     parser._scale_fs = 1000
     parser._scale_unit = "1ps"
+    parser._stat_identity = lambda: None
     return parser
 
 

@@ -45,6 +45,7 @@ struct FsdbCtx {
     ffrObject                        *obj;
     std::map<std::string, SigInfo>    path_to_sig;   /* full_path → SigInfo */
     std::map<fsdbVarIdcode, SigInfo*> id_to_sig;
+    std::set<std::string>             top_modules;
     std::string                       scope_stack;   /* 当前遍历路径 */
     std::vector<std::string>          scope_parts;
     bool                              tree_done;
@@ -175,6 +176,8 @@ _TreeCB(fsdbTreeCBType cb_type, void *client_data, void *tree_cb_data)
         info.full_path     = full_path;
 
         ctx->path_to_sig[full_path] = info;
+        if (!ctx->scope_parts.empty())
+            ctx->top_modules.insert(ctx->scope_parts.front());
         break;
     }
     default:
@@ -370,6 +373,66 @@ fsdb_close(void *handle)
     }
     ctx->obj->ffrClose();
     delete ctx;
+}
+
+/* Optional metadata ABI v1. Exact lookups use the existing ordered map and
+ * never invoke keyword search or enumerate other signals. Fixed-width scalar
+ * output also preserves escaped names without a delimiter-based round trip. */
+struct FsdbSignalMetadataV1 {
+    unsigned int width;
+    unsigned int direction;
+    unsigned int var_type;
+};
+
+int fsdb_metadata_version() { return 1; }
+
+int
+fsdb_get_signal_metadata_v1(void *handle, const char *path,
+                           FsdbSignalMetadataV1 *out, unsigned int out_size)
+{
+    if (!handle || !path || !out || out_size != sizeof(*out)) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    auto it = ctx->path_to_sig.find(path);
+    if (it == ctx->path_to_sig.end()) return -2;
+    out->width = it->second.bit_size;
+    out->direction = it->second.direction;
+    out->var_type = it->second.var_type;
+    return 0;
+}
+
+/* Bounded summary listing, independent of keyword search. kind=0 returns a
+ * lexical path sample; kind=1 lists actual top scopes, collected during the
+ * existing tree walk (never inferred from a sample). Strings are NUL-delimited.
+ * A full buffer or item cap stops BEFORE a partial string and sets truncated.
+ * No scan beyond the returned prefix is needed for either listing. */
+int
+fsdb_get_summary_paths_v1(void *handle, int kind, int max_items,
+                         char *out, int capacity, int *truncated)
+{
+    if (!handle || !out || capacity <= 0 || max_items < 0 || !truncated ||
+        (kind != 0 && kind != 1)) return -1;
+    FsdbCtx *ctx = (FsdbCtx*)handle;
+    int pos = 0, count = 0;
+    out[0] = '\0';
+    *truncated = 0;
+    auto append = [&](const std::string &path) {
+        if (count >= max_items || path.size() + 1 > (size_t)(capacity - pos)) {
+            *truncated = 1;
+            return false;
+        }
+        memcpy(out + pos, path.c_str(), path.size() + 1);
+        pos += (int)path.size() + 1;
+        ++count;
+        return true;
+    };
+    if (kind == 0) {
+        for (const auto &kv : ctx->path_to_sig)
+            if (!append(kv.first)) break;
+    } else {
+        for (const auto &top : ctx->top_modules)
+            if (!append(top)) break;
+    }
+    return count;
 }
 
 /* ── 搜索信号（关键字匹配，结果写入 out_buf，换行分隔）────────────

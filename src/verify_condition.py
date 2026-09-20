@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable
 
 from . import operation_metrics
-from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
+from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancelled
 from .cursor_store import CursorRef, CursorStore
 from .cycle_query import EdgeSamplingSession, sample_signals_on_edges
 
@@ -1534,6 +1534,8 @@ def _resolve_signal_path(parser: Any, path: str) -> str:
     try:
         parser.get_signal_width(path)
         return path
+    except OperationCancelled:
+        raise
     except Exception:
         pass
     if "[" in path or not hasattr(parser, "search_signals"):
@@ -1541,6 +1543,8 @@ def _resolve_signal_path(parser: Any, path: str) -> str:
     basename = path.rsplit(".", 1)[-1]
     try:
         results = parser.search_signals(basename).get("results", [])
+    except OperationCancelled:
+        raise
     except Exception:
         return path
     candidates = [

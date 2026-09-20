@@ -6,7 +6,10 @@ The public API matches vcd_parser.py.
 
 import ctypes
 import os
+import sys
+from collections import OrderedDict
 from contextlib import contextmanager
+from types import MappingProxyType
 from typing import Iterator
 
 from config import (
@@ -18,6 +21,7 @@ from config import (
 )
 from . import operation_metrics
 from .clock_edge_cache import ClockCacheToken, discard_clock_edges
+from .cancellation import OperationCancelled, check_cancelled
 
 # Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
@@ -62,6 +66,11 @@ class _NativeTransitionGroupProfileV1(ctypes.Structure):
         ("unload_ns", ctypes.c_uint64),
         ("signal_count", ctypes.c_uint64),
     ]
+
+
+class _NativeSignalMetadataV1(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_uint), ("direction", ctypes.c_uint),
+                ("var_type", ctypes.c_uint)]
 
 
 def _profile_dict(profile: ctypes.Structure) -> dict[str, int]:
@@ -124,6 +133,26 @@ def _setup(lib):
     lib.fsdb_search_signals.restype  = ctypes.c_int
     lib.fsdb_search_signals.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
                                          ctypes.c_char_p, ctypes.c_int]
+
+    # Optional, explicitly versioned metadata ABI; old wrappers keep search.
+    lib._traceweave_has_metadata_v1 = False
+    try:
+        lib.fsdb_metadata_version.restype = ctypes.c_int
+        lib.fsdb_metadata_version.argtypes = []
+        if lib.fsdb_metadata_version() == 1:
+            lib.fsdb_get_signal_metadata_v1.restype = ctypes.c_int
+            lib.fsdb_get_signal_metadata_v1.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p,
+                ctypes.POINTER(_NativeSignalMetadataV1), ctypes.c_uint,
+            ]
+            lib.fsdb_get_summary_paths_v1.restype = ctypes.c_int
+            lib.fsdb_get_summary_paths_v1.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                ctypes.c_char_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int),
+            ]
+            lib._traceweave_has_metadata_v1 = True
+    except AttributeError:
+        pass
 
     # int fsdb_get_value_at_time(void*, const char*, uint64, char*, int)
     lib.fsdb_get_value_at_time.restype  = ctypes.c_int
@@ -220,6 +249,11 @@ _BUF_SIZE = 64 * 1024 * 1024
 # the context exits. Keep the default deliberately conservative for multi-GB
 # waves; larger groups can be opted into after inspecting the RSS telemetry.
 _DEFAULT_TRANSITION_GROUP_MAX_SIGNALS = 16
+# Per-parser positive metadata LRU. No full-design Python path table or misses.
+_METADATA_MAX_ENTRIES = 1024
+_METADATA_MAX_BYTES = 256 * 1024
+_SUMMARY_PATH_BYTES = 64 * 1024
+_SUMMARY_TOP_LIMIT = 256
 
 
 def _transition_group_limit() -> int:
@@ -243,10 +277,44 @@ class FSDBParser:
         self._scale_unit = None   # raw header string, e.g. "100fs"; "unknown" if unreadable
         self._scale_fs   = None   # fs per FSDB tick; 0 = unknown
         self._transition_group_active = False
+        self._file_identity = None
+        self._header = None
+        self._summary_paths = None
+        self._metadata_cache = OrderedDict()
+        self._metadata_bytes = 0
+
+    def _stat_identity(self):
+        stat = os.stat(self.file_path)
+        return (os.path.realpath(self.file_path), stat.st_dev, stat.st_ino,
+                stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def _check_metadata_identity(self, expected):
+        check_cancelled()
+        if expected is None:
+            return
+        try:
+            unchanged = expected == self._file_identity == self._stat_identity()
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            if not self._transition_group_active:
+                self.close()
+            raise RuntimeError("FSDB changed during metadata query")
 
     def _open(self):
+        check_cancelled()
+        try:
+            identity = self._stat_identity()
+        except OSError:
+            if not self._transition_group_active:
+                self.close()
+            raise
         if self._handle:
-            return
+            if identity == self._file_identity:
+                return
+            if self._transition_group_active:
+                raise RuntimeError("FSDB changed during active transition group")
+            self.close()
         if self._lib is None:
             self._lib = _load_wrapper()
         handle = self._lib.fsdb_open(self.file_path.encode())
@@ -256,6 +324,14 @@ class FSDBParser:
         unit_buf = ctypes.create_string_buffer(64)
         self._scale_fs = int(self._lib.fsdb_get_scale_info(handle, unit_buf, 64))
         self._scale_unit = unit_buf.value.decode() or "unknown"
+        self._file_identity = identity
+        try:
+            if self._stat_identity() != identity:
+                raise RuntimeError("FSDB changed while opening")
+            check_cancelled()
+        except BaseException:
+            self.close()
+            raise
 
     @property
     def transition_group_limit(self) -> int:
@@ -272,6 +348,13 @@ class FSDBParser:
 
     def close(self):
         discard_clock_edges(self)
+        self.__dict__.pop("_cached_clock_info", None)
+        self.__dict__.pop("_cached_clock_detect_reason", None)
+        self._header = None
+        self._summary_paths = None
+        self._file_identity = None
+        self._metadata_cache = OrderedDict()
+        self._metadata_bytes = 0
         if self._handle and self._lib:
             if getattr(self, "_transition_group_active", False):
                 profile = _NativeTransitionGroupProfileV1()
@@ -418,6 +501,11 @@ class FSDBParser:
             yield False
             return
 
+        # Duration's rare legacy recovery may load signals. Prepare it before
+        # beginning a resident group, never from inside an active native view.
+        if getattr(self._lib, "_traceweave_has_metadata_v1", False):
+            self.get_header()
+
         encoded = [path.encode() for path in paths]
         c_paths = (ctypes.c_char_p * len(encoded))(*encoded)
         begin_profile = _NativeTransitionGroupProfileV1()
@@ -490,21 +578,60 @@ class FSDBParser:
             extra_transitions=extra_transitions,
         )
 
-    def get_summary(self) -> dict:
+    def _get_summary_paths(self):
+        if self._summary_paths is not None:
+            return self._summary_paths
+        identity = self._file_identity
+        if getattr(self._lib, "_traceweave_has_metadata_v1", False):
+            listings = []
+            for kind, limit in ((0, 20), (1, _SUMMARY_TOP_LIMIT)):
+                check_cancelled()
+                buf = ctypes.create_string_buffer(_SUMMARY_PATH_BYTES)
+                truncated = ctypes.c_int()
+                count = self._lib.fsdb_get_summary_paths_v1(
+                    self._handle, kind, limit, buf, len(buf), ctypes.byref(truncated)
+                )
+                check_cancelled()
+                if count < 0:
+                    raise RuntimeError(f"fsdb_get_summary_paths_v1 failed, rc={count}")
+                paths = tuple(s.decode() for s in buf.raw.split(b"\0", count)[:count])
+                listings.append((paths, not bool(truncated.value)))
+            result = (listings[0][0], listings[1][0], listings[1][1])
+        else:
+            search = self.search_signals("", max_results=20)
+            check_cancelled()
+            samples = tuple(item["path"] for item in search.get("results", [])[:20])
+            tops = tuple(sorted({p.split(".")[0] for p in samples if "." in p}))
+            # A legacy sample does not prove the complete set of top scopes.
+            result = (samples, tops, False)
+        self._check_metadata_identity(identity)
+        self._summary_paths = result
+        return result
+
+    def get_header(self) -> dict:
+        """Scalar metadata for comparison; no signal listing on a normal file.
+
+        Returned dictionaries are copies of immutable, file-bound cached facts.
+        The zero-duration compatibility recovery alone may read bounded samples.
+        All calls retain the caller's existing process-global FSDB lock contract.
+        """
         self._open()
+        if self._header is not None:
+            return dict(self._header)
+        identity = self._file_identity
         end_ps = int(self._lib.fsdb_get_end_time(self._handle))
         count  = self._lib.fsdb_get_signal_count(self._handle)
-        sample_signals: list[str] = []
-        top_modules: list[str] = []
         try:
-            search_result = self.search_signals("", max_results=20)
-            sample_signals = [item["path"] for item in search_result.get("results", [])[:20]]
-            top_modules = sorted({path.split(".")[0] for path in sample_signals if "." in path})
-            if end_ps <= 0:
-                for signal_path in sample_signals[:8]:
+            if end_ps <= 0 and self._scale_fs != 0:
+                if self._transition_group_active:
+                    raise RuntimeError("FSDB duration recovery requires an unloaded group")
+                for signal_path in self._get_summary_paths()[0][:8]:
+                    check_cancelled()
                     transitions = self.get_transitions(signal_path, 0, -1).get("transitions", [])
                     if transitions:
                         end_ps = max(end_ps, transitions[-1]["time_ps"])
+        except OperationCancelled:
+            raise
         except Exception:
             pass
         summary = {
@@ -518,8 +645,10 @@ class FSDBParser:
             "simulation_duration_ps": end_ps,
             "simulation_duration_ns": end_ps / 1000,
             "total_signals":          count,
-            "top_modules":            top_modules,
-            "sample_signals":         sample_signals,
+            "metadata_query_mode": (
+                "native_v1" if getattr(self._lib, "_traceweave_has_metadata_v1", False)
+                else "legacy_search"
+            ),
         }
         if not self._scale_fs:
             summary["scale_warning"] = (
@@ -527,6 +656,24 @@ class FSDBParser:
                 "time-based queries on this waveform will be refused rather than "
                 "silently assuming 1 tick == 1 ps."
             )
+        self._check_metadata_identity(identity)
+        self._header = MappingProxyType(summary)
+        return dict(self._header)
+
+    def get_summary(self) -> dict:
+        summary = self.get_header()
+        identity = self._file_identity
+        try:
+            samples, tops, complete = self._get_summary_paths()
+        except OperationCancelled:
+            raise
+        except Exception:
+            samples, tops, complete = (), (), False
+        self._check_metadata_identity(identity)
+        summary.update(sample_signals=list(samples), top_modules=list(tops),
+                       top_modules_complete=complete,
+                       sample_signals_order=("lexical" if summary["metadata_query_mode"] == "native_v1"
+                                             else "legacy_ranked"))
         return summary
 
     def search_signals(self, keyword: str,
@@ -577,19 +724,60 @@ class FSDBParser:
         }
 
     def get_signal_width(self, signal_path: str) -> int:
+        self._open()
+        identity = self._file_identity
+        cached = self._metadata_cache.get(signal_path)
+        if cached is not None:
+            self._metadata_cache.move_to_end(signal_path)
+            return cached[0][0]
+        if getattr(self._lib, "_traceweave_has_metadata_v1", False):
+            metadata = _NativeSignalMetadataV1()
+            rc = self._lib.fsdb_get_signal_metadata_v1(
+                self._handle, signal_path.encode(), ctypes.byref(metadata), ctypes.sizeof(metadata)
+            )
+            check_cancelled()
+            if rc == 0:
+                values = (int(metadata.width), int(metadata.direction), int(metadata.var_type))
+                self._check_metadata_identity(identity)
+                self._cache_metadata(signal_path, values)
+                return values[0]
+            if rc != -2:
+                raise RuntimeError(f"fsdb_get_signal_metadata_v1 failed, rc={rc}")
+        # Preserve suffix/legacy resolution; exact native hits never get here.
         exact = self.search_signals(signal_path, max_results=32)
+        check_cancelled()
         for item in exact.get("results", []):
             if item.get("path") == signal_path:
-                return int(item["width"])
+                return self._cache_width(signal_path, item, identity)
 
         leaf = signal_path.split(".")[-1]
         fallback = self.search_signals(leaf, max_results=64)
+        check_cancelled()
         for item in fallback.get("results", []):
             path = item.get("path")
             if path == signal_path or path.endswith("." + signal_path):
-                return int(item["width"])
+                return self._cache_width(signal_path, item, identity)
 
+        self._check_metadata_identity(identity)
         raise KeyError(f"Signal not found: '{signal_path}'")
+
+    def _cache_width(self, path, item, identity):
+        width = int(item["width"])
+        self._check_metadata_identity(identity)
+        self._cache_metadata(path, (width, item.get("direction_code"), item.get("var_type_code")))
+        return width
+
+    def _cache_metadata(self, path, values):
+        # Include tuple, scalars and conservative LRU bookkeeping in the budget.
+        size = sys.getsizeof(path) + sys.getsizeof(values) + sum(map(sys.getsizeof, values)) + 128
+        if size > _METADATA_MAX_BYTES or _METADATA_MAX_ENTRIES < 1:
+            return
+        while self._metadata_cache and (len(self._metadata_cache) >= _METADATA_MAX_ENTRIES or
+                                       self._metadata_bytes + size > _METADATA_MAX_BYTES):
+            _, (_, old_size) = self._metadata_cache.popitem(last=False)
+            self._metadata_bytes -= old_size
+        self._metadata_cache[path] = (values, size)
+        self._metadata_bytes += size
 
 
 # ── Utility ───────────────────────────────────────────────────────────

@@ -129,3 +129,15 @@ def test_cancellation_is_not_missing_data():
             raise OperationCancelled("cancelled")
     with pytest.raises(OperationCancelled):
         compare(Cancel({}))
+
+
+def test_comparison_uses_header_without_summary_listing():
+    class HeaderParser(Parser):
+        def get_header(self):
+            return {"simulation_duration_ps": self.end, "scale_fs_per_tick": self.scale}
+
+        def get_summary(self):
+            pytest.fail("comparison must not request sample signals")
+
+    events = {"a": [(0, "0"), (10, "1")], "b": [(0, "0")]}
+    assert compare(HeaderParser(events)) == compare(Parser(events))
