@@ -23,11 +23,15 @@ accept a derived ``psel && penable`` valid expression yet.
 from __future__ import annotations
 
 import re
+import sys
 import time
+from types import MappingProxyType
 from typing import Any, Callable
 
 from src import operation_metrics
 from src.cancellation import OperationCancelled, check_cancelled
+from src.scope_metadata import PAGE_ITEMS, PAGE_BYTES, PAGE_SCAN, ScopeIdentityChanged
+from src.scope_metadata import file_identity, normalize_scope
 
 # Role vocabulary, aligned with analyzer._ROLE_KEYWORDS["handshake"].
 VALID_MARKERS = ("valid", "vld", "req")
@@ -38,17 +42,50 @@ RESET_TOKENS = ("rst", "reset", "resetn", "rst_n")
 _NON_SIGNAL_VARTYPES = ("integer", "real", "time", "parameter", "string", "event")
 
 _RANGE_RE = re.compile(r"\[[^\]]*\]\s*$")
+_PORT_SUFFIX_RE = re.compile(r"_(?:i|o)$")
+_CLOCK_NAMES = frozenset(("clk", "clock", "aclk", "hclk", "pclk"))
+_CLOCK_STATUS_TOKENS = frozenset((
+    "en", "ena", "enable", "enabled", "disable", "status", "stable", "good",
+    "valid", "ready", "req", "ack", "gnt", "grant", "sel", "select", "active",
+    "running", "stopped", "count", "cnt", "idle", "present", "locked", "lock", "done",
+))
 DISCOVERY_SIGNAL_LIMIT = 65_536
+DISCOVERY_SCAN_LIMIT = 131_072
+DISCOVERY_BYTE_LIMIT = 16 * 1024 * 1024
+DISCOVERY_MEMORY_LIMIT = 64 * 1024 * 1024
+ANCESTOR_SIGNAL_LIMIT = 4096
+ANCESTOR_DEPTH_LIMIT = 256
 
 
 def _in_scope(path: str, scope: str | None) -> bool:
-    return not scope or path.startswith(scope.rstrip(".") + ".")
+    return not scope or path.startswith(normalize_scope(scope) + ".")
 
 
 def _leaf(path: str) -> str:
     """Last hierarchy component, without a trailing bit range."""
     leaf = path.rsplit(".", 1)[-1]
     return _RANGE_RE.sub("", leaf)
+
+
+def _role_leaf(signal: dict) -> str:
+    """Normalize spelling only; the original path and bit identity stay intact."""
+    leaf = _RANGE_RE.sub("", signal.get("name") or signal["path"].rsplit(".", 1)[-1]).lower()
+    return _PORT_SUFFIX_RE.sub("", leaf)
+
+
+def _port_direction(signal: dict) -> str:
+    leaf = _RANGE_RE.sub("", signal.get("name") or signal["path"].rsplit(".", 1)[-1]).lower()
+    suffix = "input" if leaf.endswith("_i") else "output" if leaf.endswith("_o") else None
+    native = (signal.get("direction") or "").lower()
+    native = native if native in ("input", "output") else None
+    if native and suffix and native != suffix:
+        return "conflict"
+    return native or suffix or "unknown"
+
+
+def _compatible_directions(a: dict, b: dict) -> bool:
+    directions = (a.get("direction", "unknown"), b.get("direction", "unknown"))
+    return "conflict" not in directions and ("unknown" in directions or directions[0] != directions[1])
 
 
 def _parent(path: str) -> str:
@@ -70,7 +107,9 @@ def _stem(leaf_lower: str, marker: str) -> str:
 
 def _classify(leaf_lower: str, width: int) -> tuple[str | None, str | None]:
     """Return (role, marker). role in {clock, reset, valid, ready, None}."""
-    if any(tok in leaf_lower for tok in CLOCK_TOKENS) and width == 1:
+    leaf_lower = _PORT_SUFFIX_RE.sub("", leaf_lower)
+    tokens = set(leaf_lower.split("_"))
+    if tokens & _CLOCK_NAMES and not tokens & _CLOCK_STATUS_TOKENS and width == 1:
         return "clock", None
     if leaf_lower in RESET_TOKENS or any(leaf_lower.endswith(t) for t in ("rst_n", "reset", "resetn")):
         return "reset", None
@@ -101,6 +140,7 @@ def propose_handshake_bundles(
     readys: dict[tuple[str, str, str], list[dict]] = {}
     clocks: dict[str, list[dict]] = {}
     by_scope: dict[str, list[dict]] = {}
+    valid_counts: dict[tuple[str, str, str], int] = {}
 
     for s in signals:
         check_cancelled()
@@ -108,15 +148,20 @@ def propose_handshake_bundles(
         if not path:
             continue
         width = int(s.get("width") or 1)
-        leaf = _leaf(path).lower()
+        leaf = _role_leaf(s)
         role, marker = _classify(leaf, width)
-        rec = {"path": path, "leaf": leaf, "width": width, "scope": _parent(path),
+        if (s.get("var_type") or "").lower() in _NON_SIGNAL_VARTYPES:
+            continue
+        rec = {"path": path, "leaf": leaf, "width": width, "scope": s.get("scope", _parent(path)),
                "role": role, "marker": marker,
+               "direction": _port_direction(s),
                "selection": (m.group(0) if (m := _RANGE_RE.search(path.rsplit(".", 1)[-1])) else ""),
                "var_type": (s.get("var_type") or "").lower()}
         by_scope.setdefault(rec["scope"], []).append(rec)
         if role == "valid":
             valids.append(rec)
+            key = (rec["scope"], _stem(leaf, marker), rec["selection"])
+            valid_counts[key] = valid_counts.get(key, 0) + 1
         elif role == "ready":
             key = (rec["scope"], _stem(leaf, marker), rec["selection"])
             readys.setdefault(key, []).append(rec)
@@ -131,19 +176,24 @@ def propose_handshake_bundles(
         v_stem = _stem(v["leaf"], v["marker"])
         # Find a ready in the same scope with a matching stem.
         matches = readys.get((v["scope"], v_stem, v["selection"]), [])
-        if len(matches) != 1:
+        if len(matches) != 1 or valid_counts.get((v["scope"], v_stem, v["selection"])) != 1:
             continue
         match = matches[0]
+        if not _compatible_directions(v, match):
+            continue
 
         clock = _pick_clock(clocks, v["scope"])
         payload = [] if v["selection"] else _pick_payload(
-            by_scope.get(v["scope"], []), v_stem, max_payload)
+            by_scope.get(v["scope"], []), v_stem, max_payload, v["direction"])
 
         needs = []
         if v["selection"]:
             needs.append("explicit_payload_mapping_for_bit_channel")
         if clock is None:
             needs.append("clock")
+        semantics = "valid_ready" if v["marker"] in ("valid", "vld") and match["marker"] in ("ready", "rdy") else "requires_confirmation"
+        if semantics == "requires_confirmation":
+            needs.append("explicit_valid_hold_semantics")
         confidence = "high" if (clock and payload) else "medium" if clock else "low"
         rationale = (
             f"{v['leaf']}/{match['leaf']} pair in scope {v['scope'] or '(top)'}"
@@ -159,6 +209,8 @@ def propose_handshake_bundles(
             "confidence": confidence,
             "rationale": rationale,
             "needs": needs,
+            "handshake_semantics": semantics,
+            "signal_directions": {"valid": v["direction"], "ready": match["direction"]},
         })
 
     # Rank by confidence, then shallower scope first (a top-level interface net
@@ -182,7 +234,7 @@ def _pick_clock(clocks: dict[str, list[dict]], scope: str) -> str | None:
     return None
 
 
-def _pick_payload(scope_sigs: list[dict], stem: str, cap: int) -> list[str]:
+def _pick_payload(scope_sigs: list[dict], stem: str, cap: int, direction: str = "unknown") -> list[str]:
     """Same-scope buses (width>1) that aren't handshake/clock/reset signals,
     preferring those sharing the channel stem prefix."""
     cands = [
@@ -190,10 +242,19 @@ def _pick_payload(scope_sigs: list[dict], stem: str, cap: int) -> list[str]:
         if s["width"] > 1 and s["role"] not in ("valid", "ready", "clock", "reset")
         and s.get("var_type") not in _NON_SIGNAL_VARTYPES
     ]
-    if stem:
-        cands = [s for s in cands if s["leaf"].startswith(stem)]
-    elif sum(s["role"] == "valid" for s in scope_sigs) != 1:
+    fields = {"d", "data", "payload", "addr", "address", "id", "len", "size", "burst",
+              "strb", "strobe", "keep", "last", "resp", "user", "prot", "qos", "region", "dest"}
+    cands = [s for s in cands if s["leaf"].startswith(stem)
+             and s["leaf"][len(stem):].lstrip("_") in fields
+             and s.get("direction") != "conflict"
+             and (direction == "unknown" or s.get("direction") in ("unknown", direction))]
+    if not stem and (sum(s["role"] == "valid" for s in scope_sigs) != 1 or
+                     any(_role_for(s["leaf"], {"htrans", "psel", "penable"}) for s in scope_sigs)):
         cands = []
+    counts = {}
+    for s in cands:
+        counts[s["leaf"]] = counts.get(s["leaf"], 0) + 1
+    cands = [s for s in cands if counts[s["leaf"]] == 1]
     cands.sort(key=lambda s: (-s["width"], s["leaf"]))
     return [s["path"] for s in cands[:cap]]
 
@@ -251,14 +312,14 @@ def _search_signals(
     return result
 
 
-def _gather_scope(parser: Any, scope: str | None) -> tuple[list[dict], dict]:
+def _gather_scope_legacy(parser: Any, scope: str | None) -> tuple[list[dict], dict]:
     """Bounded enumeration, with scope applied BEFORE the result cap.
 
     One search replaces global role searches and one full-index sibling search
     per interface. The cap is a coverage boundary, never a clean-design claim.
     """
     receipt = {"status": "complete", "signal_limit": DISCOVERY_SIGNAL_LIMIT,
-               "signals_returned": 0, "reasons": []}
+               "signals_returned": 0, "reasons": [], "mode": "legacy_search"}
     sigs: dict[str, dict] = {}
 
     def collect(keyword: str, *, ancestor: str | None = None) -> None:
@@ -302,17 +363,160 @@ def _gather_scope(parser: Any, scope: str | None) -> tuple[list[dict], dict]:
     return list(sigs.values()), receipt
 
 
+def _gather_scope(parser: Any, scope: str | None) -> tuple[list[dict], dict]:
+    """A request-owned snapshot with independent work, transfer and memory caps."""
+    page_reader = getattr(parser, "enumerate_scope_page", None)
+    if page_reader is None:
+        return _gather_scope_legacy(parser, scope)
+    receipt = {"status": "complete", "signal_limit": DISCOVERY_SIGNAL_LIMIT,
+               "signals_returned": 0, "reasons": [], "mode": "paged",
+               "pages_read": 0, "signals_scanned": 0, "scan_limit": DISCOVERY_SCAN_LIMIT,
+               "bytes_returned": 0, "byte_limit": DISCOVERY_BYTE_LIMIT,
+               "resident_bytes_estimate": 0, "memory_limit": DISCOVERY_MEMORY_LIMIT,
+               "scope_signals_returned": 0, "scope_total": None,
+               "scope_total_lower_bound": 0, "ancestor_signals_returned": 0}
+    sigs: dict[str, dict] = {}
+
+    def partial(reason):
+        receipt["status"] = "partial"
+        if reason not in receipt["reasons"]:
+            receipt["reasons"].append(reason)
+
+    def collect(target, direct=False):
+        cursor = None
+        count = 0
+        while True:
+            check_cancelled()
+            budgets = (DISCOVERY_SIGNAL_LIMIT - len(sigs),
+                       DISCOVERY_BYTE_LIMIT - receipt["bytes_returned"],
+                       DISCOVERY_SCAN_LIMIT - receipt["signals_scanned"])
+            if min(budgets) <= 0:
+                partial(("signal_limit", "byte_limit", "scan_limit")[next(i for i, b in enumerate(budgets) if b <= 0)])
+                return False, count
+            if direct and receipt["ancestor_signals_returned"] >= ANCESTOR_SIGNAL_LIMIT:
+                partial("ancestor_signal_limit")
+                return False, count
+            page = page_reader(target, cursor=cursor, direct=direct,
+                               max_items=min(PAGE_ITEMS, budgets[0],
+                                             ANCESTOR_SIGNAL_LIMIT - receipt["ancestor_signals_returned"] if direct else PAGE_ITEMS),
+                               max_bytes=min(PAGE_BYTES, budgets[1]), max_visited=min(PAGE_SCAN, budgets[2]))
+            check_cancelled()
+            receipt["mode"] = page["mode"]
+            receipt["pages_read"] += 1
+            receipt["signals_scanned"] += page["visited"]
+            receipt["bytes_returned"] += page["bytes_returned"]
+            for row in page["results"]:
+                check_cancelled()
+                # Include copied record, strings/scalars, read-only wrapper and
+                # snapshot/index overhead. This is a conservative retained estimate.
+                size = sys.getsizeof(row) + sum(sys.getsizeof(v) for v in row.values()) + 160
+                if size + receipt["resident_bytes_estimate"] > DISCOVERY_MEMORY_LIMIT:
+                    partial("memory_limit")
+                    return False, count
+                if row["path"] not in sigs:
+                    sigs[row["path"]] = row
+                    receipt["resident_bytes_estimate"] += size
+                    count += 1
+                    if direct:
+                        receipt["ancestor_signals_returned"] += 1
+            if page["complete"]:
+                return True, count
+            next_cursor = page.get("cursor")
+            if next_cursor is None or next_cursor == cursor or not page["results"] and page["stop_reason"] == "page_bytes":
+                partial("byte_limit" if page["stop_reason"] == "page_bytes" else page["stop_reason"] or "page_no_progress")
+                return False, count
+            cursor = next_cursor
+
+    try:
+        complete, count = collect(scope)
+        receipt["scope_signals_returned"] = count
+        receipt["scope_total"] = count if complete else None
+        # An unconsumed lexical key may be a dot inside an escaped scope, not
+        # a member of the requested subtree. Only admitted rows prove a bound.
+        receipt["scope_total_lower_bound"] = count
+        # Direct ancestors have a separate small cap and never enumerate siblings'
+        # descendants. Finish a scope before selecting a unique clock there.
+        current = normalize_scope(scope)
+        depth = 0
+        while current:
+            if any(s.get("scope", _parent(p)) == current and
+                   _classify(_role_leaf(s), int(s.get("width") or 1))[0] == "clock" for p, s in sigs.items()):
+                break
+            current = _parent(current)
+            depth += 1
+            if depth > ANCESTOR_DEPTH_LIMIT:
+                partial("ancestor_depth_limit")
+                break
+            if not collect(current, direct=True)[0]:
+                break
+    except NotImplementedError:
+        if receipt["pages_read"]:
+            partial("paging_unavailable")
+        else:
+            sigs_legacy, legacy = _gather_scope_legacy(parser, scope)
+            legacy["mode"] = "legacy_search"
+            return sigs_legacy, legacy
+    except OperationCancelled:
+        raise
+    except ScopeIdentityChanged:
+        sigs.clear()
+        receipt["scope_signals_returned"] = 0
+        receipt["ancestor_signals_returned"] = 0
+        receipt["resident_bytes_estimate"] = 0
+        receipt["scope_total"] = None
+        receipt["scope_total_lower_bound"] = 0
+        partial("index_identity_changed")
+    except Exception:
+        partial("enumeration_failed")
+    receipt["signals_returned"] = len(sigs)
+    return list(sigs.values()), receipt
+
+
+class DiscoverySnapshot:
+    """Lazy, immutable, single-request sharing between discovery families."""
+    def __init__(self):
+        self._key = None
+        self._value = None
+        self._parser = None
+        self._identity = None
+        self._epoch = None
+
+    def get(self, parser, wave_path, scope):
+        check_cancelled()
+        key = (wave_path, scope)
+        if self._value is None:
+            rows, receipt = _gather_scope(parser, scope)
+            self._key = key
+            self._value = (tuple(MappingProxyType(row) for row in rows),
+                           MappingProxyType({**receipt, "reasons": tuple(receipt["reasons"])}))
+            self._parser = parser
+            self._identity = getattr(parser, "_file_identity", None) or getattr(parser, "_parsed_identity", None)
+            self._epoch = getattr(parser, "_scope_epoch", None)
+        elif key != self._key:
+            raise ValueError("discovery snapshot belongs to another query")
+        if self._identity is not None:
+            try:
+                current = file_identity(self._parser.file_path)
+            except OSError as exc:
+                raise ScopeIdentityChanged("waveform disappeared before snapshot reuse") from exc
+            if current != self._identity or self._epoch is not self._parser._scope_epoch:
+                raise ScopeIdentityChanged("waveform changed before snapshot reuse")
+        rows, receipt = self._value
+        return rows, {**receipt, "reasons": list(receipt["reasons"])}
+
+
 def suggest_handshakes(
     *,
     get_parser: Callable[[str], Any],
     wave_path: str,
     scope: str | None = None,
     max_candidates: int = 8,
+    _snapshot: DiscoverySnapshot | None = None,
 ) -> dict[str, Any]:
     """Scan a waveform and propose inspect_handshake bundles. Reads existing
     waveforms only — does NOT rerun simulation."""
     parser = get_parser(wave_path)
-    sigs, discovery = _gather_scope(parser, scope)
+    sigs, discovery = (_snapshot or DiscoverySnapshot()).get(parser, wave_path, scope)
 
     check_cancelled()
     bundles = propose_handshake_bundles(sigs, scope=scope)
@@ -322,15 +526,15 @@ def suggest_handshakes(
         "candidate_count": len(bundles),
         "candidates": bundles[:max_candidates],
         "discovery": discovery,
-        "reason": None if bundles else _empty_result_reason(parser, wave_path, scope),
+        "reason": None if bundles else _empty_result_reason(parser, wave_path, scope, signals=sigs),
     }
 
 
-def _probe_present(parser: Any, token: str, scope: str | None) -> bool:
+def _probe_present(parser: Any, token: str, scope: str | None, signals=None) -> bool:
     """True if a signal whose leaf is exactly ``token`` (or ``*_token``/``*.token``)
     exists under ``scope``. Pure name-existence fact via search_signals."""
     try:
-        results = _search_signals(parser, token).get("results", [])
+        results = signals if signals is not None else _search_signals(parser, token).get("results", [])
     except OperationCancelled:
         raise
     except Exception:
@@ -339,13 +543,13 @@ def _probe_present(parser: Any, token: str, scope: str | None) -> bool:
         p = r.get("path", "")
         if not _in_scope(p, scope):
             continue
-        leaf = _leaf(p).lower()
+        leaf = _role_leaf(r)
         if leaf == token or leaf.endswith("_" + token) or leaf.endswith("." + token):
             return True
     return False
 
 
-def _empty_result_reason(parser: Any, wave_path: str, scope: str | None) -> str:
+def _empty_result_reason(parser: Any, wave_path: str, scope: str | None, signals=None) -> str:
     """Empty-result hint for suggest_handshakes. A lightweight mechanical probe
     for the strongest bus-family discriminators (htrans → AHB; psel+penable →
     APB) upgrades the generic pointer into a copy-paste-ready
@@ -355,8 +559,8 @@ def _empty_result_reason(parser: Any, wave_path: str, scope: str | None) -> str:
     base = "no valid/ready handshake pairs found by name" + (
         f" under scope {scope}" if scope else ""
     )
-    has_ahb = _probe_present(parser, "htrans", scope)
-    has_apb = _probe_present(parser, "psel", scope) and _probe_present(parser, "penable", scope)
+    has_ahb = _probe_present(parser, "htrans", scope, signals)
+    has_apb = _probe_present(parser, "psel", scope, signals) and _probe_present(parser, "penable", scope, signals)
     scope_arg = f', scope="{scope}"' if scope else ""
     cmds: list[str] = []
     if has_ahb:
@@ -392,15 +596,21 @@ def propose_protocol_bundles(
     if protocol not in ("ahb", "apb"):
         raise ValueError("protocol must be 'ahb' or 'apb'")
 
-    records = [_protocol_rec(s) for s in signals if s.get("path")]
-    records = [r for r in records if r is not None]
+    records, clocks = [], {}
+    for signal in signals:
+        check_cancelled()
+        rec = _protocol_rec(signal)
+        if rec is not None:
+            records.append(rec)
+            if _classify(rec["leaf_lower"], rec["width"])[0] == "clock":
+                clocks.setdefault(rec["scope"], []).append(rec)
     if scope:
         records = [r for r in records if _in_scope(r["path"], scope)]
 
     if protocol == "ahb":
-        bundles = _propose_ahb_bundles(records, max_payload=max_payload)
+        bundles = _propose_ahb_bundles(records, max_payload=max_payload, clocks=clocks)
     else:
-        bundles = _propose_apb_bundles(records, max_payload=max_payload)
+        bundles = _propose_apb_bundles(records, max_payload=max_payload, clocks=clocks)
 
     rank = {"high": 0, "medium": 1, "low": 2}
     bundles.sort(key=lambda b: (
@@ -413,17 +623,18 @@ def propose_protocol_bundles(
 
 def _protocol_rec(s: dict) -> dict | None:
     path = s.get("path")
-    if not path:
+    if not path or (s.get("var_type") or "").lower() in _NON_SIGNAL_VARTYPES:
         return None
-    leaf = _leaf(path)
+    leaf = _role_leaf(s)
     return {
         "path": path,
         "leaf": leaf,
         "leaf_lower": leaf.lower(),
         "width": int(s.get("width") or 1),
-        "scope": _parent(path),
+        "scope": s.get("scope", _parent(path)),
         "var_type": (s.get("var_type") or "").lower(),
-        "direction": (s.get("direction") or "").lower(),
+        "direction": _port_direction(s),
+        "selection": (m.group(0) if (m := _RANGE_RE.search(path.rsplit(".", 1)[-1])) else ""),
     }
 
 
@@ -460,14 +671,10 @@ def _by_scope_and_role(records: list[dict], roles: set[str]) -> dict[str, dict[s
 
 
 def _pick_protocol_clock(scope_records: dict[str, list[dict]], clock_roles: tuple[str, ...]) -> str | None:
-    for role in clock_roles:
-        vals = scope_records.get(role, [])
-        if vals:
-            return vals[0]["path"]
     all_clocks = []
     for role in clock_roles:
         all_clocks.extend(scope_records.get(role, []))
-    return all_clocks[0]["path"] if all_clocks else None
+    return all_clocks[0]["path"] if len(all_clocks) == 1 else None
 
 
 def _pick_protocol_payload(
@@ -481,6 +688,10 @@ def _pick_protocol_payload(
     for role in payload_roles:
         candidates = scope_records.get(role, [])
         candidates = [c for c in candidates if _prefix_for_role(c["leaf_lower"], role) == source_prefix]
+        candidates = [c for c in candidates if c["direction"] != "conflict" and
+                      (source["direction"] == "unknown" or c["direction"] in ("unknown", source["direction"]))]
+        if len(candidates) != 1:
+            continue
         for c in candidates:
             if c["path"] not in payload:
                 payload.append(c["path"])
@@ -528,23 +739,28 @@ def _pick_prefixed_path(roles: dict, role: str, anchor: dict) -> str | None:
     cands = roles.get(role, [])
     if not cands:
         return None
-    prefixed = [c for c in cands if _same_prefix(anchor, c, c["role"])]
+    prefixed = [c for c in cands if _same_prefix(anchor, c, c["role"]) and c["direction"] != "conflict"
+                and (anchor["direction"] == "unknown" or c["direction"] in ("unknown", anchor["direction"]))]
     return prefixed[0]["path"] if len(prefixed) == 1 else None
 
 
-def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
+def _propose_ahb_bundles(records: list[dict], max_payload: int, clocks: dict) -> list[dict]:
     grouped = _by_scope_and_role(records, _AHB_ROLES)
     bundles: list[dict] = []
     for scope_name, roles in grouped.items():
         for htrans in roles.get("htrans", []):
+            check_cancelled()
+            if htrans["width"] != 2 or len([r for r in roles["htrans"] if _same_prefix(htrans, r, "htrans")]) != 1:
+                continue
             ready_candidates = roles.get("hreadyout", []) + roles.get("hready", [])
             if not ready_candidates:
                 continue
-            prefixed = [r for r in ready_candidates if _same_prefix(htrans, r, r["role"])]
-            if not prefixed:
+            prefixed = [r for r in ready_candidates if _same_prefix(htrans, r, r["role"]) and r["width"] == 1
+                        and not r["selection"] and _compatible_directions(htrans, r)]
+            if len(prefixed) != 1:
                 continue
             ready = prefixed[0]
-            clock = _pick_protocol_clock(roles, ("hclk", "clk", "clock"))
+            clock = _pick_clock(clocks, scope_name)
             reset = _pick_protocol_clock(roles, ("hresetn", "hreset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, htrans, _AHB_PAYLOAD_ROLES, max_payload)
             side_paths = [htrans["path"], ready["path"], *payload]
@@ -602,22 +818,26 @@ def _propose_ahb_bundles(records: list[dict], max_payload: int) -> list[dict]:
     return bundles
 
 
-def _propose_apb_bundles(records: list[dict], max_payload: int) -> list[dict]:
+def _propose_apb_bundles(records: list[dict], max_payload: int, clocks: dict) -> list[dict]:
     grouped = _by_scope_and_role(records, _APB_ROLES)
     bundles: list[dict] = []
     for scope_name, roles in grouped.items():
         for psel in roles.get("psel", []):
+            check_cancelled()
+            if psel["width"] != 1 or len([r for r in roles["psel"] if _same_prefix(psel, r, "psel")]) != 1:
+                continue
             ready_candidates = roles.get("pready", [])
             if not ready_candidates:
                 continue
-            prefixed = [r for r in ready_candidates if _same_prefix(psel, r, r["role"])]
-            if not prefixed:
+            prefixed = [r for r in ready_candidates if _same_prefix(psel, r, r["role"]) and r["width"] == 1
+                        and r["selection"] == psel["selection"] and _compatible_directions(psel, r)]
+            if len(prefixed) != 1:
                 continue
             ready = prefixed[0]
             penable_candidates = roles.get("penable", [])
             prefixed_penable = [p for p in penable_candidates if _same_prefix(psel, p, p["role"])]
             penable = prefixed_penable[0] if len(prefixed_penable) == 1 else None
-            clock = _pick_protocol_clock(roles, ("pclk", "clk", "clock"))
+            clock = _pick_clock(clocks, scope_name)
             reset = _pick_protocol_clock(roles, ("presetn", "preset", "resetn", "rst_n", "reset", "rst"))
             payload = _pick_protocol_payload(roles, psel, _APB_PAYLOAD_ROLES, max_payload)
             side_paths = [psel["path"], ready["path"], *(payload or [])]
@@ -663,6 +883,7 @@ def suggest_protocol_bundles(
     protocol: str,
     scope: str | None = None,
     max_candidates: int = 8,
+    _snapshot: DiscoverySnapshot | None = None,
 ) -> dict[str, Any]:
     """Scan a waveform for AHB/APB protocol bundles. Reads existing waveforms
     only — does NOT rerun simulation."""
@@ -671,7 +892,7 @@ def suggest_protocol_bundles(
         raise ValueError("protocol must be 'ahb' or 'apb'")
 
     parser = get_parser(wave_path)
-    sigs, discovery = _gather_scope(parser, scope)
+    sigs, discovery = (_snapshot or DiscoverySnapshot()).get(parser, wave_path, scope)
 
     check_cancelled()
     bundles = propose_protocol_bundles(sigs, protocol=protocol, scope=scope)

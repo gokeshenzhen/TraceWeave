@@ -6322,7 +6322,10 @@ async def list_tools():
                 "hand-assemble {clock, valid, ready, payload} signal paths. Covers AXI "
                 "*valid/*ready, generic valid/ready, and req/ack. It does NOT synthesise "
                 "an AHB 'valid' (there is no literal valid signal — it is htrans != IDLE); "
-                "use suggest_protocol_bundles for AHB/APB. Reads existing waveforms only."
+                "use suggest_protocol_bundles for AHB/APB. Port _i/_o suffixes retain "
+                "actual paths and directions; ambiguous clocks/payload require explicit "
+                "mapping. Req/ack candidates require confirmation of valid-hold semantics. "
+                "Read discovery for bounded enumeration coverage. Reads existing waveforms only."
             ),
             inputSchema={
                 "type": "object",
@@ -6389,7 +6392,7 @@ async def list_tools():
         Tool(
             name="sweep_handshakes",
             description=(
-                "Whole-design handshake anomaly sweep: discover EVERY valid/ready "
+                "Bounded handshake anomaly sweep: discover valid/ready "
                 "interface and every AHB interface, then inspect each over the window in "
                 "one call, returning a comparative fact table (per-interface stalls, "
                 "deadlock signature ended_in_stall, x-while-valid, payload-hold, "
@@ -6400,6 +6403,10 @@ async def list_tools():
                 "round-trips into one. Always interpret flagged_count together with "
                 "coverage_status: zero_coverage means no protocol interfaces were "
                 "checked and is NOT a pass; truncated/degraded means partial coverage. "
+                "Read discovery for enumeration budgets, exact scope totals or lower bounds; "
+                "increasing max_interfaces cannot repair incomplete discovery. Both families "
+                "share one request metadata snapshot. Idle-ready stays a count, without "
+                "a flag or ranking weight. Req/ack names need explicit valid-hold semantics. "
                 "Workflow follow-ups relay only parameter-changing retries: an unscoped "
                 "zero-coverage result is not blindly replayed, but remains inconclusive. "
                 "FSDB native transition-buffer truncation is propagated per row and "

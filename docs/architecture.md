@@ -402,16 +402,57 @@ Verification
   result build/serialization cost, and process RSS start/peak/end. All fields
   are numeric or fixed-label aggregates; paths, scopes, signal names, values,
   and search keywords are never recorded.
-- Handshake discovery enumerates at most 65,536 signal descriptors per search,
-  applying the requested scope before that limit. It reports independent
-  `discovery` coverage; search failures or truncation make a sweep incomplete
+- Handshake discovery retains at most 65,536 signal descriptors per request,
+  applying the exact, case-sensitive hierarchy scope before that limit. The
+  optional native scope ABI seeks the existing ordered FSDB index with
+  `lower_bound`, then returns lexical pages of at most 1,024 records, 1 MiB and
+  4,096 visited entries. Actual scope boundaries distinguish escaped names from
+  hierarchy separators. Direct ancestor queries skip child subtrees and have a
+  separate 4,096-record / 256-level cap. Request totals are bounded by 131,072
+  visits, 16 MiB of record bytes and an estimated 64 MiB retained snapshot.
+  Native open still builds the design index; VCD still parses the full input
+  and lazily sorts references to existing declaration keys for paging.
+  Cursors bind the exact scope, file stat identity and parser index generation;
+  replacement, mutation, close or reopen cannot continue an old page. This is
+  stat identity, not a content hash. No cursor or discovery snapshot is persisted.
+  Both sweep families share one read-only snapshot, including empty-result hints,
+  and release it before waveform sampling. Public keyword search retains its
+  existing case-insensitive substring semantics and ranking. Older wrappers use
+  the legacy search fallback and do not claim paged work limits.
+  The existing `discovery` receipt adds `mode`, page/visit/byte counts and caps,
+  a retained-byte estimate, separate scope/ancestor return counts, `scope_total`
+  (null until exhaustion), and `scope_total_lower_bound` (confirmed retained
+  scope members only; an unconsumed lexical key is not counted). These are enumeration
+  facts, not protocol coverage. Search failures or truncation make a sweep incomplete
   even when its interface cap was not reached. `discovered_count` is then a
   lower bound. Narrowing scope can recover interfaces that a global prefix
   missed; raising `max_interfaces` alone cannot repair discovery truncation.
   Valid/ready bit channels pair by identical index and carry an explicit payload
-  mapping need. Named channels never borrow another channel's payload, and an
-  ambiguous nearest clock is left unresolved. These are naming-based proposals,
-  with each inspected row retaining its actual check coverage.
+  mapping need. Port `_i`/`_o` normalization keeps original paths and direction
+  evidence; conflicting directions and duplicate normalized roles are not paired.
+  Payload requires a same-channel field name and compatible known direction;
+  an unnamed channel never absorbs arbitrary register/counter buses. Both generic
+  and protocol candidates leave multiple nearest clocks unresolved and exclude
+  clock enable/status signals. Req/ack naming returns
+  `handshake_semantics="requires_confirmation"`; automatic sweeps skip those
+  candidates until valid-hold semantics are supplied explicitly. Idle-ready counts
+  remain visible for both families but create no sweep flag or ranking weight.
+  Explicit `inspect_handshake` calls retain their previous semantics. Packed-only
+  buses require a future field-selection capability; empty discovery cannot
+  certify them. Each inspected row retains its actual check coverage.
+  Paging and sampling run under the existing wave locks, including the one global
+  FSDB lock. Cancellation is checked between pages and after native calls; native
+  open and individual native calls are still not interruptible internally. Time
+  conversion, four-state values, predecessor and transition truncation are unchanged.
+  Reproduce discovery or sweep workloads with
+  `python3.11 scripts/benchmark_signal_discovery.py --wave /absolute/run.fsdb
+  --mode discovery --scope tb.dut --output /tmp/discovery.json` (omit scope for
+  global discovery; use `--mode sweep --start 0 --end 100000 --max-interfaces 64`
+  for a sweep). Run each revision serially in fresh processes. Reports include
+  first/warm wall and CPU time, peak RSS, native/search call volume, complete
+  facts and source/library/input fingerprints. Candidate sets can change with
+  role corrections: compare common-interface observations separately from new
+  candidates and changed flags, rather than claiming identical whole results.
   The September 18 large SoC replay (18,641 lexical hierarchy nodes, 75,578
   VCD IDs, fresh MCP server, NPI disabled, 64-interface cap) discovered at least
   7,421 interfaces versus 297 in the original evaluation. It explicitly reported

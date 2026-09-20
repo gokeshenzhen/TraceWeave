@@ -25,6 +25,7 @@
 #define TRUE 1
 #endif
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -39,6 +40,9 @@ struct SigInfo {
     uint_T        direction;   /* fsdbVarDir: 0=IMPLICIT 1=INPUT 2=OUTPUT 3=INOUT 4=BUFFER 5=LINKAGE */
     uint_T        var_type;    /* fsdbVarType: 2=PARAMETER 3=REAL 4=REG 15=WIRE 17=MEMORY ... */
     std::string   full_path;   /* top_tb.dut.s_bits */
+    /* Actual scope boundaries shared by declarations in one scope. Dots inside
+     * escaped identifiers are never mistaken for hierarchy separators. */
+    std::shared_ptr<const std::vector<size_t>> scope_ends;
 };
 
 struct FsdbCtx {
@@ -48,6 +52,7 @@ struct FsdbCtx {
     std::set<std::string>             top_modules;
     std::string                       scope_stack;   /* 当前遍历路径 */
     std::vector<std::string>          scope_parts;
+    std::shared_ptr<const std::vector<size_t>> scope_ends;
     bool                              tree_done;
     /* FSDB 时间刻度。FSDB tag 存的是 tick 计数而非 ps：
      *   真实时间 = tick × scale
@@ -146,11 +151,13 @@ _TreeCB(fsdbTreeCBType cb_type, void *client_data, void *tree_cb_data)
     case FSDB_TREE_CBT_SCOPE: {
         fsdbTreeCBDataScope *s = (fsdbTreeCBDataScope*)tree_cb_data;
         ctx->scope_parts.push_back(std::string(s->name));
+        ctx->scope_ends.reset();
         break;
     }
     case FSDB_TREE_CBT_UPSCOPE:
         if (!ctx->scope_parts.empty())
             ctx->scope_parts.pop_back();
+        ctx->scope_ends.reset();
         break;
 
     case FSDB_TREE_CBT_VAR: {
@@ -174,6 +181,16 @@ _TreeCB(fsdbTreeCBType cb_type, void *client_data, void *tree_cb_data)
         info.direction     = (uint_T)v->direction;
         info.var_type      = (uint_T)v->type;
         info.full_path     = full_path;
+        if (!ctx->scope_ends) {
+            auto ends = std::make_shared<std::vector<size_t>>();
+            size_t end = 0;
+            for (const auto &part : ctx->scope_parts) {
+                end += (end ? 1 : 0) + part.size();
+                ends->push_back(end);
+            }
+            ctx->scope_ends = ends;
+        }
+        info.scope_ends = ctx->scope_ends;
 
         ctx->path_to_sig[full_path] = info;
         if (!ctx->scope_parts.empty())
@@ -385,6 +402,94 @@ struct FsdbSignalMetadataV1 {
 };
 
 int fsdb_metadata_version() { return 1; }
+
+/* Optional scope ABI, separate from the unchanged keyword-search ABI. Each
+ * row is five uint32 fields (path bytes, width, direction, type, scope bytes), then exactly
+ * path bytes. No delimiter escaping or fixed-size path truncation is involved.
+ * Native work is capped independently by rows, bytes and visited map entries.
+ * next_path is the first unconsumed key, resumed with lower_bound(). Python
+ * binds that key to the file identity and open-index generation. */
+struct FsdbScopePageV1 {
+    unsigned int returned;
+    unsigned int visited;
+    unsigned int output_bytes;
+    unsigned int complete;
+    unsigned int stop_reason;  /* 0=end, 1=items, 2=bytes, 3=visits, 4=path */
+};
+
+int fsdb_scope_page_version() { return 1; }
+
+int
+fsdb_scope_page_v1(void *handle, const char *scope, const char *start,
+                   int direct, unsigned int max_items, unsigned int max_visited,
+                   char *out, unsigned int capacity, char *next_path,
+                   unsigned int next_capacity, FsdbScopePageV1 *receipt,
+                   unsigned int receipt_size)
+{
+    if (!handle || !scope || !start || !out || !next_path || !receipt ||
+        receipt_size != sizeof(*receipt) || capacity == 0 || next_capacity == 0 ||
+        max_items == 0 || max_visited == 0 || (direct != 0 && direct != 1)) return -1;
+    if (max_items > 1024) max_items = 1024;
+    if (max_visited > 4096) max_visited = 4096;
+    if (capacity > 1024 * 1024) capacity = 1024 * 1024;
+    if (next_capacity > 1024 * 1024) next_capacity = 1024 * 1024;
+    memset(receipt, 0, sizeof(*receipt));
+    next_path[0] = '\0';
+    try {
+        FsdbCtx *ctx = (FsdbCtx*)handle;
+        const std::string scope_name(scope);
+        const std::string prefix = scope_name.empty() ? "" : scope_name + ".";
+        const std::string first(start);
+        if (!first.empty() && first.compare(0, prefix.size(), prefix) != 0) return -1;
+        auto it = ctx->path_to_sig.lower_bound(first.empty() ? prefix : first);
+        while (it != ctx->path_to_sig.end() &&
+               it->first.compare(0, prefix.size(), prefix) == 0) {
+            if (it->first.size() + 1 > next_capacity) {
+                receipt->stop_reason = 4;
+                return 0;
+            }
+            if (receipt->returned >= max_items) { receipt->stop_reason = 1; break; }
+            if (receipt->visited >= max_visited) { receipt->stop_reason = 3; break; }
+            const auto &ends = it->second.scope_ends;
+            bool belongs = scope_name.empty();
+            if (ends) {
+                for (auto end : *ends)
+                    if (end == scope_name.size()) { belongs = true; break; }
+            }
+            ++receipt->visited;
+            if (!belongs) { ++it; continue; }
+            if (direct && ends && !ends->empty() && ends->back() > scope_name.size()) {
+                /* Skip a whole child subtree, not each descendant declaration. */
+                size_t end = 0;
+                for (auto boundary : *ends)
+                    if (boundary > scope_name.size()) { end = boundary; break; }
+                it = ctx->path_to_sig.lower_bound(it->first.substr(0, end) + "/");
+                continue;
+            }
+            size_t row_bytes = 5 * sizeof(unsigned int) + it->first.size();
+            if (row_bytes > capacity - receipt->output_bytes) {
+                receipt->stop_reason = 2;
+                break;
+            }
+            unsigned int fields[] = {(unsigned int)it->first.size(), it->second.bit_size,
+                                     it->second.direction, it->second.var_type,
+                                     ends && !ends->empty() ? (unsigned int)ends->back() : 0};
+            memcpy(out + receipt->output_bytes, fields, sizeof(fields));
+            receipt->output_bytes += sizeof(fields);
+            memcpy(out + receipt->output_bytes, it->first.data(), it->first.size());
+            receipt->output_bytes += (unsigned int)it->first.size();
+            ++receipt->returned;
+            ++it;
+        }
+        if (it == ctx->path_to_sig.end() || it->first.compare(0, prefix.size(), prefix) != 0) {
+            receipt->complete = 1;
+            receipt->stop_reason = 0;
+        } else if (it->first.size() + 1 <= next_capacity) {
+            memcpy(next_path, it->first.c_str(), it->first.size() + 1);
+        } else receipt->stop_reason = 4;
+        return 0;
+    } catch (...) { return -3; }
+}
 
 int
 fsdb_get_signal_metadata_v1(void *handle, const char *path,

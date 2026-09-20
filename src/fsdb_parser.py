@@ -6,6 +6,7 @@ The public API matches vcd_parser.py.
 
 import ctypes
 import os
+import struct
 import sys
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -22,6 +23,8 @@ from config import (
 from . import operation_metrics
 from .clock_edge_cache import ClockCacheToken, discard_clock_edges
 from .cancellation import OperationCancelled, check_cancelled
+from .scope_metadata import (PAGE_ITEMS, PAGE_BYTES, PAGE_SCAN, ScopeCursor,
+                             ScopeIdentityChanged, normalize_scope, page_limits)
 
 # Wrapper shared object lives next to this file.
 _WRAPPER_SO = os.path.join(os.path.dirname(__file__), "..", "libfsdb_wrapper.so")
@@ -71,6 +74,11 @@ class _NativeTransitionGroupProfileV1(ctypes.Structure):
 class _NativeSignalMetadataV1(ctypes.Structure):
     _fields_ = [("width", ctypes.c_uint), ("direction", ctypes.c_uint),
                 ("var_type", ctypes.c_uint)]
+
+
+class _NativeScopePageV1(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint) for name in
+                ("returned", "visited", "output_bytes", "complete", "stop_reason")]
 
 
 def _profile_dict(profile: ctypes.Structure) -> dict[str, int]:
@@ -151,6 +159,21 @@ def _setup(lib):
                 ctypes.c_char_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int),
             ]
             lib._traceweave_has_metadata_v1 = True
+    except AttributeError:
+        pass
+
+    lib._traceweave_has_scope_page_v1 = False
+    try:
+        lib.fsdb_scope_page_version.restype = ctypes.c_int
+        lib.fsdb_scope_page_version.argtypes = []
+        if lib.fsdb_scope_page_version() == 1:
+            lib.fsdb_scope_page_v1.restype = ctypes.c_int
+            lib.fsdb_scope_page_v1.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int,
+                ctypes.c_uint, ctypes.c_uint, ctypes.c_char_p, ctypes.c_uint,
+                ctypes.c_char_p, ctypes.c_uint, ctypes.POINTER(_NativeScopePageV1), ctypes.c_uint,
+            ]
+            lib._traceweave_has_scope_page_v1 = True
     except AttributeError:
         pass
 
@@ -282,6 +305,7 @@ class FSDBParser:
         self._summary_paths = None
         self._metadata_cache = OrderedDict()
         self._metadata_bytes = 0
+        self._scope_epoch = object()
 
     def _stat_identity(self):
         stat = os.stat(self.file_path)
@@ -347,6 +371,7 @@ class FSDBParser:
         )
 
     def close(self):
+        self._scope_epoch = object()
         discard_clock_edges(self)
         self.__dict__.pop("_cached_clock_info", None)
         self.__dict__.pop("_cached_clock_detect_reason", None)
@@ -675,6 +700,74 @@ class FSDBParser:
                        sample_signals_order=("lexical" if summary["metadata_query_mode"] == "native_v1"
                                              else "legacy_ranked"))
         return summary
+
+    def enumerate_scope_page(self, scope: str | None = None, *, cursor=None,
+                             direct: bool = False, max_items: int = PAGE_ITEMS,
+                             max_bytes: int = PAGE_BYTES, max_visited: int = PAGE_SCAN) -> dict:
+        """Read one bounded lexical subtree page under the caller's FSDB lock.
+
+        Old wrappers explicitly decline this optional ABI; discovery may use its
+        legacy search path. A stale cursor never restarts silently on a new file.
+        """
+        check_cancelled()
+        scope = normalize_scope(scope)
+        if "\0" in scope:
+            raise ValueError("scope contains NUL")
+        limits = page_limits(max_items, max_bytes, max_visited)
+        if cursor is not None:
+            if not isinstance(cursor, ScopeCursor):
+                raise ValueError("invalid scope cursor")
+            try:
+                cursor.validate(self._scope_epoch, self._stat_identity(), scope, direct)
+            except OSError as exc:
+                raise ScopeIdentityChanged("waveform disappeared during scope enumeration") from exc
+        self._open()
+        if not getattr(self._lib, "_traceweave_has_scope_page_v1", False):
+            raise NotImplementedError("native scope paging unavailable")
+        identity = self._file_identity
+        max_items, max_bytes, max_visited = limits
+        buf = ctypes.create_string_buffer(max_bytes)
+        continuation = ctypes.create_string_buffer(PAGE_BYTES)
+        receipt = _NativeScopePageV1()
+        rc = self._lib.fsdb_scope_page_v1(
+            self._handle, scope.encode(), cursor.next_path.encode() if cursor else b"",
+            int(direct), max_items, max_visited, buf, max_bytes, continuation, PAGE_BYTES,
+            ctypes.byref(receipt), ctypes.sizeof(receipt))
+        check_cancelled()
+        try:
+            self._check_metadata_identity(identity)
+        except RuntimeError as exc:
+            raise ScopeIdentityChanged(str(exc)) from exc
+        if rc != 0:
+            raise RuntimeError(f"fsdb_scope_page_v1 failed, rc={rc}")
+        if receipt.output_bytes > max_bytes or receipt.returned > max_items:
+            raise RuntimeError("invalid native scope page")
+        data = buf.raw[:receipt.output_bytes]
+        rows, pos = [], 0
+        for _ in range(receipt.returned):
+            check_cancelled()
+            size, width, direction, vartype, parent_bytes = struct.unpack_from("=IIIII", data, pos)
+            pos += 20
+            raw = data[pos:pos + size]
+            if len(raw) != size or parent_bytes > size:
+                raise RuntimeError("invalid native scope record")
+            path = raw.decode()
+            parent = raw[:parent_bytes].decode()
+            rows.append({"path": path, "name": raw[parent_bytes + bool(parent_bytes):].decode(),
+                         "scope": parent, "width": width,
+                         "direction": _FSDB_VAR_DIR.get(direction, "unknown"), "direction_code": direction,
+                         "var_type": _FSDB_VAR_TYPE.get(vartype, "unknown"), "var_type_code": vartype})
+            pos += size
+        if pos != len(data):
+            raise RuntimeError("invalid native scope page length")
+        next_path = continuation.value.decode()
+        return {"results": rows, "complete": bool(receipt.complete),
+                "cursor": ScopeCursor(self._scope_epoch, identity, scope, direct, next_path)
+                          if next_path and not receipt.complete else None,
+                "visited": int(receipt.visited), "bytes_returned": int(receipt.output_bytes),
+                "mode": "native_scope_v1",
+                "stop_reason": {0: None, 1: "page_items", 2: "page_bytes", 3: "page_scan",
+                                4: "path_limit"}.get(receipt.stop_reason, "native_error")}
 
     def search_signals(self, keyword: str,
                        max_results: int = SIGNAL_SEARCH_MAX_RESULTS) -> dict:

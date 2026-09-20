@@ -114,6 +114,15 @@ Step 4: sweep_handshakes(wave_path, ...)
 │  What the agent does:
 │  - Prefer the first sweep unscoped unless the interface scope is already known
 │  - Always examine the finding_summary before diving into individual interfaces
+│  - Read discovery separately: null scope_total means enumeration did not prove
+│    an exact scope count; scope_total_lower_bound is only a lower bound. Narrow
+│    scope when a discovery budget is exhausted. Raising max_interfaces only
+│    checks more already-discovered candidates.
+│  - Idle ready remains a count, with no anomaly flag or ranking weight. Req/ack
+│    names do not establish valid-hold semantics and automatic sweeps skip them.
+│    Supply confirmed semantics in an explicit inspect_handshake call. Ambiguous
+│    clocks and payload ownership need explicit mapping; a packed-only interface
+│    is outside scalar discovery coverage.
 │  - Interpret flagged_count only with coverage_status:
 │    * coverage_status="zero_coverage" means no protocol interfaces were checked;
 │      it is not a protocol pass. A scoped result may retry without scope or at

@@ -239,15 +239,16 @@ def test_sweep_drops_clocking_block_scopes(tmp_path):
     assert r["coverage_status"] == "complete"            # no skip -> not degraded
 
 
-# --- flags / sort: ahb ready_without_valid suppression + x_while_valid ------
+# --- flags / sort: idle-ready suppression + x_while_valid -------------------
 
-def test_flags_suppresses_ready_without_valid_on_ahb():
+def test_flags_suppresses_idle_ready_on_both_families():
     # On an AHB row, ready_without_valid means HREADY high while HTRANS idle (an
-    # idle bus, not backpressure) — it must NOT surface as an anomaly flag. On a
-    # valid_ready row it still does.
+    # idle bus, not backpressure). Both families permit idle ready, so neither
+    # its presence nor its count contributes an anomaly flag or ranking weight.
     res = {"ready_without_valid_cycles": 5}
     assert "ready_without_valid" not in _flags(res, "ahb")
-    assert "ready_without_valid" in _flags(res, "valid_ready")
+    assert "ready_without_valid" not in _flags(res, "valid_ready")
+    assert _sort_key({"kind": "valid_ready", "valid": "a", "ready_without_valid_cycles": 999}) == _sort_key({"kind": "valid_ready", "valid": "a"})
 
 
 def test_flags_includes_x_while_valid():

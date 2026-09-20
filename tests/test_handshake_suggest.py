@@ -518,3 +518,93 @@ def test_search_failure_is_partial_coverage():
     result = suggest_handshakes(get_parser=lambda _: Broken(), wave_path="a.fsdb")
     assert result["discovery"]["status"] == "partial"
     assert result["discovery"]["reasons"] == ["search_failed"]
+
+
+@pytest.mark.parametrize("clock", ["clk_enable", "clk_en_i", "clk_status", "clock_good",
+                                   "clk_ready", "clock_stable", "clock_locked", "clock_count"])
+def test_clock_status_signals_are_not_sampling_clocks(clock):
+    sigs = [_sig("tb." + clock), _sig("tb.valid"), _sig("tb.ready")]
+    assert propose_handshake_bundles(sigs)[0]["clock"] is None
+    sigs += [_sig("tb.HTRANS", 2), _sig("tb.HREADY")]
+    assert propose_protocol_bundles(sigs, "ahb")[0]["clock"] is None
+
+
+@pytest.mark.parametrize("protocol,valid,ready,width", [("ahb", "htrans", "hready", 2),
+                                                       ("apb", "psel", "pready", 1)])
+def test_protocol_clocks_preserve_ambiguity_and_ancestor_scope(protocol, valid, ready, width):
+    sigs = [_sig("tb.clock_main_i"), _sig("tb.u." + valid + "_o", width), _sig("tb.u." + ready + "_i")]
+    b = propose_protocol_bundles(sigs, protocol, scope="tb.u")[0]
+    assert b["clock"] == "tb.clock_main_i"
+    sigs += [_sig("tb.u.hclk"), _sig("tb.u.pclk")]
+    b = propose_protocol_bundles(sigs, protocol, scope="tb.u")[0]
+    assert b["clock"] is None and "clock" in b["needs"]
+    assert b["inspect_handshake_args"] is None
+
+
+def test_generic_multiclock_does_not_pick_first_or_ancestor():
+    sigs = [_sig("tb.clk"), _sig("tb.u.clk_a_i"), _sig("tb.u.clk_b_i"),
+            _sig("tb.u.valid"), _sig("tb.u.ready")]
+    assert propose_handshake_bundles(sigs)[0]["clock"] is None
+
+
+def test_port_suffixes_keep_paths_directions_and_bit_identity():
+    sigs = [_sig("tb.clk_i"), _sig("tb.rvalid_o[2]"), _sig("tb.rready_i[2]"),
+            _sig("tb.rvalid_o[3]"), _sig("tb.rready_i[3]"), _sig("tb.rdata_o", 32)]
+    bundles = propose_handshake_bundles(sigs)
+    assert len(bundles) == 2
+    for b in bundles:
+        assert b["valid"][-3:] == b["ready"][-3:]
+        assert b["signal_directions"] == {"valid": "output", "ready": "input"}
+        assert b["payload"] == []
+
+
+def test_same_direction_conflict_and_duplicate_roles_are_not_guessed():
+    base = [_sig("tb.clk"), _sig("tb.valid_i"), _sig("tb.ready_i")]
+    assert propose_handshake_bundles(base) == []
+    base[-1] = {**_sig("tb.ready_o"), "direction": "input"}
+    assert propose_handshake_bundles(base) == []
+    base[-1] = _sig("tb.ready_o")
+    base += [_sig("tb.valid")]
+    assert propose_handshake_bundles(base) == []
+
+
+def test_unnamed_payload_uses_only_unambiguous_role_names():
+    base = [_sig("tb.clk"), _sig("tb.valid_i"), _sig("tb.ready_o"),
+            _sig("tb.reg_data", 32), _sig("tb.counter", 32), _sig("tb.address_state", 32)]
+    assert propose_handshake_bundles(base)[0]["payload"] == []
+    base += [_sig("tb.data_i", 32), _sig("tb.addr_i", 16), _sig("tb.data_o", 32)]
+    assert set(propose_handshake_bundles(base)[0]["payload"]) == {"tb.data_i", "tb.addr_i"}
+    base += [_sig("tb.data", 32)]
+    assert propose_handshake_bundles(base)[0]["payload"] == ["tb.addr_i"]
+    base += [_sig("tb.psel"), _sig("tb.penable")]
+    assert propose_handshake_bundles(base)[0]["payload"] == []
+
+
+def test_short_stem_cannot_borrow_register_payload():
+    sigs = [_sig("tb.clk"), _sig("tb.rvalid_o"), _sig("tb.rready_i"),
+            _sig("tb.reg_data", 32), _sig("tb.random_bus", 16), _sig("tb.rdata_o", 32)]
+    assert propose_handshake_bundles(sigs)[0]["payload"] == ["tb.rdata_o"]
+
+
+def test_req_ack_requires_semantic_confirmation():
+    b = propose_handshake_bundles([_sig("tb.clk"), _sig("tb.req_o"), _sig("tb.ack_i")])[0]
+    assert b["handshake_semantics"] == "requires_confirmation"
+    assert "explicit_valid_hold_semantics" in b["needs"]
+
+
+def test_packed_only_interface_is_not_projected_into_scalar_roles():
+    sigs = [_sig("tb.clk"), _sig("tb.request_o", 109), _sig("tb.response_i", 66),
+            _sig("tb.valid", 4), _sig("tb.ready", 4)]
+    assert propose_handshake_bundles(sigs) == []
+    assert propose_protocol_bundles(sigs, "ahb") == []
+
+
+def test_protocol_payload_and_ready_ambiguity_remain_unresolved():
+    sigs = [_sig("tb.hclk"), _sig("tb.mst_htrans_o", 2), _sig("tb.mst_hready_i"),
+            _sig("tb.mst_haddr_o", 32), _sig("tb.slv_haddr_o", 32)]
+    b = propose_protocol_bundles(sigs, "ahb")[0]
+    assert b["payload"] == ["tb.mst_haddr_o"]
+    sigs += [_sig("tb.mst_haddr", 32)]
+    assert propose_protocol_bundles(sigs, "ahb")[0]["payload"] == []
+    sigs += [_sig("tb.mst_hreadyout_i")]
+    assert propose_protocol_bundles(sigs, "ahb") == []

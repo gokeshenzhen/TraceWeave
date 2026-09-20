@@ -9,6 +9,9 @@ from bisect import bisect_left, bisect_right
 from operator import itemgetter
 from itertools import islice
 from pathlib import Path
+from .cancellation import check_cancelled
+from .scope_metadata import (PAGE_ITEMS, PAGE_BYTES, PAGE_SCAN, ScopeCursor,
+                             ScopeIdentityChanged, file_identity, normalize_scope, page_limits)
 
 from src.waveform_hints import annotate_signal_search_result, normalize_vcd_producer
 from src.clock_edge_cache import ClockCacheToken
@@ -34,6 +37,10 @@ class VCDParser:
         self._top_modules: list = []
         self._producer_hint: str | None = None
         self._producer_evidence: str | None = None
+        self._scope_ends: dict[str, tuple[int, ...]] = {}
+        self._scope_index = None
+        self._scope_epoch = object()
+        self._parsed_identity = None
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -141,6 +148,70 @@ class VCDParser:
         return {**self.get_header(), "top_modules": list(self._top_modules),
                 "sample_signals": list(islice(self._path_to_sym, 20))}
 
+    def enumerate_scope_page(self, scope: str | None = None, *, cursor=None,
+                             direct: bool = False, max_items: int = PAGE_ITEMS,
+                             max_bytes: int = PAGE_BYTES, max_visited: int = PAGE_SCAN) -> dict:
+        """Page over references to existing declarations, without full metadata copies."""
+        check_cancelled()
+        scope = normalize_scope(scope)
+        if "\0" in scope:
+            raise ValueError("scope contains NUL")
+        max_items, max_bytes, max_visited = page_limits(max_items, max_bytes, max_visited)
+        self._ensure_parsed()
+        try:
+            identity = file_identity(self.file_path)
+        except OSError as exc:
+            raise ScopeIdentityChanged("waveform disappeared during scope enumeration") from exc
+        if identity != self._parsed_identity:
+            raise ScopeIdentityChanged("VCD changed after parsing; obtain a new parser")
+        if cursor is not None:
+            if not isinstance(cursor, ScopeCursor):
+                raise ValueError("invalid scope cursor")
+            cursor.validate(self._scope_epoch, identity, scope, direct)
+        if self._scope_index is None:
+            self._scope_index = tuple(sorted(p for p in self._path_to_sym if p not in self._range_aliases))
+        check_cancelled()
+        paths = self._scope_index
+        prefix = scope + "." if scope else ""
+        index = bisect_left(paths, cursor.next_path if cursor else prefix)
+        rows, visited, nbytes, reason = [], 0, 0, None
+        while index < len(paths) and paths[index].startswith(prefix):
+            check_cancelled()
+            path = paths[index]
+            if len(rows) >= max_items:
+                reason = "page_items"
+                break
+            if visited >= max_visited:
+                reason = "page_scan"
+                break
+            visited += 1
+            ends = self._scope_ends[path]
+            if scope and len(scope) not in ends:
+                index += 1
+                continue
+            if direct and ends and ends[-1] > len(scope):
+                child_end = next(end for end in ends if end > len(scope))
+                index = bisect_left(paths, path[:child_end] + "/", lo=index + 1)
+                continue
+            size = 20 + len(path.encode())
+            if size > max_bytes - nbytes:
+                reason = "page_bytes"
+                break
+            parent_end = ends[-1] if ends else 0
+            signal = self._signals[self._path_to_sym[path]]
+            rows.append({"path": path, "name": path[parent_end + bool(parent_end):],
+                         "scope": path[:parent_end], "width": signal["width"],
+                         "direction": None, "var_type": signal.get("var_type")})
+            nbytes += size
+            index += 1
+        if file_identity(self.file_path) != identity:
+            raise ScopeIdentityChanged("VCD changed during scope enumeration")
+        complete = index == len(paths) or not paths[index].startswith(prefix)
+        return {"results": rows, "complete": complete,
+                "cursor": None if complete else ScopeCursor(self._scope_epoch, identity, scope, direct, paths[index]),
+                "visited": visited, "bytes_returned": nbytes, "mode": "vcd_scope_v1",
+                "stop_reason": None if complete else reason}
+
     def search_signals(self, keyword: str, max_results: int = 100) -> dict:
         """Search signals in a VCD using the in-memory path index.
 
@@ -178,7 +249,11 @@ class VCDParser:
 
     def _ensure_parsed(self):
         if not self._parsed:
+            identity = file_identity(self.file_path)
             self._parse()
+            if file_identity(self.file_path) != identity:
+                raise ScopeIdentityChanged("VCD changed while parsing")
+            self._parsed_identity = identity
             self._parsed = True
 
     def _resolve(self, signal_path: str) -> str:
@@ -209,6 +284,7 @@ class VCDParser:
             self._timescale_fs = _parse_timescale_fs(self._timescale_raw)
 
         scope_stack   = []
+        scope_ends = ()
         current_ps    = 0
         tokens        = content.split()
         ranged_declarations: dict[str, set[str]] = {}
@@ -218,12 +294,14 @@ class VCDParser:
             if tok == "$scope":
                 scope_name = tokens[i + 2] if i + 2 < len(tokens) else "unknown"
                 scope_stack.append(scope_name)
+                scope_ends += ((scope_ends[-1] + 1 if scope_ends else 0) + len(scope_name),)
                 if len(scope_stack) == 1 and scope_name not in self._top_modules:
                     self._top_modules.append(scope_name)
                 i += 4
             elif tok == "$upscope":
                 if scope_stack:
                     scope_stack.pop()
+                    scope_ends = scope_ends[:-1]
                 i += 2
             elif tok == "$var":
                 # $var <var_type> <size> <id> <reference> [index/range] $end
@@ -245,6 +323,7 @@ class VCDParser:
                     ranged_declarations.setdefault(base, set()).add(full)
                 self._signals[symbol]     = {"path": full, "width": width, "var_type": var_type}
                 self._path_to_sym[full]   = symbol
+                self._scope_ends[full] = scope_ends
                 self._transitions.setdefault(symbol, [])
                 i = end + 1
             elif tok.startswith("#"):
@@ -283,6 +362,7 @@ class VCDParser:
                 full = next(iter(paths))
                 if ":" in full[len(base):]:
                     self._path_to_sym[base] = self._path_to_sym[full]
+                    self._scope_ends[base] = self._scope_ends[full]
                     self._range_aliases.add(full)
 
 

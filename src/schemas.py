@@ -1649,6 +1649,8 @@ class HandshakeBundle(SchemaModel):
     confidence: str
     rationale: str
     needs: list[str] = Field(default_factory=list)
+    handshake_semantics: Literal["valid_ready", "requires_confirmation"] = "valid_ready"
+    signal_directions: dict[str, str] = Field(default_factory=dict)
 
 
 class SignalDiscoveryCoverage(SchemaModel):
@@ -1656,6 +1658,18 @@ class SignalDiscoveryCoverage(SchemaModel):
     signal_limit: int = 65_536
     signals_returned: int = 0
     reasons: list[str] = Field(default_factory=list)
+    mode: Literal["paged", "native_scope_v1", "vcd_scope_v1", "legacy_search"] | None = None
+    pages_read: int | None = None
+    signals_scanned: int | None = None
+    scan_limit: int | None = None
+    bytes_returned: int | None = None
+    byte_limit: int | None = None
+    resident_bytes_estimate: int | None = None
+    memory_limit: int | None = None
+    scope_signals_returned: int | None = None
+    scope_total: int | None = None
+    scope_total_lower_bound: int | None = None
+    ancestor_signals_returned: int | None = None
 
 
 class SuggestHandshakesResult(SchemaModel):

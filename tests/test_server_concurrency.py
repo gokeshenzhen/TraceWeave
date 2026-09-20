@@ -292,6 +292,50 @@ class TestEventLoopNotBlocked:
 
 @pytest.mark.anyio
 class TestCooperativeCancellation:
+    async def test_paged_discovery_yields_fsdb_lock_after_native_return(self):
+        from src.handshake_suggest import suggest_handshakes
+
+        entered, release, interactive_entered = (threading.Event() for _ in range(3))
+        calls = []
+        cancelled = threading.Event()
+
+        class Pages:
+            def enumerate_scope_page(self, *args, **kwargs):
+                calls.append(1)
+                entered.set()
+                assert release.wait(5)
+                assert not interactive_entered.is_set()
+                return {"results": [], "mode": "native_scope_v1", "visited": 1,
+                        "bytes_returned": 0, "complete": False, "cursor": "next", "stop_reason": "page_scan"}
+
+        async def background():
+            try:
+                await server._run_in_wave_thread(
+                    "/fake/background.fsdb",
+                    lambda: suggest_handshakes(get_parser=lambda _: Pages(), wave_path="/fake/background.fsdb"),
+                    priority=server._WAVE_PRIORITY_BACKGROUND)
+            except OperationCancelled:
+                cancelled.set()
+
+        async def interactive():
+            await server._run_in_wave_thread("/fake/other.fsdb", interactive_entered.set)
+
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(background)
+                assert await anyio.to_thread.run_sync(_wait_event, entered, 5)
+                tg.start_soon(interactive)
+                # Wait for preemption to be armed, not for a scheduler timing guess.
+                with anyio.fail_after(3):
+                    while not server._FSDB_ACTIVE or not server._FSDB_ACTIVE[0].is_set():
+                        await anyio.sleep(0.01)
+                assert not interactive_entered.is_set()
+                release.set()
+        finally:
+            release.set()
+        assert cancelled.is_set() and interactive_entered.is_set()
+        assert len(calls) == 1
+
     async def test_cancelled_structural_scan_stops_at_checkpoint(
         self,
         monkeypatch,

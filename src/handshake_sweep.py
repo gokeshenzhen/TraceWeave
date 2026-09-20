@@ -31,7 +31,7 @@ from src import operation_metrics
 from src.cancellation import check_cancelled
 from src.cycle_query import EdgeSamplingSession
 from src.cursor_store import CursorStore
-from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
+from src.handshake_suggest import DiscoverySnapshot, suggest_handshakes, suggest_protocol_bundles
 from src.verify_condition import _resolve_signal_path, inspect_handshake
 
 DEFAULT_MAX_INTERFACES = 64
@@ -75,7 +75,8 @@ def _iter_clock_groups(
     """
     groups: dict[str | None, list[dict[str, Any]]] = {}
     for bundle in bundles:
-        groups.setdefault(bundle.get("clock"), []).append(bundle)
+        clock = bundle.get("clock") if bundle.get("semantics_confirmed", True) else None
+        groups.setdefault(clock, []).append(bundle)
 
     for clock, members in groups.items():
         if not clock:
@@ -197,6 +198,7 @@ def _normalize_vr(b: dict[str, Any]) -> dict[str, Any]:
         "payload": b.get("payload") or [], "confidence": b.get("confidence"),
         "discovery_needs": b.get("needs") or [],
         "inspect_kwargs": {"valid": b["valid"]},
+        "semantics_confirmed": b.get("handshake_semantics", "valid_ready") == "valid_ready",
     }
 
 
@@ -222,10 +224,8 @@ def _normalize_ahb(b: dict[str, Any]) -> dict[str, Any]:
 def _flags(res: dict[str, Any], kind: str) -> list[str]:
     """Factual tags describing what the cycle scan observed — NOT verdicts.
 
-    ``ready_without_valid`` is suppressed for an ``ahb`` row: there it means
-    HREADY high while HTRANS is idle — an idle bus, not backpressure — so flagging
-    it would be a false anomaly that trains the reader to distrust the row. The raw
-    ``ready_without_valid_cycles`` count is still carried in the facts."""
+    Idle-ready is legal for AHB and valid/ready. Its raw count stays in the facts
+    but cannot independently create a flag or imply a driver violation."""
     flags: list[str] = []
     if res.get("ended_in_stall"):
         flags.append("ended_in_stall")
@@ -239,8 +239,6 @@ def _flags(res: dict[str, Any], kind: str) -> list[str]:
         flags.append("premature_valid_deassertion")
     if any(f.get("type") == "long_stall" for f in res.get("findings", [])):
         flags.append("long_stall")
-    if kind != "ahb" and res.get("ready_without_valid_cycles"):
-        flags.append("ready_without_valid")
     if res.get("unknown_sample_cycles"):
         flags.append("unknown_samples")
     return flags
@@ -250,9 +248,8 @@ def _sort_key(iface: dict[str, Any]) -> tuple:
     """Transparent mechanical ordering (documented in the result note). Surfaces
     the most-likely-interesting facts first; it is NOT a causal ranking.
       deadlock signature -> x-while-valid -> payload-hold -> write-data-hold ->
-      premature deassertion -> longest stall -> backpressure.
-    ready_without_valid does NOT weight an ahb row (idle-bus, not backpressure)."""
-    rwv = int(iface.get("ready_without_valid_cycles") or 0) if iface.get("kind") != "ahb" else 0
+      premature deassertion -> longest stall.
+    Idle-ready never contributes to the ordering."""
     return (
         0 if iface.get("ended_in_stall") else 1,
         -int(iface.get("x_while_valid_violations") or 0),
@@ -260,7 +257,6 @@ def _sort_key(iface: dict[str, Any]) -> tuple:
         -int(iface.get("write_data_hold_violations") or 0),
         -int(iface.get("valid_deassert_violations") or 0),
         -int(iface.get("max_stall_cycles") or 0),
-        -rwv,
         iface.get("valid") or "",
     )
 
@@ -269,8 +265,7 @@ _SORT_DESC = (
     "ordered (convenience, not a verdict) by: ended_in_stall, then "
     "x_while_valid_violations, then payload_hold_violations, then "
     "write_data_hold_violations, then valid_deassert_violations, then "
-    "max_stall_cycles, then ready_without_valid_cycles (ahb rows excluded: "
-    "idle-bus, not backpressure). "
+    "max_stall_cycles. Idle-ready counts are informational for both families. "
     "Raw facts are exposed per interface — re-rank as the symptom warrants."
 )
 
@@ -310,13 +305,14 @@ def _retry_truncated_action(
     max_wait_cycles: int,
     discovered_count: int,
     max_interfaces: int,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     return {
         "tool": "sweep_handshakes",
         "reason": (
             f"Previous sweep discovered {discovered_count} interfaces but only "
             f"swept {max_interfaces} due to cap. Re-run with max_interfaces>={discovered_count} "
-            "for complete coverage before trusting the interface ranking."
+            "to check more discovered candidates; discovery and skipped-row gaps remain separate."
         ),
         "arguments": {
             "wave_path": wave_path,
@@ -325,6 +321,7 @@ def _retry_truncated_action(
             "end_time_ps": int(end_ps),
             "max_wait_cycles": int(max_wait_cycles),
             "max_interfaces": int(discovered_count),
+            **({"scope": scope} if scope else {}),
         },
     }
 
@@ -427,20 +424,24 @@ def sweep_handshake_anomalies(
     # psel&&penable valid that inspect_handshake doesn't accept yet), so they would
     # only land in `skipped`.
     check_cancelled()
+    snapshot = DiscoverySnapshot()
     with operation_metrics.timed_phase(
         "discover_valid_ready", "discover_valid_ready_ms"
     ):
         vr = suggest_handshakes(
             get_parser=get_parser, wave_path=wave_path, scope=scope,
             max_candidates=max_interfaces,
+            _snapshot=snapshot,
         )
     check_cancelled()
     with operation_metrics.timed_phase("discover_ahb", "discover_ahb_ms"):
         ahb = suggest_protocol_bundles(
             get_parser=get_parser, wave_path=wave_path, protocol="ahb", scope=scope,
             max_candidates=max_interfaces,
+            _snapshot=snapshot,
         )
     check_cancelled()
+    del snapshot  # release metadata before transition loading and sampling
     operation_metrics.set_value("sweep_phase", "inspect_interfaces")
     # Drop clocking-block scopes (TB sampling mirrors of a parent interface, no own
     # clock) BEFORE counting/inspecting, so they neither inflate discovered_count nor
@@ -640,6 +641,9 @@ def sweep_handshake_anomalies(
                     "scope": nb["scope"], "valid": nb["valid"] or "",
                     "ready": nb["ready"] or "",
                 }
+                if not nb.get("semantics_confirmed", True):
+                    skipped.append({**base, "reason": "req/ack naming needs explicit valid-hold semantics"})
+                    continue
                 if not nb.get("clock"):
                     skipped.append({
                         **base, "reason": "no clock found in scope/ancestors"
@@ -769,7 +773,8 @@ def sweep_handshake_anomalies(
             f"COVERAGE TRUNCATED: {discovered} interfaces discovered but only "
             f"{len(to_inspect)} swept (max_interfaces={max_interfaces}). The dropped "
             "interfaces are the tail of suggest's ordering; re-run with "
-            f"max_interfaces>={discovered} for full coverage before trusting the ranking."
+            f"max_interfaces>={discovered} to inspect more discovered candidates. "
+            "This does not repair discovery or skipped-row gaps."
         )
         suggested_next_actions.append(
             _retry_truncated_action(
@@ -780,6 +785,7 @@ def sweep_handshake_anomalies(
                 max_wait_cycles=max_wait_cycles,
                 discovered_count=discovered,
                 max_interfaces=max_interfaces,
+                scope=scope,
             )
         )
     if transition_truncated_count:
