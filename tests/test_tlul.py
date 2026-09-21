@@ -78,11 +78,11 @@ def test_scalar_and_packed_match_independent_events(tmp_path, data_width, id_wid
     for packed in (False, True):
         parser, fields = fixture(tmp_path, packed=packed, data_width=data_width, id_width=id_width)
         counts = Counter()
-        original = parser.get_transitions
+        original = parser._event_pages
         def measured(path, *a, **kw):
             counts[path] += 1
             return original(path, *a, **kw)
-        parser.get_transitions = measured
+        parser._event_pages = measured
         r = run(parser, fields)
         assert r["coverage_status"] == "complete"
         assert r["reset_cycles"] == 1
@@ -142,6 +142,9 @@ def test_unknown_payload_is_retained_and_never_called_integrity_pass(tmp_path):
 
 def test_transition_prefix_never_invents_repeated_accepts(tmp_path):
     parser, fields = fixture(tmp_path, packed=True)
+    # Exercise the compatibility reader; modern page truncation is separately
+    # checked through the native/page receipt in transaction sampling tests.
+    parser._supports_event_pages = lambda: False
     original = parser.get_transitions
     def limited(path, *a, **kw):
         r = original(path, *a, **kw)

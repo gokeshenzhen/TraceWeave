@@ -6707,7 +6707,9 @@ async def list_tools():
                 "handshake channels: walk every clock edge, match accepted request beats "
                 "to completion beats by id, and return per-transaction latency plus "
                 "aggregate facts (outstanding curve incl. per-id peak, ordering, "
-                "unmatched=hang signature). One generic core, not a tool per protocol. "
+                "window-local unmatched endpoints). Inspect coverage_status and analysis: "
+                "state/read budgets return a partial prefix; max_transactions limits display only. "
+                "Pending at a window boundary does not prove a hang. One generic core. "
                 "AXI READ: req=AR (req_valid=arvalid, req_ready=arready, req_id=arid), "
                 "cmp=R (cmp_valid=rvalid, cmp_ready=rready, cmp_id=rid, cmp_last=rlast); "
                 "AXI WRITE: req=AW (awvalid/awready/awid), cmp=B (bvalid/bready/bid, no "
@@ -6829,7 +6831,9 @@ async def list_tools():
                     },
                     "max_transactions": {
                         "type": "integer",
-                        "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.",
+                        "minimum": 1,
+                        "maximum": 65536,
+                        "description": "Display cap (default 256). Counts/stats cover all analyzed edges independently of display; inspect analysis.stop_reason and display_stop_reason for budget boundaries.",
                         "default": 256,
                     },
                     "cursor_name": {

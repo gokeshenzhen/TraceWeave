@@ -1,8 +1,12 @@
 """A/D role adaptation over the existing handshake and transaction engines."""
 from __future__ import annotations
 
+import time
+
 from .cancellation import check_cancelled
-from .cycle_query import sample_signals_on_edges
+from .cycle_query import sample_signals_on_edges, iter_sample_rows
+from .transaction_sampling import (TransactionBudget, TransactionBudgetExceeded,
+    TransactionSampleInput, bounded_parser, role_identity, sample_identity, sample_limit, limit_to_budget_prefix)
 from .txn_reconstruct import reconstruct_transactions
 from .verify_condition import inspect_handshake, _hs_truth
 from .waveform_selection import prepare_selections, attach_selections
@@ -14,7 +18,7 @@ OPTIONAL_FIELDS = ("a_opcode", "a_param", "a_size", "a_address", "a_mask", "a_da
 
 def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
                  reset_active_low=True, start_ps=0, end_ps=-1, edge="posedge",
-                 max_cycles=65536, max_transactions=256, max_wait_cycles=16):
+                 max_cycles=65536, max_transactions=256, max_wait_cycles=16, _limits=None):
     """Explicit mappings only; bit widths come from declarations, never a profile.
 
     No carry-in state is invented. Pairing before a known reset is window-local;
@@ -50,20 +54,34 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     for left, right in (("a_source", "d_source"), ("a_size", "d_size")):
         if left in mapped and right in mapped and parser.get_signal_width(mapped[left]) != parser.get_signal_width(mapped[right]):
             raise ValueError(f"{left} and {right} widths disagree")
-    sampled = sample_signals_on_edges(parser, clock, list(dict.fromkeys([*mapped.values(), *([reset] if reset else [])])),
-                                      start_ps=start_ps, end_ps=end_ps, edge=edge, max_edges=max_cycles,
-                                      safe_prefix_only=True)
-    samples = sampled["samples"]
-    result.update(sample_count=len(samples), clock=clock,
+    budget = TransactionBudget(_limits)
+    all_signals = list(dict.fromkeys([*mapped.values(), *([reset] if reset else [])]))
+    identity = sample_identity(parser, wave_path, clock, all_signals, start_ps, end_ps, edge)
+    sampling_started = time.perf_counter()
+    try:
+        sampled = sample_signals_on_edges(bounded_parser(parser, budget), clock, all_signals,
+            start_ps=start_ps, end_ps=end_ps, edge=edge, compact=True,
+            max_edges=sample_limit(parser, all_signals, budget, max_cycles), safe_prefix_only=True)
+        sampled = limit_to_budget_prefix(sampled, budget)
+    except TransactionBudgetExceeded:
+        result.update(coverage_status="partial", gaps=[budget.stop_reason], tail=budget.stop_reason)
+        return attach_selections(result, parser)
+    sampling_ms = (time.perf_counter() - sampling_started) * 1000
+    sample_count = len(sampled["edge_times"])
+    result.update(sample_count=sample_count, clock=clock,
                   sample_limit_reached=sampled["sample_limit_reached"],
                   transition_data_truncated=sampled["transition_data_truncated"])
-    if not samples or sampled["signal_errors"]:
-        result["gaps"] = ["no_clock_edges" if not samples else "signal_read_failed"]
+    if not sample_count or sampled["signal_errors"]:
+        result["gaps"] = ["no_clock_edges" if not sample_count else "signal_read_failed"]
+        if budget.stop_reason:
+            result.update(coverage_status="partial", gaps=[budget.stop_reason], tail=budget.stop_reason)
+        elif sampled["sample_limit_reached"] or sampled["transition_data_truncated"]:
+            reason = "sample_limit" if sampled["sample_limit_reached"] else "transition_data_truncated"
+            result.update(coverage_status="partial", gaps=[reason], tail=reason)
         return attach_selections(result, parser)
 
     inactive = {}
-    txn_samples = []
-    reset_key = "__traceweave_correlation_reset__"
+    boundaries, uncertain_boundaries = bytearray(), bytearray()
     saw_reset = False
     active_before_reset = False
     control_unknown = 0
@@ -72,9 +90,8 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     field_facts = {name: {"known_accepted": 0, "unknown_accepted": 0, "nonzero_accepted": 0}
                    for name in OPTIONAL_FIELDS if name in mapped}
     unknown_fields = {name: 0 for name in mapped}
-    for i, row in enumerate(samples):
+    for i, (_, sig) in enumerate(iter_sample_rows(sampled)):
         check_cancelled()
-        sig = row["signals"]
         rst = _hs_truth(sig.get(reset), not reset_active_low) if reset else False
         reset_boundary = rst is not False
         if rst is True:
@@ -114,8 +131,8 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
         # Insert that same boundary for uncertain acceptance/ID history. These
         # clears are separately reported, never described as observed resets.
         boundary = reset_boundary or uncertain
-        txn_samples.append({**row, "_uncertain_boundary": uncertain or rst is None,
-                            "signals": {**sig, reset_key: {"bin": "1" if boundary else "0", "dec": int(boundary)}}})
+        boundaries.append(boundary)
+        uncertain_boundaries.append(uncertain or rst is None)
         if uncertain or rst is None:
             result["correlation_breaks"] += 1
     result["carry_in"] = "reset_observed_before_activity" if saw_reset and not active_before_reset else "unknown"
@@ -131,26 +148,26 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
             valid=mapped[channel + "_valid"], ready=mapped[channel + "_ready"], payload=payload,
             edge=edge, start_ps=start_ps, end_ps=end_ps, max_wait_cycles=max_wait_cycles,
             _sampled=handshake_samples,
+            _compact_sampling=True,
         )
         result["checks"].extend([channel + "_acceptance", channel + "_stall",
                                  channel + "_valid_hold", channel + "_payload_hold_during_stall"])
 
-    class ResetParser:
-        def __getattr__(self, name):
-            return getattr(parser, name)
-
-        def get_signal_width(self, path):
-            return 1 if path == reset_key else parser.get_signal_width(path)
-
+    req_fields = [mapped[n] for n in OPTIONAL_FIELDS if n.startswith("a_") and n in mapped]
+    cmp_fields = [mapped[n] for n in OPTIONAL_FIELDS if n.startswith("d_") and n in mapped]
+    roles = dict(req_valid=mapped["a_valid"], req_ready=mapped["a_ready"], req_id=mapped["a_source"],
+                 cmp_valid=mapped["d_valid"], cmp_ready=mapped["d_ready"], cmp_id=mapped["d_source"])
+    if reset:
+        roles["reset"] = reset
     transactions = reconstruct_transactions(
-        get_parser=lambda _: ResetParser(), wave_path=wave_path, clock=clock,
-        req_valid=mapped["a_valid"], req_ready=mapped["a_ready"], req_id=mapped["a_source"],
-        cmp_valid=mapped["d_valid"], cmp_ready=mapped["d_ready"], cmp_id=mapped["d_source"],
-        req_fields=[mapped[n] for n in OPTIONAL_FIELDS if n.startswith("a_") and n in mapped],
-        cmp_fields=[mapped[n] for n in OPTIONAL_FIELDS if n.startswith("d_") and n in mapped],
-        reset=reset_key, reset_active_low=False, max_transactions=max_transactions,
+        get_parser=lambda _: parser, wave_path=wave_path, clock=clock, **roles,
+        req_fields=req_fields, cmp_fields=cmp_fields,
+        reset_active_low=reset_active_low, max_transactions=max_transactions,
         start_ps=start_ps, end_ps=end_ps, edge=edge,
-        _sampled={**sampled, "samples": txn_samples},
+        _sampled=TransactionSampleInput(sampled,
+            identity,
+            role_identity(roles, req_fields, cmp_fields, [], True, reset_active_low),
+            bytes(boundaries), bytes(uncertain_boundaries), budget, sampling_ms),
     )
     # A cut window is evidence of pending work, not a hang verdict.
     transactions["warnings"] = [w for w in transactions["warnings"] if "hang/deadlock" not in w]
@@ -165,6 +182,9 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     if reset:
         result["checks"].append("sampled_reset_boundaries")
     gaps = result["gaps"]
+    if budget.stop_reason:
+        gaps.append(budget.stop_reason)
+        result["tail"] = budget.stop_reason
     if result["carry_in"] == "unknown":
         gaps.append("window_carry_in_unknown")
     if not reset:

@@ -1919,3 +1919,92 @@ cross-request waveform result cache or licensed frontend is introduced. The
 existing discovery scope/page budgets, partial coverage, clock ambiguity,
 payload ownership and unconfirmed req/ack exclusions are unchanged. A clean
 mapped interface does not override partial or flagged global sweep evidence.
+
+## Transaction sampling and bounded facts
+
+`reconstruct_transactions` consumes the existing compact columns through
+`cycle_query.iter_sample_rows`. Each iteration borrows one reusable signal view;
+it does not allocate a signal dictionary or normalized value for every cycle.
+`inspect_tlul` shares those same columns with both handshake inspections and the
+transaction core. Two byte vectors carry reset/uncertain-history boundaries,
+without copying samples or inventing a reset signal. Its private
+`TransactionSampleInput` binds the original parser/epoch, file identity, actual
+declarations and ordered selected bits, roles and ordered payload fields,
+clock/edge/window, fixed 1 ps sample offset, reset polarity and semantic version.
+Identity is captured before sampling and checked again before correlation;
+untyped sample dictionaries, changed files, reopened parsers and incompatible
+mappings cannot be reused. Semantic/layout export remains a separate capability;
+these waveform samples cannot establish a compile-to-waveform association.
+
+`transaction_sampling` adapts bounded event pages to the existing sampler.
+It reads one declaration at a time with the existing `event_readers` context,
+closing the cursor before unloading its FSDB group. Clock transitions are
+released after edge extraction; compact columns keep only sampled value
+references. A per-read normalization table reuses identical four-state values,
+with at most 256 entries and 256 KiB of accounted storage. It is discarded at
+the end of that read, has no cross-request hits or eviction lifecycle, and
+reports hit/miss counts and peak size. Native page reads and every consumption
+loop retain cancellation checks. Missing predecessor values stay unknown;
+unfinished equal-time groups are masked rather than extrapolated. No new native
+ABI or global lock/worker model is introduced.
+
+The fixed transaction budgets are 128 sampled signals plus the clock,
+262,144 samples, 2,097,152 sample
+cells, 1,000,000 admitted events, 256 MiB of conservatively accounted decoded
+events, 16,384 pending requests, 16,384 early data beats, 32 MiB of accounted
+correlation state and a 30 s cooperative analysis deadline. Existing structured
+selection cell/bit limits can lower the sample cap; TL-UL also keeps its 65,536
+cycle cap. Event pages retain the existing 1,024-event/256-KiB limits; a read
+budget may consume one final page whose unused events are reported as read but
+not admitted. File parsing/index memory, FFR residency and the legacy reader's
+single-call decode scratch are outside these accounting limits. Old wrappers
+use the original materialized read and report `legacy_reads`; the new budgets
+bound admission and retained analysis data, not that legacy first-read scratch.
+
+Per-ID FIFO deques, ordered pending/data targets and an early-data deque retain
+same-ID ordering, cross-ID completion order, FIFO mode, W-before-AW, sampled
+reset segmentation, LAST and length checks, and four-state values. Exact latency
+statistics use a bounded histogram. Completed counts, unmatched counts, peaks,
+ordering, length anomalies and timeout-threshold counts cover every analyzed
+edge, including edges after the display cap. Required state is never cleared to
+continue after a budget failure. Read exhaustion admits only the common proven
+column prefix; state exhaustion stops before the next edge and preserves pending
+endpoint evidence. `coverage_status`, `gaps`, `analysis.stop_reason`,
+`analyzed_samples` and `last_time_ps` distinguish partial analysis from a full
+window. Unknown controls/IDs make coverage partial even if every edge was read.
+Tail pending requests and responses without an in-window request do not prove
+a hang or an illegal response. Unknown LAST/length values are not clean-burst
+evidence.
+
+Normalized `TransactionFacts` freeze aggregates and a bounded evidence prefix
+before display and cursor projection. `max_transactions` (1..65,536, default
+256) limits only retained/displayed records; the default shape and correlation
+parameters remain compatible. Transaction record storage has a separate 16 MiB
+accounting cap. Exhausting it marks `analysis.display_status="partial"` and
+`display_stop_reason="result_byte_budget"` while full-window counting continues;
+it does not turn complete counts into an analysis prefix. A larger projection
+of insufficient retained facts reports `retained_fact_prefix` and requires a
+new analysis. Display truncation and cursor naming never change aggregate
+conclusions or the cursor anchor. Unmatched evidence remains limited to 32
+endpoints per side while the counts are complete for the analyzed prefix.
+
+The additive `analysis` receipt reports available/analyzed samples, read versus
+admitted events, binary value bytes, page output bytes, conservative decoded
+bytes, read/page/legacy counts, state/result/table peaks and sampling,
+reconstruction and projection timings. These bytes describe different layers,
+not interchangeable process RSS measures. Benchmark RSS separately with
+`scripts/benchmark_transactions.py`: generate a VCD with `--generate --wave
+/tmp/transactions.vcd --workload dense --size 16384`, then run without
+`--generate`; `--source-root` selects an isolated checkout. The harness also
+provides long-idle, high-outstanding, multibeat and early-write workloads with
+independent arithmetic expectations, first/hot requests, parser-open cost,
+native call counts and serialization timing. OS caches are not flushed and
+these measurements exclude MCP transport.
+
+There is no cross-call transaction result repository or persistent transaction
+cache. The shared TL-UL input and bounded normalization table have request-local
+lifetimes. Repeated benchmark calls alone are not evidence of an actual repeated
+analysis workflow, and a short mapped sample cannot establish a cache benefit
+for long multibeat/high-outstanding workloads. A future cross-call cache needs
+its own source/artifact/selection/semantic identity and lifecycle evidence;
+Source Graph and structural-scan cache keys do not supply that contract.

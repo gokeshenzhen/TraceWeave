@@ -14,6 +14,32 @@ from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from . import clock_edge_cache, operation_metrics
 
 
+class SignalColumnView:
+    """Borrow one row of columns without copying the signal dictionary."""
+    __slots__ = ("columns", "index")
+
+    def __init__(self, columns):
+        self.columns, self.index = columns, 0
+
+    def get(self, path, default=None):
+        column = self.columns.get(path)
+        return column[self.index] if column is not None and self.index < len(column) else default
+
+
+def iter_sample_rows(sampled):
+    """Yield borrowed (time, values) pairs; consumers must not retain the view."""
+    if "signal_columns" in sampled:
+        view = SignalColumnView(sampled["signal_columns"])
+        for index, at in enumerate(sampled["edge_times"]):
+            if not index % CANCEL_CHECK_STRIDE:
+                check_cancelled()
+            view.index = index
+            yield at, view
+    else:
+        for row in sampled.get("samples", ()):
+            yield row["time_ps"], row["signals"]
+
+
 class EdgeSamplingSession:
     """Bounded reuse state for a group of inspections on one shared clock.
 
@@ -384,6 +410,12 @@ def sample_signals_on_edges(
     if sample_limit_reached:
         edge_times = edge_times[:max_edges]
         sample_times = sample_times[:max_edges]
+
+    if compact and sampling_session is None:
+        # The edge vector owns everything needed below. A request-local compact
+        # consumer need not keep all enriched clock transitions while sampling
+        # payload columns. Shared-clock sessions retain their own context.
+        clock_result = {"truncated": bool(clock_result.get("truncated"))}
 
     if compact:
         signal_columns, signal_errors, signal_transition_truncations = (

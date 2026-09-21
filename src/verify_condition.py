@@ -25,24 +25,11 @@ from typing import Any, Callable
 from . import operation_metrics
 from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancelled
 from .cursor_store import CursorRef, CursorStore
-from .cycle_query import EdgeSamplingSession, sample_signals_on_edges
+from .cycle_query import EdgeSamplingSession, sample_signals_on_edges, SignalColumnView
 from .waveform_selection import selection_inputs
 
 
-class _SignalColumnView:
-    """Reusable dict-like view over one edge of compact signal columns."""
-
-    __slots__ = ("columns", "index")
-
-    def __init__(self, columns: dict[str, list[Any]]) -> None:
-        self.columns = columns
-        self.index = 0
-
-    def get(self, signal_path: str, default: Any = None) -> Any:
-        column = self.columns.get(signal_path)
-        if column is None or self.index >= len(column):
-            return default
-        return column[self.index]
+_SignalColumnView = SignalColumnView
 
 
 # ---------------------------------------------------------------------------

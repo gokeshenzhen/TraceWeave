@@ -1984,7 +1984,38 @@ class TxnEndpoint(SchemaModel):
     completion_time_ps: int | None = None
 
 
+class TxnAnalysis(SchemaModel):
+    available_samples: int = 0
+    analyzed_samples: int = 0
+    last_time_ps: int | None = None
+    stop_reason: str | None = None
+    events_read: int = 0
+    events_admitted: int = 0
+    value_bytes_read: int = 0
+    value_reuse_hits: int = 0
+    value_reuse_misses: int = 0
+    value_table_peak_entries: int = 0
+    value_table_peak_bytes: int = 0
+    decoded_bytes: int = 0
+    read_output_bytes: int = 0
+    read_pages: int = 0
+    read_calls: int = 0
+    legacy_reads: int = 0
+    peak_pending: int = 0
+    peak_early_data: int = 0
+    state_peak_bytes: int = 0
+    result_bytes: int = 0
+    display_status: Literal["complete", "partial"] = "complete"
+    display_stop_reason: str | None = None
+    sample_ms: float = 0.0
+    walk_ms: float = 0.0
+    projection_ms: float = 0.0
+
+
 class TxnReconstructResult(SchemaModel):
+    coverage_status: Literal["complete", "partial", "zero_coverage"] = "zero_coverage"
+    gaps: list[str] = Field(default_factory=list)
+    analysis: TxnAnalysis = Field(default_factory=TxnAnalysis)
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
@@ -2001,6 +2032,7 @@ class TxnReconstructResult(SchemaModel):
     max_outstanding_id: int | None = None
     reorder_count: int = 0
     unknown_id_beats: int = 0
+    unknown_control_cycles: int = 0
     reset_clears: int = 0
     unknown_history_clears: int = 0
     orphan_data_beats: int = 0
