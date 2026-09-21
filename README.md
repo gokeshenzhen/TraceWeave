@@ -38,7 +38,8 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 |---|---|
 | A simulation times out or hangs, with no clear starting point | Summarize failures and scan interface handshakes to narrow down the affected interfaces and time window |
 | A scoreboard mismatch or different results between runs | Compare failure records and waveforms, locate observed differences, and trace data and control sources on both sides |
-| A signal becomes X/Z | Inspect the surrounding waveform and follow upstream drivers to trace unknown-value propagation |
+| A signal becomes X/Z | Follow drivers and review waveform history to check whether a register sampled and retained an unknown value |
+| Packed buses are hard to read, or TL-UL requests are not completing | Inspect address, data, and control fields individually, then check request/response handshakes, latency, and completion |
 | Suspected ties, unconnected inputs, or magic-word conditions | Statically scan source code for constant connections, open inputs, and constant comparisons as investigation leads; no simulation run or waveform required |
 | A deep SoC hierarchy with many modules and interfaces | Browse hierarchy on demand, locate instances and source files, and follow drivers, consumers, and connectivity paths |
 | A debugging hypothesis needs evidence | Sample by cycle and check timing conditions, handshake stability, and transaction completion |
@@ -139,6 +140,30 @@ The assistant's default investigation follows these steps:
 5. **Compare after a fix:** check how failure records and waveforms change in the next run.
 
 For a first connection check, ask the assistant to call `get_sim_paths` and confirm that actual MCP tool calls run. See the [debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) for the full procedure.
+
+### Find Waveform Differences and Trace X/Z Sources
+
+When two simulation runs produce different results, TraceWeave can compare selected signals, locate the earliest difference it can confirm within a time window, and trace the related data, control, and RTL logic on both sides.
+
+For X/Z, inspect the propagation path at the time of interest or look back through history to check whether a register sampled an unknown value and continued to hold it. You can investigate earlier events even if the input is now known:
+
+> `tb.dut.q` is X at 36 ns, but its input is now known. Review the waveform from 0 to 36 ns, check earlier sampling and hold behavior, and trace possible sources.
+
+Results distinguish relationships supported by evidence from leads that need more investigation. When history is missing or a structure is unsupported, TraceWeave explains where tracing stopped. The first recorded anomaly is not automatically its true point of origin.
+
+See [waveform comparison](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#divergence-evidence-and-backtrace) and [X/Z history tracing](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#bounded-x-history) for tool parameters and detailed support limits.
+
+### Inspect Bus Fields and TL-UL Interfaces
+
+When address, data, and control information share a packed bus, TraceWeave can identify field positions from source types that match the waveform. The assistant can then inspect individual fields, reducing manual work to look up widths and calculate offsets. You can also provide a field-to-bit mapping when automatic resolution is unavailable.
+
+For TL-UL interfaces, once the assistant confirms the field mapping and clock, it can check handshake stalls, request/response matching, response latency, and outstanding requests within a specified time window:
+
+> Check the TL-UL interface under `tb.dut` from 10 to 20 μs for handshake stalls or outstanding requests. List the relevant times and signals.
+
+Results state which checks ran and what information is missing. A request still outstanding at the end of the window is not automatically a deadlock, and these checks do not replace full TL-UL protocol verification.
+
+See [bus fields and TL-UL](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#packed-waveform-selections-and-tl-ul) for field configuration and detailed support limits.
 
 ### Custom Runtime Error Formats
 
@@ -285,7 +310,7 @@ Usually, you describe the debugging goal and let the assistant select the tools.
     </tr>
     <tr>
       <td><code>trace_x_source</code></td>
-      <td>Follow upstream drivers to trace X/Z propagation</td>
+      <td>Trace X/Z propagation and inspect historical register sampling and hold behavior</td>
     </tr>
     <tr>
       <td rowspan="6">Waveform queries</td>
@@ -352,11 +377,11 @@ Usually, you describe the debugging goal and let the assistant select the tools.
     </tr>
     <tr>
       <td><code>resolve_packed_fields</code></td>
-      <td>Export explicit field selections from current compiled packed types, or request a mapping when evidence is missing</td>
+      <td>Identify packed bus fields to inspect address, data, and control signals individually</td>
     </tr>
     <tr>
       <td><code>inspect_tlul</code></td>
-      <td>Inspect explicitly mapped A/D fields, acceptance, stalls, source pairing, and window boundaries</td>
+      <td>Check TL-UL requests and responses for handshake stalls, response latency, and outstanding requests</td>
     </tr>
     <tr>
       <td rowspan="3">Time cursors</td>
@@ -379,80 +404,17 @@ Usually, you describe the debugging goal and let the assistant select the tools.
   </tbody>
 </table>
 
-`diff_first_divergence` compares one explicit signal pair using bounded event
-pages when supported. Its `reading` receipt distinguishes streaming native
-reads, VCD index pages, and an older wrapper's whole-window fallback. Exact
-sub-ps differences appear in `first_divergence_time_fs`; the ps cursor rounds
-up. Unknown prefixes still prevent `earliest_difference_proven`.
-`trace_divergence` reuses observations within the request and releases them
-on graph restart or completion. See [the comparison contract](docs/architecture.md#divergence-evidence-and-backtrace).
-
-`trace_x_source` defaults to the existing same-time `mode="snapshot"` chain.
-For bounded history, build the hierarchy for the matching compile log, then call:
-
-```json
-{
-  "wave_path": "/path/to/waves.fsdb",
-  "compile_log": "/path/to/build.log",
-  "signal_path": "tb.dut.q[7:0]",
-  "time_ps": "36ns",
-  "mode": "history",
-  "history_start_ps": "0ns"
-}
-```
-
-Read `history.nodes`, `edges`, `frontier`, and `coverage`. History distinguishes
-combinational propagation, register sampling and hold: recovered present inputs
-do not exclude earlier X injection. `signal_bits` optionally selects ordered
-declared indices; `phase="before"` excludes events at the observation time.
-The window never expands automatically. Missing controls/history, asynchronous
-or unsupported structures, CDC and ambiguous sampling remain explicit boundaries.
-Sub-ps interval timestamps retain exact femtoseconds; unsupported dynamic sampling
-stops instead of using rounded values. The earliest recorded X/Z is not a proven
-first origin, and history leaves `root_cause` empty. See [the history contract](docs/architecture.md#bounded-x-history).
-
-## Packed fields and TL-UL
-
-Point, transition, around-time, cycle, handshake, and transaction queries accept
-existing signal strings or a structured selection such as
-`{"path":"tb.packet[15:8]","lsb":8,"width":4}`. The path names the **dump
-declaration**; `lsb` is a declared index, not an offset. Width extends toward
-the declaration's left bound. For `[0:7]`, `lsb=7,width=4` selects `[4:7]`.
-Alternatively, `bits` lists declared indices in output MSB-first order.
-X/Z remain fixed-width binary values; their numeric forms are null.
-The `selections` receipt relates result keys to declarations and bit lists.
-Separate dumped fragments are never combined into an invented vector.
-
-Use `resolve_packed_fields` with an exact `source_signal`, dump `signal_path`,
-`compile_log`, and requested member names (including nested names). It requires
-a current hierarchy and content-anchored semantic type evidence for the active
-instance and parameter specialization. Missing or stale evidence returns
-`mapping_required`. The returned selections describe the current compile snapshot;
-the caller must establish its association with the waveform and re-resolve after
-source changes. An explicit mapping can be used without the optional frontend.
-
-`inspect_tlul` takes `wave_path`, `clock`, and a `fields` mapping. Required keys are
-`a_valid`, `a_ready`, `a_source`, `d_valid`, `d_ready`, and `d_source`; each value
-is a signal string or selection. Add opcode, size, address, mask, data, user,
-sink, param, and error fields as available, plus `reset` and a time window.
-Read `checks`, `gaps`, and `unmapped_fields`: acceptance and source pairing do
-not certify opcode legality, response size agreement, integrity coding, or the
-whole protocol. Unknown history breaks pairing; pending work at the window end
-and responses with no observed request are boundary facts. A window without an
-initial observed reset retains unknown carry-in. Existing discovery budgets and
-role/clock ambiguity rules still apply; this tool does not expand global discovery.
-See [architecture](docs/architecture.md#packed-waveform-selections-and-tl-ul) for
-limits, read reuse, and the precise coverage contract.
-
 ## FAQ
 
 **Can I use TraceWeave without a commercial license?**
 
 Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses local Verdi FSDB Reader libraries and the wrapper. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
 
-**Can I analyze a run produced in another terminal?**
+**Can missing path variables be recovered automatically?**
 
-Yes. Supply the existing compile log, simulation log, and waveform; the source and include files must remain accessible. For VCS logs with recorded compilation units, TraceWeave can recover uniquely constrained project path variables from the logged absolute paths and nested filelists, then verify the replayed file order. Hierarchy discovery, Source Graph, and `build_kdb` share this recovery logic. KDB builds compile only the recorded units, preserving includes inside their parent files and restoring the original working directory's include search path. Setup scripts are never executed automatically and the server environment is unchanged. Ambiguous paths, missing options, or differing phase-local KDB options remain explicit coverage or precheck boundaries; supply the expanded compilation context when recovery is insufficient.
+Yes. You can use a CLI agent in a terminal where the project's setup script has not been sourced, or give it logs and waveforms from a run launched in another terminal. TraceWeave can recover compilation input path variables from VCS compile logs and filelists when their values can be determined unambiguously, enabling hierarchy analysis, KDB builds, and Source Graph queries.
+
+Recovery covers compilation input paths; the corresponding source and include files must remain accessible. The runtime prerequisites must already be available: `VERDI_HOME`, installed EDA tools, and license configuration for KDB builds, plus Python and `pyslang` dependencies for Source Graph.
 
 **How should I judge signal-tracing accuracy?**
 

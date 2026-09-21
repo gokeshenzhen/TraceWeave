@@ -38,7 +38,8 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 |---|---|
 | 仿真超时、卡死，不知道从哪里查起 | 汇总失败日志，扫描多接口握手行为，缩小异常接口和时间窗口 |
 | Scoreboard mismatch、两次运行结果不同 | 对比失败记录与波形，定位已观测到的差异，并追踪两侧数据和控制来源 |
-| 信号出现 X/Z | 查看异常前后的波形，沿驱动关系追踪未知值的传播路径 |
+| 信号出现 X/Z | 沿驱动追踪传播路径，回看历史波形，检查寄存器是否曾采入并保持未知值 |
+| 打包总线难读、TL-UL 请求迟迟没有响应 | 按字段查看地址、数据和控制信号，检查请求与响应的握手、延迟和完成情况 |
 | 怀疑 tie 值、悬空输入或 magic word 条件 | 静态扫描源码，提取常量连接、未连接输入和常量比较等线索，供进一步核查；无需运行仿真或提供波形 |
 | SoC 层级深、模块和接口多 | 按需浏览层次、查找实例与源码，追踪信号的驱动、消费者和连通路径 |
 | 想验证一个调试假设 | 按周期采样，检查时序条件、握手保持和事务完成情况，取得具体证据 |
@@ -139,6 +140,30 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 5. **对比修复结果**：比较下一次运行的失败记录和波形变化。
 
 首次连接时，可先要求助手调用 `get_sim_paths`，确认客户端能够执行真实的 MCP 工具调用。完整流程见[调试工作流](docs/workflow.md)。
+
+### 定位波形差异与 X/Z 来源
+
+两次仿真结果不一致时，TraceWeave 可比较指定信号，找到时间窗口内最早能确认的差异，并沿两侧驱动追踪相关的数据、控制和 RTL 逻辑。
+
+对于 X/Z，既可以查看异常时刻的传播路径，也可以回看历史，检查寄存器是否曾采入未知值，随后一直保持。即使当前输入已经正常，也能继续调查之前发生的异常：
+
+> `tb.dut.q` 在 36 ns 时为 X，但输入已经正常。请回看 0～36 ns 的波形，检查此前的采样与保持情况，并追踪可疑来源。
+
+结果会列出有证据支持的关系和仍需核查的环节。历史记录不足或遇到暂不支持的结构时，会说明停止原因，不把“首次看到异常”直接当成“真实首次产生异常”。
+
+工具参数与详细支持范围见[波形差异分析](docs/architecture.md#divergence-evidence-and-backtrace)和 [X/Z 历史追踪](docs/architecture.md#bounded-x-history)。
+
+### 按字段查看总线，检查 TL-UL 接口
+
+当地址、数据和控制信息打包在同一条总线中时，TraceWeave 可依据与波形匹配的源码类型识别字段位置，让助手按字段查看变化，减少手工查位宽、算偏移的工作。无法自动识别时，也支持提供字段与位段的对应关系。
+
+对于 TL-UL 接口，助手确认字段对应关系和时钟后，可检查指定时间范围内的握手停顿、请求与响应的对应关系、响应延迟，以及尚未完成的请求：
+
+> 检查 `tb.dut` 的 TL-UL 接口在 10～20 μs 内是否有握手停顿或未完成的请求，并列出对应的时间和信号。
+
+结果会说明实际检查的项目和缺失信息。窗口内尚未完成的请求不直接判为死锁，这些检查也不替代完整的 TL-UL 协议验证。
+
+字段配置与详细支持范围见[总线字段与 TL-UL 使用说明](docs/architecture.md#packed-waveform-selections-and-tl-ul)。
 
 ### 自定义运行期报错格式
 
@@ -284,7 +309,7 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
     </tr>
     <tr>
       <td><code>trace_x_source</code></td>
-      <td>沿上游驱动追踪 X/Z 的传播来源</td>
+      <td>追踪 X/Z 的传播路径，检查历史上的寄存器采样与保持</td>
     </tr>
     <tr>
       <td rowspan="6">波形查询</td>
@@ -351,11 +376,11 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
     </tr>
     <tr>
       <td><code>resolve_packed_fields</code></td>
-      <td>从当前编译类型导出字段选择；证据不足时要求显式映射</td>
+      <td>识别打包总线中的字段位置，便于单独查看地址、数据和控制信号</td>
     </tr>
     <tr>
       <td><code>inspect_tlul</code></td>
-      <td>检查显式映射的 A/D 字段、接受事件、停滞、source 配对及窗口边界</td>
+      <td>检查 TL-UL 请求与响应，查看握手停顿、响应延迟和未完成请求</td>
     </tr>
     <tr>
       <td rowspan="3">时间游标</td>
@@ -378,68 +403,17 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
   </tbody>
 </table>
 
-`diff_first_divergence` 对调用方明确指定的一对信号使用有界事件页比较。
-`reading` 回执区分原生流式读取、VCD 索引分页与旧 wrapper 的整窗读取。
-亚 ps 差异的精确时间在 `first_divergence_time_fs`，ps 游标向上取整；未知前缀仍会
-阻止 `earliest_difference_proven`。`trace_divergence` 只在本次请求内复用观察，
-整图重启或请求结束时释放。详见[比较合同](docs/architecture.md#divergence-evidence-and-backtrace)。
-
-`trace_x_source` 默认保留 `mode="snapshot"` 的同一时刻链条。
-需要有界历史回溯时，先为匹配的 compile log 构建层次，再调用：
-
-```json
-{
-  "wave_path": "/path/to/waves.fsdb",
-  "compile_log": "/path/to/build.log",
-  "signal_path": "tb.dut.q[7:0]",
-  "time_ps": "36ns",
-  "mode": "history",
-  "history_start_ps": "0ns"
-}
-```
-
-分别读取 `history.nodes`、`edges`、`frontier` 和 `coverage`。历史模式区分组合传播、
-寄存器采样和保持；输入当前恢复已知不能排除过去注入 X。可用 `signal_bits` 按声明坐标
-选择有序位段；`phase="before"` 排除观察时刻本身的事件。工具不会自动扩窗。
-缺少控制/历史、异步或不支持结构、CDC 及采样顺序歧义会保留为明确边界。
-亚 ps 的已观测区间时间保留精确 fs；不能精确动态采样时停止，不用取整值继续推断。
-最早已记录的 X/Z 不代表真实首次产生，历史模式不填写 `root_cause`。
-预算、身份和覆盖规则见[历史回溯合同](docs/architecture.md#bounded-x-history)。
-
-## 打包字段与 TL-UL
-
-点查询、跳变、时间邻域、逐拍采样、握手及事务工具兼容原 signal string，
-也接受 `{"path":"tb.packet[15:8]","lsb":8,"width":4}`。
-`path` 指向原始 **dump 声明**；`lsb` 是声明下标，`width` 向声明左边界展开。
-例如 `[0:7]` 的 `lsb=7,width=4` 选择 `[4:7]`。
-也可用 `bits` 按输出从高到低的顺序列出下标。X/Z 保留为定宽二进制，数值形式为空。
-返回的 `selections` 将结果键对应到真实声明和位列表；独立 dump 片段不会被拼成虚构总线。
-
-`resolve_packed_fields` 接受精确的源码 `source_signal`、dump `signal_path`、
-`compile_log` 和字段名列表（支持嵌套字段）。自动布局需要当前层次、内容身份、
-有效实例/参数特化及语义类型证据，缺失或过期时返回 `mapping_required`。
-导出的选择对应当前编译快照；调用方须确认它与历史波形的关联，源码变化后重新解析。
-无可选语义前端时仍可使用显式映射。
-
-`inspect_tlul` 的必需字段是 `a_valid/a_ready/a_source/d_valid/d_ready/d_source`，
-通过 `fields` 映射到信号字符串或位段选择，并提供 `wave_path` 和 `clock`。
-可继续映射 opcode、size、address、mask、data、user、sink、param、error，
-并指定 `reset` 和窗口。必须分别阅读 `checks`、`gaps` 和 `unmapped_fields`：
-接受事件与 source 配对不证明 opcode 合法性、响应 size 一致性、完整性编码或完整协议合规。
-未知控制/ID/复位会断开关联历史；窗口末尾 pending 和未找到窗口内请求的响应仅是边界事实。
-窗口开始未观察到复位时保留 carry-in 未知。原有发现预算、角色/时钟歧义和 req/ack
-语义边界仍有效，本工具不会自动扩大全设计发现范围。
-具体预算与复用/覆盖合同见[架构说明](docs/architecture.md#packed-waveform-selections-and-tl-ul)。
-
 ## 常见问题
 
 **没有商业 license 也能用吗？**
 
 日志分析、VCD 查询、静态结构扫描和 Source Graph 不需要商业 license。**直接查询已有波形中的信号值或跳变，不需要 NPI license**：VCD 使用内置解析器，FSDB 使用本地 Verdi FSDB Reader 库和 wrapper。Verdi NPI 信号追踪和 KDB 构建需要相应的 EDA 环境与 license。
 
-**可以分析另一个终端跑出来的案例吗？**
+**路径变量是否支持自恢复**
 
-可以。提供已有的编译日志、仿真日志和波形，并保证对应源码与 include 文件可访问。对于记录了独立编译文件的 VCS 日志，TraceWeave 会根据日志中的绝对路径和嵌套 filelist，恢复能唯一确定的项目路径变量，并校验重放后的文件顺序。层次构建、Source Graph 与 `build_kdb` 共享这套恢复逻辑。KDB 只单独编译日志记录的 compilation unit，保留父文件内的 include，并恢复原编译目录的 include 搜索路径。不会自动执行 setup 脚本或修改服务进程环境。路径歧义、缺失选项或 KDB 不支持的不同分阶段编译选项仍会形成明确的覆盖边界或预检查失败；无法恢复时需补充展开后的编译上下文。
+支持。在没有 source 过案例环境变量 setup 文件的终端上使用 CLI agent，或直接将其他终端已跑出的日志和波形交给 agent 分析时，TraceWeave 可从 VCS 编译日志和 filelist 中自动恢复能唯一确定的编译输入路径变量，用于层次分析、KDB 构建和 Source Graph 查询。
+
+自恢复范围限于编译输入路径变量，对应源码与 include 文件需可访问。自恢复能力依赖的运行环境仍需预先提供：KDB 构建所需的 `VERDI_HOME`、工具安装及许可证配置，以及 Source Graph 所需的 Python / `pyslang` 依赖。
 
 **信号追踪结果的准确性如何判断？**
 
