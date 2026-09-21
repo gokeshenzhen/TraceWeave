@@ -152,7 +152,9 @@ def query_step(backend, signal: str) -> dict:
             active.remove(key)
 
     try:
-        result["bits"] = list(reference(root).bits)
+        state = reference(root)
+        result["bits"] = list(state.bits)
+        result["state"] = asdict(state)
         value = expand(root, force=True)
         result["gaps"].extend(expression_gaps(value))
         if result["boundary"] != "input":

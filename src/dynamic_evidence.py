@@ -91,6 +91,8 @@ class Evaluation:
     dependencies: list[dict]
     gaps: list[str]
     branches: list[dict]
+    # Exact ordered passthrough only; equal values do not prove a hold.
+    reference: tuple[str, tuple[int, ...]] | None = None
 
     @property
     def truth(self) -> str:
@@ -122,7 +124,9 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             elif not known(value):
                 gaps.append("value_unknown")
             return Evaluation(value, [{**fact, "signal": node.signal, "bits": list(node.bits),
-                                       "width": node.width, "role": use, "value": value}], gaps, [])
+                                       "declared_bits": list(node.declared_bits),
+                                       "width": node.width, "role": use, "value": value}], gaps, [],
+                              (node.signal, node.bits))
         if node.op == "mux":
             cond = walk(node.args[0], "control", depth+1)
             selected = 1 if cond.truth == "true" else 2 if cond.truth == "false" else None
@@ -134,7 +138,8 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
                               + ([] if selected else ["guard_unresolved"]),
                               cond.branches + [{"condition": asdict(node.args[0]), "state": cond.truth,
                                                  "selected": selected}] +
-                              [b for c in children for b in c.branches])
+                              [b for c in children for b in c.branches],
+                              children[0].reference if selected else None)
         children = [walk(a, "control" if node.op in {"not","and","or","eq","ne"} else use,
                          depth+1) for a in node.args]
         deps = [d for c in children for d in c.dependencies]
@@ -142,6 +147,7 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
         branches = [b for c in children for b in c.branches]
         values = [c.value for c in children]
         value = None
+        reference = None
         if node.op == "unsupported":
             gaps.append(node.reason or "dynamic_evidence_unavailable")
         elif node.op == "not":
@@ -164,14 +170,20 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
                 value = "x"
         elif node.op == "concat" and all(v is not None for v in values):
             value = "".join(values)
+            refs = [c.reference for c in children]
+            if refs and all(r is not None and r[0] == refs[0][0] for r in refs):
+                reference = (refs[0][0], tuple(b for r in refs for b in r[1]))
         elif node.op == "cast" and values[0] is not None:
             source = values[0]
             pad = source[0] if node.args[0].signed else "0"
             value = source[-node.width:].rjust(node.width, pad)
+            ref = children[0].reference
+            if ref and node.width <= node.args[0].width:
+                reference = (ref[0], ref[1][-node.width:])
         if value is not None and len(value) != node.width:
             value = None
             gaps.append("expression_width_unresolved")
-        return Evaluation(value, deps, list(dict.fromkeys(gaps)), branches)
+        return Evaluation(value, deps, list(dict.fromkeys(gaps)), branches, reference)
 
     return walk(expr, role)
 
@@ -208,6 +220,10 @@ def validate_step(raw: dict) -> dict:
     for branch in raw.get("branches", ()):
         Expr.from_dict(branch["guard"])
         Expr.from_dict(branch["value"])
+    if raw.get("state"):
+        state = Expr.from_dict(raw["state"])
+        if state.op != "signal" or state.bits != tuple(raw.get("bits", ())):
+            raise ValueError("dynamic_step_state_invalid")
     if raw.get("clock"):
         Expr.from_dict(raw["clock"]["expression"])
         if raw["clock"]["edge"] not in {"posedge", "negedge"}:

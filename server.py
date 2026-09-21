@@ -4180,6 +4180,15 @@ async def _run_trace_x_attempt(
 async def _handle_trace_x_source(args: dict, simulator: str):
     """Route X-trace through NPI -> one Source Graph artifact -> Static."""
 
+    mode = args.get("mode", "snapshot")
+    if mode == "history":
+        from src.x_history import trace_x_history
+        return await trace_x_history(sys.modules[__name__], {**args, "simulator": simulator})
+    if mode != "snapshot":
+        raise ValueError("trace_x_source mode must be snapshot or history")
+    if any(k in args for k in ("history_start_ps", "signal_bits", "phase", "max_nodes", "max_events", "max_read_bytes", "timeout_sec", "compile_context")):
+        raise ValueError("history parameters require mode=history")
+
     from src.connectivity_backend import (  # noqa: PLC0415
         DeferredConnectivityFallbackBackend,
         StaticConnectivityBackend,
@@ -6033,7 +6042,11 @@ async def list_tools():
                 "trace_restarted reports a whole-trace retry. Source Graph chain nodes preserve "
                 "claim_semantics, so an exact positive edge can be used without implying global "
                 "coverage or exclusive drive. NPI testbench-driven/cross-check evidence is "
-                "preserved on the node."
+                "preserved on the node. Default mode=snapshot keeps the same-time chain. "
+                "mode=history requires history_start_ps and returns history.nodes/edges/frontier: "
+                "observed X/Z intervals, supported register sampling/hold and combinational evidence. "
+                "Missing history, ambiguous scheduling, CDC or unsupported asynchronous controls "
+                "remain boundaries; observed dump onset is never asserted to be the true first origin."
             ),
             inputSchema={
                 "type": "object",
@@ -6055,8 +6068,19 @@ async def list_tools():
                         "description": f"Maximum trace depth. Default: {DEFAULT_X_TRACE_MAX_DEPTH}",
                         "default": DEFAULT_X_TRACE_MAX_DEPTH,
                     },
+                    "mode": {"type": "string", "enum": ["snapshot", "history"], "default": "snapshot"},
+                    "history_start_ps": {**_integer_or_string_schema(), "description": "Required explicit history window start in history mode." + _TIMESPEC_HINT},
+                    "signal_bits": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 4096, "description": "History-only ordered selection in declared coordinates. signal_path remains the exact dump declaration."},
+                    "phase": {"type": "string", "enum": ["before", "after"], "default": "after", "description": "History observation phase; before excludes events exactly at time_ps."},
+                    "max_nodes": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 128},
+                    "max_events": {"type": "integer", "minimum": 1, "maximum": 262144, "default": 65536},
+                    "max_read_bytes": {"type": "integer", "minimum": 1024, "maximum": 134217728, "default": 33554432, "description": "Cumulative estimated decoded event byte budget in history mode."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 30},
+                    "compile_context": schemas.DivergenceContext.model_json_schema(),
                 },
                 "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
+                "allOf": [{"if": {"properties": {"mode": {"const": "history"}}, "required": ["mode"]},
+                           "then": {"required": ["history_start_ps"]}}],
             },
         ),
         # ── Hierarchy handle tools (phase 4) ────────────────────────────

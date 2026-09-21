@@ -130,6 +130,8 @@ class DynamicRoute:
                             ),
                         )
                     )
+                    if hasattr(self.budget, "record_preparation"):
+                        self.budget.record_preparation(outcome.metrics)
                     self.source_receipt = self.s._source_graph_receipt_from_prepare(
                         plan, outcome, adapter_wall_ms=0
                     )

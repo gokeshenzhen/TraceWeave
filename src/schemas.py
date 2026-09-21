@@ -1440,6 +1440,18 @@ class TraceRootCause(SchemaModel):
     source_line: int | None = None
 
 
+class XHistoryEvidence(SchemaModel):
+    status: Literal["partial", "blocked", "inconclusive", "signal_is_clean"]
+    window: dict[str, Any]
+    context: dict[str, Any] = Field(default_factory=dict)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    frontier: list[dict[str, Any]] = Field(default_factory=list)
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    operation_metrics: dict[str, int | float] = Field(default_factory=dict)
+
+
 class TraceXSourceResult(SchemaModel):
     start_signal: str
     start_time_ps: int
@@ -1451,6 +1463,8 @@ class TraceXSourceResult(SchemaModel):
     analysis_guide: dict[str, str] = Field(default_factory=dict)
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
     trace_restarted: bool = False
+    mode: Literal["snapshot", "history"] = "snapshot"
+    history: XHistoryEvidence | None = None
 
 
 class PrerequisiteBlockResult(SchemaModel):
@@ -2089,6 +2103,25 @@ class DiffValueDistributionResult(SchemaModel):
 
 
 # Explicit dual-context divergence tracing; no mutable current-session defaults.
+class XHistoryInput(SchemaModel):
+    mode: Literal["history"] = "history"
+    wave_path: str = Field(min_length=1)
+    signal_path: str = Field(min_length=1)
+    signal_bits: list[StrictInt] | None = Field(default=None, min_length=1, max_length=4096)
+    time_ps: int | str
+    compile_log: str = Field(min_length=1)
+    simulator: str = "auto"
+    top_hint: str | None = None
+    compile_context: DivergenceContext | None = None
+    history_start_ps: int | str
+    phase: Literal["before", "after"] = "after"
+    max_depth: int = Field(default=_config.DEFAULT_X_TRACE_MAX_DEPTH, ge=0, le=64)
+    max_nodes: int = Field(default=128, ge=1, le=1024)
+    max_events: int = Field(default=65536, ge=1, le=262144)
+    max_read_bytes: int = Field(default=32 * 1024 * 1024, ge=1024, le=128 * 1024 * 1024)
+    timeout_sec: float = Field(default=30, gt=0, le=120)
+
+
 class DivergenceSide(DivergenceContext):
     wave_path: str = Field(min_length=1)
     signal_path: str = Field(min_length=1)

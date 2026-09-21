@@ -115,6 +115,7 @@ async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch):
     # This regression is deliberately local.  It must neither inherit an LSF
     # policy nor submit a scheduler job while checking the local NPI route.
     monkeypatch.setenv("TRACEWEAVE_NPI_EXECUTION", "local")
+    monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "auto")
 
     trace_args = {
         "signal_path": SIGNAL,
@@ -139,6 +140,9 @@ async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch):
     # Build the real compile-log hierarchy and run the first trace with Static
     # forced at the one public selection seam.  This must not initialise NPI.
     with monkeypatch.context() as static_patch:
+        # The public route now tries Source Graph before terminal Static.
+        # Isolate that terminal arm explicitly without weakening its oracle.
+        static_patch.setenv("TRACEWEAVE_SOURCE_GRAPH", "0")
         static_patch.setattr(
             connectivity_backend,
             "select_backend",
@@ -152,8 +156,16 @@ async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch):
         static_result = await server._dispatch("trace_x_source", trace_args)
 
     static_dump = _result_dump(static_result)
-    assert static_result.backend_status.backend == "static", static_dump
+    assert static_result.backend_status.backend == "source_graph", static_dump
+    assert static_result.backend_status.selected_backend == "source_graph", static_dump
     assert static_result.backend_status.actual_backend == "static", static_dump
+    assert static_result.backend_status.fallback_reason == "npi_kdb_unavailable", static_dump
+    assert any(
+        attempt.backend == "source_graph"
+        and attempt.status == "blocked"
+        and attempt.reason == "source_graph_disabled"
+        for attempt in static_result.backend_status.attempted_backends
+    ), static_dump
     assert static_result.trace_restarted is False, static_dump
     assert static_result.trace_status == "driver_unresolved", static_dump
     assert static_result.trace_depth == 0, static_dump

@@ -115,7 +115,7 @@ class ObservationReader:
 
 
 def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start: int,
-                 phase="after", consume=None, session=None) -> dict:
+                 phase="after", consume=None, session=None, include_state=False) -> dict:
     reader = ObservationReader(get_parser, wave, history_start, time, consume, session)
     result = dict(observation_time_ps=time, observation_phase=phase, sampling_time_ps=time,
                   sampling_phase=phase, trigger_time_ps=None, dependencies=[], branches=[],
@@ -124,6 +124,9 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
         return result
     sample_time, sample_phase = time, phase
     if step["boundary"] == "sequential":
+        if not step.get("clock"):
+            result["gaps"].append("clock_evidence_unavailable")
+            return result
         clock = Expr.from_dict(step["clock"]["expression"])
         edges, gaps = clock_edges(reader.stream(clock.signal), step["clock"]["edge"],
                                   start=history_start, end=time, before=phase == "before")
@@ -133,6 +136,8 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             return result
         sample_time, sample_phase = edges[-1], "before"
         result.update(trigger_time_ps=sample_time, sampling_time_ps=sample_time, sampling_phase=sample_phase)
+        if include_state and step.get("state"):
+            result["previous_state"] = reader.sample(Expr.from_dict(step["state"]), sample_time, "before")
     def sample(expr):
         return reader.sample(expr, sample_time, sample_phase)
     selected = []
@@ -153,8 +158,10 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
         if step["boundary"] == "sequential":
             # No assignment executes: the predecessor Q is the data source.
             bits = tuple(step["bits"])
-            expr = Expr("signal", len(bits), signal=step["signal"].split("[")[0], bits=bits,
-                        declared_bits=tuple(step.get("declared_bits", bits)))
+            from .divergence_mapping import split_selection
+            expr = (Expr.from_dict(step["state"]) if step.get("state") else
+                    Expr("signal", len(bits), signal=split_selection(step["signal"])[0], bits=bits,
+                         declared_bits=tuple(step.get("declared_bits", bits))))
             value = evaluate(expr, sample)
             result["action"] = "hold"
             result["dependencies"].extend(value.dependencies)
@@ -170,6 +177,10 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             result["branches"].extend(value.branches)
             if not unresolved:
                 result["value"] = value.value
+                if include_state and step["boundary"] == "sequential" and step.get("state"):
+                    state = Expr.from_dict(step["state"])
+                    if value.reference == (state.signal, state.bits):
+                        result["action"] = "hold"
     result["gaps"] = list(dict.fromkeys(result["gaps"]))
     if result["value"] is not None and len(result["value"]) != step.get("width"):
         result["gaps"].append("dynamic_bit_mapping_unavailable")

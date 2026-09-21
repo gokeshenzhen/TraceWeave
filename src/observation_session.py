@@ -34,7 +34,7 @@ def selection_identity(parser, signal):
 
 
 class ObservationSession:
-    def __init__(self, budget=None, *, max_events=MAX_EVENTS, max_bytes=None):
+    def __init__(self, budget=None, *, max_events=MAX_EVENTS, max_bytes=None, stream_reader=read_stream):
         from . import divergence_budget
         self.budget = budget
         self.max_events = max_events
@@ -44,6 +44,7 @@ class ObservationSession:
         self.hits = self.misses = self.evictions = self.bypasses = 0
         self.namespace = None
         self.identities = {}
+        self.stream_reader = stream_reader
 
     def clear(self):
         self.entries.clear()
@@ -69,7 +70,7 @@ class ObservationSession:
         self.identities[wave] = identity
         if identity is None:
             return None
-        return (self.namespace, identity, getattr(parser, '_scope_epoch', None), selection_identity(parser, signal))
+        return (self.namespace, identity, getattr(parser, '_scope_epoch', id(parser)), selection_identity(parser, signal))
 
     def _put(self, key, value, events, nbytes):
         if events > self.max_events or nbytes > self.max_bytes:
@@ -99,12 +100,12 @@ class ObservationSession:
                     self.hits += 1
                     self.entries.move_to_end(key)
                     rows = stream.transitions
-                    lo = bisect_left(rows, start, key=lambda e:e['time_ps'])
-                    hi = bisect_right(rows, end, key=lambda e:e['time_ps'])
+                    lo = bisect_left(rows, start * 1000, key=lambda e:e.get('time_fs', e['time_ps'] * 1000))
+                    hi = bisect_right(rows, end * 1000, key=lambda e:e.get('time_fs', e['time_ps'] * 1000))
                     return replace(stream, transitions=rows[lo:hi],
                                    predecessor=rows[lo-1] if lo else stream.predecessor)
         self.misses += 1
-        stream = read_stream(lambda _: parser, wave, signal, start, end)
+        stream = self.stream_reader(lambda _: parser, wave, signal, start, end)
         if consume:
             consume(stream)
         self._check()

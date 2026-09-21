@@ -387,6 +387,30 @@ up. Unknown prefixes still prevent `earliest_difference_proven`.
 `trace_divergence` reuses observations within the request and releases them
 on graph restart or completion. See [the comparison contract](docs/architecture.md#divergence-evidence-and-backtrace).
 
+`trace_x_source` defaults to the existing same-time `mode="snapshot"` chain.
+For bounded history, build the hierarchy for the matching compile log, then call:
+
+```json
+{
+  "wave_path": "/path/to/waves.fsdb",
+  "compile_log": "/path/to/build.log",
+  "signal_path": "tb.dut.q[7:0]",
+  "time_ps": "36ns",
+  "mode": "history",
+  "history_start_ps": "0ns"
+}
+```
+
+Read `history.nodes`, `edges`, `frontier`, and `coverage`. History distinguishes
+combinational propagation, register sampling and hold: recovered present inputs
+do not exclude earlier X injection. `signal_bits` optionally selects ordered
+declared indices; `phase="before"` excludes events at the observation time.
+The window never expands automatically. Missing controls/history, asynchronous
+or unsupported structures, CDC and ambiguous sampling remain explicit boundaries.
+Sub-ps interval timestamps retain exact femtoseconds; unsupported dynamic sampling
+stops instead of using rounded values. The earliest recorded X/Z is not a proven
+first origin, and history leaves `root_cause` empty. See [the history contract](docs/architecture.md#bounded-x-history).
+
 ## Packed fields and TL-UL
 
 Point, transition, around-time, cycle, handshake, and transaction queries accept

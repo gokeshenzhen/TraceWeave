@@ -22,12 +22,16 @@ def query_step(backend, signal):
         unprojected_instance_candidates=backend._unprojected_instance_candidates,
     )
     claims = _query_claim_semantics(query)
+    target_definition = engine.definition_index[engine.instance_index[query.signal.instance_path].definition_id]
+    target_range = target_definition.direct_signal_range(query.signal.symbol)
     result = dict(
         version=DYNAMIC_VERSION,
         backend="source_graph",
         signal=signal,
         width=query.signal.width,
         bits=list(query.signal.bits),
+        state=asdict(Expr("signal", query.signal.width, signal=query.signal.path(),
+                         bits=query.signal.bits, declared_bits=target_range.indices if target_range else ())),
         boundary="combinational",
         complete=query.coverage_status is CoverageStatus.COMPLETE
         and not query.truncated,

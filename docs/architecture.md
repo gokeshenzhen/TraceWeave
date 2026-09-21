@@ -1447,6 +1447,76 @@ again before return. Wave access uses existing locks; backend work stays outside
 them. Metrics contain numeric aggregates only. Static/unsupported semantics and
 incomplete positive Source Graph coverage remain explicit frontiers.
 
+## Bounded X History
+
+`trace_x_source` preserves the same-time `snapshot` mode and adds opt-in `history`.
+History requires `history_start_ps` and a current hierarchy for `compile_log`;
+optional `compile_context` binds an exact hierarchy handle/top as in divergence
+tracing. The compile log must agree with the outer request. The caller still
+owns the waveform-to-compile version relationship; a matching source snapshot
+does not prove a historical waveform came from that compilation. All time
+inputs use the existing TimeSpec resolver. `signal_path` names an exact dump
+declaration; optional `signal_bits` lists ordered declared coordinates (at most
+4,096 bits), preserving generate paths, parameterized ranges and aliases.
+
+The additive `history` payload contains `nodes`, `edges`, `candidates`, `frontier`,
+`coverage` and numeric `operation_metrics`. The legacy `propagation_chain` is
+empty in history mode; `root_cause` remains null/omitted. A known target returns
+`signal_is_clean` for that observation only, with no backend query. Otherwise
+observed graphs remain `partial`; missing prerequisites are `blocked` and
+missing or invalidated observations are `inconclusive`. There is no claim of an
+exclusive source or a proven first origin. Each interval separates the earliest
+observed X/Z in the supplied window from the start of the currently active
+unknown interval. A dump/window prefix already containing X/Z, missing
+predecessor, truncated tail or exhausted window retains its boundary reason.
+
+`src/x_history.py` first locates recorded X/Z, then uses `DynamicRoute` and
+`dynamic_observe` to inspect one supported dynamic statement. Combinational
+dependencies retain the observation time/phase. Registers use a confirmed
+clock edge strictly before a `before` observation, or at/before an `after`
+observation, and sample data/guards strictly before that edge. Reset polarity
+and timing come from typed backend structure, never names. Unexecuted branches
+retain Q; a selected mux's exact ordered Q reference also proves a hold relation.
+Equal X values alone do not prove retention. Previous Q, selected controls and
+data are exposed separately, so recovered present inputs cannot exclude a past
+injection. Same-time changing controls/data, unknown guards, missing clocks,
+different upstream clock domains and unsupported asynchronous structures stop
+temporal inference. Static constant propagation is not historical evidence.
+
+`src/x_history_observe.py` consumes PR 04 private event pages under existing wave
+locks. Raw femtoseconds define interval boundaries and timestamp groups; dynamic
+sampling at sub-ps resolution remains an explicit frontier, never a rounded
+replacement value. Cursors/groups close before Source Graph/Static/NPI work.
+Legacy wrappers retain materialized reads, with an explicit mode receipt; an
+unavailable exact timescale prevents temporal inference. FSDB still serializes
+all handles through its process-global lock and cannot cancel within an active
+native call. Initial VCD parsing/FSDB indexing and native signal loading retain
+their existing costs; event limits do not promise bounded physical disk reads.
+
+The request never widens its window. Default/hard limits are 20/64 depth,
+128/1,024 admitted nodes, 65,536/262,144 read events, 32/128 MiB estimated decoded
+event bytes and 30/120 seconds; a node expands at most 16 unknown dependencies.
+At most three whole-graph restarts consume the same cumulative budget. Expression limits remain 256 nodes,
+32 depth and 4,096 selected bits, including after selection projection. The
+ObservationSession cache separately retains its event/byte caps, time coverage
+and offset identity. Node/visited identities include design, backend/artifact,
+file/parser generation, actual declaration, ordered bits, time and phase.
+Every backend/scope-artifact change discards the graph and cached observations
+and restarts the original target. Final wave/source/KDB/parser validation drops
+all stale evidence even after a timeout. No cross-request history or transaction
+cache is introduced.
+
+Partial driver traversal, objective exclusions and testbench/consumer-alias
+cross-checks stay on nodes and frontiers. Positive incomplete statements only
+create candidate relations; unknown, missing or unexecuted checks are never
+negative evidence. Candidate records retain competing hypotheses and explicit
+checked/unchecked boundaries. Read `coverage.checks` separately from its gaps.
+Metrics count read events, ABI/VCD record bytes, conservative decoded bytes,
+wave/page/native calls, backend queries, semantic preparation/builds, elapsed
+time and process/frontend RSS. Record bytes are not physical I/O; process peak
+RSS is lifetime high-water and includes prior preparation. These measurements
+describe bounded work, not an asserted speedup.
+
 ## Structural Scan Invocation
 
 `scan_structural_risks` selects its mode per invocation, not through an

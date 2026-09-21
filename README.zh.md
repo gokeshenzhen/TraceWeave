@@ -384,6 +384,28 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
 阻止 `earliest_difference_proven`。`trace_divergence` 只在本次请求内复用观察，
 整图重启或请求结束时释放。详见[比较合同](docs/architecture.md#divergence-evidence-and-backtrace)。
 
+`trace_x_source` 默认保留 `mode="snapshot"` 的同一时刻链条。
+需要有界历史回溯时，先为匹配的 compile log 构建层次，再调用：
+
+```json
+{
+  "wave_path": "/path/to/waves.fsdb",
+  "compile_log": "/path/to/build.log",
+  "signal_path": "tb.dut.q[7:0]",
+  "time_ps": "36ns",
+  "mode": "history",
+  "history_start_ps": "0ns"
+}
+```
+
+分别读取 `history.nodes`、`edges`、`frontier` 和 `coverage`。历史模式区分组合传播、
+寄存器采样和保持；输入当前恢复已知不能排除过去注入 X。可用 `signal_bits` 按声明坐标
+选择有序位段；`phase="before"` 排除观察时刻本身的事件。工具不会自动扩窗。
+缺少控制/历史、异步或不支持结构、CDC 及采样顺序歧义会保留为明确边界。
+亚 ps 的已观测区间时间保留精确 fs；不能精确动态采样时停止，不用取整值继续推断。
+最早已记录的 X/Z 不代表真实首次产生，历史模式不填写 `root_cause`。
+预算、身份和覆盖规则见[历史回溯合同](docs/architecture.md#bounded-x-history)。
+
 ## 打包字段与 TL-UL
 
 点查询、跳变、时间邻域、逐拍采样、握手及事务工具兼容原 signal string，
