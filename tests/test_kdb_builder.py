@@ -343,6 +343,28 @@ def test_build_kdb_force_rebuild(tmp_path, monkeypatch):
     assert len(calls) == 2  # vericom + elabcom both re-ran
 
 
+def test_build_kdb_does_not_publish_inputs_changed_during_compile(tmp_path, monkeypatch):
+    verdi_home = _fake_verdi_layout(tmp_path)
+    cr = _make_cr(tmp_path)
+    cache = tmp_path / "cache"
+    _install_fake_run(monkeypatch, kdb_after_elabcom=True)
+    previous = build_kdb(cr, cache_root=cache, verdi_home=verdi_home)
+    original_run = kdb_builder.subprocess.run
+
+    def change_source(cmd, **kwargs):
+        result = original_run(cmd, **kwargs)
+        if cmd[0].endswith("elabcom"):
+            Path(cr["files"]["user"][0]["path"]).write_text("module tb_top; wire q; endmodule")
+        return result
+
+    monkeypatch.setattr(kdb_builder.subprocess, "run", change_source)
+    result = build_kdb(cr, cache_root=cache, verdi_home=verdi_home, force_rebuild=True)
+    assert result["status"] == "failed"
+    assert result["phase"] == "postcheck"
+    assert Path(previous["kdb_path"]).is_dir()
+    assert kdb_builder.get_cached_kdb_result(cr, cache_root=cache) is None
+
+
 def test_build_kdb_vericom_failure_keeps_existing_cache(tmp_path, monkeypatch):
     verdi_home = _fake_verdi_layout(tmp_path)
     cr = _make_cr(tmp_path)

@@ -437,6 +437,10 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
 
 日志分析、VCD 查询、静态结构扫描和 Source Graph 不需要商业 license。**直接查询已有波形中的信号值或跳变，不需要 NPI license**：VCD 使用内置解析器，FSDB 使用本地 Verdi FSDB Reader 库和 wrapper。Verdi NPI 信号追踪和 KDB 构建需要相应的 EDA 环境与 license。
 
+**可以分析另一个终端跑出来的案例吗？**
+
+可以。提供已有的编译日志、仿真日志和波形，并保证对应源码与 include 文件可访问。对于记录了独立编译文件的 VCS 日志，TraceWeave 会根据日志中的绝对路径和嵌套 filelist，恢复能唯一确定的项目路径变量，并校验重放后的文件顺序。层次构建、Source Graph 与 `build_kdb` 共享这套恢复逻辑。KDB 只单独编译日志记录的 compilation unit，保留父文件内的 include，并恢复原编译目录的 include 搜索路径。不会自动执行 setup 脚本或修改服务进程环境。路径歧义、缺失选项或 KDB 不支持的不同分阶段编译选项仍会形成明确的覆盖边界或预检查失败；无法恢复时需补充展开后的编译上下文。
+
 **信号追踪结果的准确性如何判断？**
 
 NPI 基于与当前设计匹配的已展开 KDB；Source Graph 从源码构建语义连接图。在编译上下文完整、目标语义受支持，且查询满足**覆盖完整、解析精确、未截断**时，返回结果可作为**当前查询范围内的精确结构连接事实**，用于驱动、负载和连通路径分析。

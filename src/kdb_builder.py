@@ -48,7 +48,14 @@ from config import (
     KDB_CACHE_SUBDIR,
     TRACEWEAVE_CACHE_ROOT,
 )
+from .cancellation import check_cancelled
+from .compile_environment import (
+    _compile_evidence,
+    _compilation_unit_records,
+    resolve_compile_environment,
+)
 from .hdl_suffixes import is_frontend_hdl_path
+from .sv_preprocessor import extract_preprocessor_options
 
 
 _KDB_ELAB_DIRNAME = "kdb.elab++"
@@ -183,6 +190,14 @@ def build_kdb(
                 phase="postcheck",
             )
 
+        current_inputs = _extract_build_inputs(compile_result, top_hint=top_hint)
+        if current_inputs.get("hash") != inputs["hash"]:
+            return _result_failed(
+                cache_dir=str(tmp_dir),
+                reason="Compile inputs changed while building KDB; the result was not cached.",
+                phase="postcheck",
+            )
+
         (tmp_dir / "state.json").write_text(
             json.dumps(
                 {
@@ -250,11 +265,17 @@ def _extract_build_inputs(
     *,
     top_hint: str | None,
 ) -> dict[str, Any]:
-    files = [
-        f.get("path")
-        for f in (compile_result.get("files") or {}).get("user") or []
-        if f.get("path")
-    ]
+    records = _compilation_unit_records(compile_result)
+    # files.user is a browsing inventory: it also contains class/header and
+    # module-body includes. Only the recorded compilation units belong on the
+    # compiler command line, in their original order.
+    files = (
+        [str(r["path"]) for r in records
+         if r.get("role") != "simulator_instrumentation"]
+        if records else
+        [f["path"] for f in (compile_result.get("files") or {}).get("user") or []
+         if f.get("path")]
+    )
     files = [f for f in files if _is_source_file(f)]
     # De-dup while preserving order — duplicates trip elabcom.
     seen: set[str] = set()
@@ -270,42 +291,87 @@ def _extract_build_inputs(
     if not top:
         return {"error": "No top module known (compile_result.top_modules empty)."}
 
-    cmd = compile_result.get("compile_command") or ""
-    defines = _extract_plus_args(cmd, "+define+")
-    # Two incdir syntaxes coexist:
-    #   VCS / xrun ``+incdir+<path>``  (one token)
-    #   xrun       ``-incdir <path>``  (two tokens)
-    incdirs = _extract_plus_args(cmd, "+incdir+") + _extract_dash_pair(cmd, "-incdir")
-    # Preserve order, drop duplicates.
-    seen_inc: set[str] = set()
-    deduped_inc: list[str] = []
-    for path in incdirs:
-        if path not in seen_inc:
-            seen_inc.add(path)
-            deduped_inc.append(path)
-    incdirs = deduped_inc
+    cmd = compile_result.get("compile_replay_command") or compile_result.get("compile_command") or ""
+    evidence = _compile_evidence(compile_result) or {}
+    environment = resolve_compile_environment(compile_result)
+    options = extract_preprocessor_options(
+        compile_result, ordered_files[0], environment=environment,
+    )
+    if records and not options.complete:
+        return {"error": (
+            "Compile options or filelist paths cannot be replayed completely "
+            "and verified against the recorded compilation units. Supply the "
+            "expanded compile command/filelists or the missing compile environment."
+        )}
+    if evidence.get("source_phases"):
+        # A single vericom invocation cannot represent different per-phase
+        # macro/include environments by silently merging their options.
+        for source in ordered_files[1:]:
+            source_options = extract_preprocessor_options(
+                compile_result, source, environment=environment,
+            )
+            if source_options != options:
+                return {"error": "KDB replay does not support differing phase-local compile options."}
+    defines = [f"{name}={value}" for name, value in options.macros]
+    incdirs = list(options.include_dirs)
+    # Preserve compatibility for caller-built legacy contexts with no command.
+    if not records and not cmd:
+        defines, incdirs = [], []
+    # vericom runs in a private cache directory. Restore the original cwd's
+    # implicit include search without compiling any include as a separate unit.
+    if compile_result.get("compile_cwd"):
+        incdirs.insert(0, str(Path(compile_result["compile_cwd"]).resolve()))
+    incdirs = list(dict.fromkeys(incdirs))
     needs_uvm = _needs_uvm(cmd, ordered_files)
+    explicit_uvm = any(Path(f).name == "uvm_pkg.sv" for f in ordered_files)
+
+    dependencies = list(ordered_files)
+    for item in evidence.get("ordered_includes") or []:
+        if isinstance(item, dict) and item.get("path"):
+            dependencies.append(str(item["path"]))
+    for parent, children in (compile_result.get("include_tree") or {}).items():
+        dependencies.extend((parent, *children))
+    dependencies.extend(environment.filelists)
+    recorded_filelists = [] if environment.filelists else evidence.get("filelists") or []
+    for item in recorded_filelists:
+        if isinstance(item, dict) and item.get("path") and "$" not in item["path"]:
+            dependencies.append(str(item["path"]))
+    dependencies = list(dict.fromkeys(dependencies))
 
     h = hashlib.sha256()
+    h.update(b"traceweave-kdb-inputs-v2\0")
+    h.update(json.dumps(ordered_files, ensure_ascii=True).encode())
+    h.update(b"\0")
     h.update(top.encode())
     h.update(b"\0")
-    for f in ordered_files:
+    for f in dependencies:
+        check_cancelled()
         h.update(f.encode())
         h.update(b"\0")
         try:
-            h.update(str(int(os.path.getmtime(f))).encode())
+            before = os.stat(f)
+            with open(f, "rb") as stream:
+                while block := stream.read(1024 * 1024):
+                    check_cancelled()
+                    h.update(block)
+            after = os.stat(f)
+            if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+            ):
+                return {"error": "Compile inputs changed during KDB identity validation; retry with stable inputs."}
         except OSError:
-            h.update(b"missing")
+            return {"error": f"KDB compile dependency is unavailable: {f}"}
         h.update(b"\0")
-    for d in sorted(defines):
+    for d in defines:
         h.update(b"D")
         h.update(d.encode())
         h.update(b"\0")
-    for i in sorted(incdirs):
+    for i in incdirs:
         h.update(b"I")
         h.update(i.encode())
         h.update(b"\0")
     h.update(b"U1" if needs_uvm else b"U0")
+    h.update(b"E1" if explicit_uvm else b"E0")
 
     return {
         "top": top,
@@ -313,6 +379,8 @@ def _extract_build_inputs(
         "defines": defines,
         "incdirs": incdirs,
         "needs_uvm": needs_uvm,
+        "explicit_uvm_package": explicit_uvm,
+        "dependencies": dependencies,
         "hash": h.hexdigest()[:16],
     }
 
@@ -396,7 +464,7 @@ def _needs_uvm(compile_command: str, files: list[str]) -> bool:
 
 def _vericom_cmd(vericom_bin: str, inputs: dict[str, Any]) -> list[str]:
     cmd = [vericom_bin, "-sv", "-kdb"]
-    if inputs["needs_uvm"]:
+    if inputs["needs_uvm"] and not inputs.get("explicit_uvm_package"):
         cmd += ["-ntb_opts", "uvm"]
     for d in inputs["defines"]:
         cmd.append(f"+define+{d}")
@@ -475,7 +543,7 @@ def _write_build_script(
     inputs: dict[str, Any],
 ) -> Path:
     vericom_args = ["-sv", "-kdb"]
-    if inputs["needs_uvm"]:
+    if inputs["needs_uvm"] and not inputs.get("explicit_uvm_package"):
         vericom_args += ["-ntb_opts", "uvm"]
     for d in inputs["defines"]:
         vericom_args.append(f"+define+{d}")
@@ -561,6 +629,8 @@ def _serialisable_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         "defines": inputs["defines"],
         "incdirs": inputs["incdirs"],
         "files": inputs["files"],
+        "dependencies": inputs.get("dependencies", inputs["files"]),
+        "explicit_uvm_package": inputs.get("explicit_uvm_package", False),
         "hash": inputs["hash"],
     }
 

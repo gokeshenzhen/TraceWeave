@@ -575,6 +575,8 @@ def _recover_vcs_command_files(
     tokens: list[str],
     command_dir: str,
     warnings: list[str],
+    *,
+    environment: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict], dict[str, list[str]], list[str], list[dict]]:
     """Recover sources from a no-op VCS command and its filelists.
 
@@ -591,6 +593,7 @@ def _recover_vcs_command_files(
         "token_limit_reported": False,
         "incdirs": [],
         "filelists": [],
+        "environment": environment or {},
     }
     _scan_vcs_tokens(
         tokens,
@@ -629,6 +632,7 @@ def _scan_vcs_tokens(
 
     index = 0
     while index < len(tokens):
+        _check_cancelled()
         token = tokens[index]
         if index == 0 and Path(token).name in {"vcs", "vlogan", "vhdlan"}:
             index += 1
@@ -637,7 +641,7 @@ def _scan_vcs_tokens(
             for raw_path in token[len("+incdir+") :].split("+"):
                 if not raw_path:
                     continue
-                path = _normalize_path(raw_path, source_base)
+                path = _normalize_path(_replay_path(raw_path, state), source_base)
                 if path not in state["incdirs"]:
                     state["incdirs"].append(path)
             index += 1
@@ -645,7 +649,7 @@ def _scan_vcs_tokens(
         if token in {"-f", "-F"} and index + 1 < len(tokens):
             raw_filelist = tokens[index + 1]
             filelist_base = command_dir if token == "-f" else source_base
-            filelist_path = _normalize_path(raw_filelist, filelist_base)
+            filelist_path = _normalize_path(_replay_path(raw_filelist, state), filelist_base)
             entries_base = (
                 command_dir if token == "-f" else os.path.dirname(filelist_path)
             )
@@ -665,7 +669,7 @@ def _scan_vcs_tokens(
             index += 2
             continue
         if token == "-v" and index + 1 < len(tokens):
-            _add_vcs_source(tokens[index + 1], source_base, file_info, warnings)
+            _add_vcs_source(_replay_path(tokens[index + 1], state), source_base, file_info, warnings)
             index += 2
             continue
         if token in _VCS_FLAGS_WITH_VALUE and index + 1 < len(tokens):
@@ -677,8 +681,17 @@ def _scan_vcs_tokens(
         if token.startswith(("-", "+")):
             index += 1
             continue
-        _add_vcs_source(token, source_base, file_info, warnings)
+        _add_vcs_source(_replay_path(token, state), source_base, file_info, warnings)
         index += 1
+
+
+def _replay_path(raw: str, state: dict) -> str:
+    # Log-proven bindings are local to this replay, never process environment.
+    environment = state.get("environment")
+    if not environment:
+        return raw
+    from .compile_environment import _expand_with_environment
+    return _expand_with_environment(raw, environment)
 
 
 def _expand_vcs_filelist(

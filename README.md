@@ -450,6 +450,10 @@ limits, read reuse, and the precise coverage contract.
 
 Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses local Verdi FSDB Reader libraries and the wrapper. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
 
+**Can I analyze a run produced in another terminal?**
+
+Yes. Supply the existing compile log, simulation log, and waveform; the source and include files must remain accessible. For VCS logs with recorded compilation units, TraceWeave can recover uniquely constrained project path variables from the logged absolute paths and nested filelists, then verify the replayed file order. Hierarchy discovery, Source Graph, and `build_kdb` share this recovery logic. KDB builds compile only the recorded units, preserving includes inside their parent files and restoring the original working directory's include search path. Setup scripts are never executed automatically and the server environment is unchanged. Ambiguous paths, missing options, or differing phase-local KDB options remain explicit coverage or precheck boundaries; supply the expanded compilation context when recovery is insufficient.
+
 **How should I judge signal-tracing accuracy?**
 
 NPI uses an elaborated KDB matching the current design; Source Graph builds a semantic connectivity graph from source. With complete compilation context, supported target semantics, and **complete query coverage, exact resolution, and no truncation**, the results can be treated as **exact structural connectivity facts within the current query scope** for driver, load, and connectivity path analysis.

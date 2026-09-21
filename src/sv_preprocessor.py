@@ -21,6 +21,11 @@ import shlex
 from typing import Any, Callable, Mapping, Sequence
 
 from .cancellation import check_cancelled
+from .compile_environment import (
+    CompileEnvironment,
+    _expand_with_environment,
+    resolve_compile_environment,
+)
 from .filelist_tokenizer import tokenize_filelist
 
 
@@ -265,8 +270,10 @@ def _canonical(path: str | os.PathLike[str]) -> str:
     return os.path.realpath(os.fspath(path))
 
 
-def _render_path(raw: str, base: str) -> str | None:
-    expanded = os.path.expandvars(os.path.expanduser(raw))
+def _render_path(
+    raw: str, base: str, environment: Mapping[str, str] | None = None,
+) -> str | None:
+    expanded = _expand_with_environment(raw, environment or {})
     if "$" in expanded:
         return None
     path = Path(expanded)
@@ -296,8 +303,11 @@ def _record_macro(macros: dict[str, str], rendered: str) -> None:
         macros[name] = value if separator else "1"
 
 
-def _record_incdir(include_dirs: list[str], raw: str, base: str) -> bool:
-    path = _render_path(raw, base)
+def _record_incdir(
+    include_dirs: list[str], raw: str, base: str,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    path = _render_path(raw, base, environment)
     if path is None:
         return False
     if path not in include_dirs:
@@ -315,6 +325,7 @@ def _extract_tokens_options(
     visited_filelists: set[str],
     token_budget: list[int],
     depth: int,
+    environment: Mapping[str, str] | None = None,
 ) -> bool:
     if depth > _MAX_FILELIST_DEPTH:
         return False
@@ -347,24 +358,24 @@ def _extract_tokens_options(
             continue
         if token.startswith("+incdir+"):
             for raw in token[len("+incdir+") :].split("+"):
-                if raw and not _record_incdir(include_dirs, raw, base):
+                if raw and not _record_incdir(include_dirs, raw, base, environment):
                     complete = False
             index += 1
             continue
         if (lower == "-incdir" or token == "-I") and index + 1 < len(tokens):
-            if not _record_incdir(include_dirs, str(tokens[index + 1]), base):
+            if not _record_incdir(include_dirs, str(tokens[index + 1]), base, environment):
                 complete = False
             index += 2
             continue
         if token.startswith("-I") and len(token) > 2:
-            if not _record_incdir(include_dirs, token[2:], base):
+            if not _record_incdir(include_dirs, token[2:], base, environment):
                 complete = False
             index += 1
             continue
         if token in {"-f", "-F"} and index + 1 < len(tokens):
             raw_filelist = str(tokens[index + 1])
             filelist_base = command_dir if token == "-f" else base
-            filelist_path = _render_path(raw_filelist, filelist_base)
+            filelist_path = _render_path(raw_filelist, filelist_base, environment)
             if filelist_path is None or filelist_path in visited_filelists:
                 complete &= filelist_path is not None
                 index += 2
@@ -391,6 +402,7 @@ def _extract_tokens_options(
                 visited_filelists=visited_filelists,
                 token_budget=token_budget,
                 depth=depth + 1,
+                environment=environment,
             )
             index += 2
             continue
@@ -400,6 +412,7 @@ def _extract_tokens_options(
 
 def _extract_options_from_contexts(
     contexts: Sequence[tuple[str, str]],
+    environment: Mapping[str, str] | None = None,
 ) -> PreprocessorOptions:
     macros: dict[str, str] = {}
     include_dirs: list[str] = []
@@ -421,6 +434,7 @@ def _extract_options_from_contexts(
             visited_filelists=set(),
             token_budget=[0],
             depth=0,
+            environment=environment,
         )
     return PreprocessorOptions(
         tuple(macros.items()), tuple(include_dirs), complete
@@ -428,10 +442,17 @@ def _extract_options_from_contexts(
 
 
 def extract_preprocessor_options(
-    compile_result: Mapping[str, Any], source_path: str
+    compile_result: Mapping[str, Any], source_path: str, *,
+    environment: CompileEnvironment | None = None,
 ) -> PreprocessorOptions:
-    return _extract_options_from_contexts(
-        _command_contexts(compile_result, source_path)
+    if environment is None:
+        environment = resolve_compile_environment(compile_result)
+    options = _extract_options_from_contexts(
+        _command_contexts(compile_result, source_path), environment.bindings
+    )
+    return PreprocessorOptions(
+        options.macros, options.include_dirs,
+        options.complete and environment.complete,
     )
 
 
@@ -765,6 +786,7 @@ class SystemVerilogPreprocessor:
         ),
     ) -> None:
         self._compile_result = compile_result
+        self._environment = resolve_compile_environment(compile_result)
         self._source_loader = source_loader or self._read_source
         self._max_include_depth = max(0, int(max_include_depth))
         # Raw and derived masked text share one hard LRU budget.
@@ -1056,7 +1078,9 @@ class SystemVerilogPreprocessor:
         contexts = self._context_index.contexts_for(root)
         options = self._options_cache.get(contexts)
         if options is None:
-            options = _extract_options_from_contexts(contexts)
+            options = _extract_options_from_contexts(contexts, self._environment.bindings)
+            options = PreprocessorOptions(options.macros, options.include_dirs,
+                                           options.complete and self._environment.complete)
             self._options_cache[contexts] = options
         state = _ExpansionState(
             macros=options.macro_dict(),

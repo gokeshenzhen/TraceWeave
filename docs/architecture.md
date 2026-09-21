@@ -40,6 +40,7 @@ Connectivity backends (driver/load/path resolution)
   src/npi_worker.py               # short-lived compute-node NPI entry point
   src/verdi_backend.py            # KDB / license probe, kdb_hint generator
   src/kdb_builder.py              # Auto-build Verdi KDB (vericom + elabcom) for Xcelium
+  src/compile_environment.py      # Bounded log-anchored path recovery shared by hierarchy/KDB/Source Graph
 
 Waveform backends
   src/vcd_parser.py
@@ -1209,11 +1210,28 @@ remains the default. With `TRACEWEAVE_NPI_EXECUTION=lsf`, every cache miss or
 forced rebuild runs in the same LSF policy used by NPI queries; no failure path
 silently starts a licensed local build.
 
+VCS compilation records also support rebuilding from a different terminal.
+`compile_environment` infers only uniquely constrained path variables from
+simulator-recorded absolute paths and bounded nested filelists, then checks
+the replayed project-unit order against the log. The preprocessor and KDB
+builder reuse the same inference as Source Graph. No setup script is executed
+and no process environment is modified; ambiguous or incomplete option replay
+does not authorize conditional hierarchy and fails KDB precheck. Phase-local
+KDB options must agree across the compiled sources.
+
+`files.user` is a browsing inventory and may contain module-body or class
+includes. With compilation-unit evidence, KDB builds use that ordered evidence
+instead; an included file is a separate unit only if the simulator records it
+as one. Nested `-f`/`-F` options retain their path bases and include search
+order. The original compile cwd is restored as an include directory because
+vericom runs under a private cache directory. Legacy caller-built contexts
+without compilation-unit records retain their inventory fallback.
+
 ```text
 build_kdb(compile_log)
 ├── parse_compile_log → top, files, defines, incdirs, UVM flag
-├── hash = sha256(top + sorted(files + mtimes) + sorted(defines)
-│                 + sorted(incdirs) + uvm_bit)
+├── versioned hash = sha256(ordered units + top + dependency contents
+│                          + ordered defines/incdirs + UVM mode)
 ├── cache_dir = $TRACEWEAVE_CACHE_DIR/kdb/<hash>/
 ├── if cache_dir/state.json says ok → return cached, no Verdi spawn
 ├── execution=lsf → submit versioned private worker request via bsub -K
@@ -1227,6 +1245,7 @@ build_kdb(compile_log)
     │   → vericom.log
     ├── elabcom -lib work.lib++ -elab kdb -top <top>
     │   → elabcom.log
+    ├── revalidate inputs after compile; changed inputs cannot be published
     ├── on success: rename tmp → cache_dir (atomic, replaces stale entry)
     └── on failure: rename tmp → .failed-<hash>/ (preserved for inspection;
                       existing cache_dir untouched)
@@ -1264,7 +1283,12 @@ Cross-environment generality:
   (xrun) are both extracted.
 - UVM detection is heuristic: `-ntb_opts uvm`, `-uvm`,
   `+define+UVM*`, or any source path containing `uvm`. Any one
-  signal triggers `-ntb_opts uvm` for vericom.
+  signal triggers `-ntb_opts uvm` for vericom unless the recorded units already
+  provide `uvm_pkg.sv`; an explicit package retains its original order/version.
+- Cache identity includes source, recorded include, and replayed filelist
+  contents, including changes within the same timestamp second. Old cache
+  keys are invalidated by the input-version salt. Content reads are streamed
+  with cancellation checkpoints; this adds validation I/O to cache lookup.
 - Top-module selection prefers names not matching
   `uvm_custom_install*` (Synopsys recorder shims), falling back to
   the first listed top.

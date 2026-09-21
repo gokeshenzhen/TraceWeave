@@ -5995,6 +5995,10 @@ async def list_tools():
             name="build_kdb",
             description=(
                 "Auto-build a Verdi KDB from a parsed compile log using vericom + elabcom. "
+                "Preserves recorded compilation-unit order and parent include context, with "
+                "bounded log-anchored path recovery for nested filelists when project variables "
+                "are absent or stale. Does not execute project setup scripts; incomplete replay "
+                "returns a precheck failure. "
                 "Use this when the simulator is Xcelium (xrun) and the NPI backend reports no KDB, "
                 "or to force-refresh a stale cached KDB. Output is cached under TRACEWEAVE_CACHE_DIR "
                 "(default ~/.cache/traceweave/kdb/<hash>/); cache hits reuse the previous KDB without "
