@@ -158,6 +158,7 @@ from src.cycle_query import (
 from pydantic import BaseModel
 import src.schemas as schemas
 from src.evidence_output import serialize_compact_result
+from src.mcp_validation import recover_keyword_limit_errors
 
 
 # Session state and workflow prerequisite gating.
@@ -7101,6 +7102,7 @@ async def list_tools():
 # ═══════════════════════════════════════════════════════════════════
 
 
+@recover_keyword_limit_errors(app)
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
     start = time.perf_counter()

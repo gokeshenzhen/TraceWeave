@@ -844,6 +844,16 @@ glitch and asynchronous investigations on transition/window queries.
 `values_only` trims the response after reading; it does not bypass the reader
 or clock-detection guardrails and makes no parser-performance guarantee.
 
+The MCP request adapter rejects `search_signals.keyword` lists longer than 16
+before any search or parser access. It returns `isError=true` with matching
+JSON text and structured content: `error_code="too_many_keywords"`,
+`parameter`, `provided_count`, `max_count`, `search_executed=false` and a
+batch-splitting `recovery` instruction. No keyword or path contents are echoed.
+All other requests retain the SDK's original input validation and error
+handling. Neither this precheck nor SDK input-validation failures enter
+tool-handler telemetry; client-side rejection may happen before either layer
+and cannot be customized or counted by the server.
+
 ## Handle-based Hierarchy Access
 
 `build_tb_hierarchy` generates a full hierarchy result server-side (project

@@ -1588,6 +1588,15 @@ class ToolErrorResult(SchemaModel):
     fallback: dict[str, Any] | None = None
 
 
+class KeywordLimitErrorResult(ToolErrorResult):
+    error_code: Literal["too_many_keywords"] = "too_many_keywords"
+    parameter: Literal["keyword"] = "keyword"
+    provided_count: StrictInt = Field(gt=0)
+    max_count: StrictInt = Field(gt=0)
+    search_executed: Literal[False] = False
+    recovery: str
+
+
 # ---------------------------------------------------------------------------
 # Auto-debug v2: cursors + verify primitives
 # ---------------------------------------------------------------------------
