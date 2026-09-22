@@ -1539,6 +1539,11 @@ class TraceRootCause(SchemaModel):
 
 
 class XHistoryEvidence(SchemaModel):
+    """Observed facts and labelled candidates; frontiers never prove exclusion.
+
+    A predecessor_sampling_candidate retains sampling_order_unresolved and
+    uses candidate_* edges. It cannot establish simulator scheduling order.
+    """
     status: Literal["partial", "blocked", "inconclusive", "signal_is_clean"]
     window: dict[str, Any]
     context: dict[str, Any] = Field(default_factory=dict)

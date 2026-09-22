@@ -280,13 +280,25 @@ async def _walk(result, request, services, route, budget, session, design, wave,
         unsafe = [g for g in obs['gaps'] if g not in {'value_unknown', 'driver_set_incomplete'}]
         for gap in unsafe:
             frontier(node_id, gap)
-        if unsafe:
+        # A recorded predecessor can guide a bounded candidate path even when
+        # same-time updates leave simulator ordering unproven. Precision, clock,
+        # missing data and unknown guards remain hard frontiers.
+        uncertain = [d for d in dependencies if d.get('gaps')]
+        ordering_candidate = (set(unsafe) == {'sampling_order_unresolved'} and bool(uncertain)
+            and not obs.get('trigger_gaps')
+            and all(d.get('ordering_candidate') and d.get('role') == 'data' for d in uncertain))
+        if unsafe and not ordering_candidate:
             node['status'] = 'frontier'
             continue
+        if ordering_candidate:
+            node['sampling_status'] = 'candidate_predecessor'
+            result['candidates'].append(dict(node_id=node_id, kind='predecessor_sampling_candidate',
+                competing_hypotheses=_HYPOTHESES, checked=['recorded_predecessor'],
+                unchecked=['simulation_scheduling', 'same_time_write_order']))
         for check in ('selected_data_and_controls', *(['trigger_edge_and_previous_state'] if clock else [])):
             if check not in result['coverage']['checks']:
                 result['coverage']['checks'].append(check)
-        supported = obs['value'] == node['value'] and step.get('complete') and not gaps
+        supported = obs['value'] == node['value'] and step.get('complete') and not gaps and not unsafe
         action = 'hold' if obs.get('action') == 'hold' else 'register_sample' if clock else 'combinational'
         node['relation'] = action
         node['value_relation_observed'] = obs['value'] == node['value']
@@ -299,7 +311,7 @@ async def _walk(result, request, services, route, budget, session, design, wave,
             continue
         unique = {}
         for dep in dependencies:
-            if dep.get('value') is None or dep.get('gaps'):
+            if dep.get('value') is None or (dep.get('gaps') and not (ordering_candidate and dep.get('ordering_candidate'))):
                 frontier(node_id, 'dependency_evidence_incomplete', dependency=dep)
                 continue
             if not known(dep['value']):

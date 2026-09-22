@@ -1459,6 +1459,15 @@ The LSF `dynamic_step` request calls the same NPI core. NPI's active-design
 identity is process-wide; fixed elaboration maps distinguish KDB changes while
 transient native lock files do not invalidate an unchanged design.
 
+NPI pseudo selections expand the full typed cell output before selecting its
+declared bit coordinates. Narrow mux outputs explicitly select contributing
+input bits; unknown extension rules remain gaps. Logical input pin polarity is
+preserved. Constant logical right shifts lower to bounded bit selection and
+zero padding; variable and arithmetic shifts remain unsupported. The shared
+`src/dynamic_selection.py` projector preserves ordered bits through muxes,
+concatenations and casts within the existing expression budgets. Evaluation
+rejects inconsistent mux widths instead of silently returning a wider value.
+
 `src/dynamic_observe.py` separates output observation, triggering edge and strict
 predecessor samples; it does not infer simulation scheduling order from integer
 picoseconds. `src/divergence_trace.py` pairs active dependencies and stores each
@@ -1503,9 +1512,16 @@ and timing come from typed backend structure, never names. Unexecuted branches
 retain Q; a selected mux's exact ordered Q reference also proves a hold relation.
 Equal X values alone do not prove retention. Previous Q, selected controls and
 data are exposed separately, so recovered present inputs cannot exclude a past
-injection. Same-time changing controls/data, unknown guards, missing clocks,
-different upstream clock domains and unsupported asynchronous structures stop
-temporal inference. Static constant propagation is not historical evidence.
+injection. Same-time changing controls, unknown guards, missing or ambiguous
+clocks, different upstream clock domains and unsupported asynchronous
+structures stop temporal inference. For same-time data changes at a known
+integer-ps scale, a recorded predecessor may extend a bounded candidate path:
+the node carries `sampling_status=candidate_predecessor`, the edge uses
+`candidate_*`, and `predecessor_sampling_candidate` lists unverified scheduling
+and write order. The original `sampling_order_unresolved` frontier remains;
+this is not a supported sampling relation. Precision gaps and uncertain
+controls cannot use this path. Static constant propagation is not historical
+evidence. Full and compact output preserve the same candidate facts and gaps.
 
 `src/x_history_observe.py` consumes PR 04 private event pages under existing wave
 locks. Raw femtoseconds define interval boundaries and timestamp groups; dynamic

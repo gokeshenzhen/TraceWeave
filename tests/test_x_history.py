@@ -173,6 +173,33 @@ async def test_native_precision_not_replaced_with_rounded_sample(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_same_edge_recovery_keeps_only_a_labelled_predecessor_candidate(tmp_path, monkeypatch):
+    from tests.test_evidence_output import compact_call
+    from src.schemas import XHistoryEvidence
+    args = await setup(tmp_path, changes={15: dict(d='1')})
+    expanded, _ = await compact_call(monkeypatch, 'trace_x_source', args)
+    r = XHistoryEvidence.model_validate(expanded['history'])
+    assert r.status == 'partial' and not r.coverage['true_origin_proven']
+    assert 'sampling_order_unresolved' in r.coverage['gaps']
+    upstream = [n for n in r.nodes if n['signal'] == 'top.d']
+    assert len(upstream) == 1 and upstream[0]['time_ps'] == 15 and upstream[0]['phase'] == 'before'
+    assert upstream[0]['interval']['active_interval_start_time_fs'] == 12000
+    assert any(e['relation'] == 'candidate_register_sample' for e in r.edges)
+    assert any(c['kind'] == 'predecessor_sampling_candidate' for c in r.candidates)
+
+
+@pytest.mark.anyio
+async def test_ambiguous_clock_cannot_use_data_predecessor_candidate(tmp_path):
+    args = await setup(tmp_path, changes={15: dict(d='1')})
+    p = Path(args['wave_path'])
+    p.write_text(p.read_text().replace('#15\n1!', '#15\n1!\n0!\n1!'))
+    r = await run(args)
+    assert 'sampling_order_unresolved' in r.coverage['gaps']
+    assert not any(n['signal'] == 'top.d' for n in r.nodes)
+    assert not any(e['relation'] == 'candidate_register_sample' for e in r.edges)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize('limit,value', [('max_nodes', 1), ('max_depth', 0), ('max_events', 1), ('max_read_bytes', 1024)])
 async def test_budget_exhaustion_is_partial_not_exclusion(tmp_path, limit, value):
     args = await setup(tmp_path)

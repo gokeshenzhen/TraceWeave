@@ -10,11 +10,12 @@ import re
 
 from .cancellation import check_cancelled, OperationCancelled
 from .dynamic_evidence import DYNAMIC_VERSION, Expr, TRUE, expression_gaps, unsupported_step
+from .dynamic_selection import select_expression
 
 _MAX_STATES = 256
 _MAX_DEPTH = 32
 _MAX_PINS = 64
-_SELECT = re.compile(r"\[-?\d+(?::-?\d+)?\]$")
+_SELECT = re.compile(r"(?:\[-?\d+(?::-?\d+)?\]#)?\[-?\d+(?::-?\d+)?\]$")
 
 
 class ProjectionGap(Exception):
@@ -110,6 +111,27 @@ def query_step(backend, signal: str) -> dict:
                 return expand(linked, depth+1)
             cell_type = scope.cell_type()
             pins = bounded(scope.instport_list() or [])
+            outputs = [p.connected_net() for p in pins if p.direction() == "npiNlOutput"]
+            outputs = [n for n in outputs if n is not None and
+                       _SELECT.sub('', n.full_name()) == _SELECT.sub('', net.full_name())]
+            if len(outputs) != 1:
+                raise ProjectionGap('dynamic_bit_mapping_unavailable')
+            output = outputs[0]
+            if output is not None and (int(output.left()), int(output.right()), int(output.size())) != (
+                    int(net.left()), int(net.right()), width):
+                # A pseudo net may select only part of a generated cell output.
+                # Expand the full cell first, then project exact native indices;
+                # using the pseudo width as the mux's width selects wrong lanes.
+                if _SELECT.sub('', output.full_name()) != _SELECT.sub('', net.full_name()):
+                    raise ProjectionGap('dynamic_bit_mapping_unavailable')
+                left, right = int(output.left()), int(output.right())
+                declared = tuple(range(left, right + (-1 if left > right else 1), -1 if left > right else 1))
+                left, right = int(net.left()), int(net.right())
+                selected = tuple(range(left, right + (-1 if left > right else 1), -1 if left > right else 1))
+                if len(declared) != int(output.size()) or len(selected) != width or not set(selected).issubset(declared):
+                    raise ProjectionGap('dynamic_bit_mapping_unavailable')
+                return select_expression(expand(output, depth + 1, force=True),
+                                         tuple(declared.index(bit) for bit in selected))
             inputs = [p for p in pins if p.direction() == "npiNlInput"]
             result["sources"].append({"cell": scope.full_name(), "kind": cell_type, "location": scope.src_info()})
             def linked(p):
@@ -137,10 +159,37 @@ def query_step(backend, signal: str) -> dict:
                 annotated = {p.cond_annot(): p for p in data}
                 if cond.width != 1 or set(annotated) != {"1'b1", "1'b0"}:
                     raise ProjectionGap("guard_unresolved")
-                return Expr("mux", width, (cond, linked(annotated["1'b1"]), linked(annotated["1'b0"])))
+                operands = []
+                for annotation in ("1'b1", "1'b0"):
+                    value = linked(annotated[annotation])
+                    if value.width < width:
+                        raise ProjectionGap('operand_type_unresolved')
+                    # A directly assigned narrow output also truncates wider
+                    # mux inputs. Keep only the contributing declared bits.
+                    operands.append(select_expression(value, tuple(range(value.width - width, value.width))))
+                return Expr("mux", width, (cond, *operands))
             op = {"npiNlLogAndCell": "and", "npiNlLogOrCell": "or", "npiNlNotCell": "not",
                   "npiNlEqCompCell": "eq", "npiNlNotEqCompCell": "ne"}.get(cell_type)
             operands = tuple(linked(p) for p in sorted(inputs, key=lambda p: p.port_order() or 0))
+            if cell_type in {'npiNlLogAndCell', 'npiNlLogOrCell'}:
+                ordered = sorted(inputs, key=lambda p: p.port_order() or 0)
+                if any(p.port_state() not in {'npiNlHighActive', 'npiNlLowActive'} for p in ordered):
+                    raise ProjectionGap('guard_unresolved')
+                operands = tuple(Expr('not', 1, (value,)) if p.port_state() == 'npiNlLowActive' else value
+                                 for p, value in zip(ordered, operands))
+            if cell_type == 'npiNlShiftRightCell' and len(inputs) == 2:
+                if {p.port_order() for p in inputs} != {0, 1}:
+                    raise ProjectionGap('dynamic_bit_mapping_unavailable')
+                data, amount = operands
+                if data.width != width or amount.op != 'const' or any(c in amount.value for c in 'xz'):
+                    raise ProjectionGap('dynamic_evidence_unavailable')
+                shift = int(amount.value, 2)
+                if not shift:
+                    return data
+                if shift >= width:
+                    return Expr('const', width, value='0' * width)
+                return Expr('concat', width, (Expr('const', shift, value='0' * shift),
+                    select_expression(data, tuple(range(width - shift)))))
             if cell_type in {"npiNlBufCell", "npiNlAssignCell"} and len(operands) == 1 and operands[0].width == width:
                 return operands[0]
             if op and (len(operands) == 2 or op == "not" and len(operands) == 1):

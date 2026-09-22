@@ -130,6 +130,9 @@ class ObservationReader:
             bits = None
         return dict(value=bits, time_ps=time, phase=phase,
                     predecessor_time_ps=int(event["time_ps"]) if event else None,
+                    ordering_candidate=(phase == "before" and bool(same_time)
+                        and set(gaps) == {"sampling_order_unresolved"}
+                        and stream.scale_fs is not None and stream.scale_fs >= 1000),
                     gaps=list(dict.fromkeys(gaps)))
 
 
@@ -139,6 +142,7 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
     result = dict(observation_time_ps=time, observation_phase=phase, sampling_time_ps=time,
                   sampling_phase=phase, trigger_time_ps=None, dependencies=[], branches=[],
                   value=None, complete=False, gaps=list(step.get("gaps", ())), boundary=step["boundary"])
+    result['trigger_gaps'] = []
     if step["boundary"] in {"input", "unsupported"}:
         return result
     sample_time, sample_phase = time, phase
@@ -152,6 +156,7 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
         edges, gaps = clock_edges(reader.stream(clock.signal), step["clock"]["edge"],
                                   start=history_start, end=time, before=phase == "before")
         result["gaps"].extend(gaps)
+        result['trigger_gaps'] = [*binding_gaps, *gaps]
         if not edges:
             result["gaps"].append("history_window_exhausted")
             return result

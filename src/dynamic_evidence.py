@@ -133,9 +133,13 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             children = [walk(node.args[i], use, depth+1) for i in
                         ((selected,) if selected else (1, 2))]
             value = children[0].value if selected else None
+            width_gaps = []
+            if any(a.width != node.width for a in node.args[1:]):
+                value = None
+                width_gaps.append("expression_width_unresolved")
             return Evaluation(value, cond.dependencies + [d for c in children for d in c.dependencies],
                               cond.gaps + [g for c in children for g in c.gaps]
-                              + ([] if selected else ["guard_unresolved"]),
+                              + ([] if selected else ["guard_unresolved"]) + width_gaps,
                               cond.branches + [{"condition": asdict(node.args[0]), "state": cond.truth,
                                                  "selected": selected}] +
                               [b for c in children for b in c.branches],

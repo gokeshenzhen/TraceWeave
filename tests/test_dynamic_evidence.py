@@ -122,3 +122,9 @@ def test_real_slang_unsupported_semantics_cannot_claim_complete(body):
 def test_old_ir_does_not_acquire_dynamic_capability():
     with pytest.raises(ValueError, match="version"):
         ConnectivityIR.from_dict({"ir_version":"1.2"})
+
+
+def test_malformed_mux_width_does_not_return_an_oversized_value():
+    expr = Expr('mux', 4, (TRUE, Expr('const', 8, value='11110000'), Expr('const', 4, value='0000')))
+    r = evaluate(expr, lambda _: {})
+    assert r.value is None and 'expression_width_unresolved' in r.gaps

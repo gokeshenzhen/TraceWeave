@@ -9,6 +9,7 @@ from .divergence_compare import SignalStream, bit_value, known, read_stream
 from .divergence_mapping import split_selection
 from .dynamic_evidence import Expr, expression_gaps
 from .dynamic_binding import signal_expression
+from .dynamic_selection import select_expression as _select
 from .operation_metrics import read_process_rss_kib
 from .waveform_batch import EventPagingUnavailable, event_readers
 
@@ -189,36 +190,6 @@ def unknown_interval(stream, expr, start, time, phase):
                                          if stream.predecessor else None),
                     transition_data_truncated=stream.truncated),
                 gaps=list(dict.fromkeys(gaps)))
-
-
-def _select(expr, positions):
-    """Project existing typed expressions; unsupported operators remain frontiers."""
-    if tuple(positions) == tuple(range(expr.width)):
-        return expr
-    if expr.op == 'signal':
-        return replace(expr, width=len(positions), bits=tuple(expr.bits[i] for i in positions))
-    if expr.op == 'const':
-        return replace(expr, width=len(positions), value=''.join(expr.value[i] for i in positions))
-    if expr.op == 'mux':
-        return replace(expr, width=len(positions), args=(expr.args[0], *(_select(a, positions) for a in expr.args[1:])))
-    if expr.op in {'concat', 'cast'}:
-        pieces = []
-        if expr.op == 'concat':
-            for child in expr.args:
-                pieces.extend((child, i) for i in range(child.width))
-        else:
-            child = expr.args[0]
-            if expr.width <= child.width:
-                pieces = [(child, i) for i in range(child.width - expr.width, child.width)]
-            else:
-                pad = (child, 0) if child.signed else (Expr('const', 1, value='0'), 0)
-                pieces = [pad] * (expr.width - child.width) + [(child, i) for i in range(child.width)]
-        groups = []
-        for _, indices in groupby((pieces[i] for i in positions), key=lambda p: id(p[0])):
-            entries = list(indices)
-            groups.append(_select(entries[0][0], tuple(p[1] for p in entries)))
-        return Expr('concat', len(positions), tuple(groups))
-    return Expr('unsupported', len(positions), reason='dynamic_bit_mapping_unavailable')
 
 
 def select_step(step, bits):

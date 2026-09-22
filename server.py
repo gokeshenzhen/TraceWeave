@@ -6050,6 +6050,8 @@ async def list_tools():
                 "preserved on the node. Default mode=snapshot keeps the same-time chain. "
                 "mode=history requires history_start_ps and returns history.nodes/edges/frontier: "
                 "observed X/Z intervals, supported register sampling/hold and combinational evidence. "
+                "Same-edge data predecessors may extend a labelled candidate path while retaining "
+                "the scheduling gap; ambiguous controls or clocks still stop expansion. "
                 "Missing history, ambiguous scheduling, CDC or unsupported asynchronous controls "
                 "remain boundaries; observed dump onset is never asserted to be the true first origin."
             ),

@@ -133,6 +133,11 @@ def value(step, values):
 
 def test_real_npi_mux_enable_reset_edges_and_synthetic_conditions(real_kdbs):
     b = load(real_kdbs[0])
+    negated = query_step(b, 'tw_div_probe.neg_or_out')
+    assert negated['complete'], negated
+    for en, expected in (('0', '01010101'), ('1', '10101010')):
+        assert value(negated, {'tw_div_probe.en': en, 'tw_div_probe.sel': '0',
+                              'tw_div_probe.a': '01010101', 'tw_div_probe.b': '10101010'}).value == expected
     for name in ("mux_out", "q", "qn", "qnested", "a"):
         r = query_step(b, "tw_div_probe." + name)
         validate_step(json.loads(json.dumps(r)))
@@ -140,6 +145,15 @@ def test_real_npi_mux_enable_reset_edges_and_synthetic_conditions(real_kdbs):
         if name in {"q", "qn", "qnested"}:
             assert r["boundary"] == "sequential"
             assert r["clock"]["edge"] == ("negedge" if name == "qn" else "posedge")
+    for selected, expected in (("narrow_out", "01111000"), ("wide_mux[19:12]", "01000101"),
+                               ("shifted_out", f'{0x00123456:032b}')):
+        narrowed = query_step(b, "tw_div_probe." + selected)
+        assert narrowed['complete'], narrowed
+        observed = evaluate(Expr.from_dict(narrowed['branches'][0]['value']),
+            lambda e: {'value': '1' if e.signal.endswith('.sel') else
+                       ''.join(f'{0x12345678:032b}'[31 - bit] for bit in e.bits)})
+        assert observed.value == expected
+        assert not observed.gaps
     q = query_step(b, "tw_div_probe.q")
     reset = value(q, {"tw_div_probe.rst": "1"})
     assert reset.value == "00000000" and len(reset.dependencies) == 1
