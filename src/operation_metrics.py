@@ -55,6 +55,12 @@ _PUBLIC_FIELDS = {
     "sweep_native_group_oversized_count",
     "sweep_native_group_begin_error_count",
     "sweep_native_profiled_read_count",
+    "sweep_native_event_open_count",
+    "sweep_native_event_close_count",
+    "sweep_native_event_open_total_ms",
+    "sweep_native_event_close_total_ms",
+    "sweep_native_event_page_count",
+    "sweep_native_event_page_total_ms",
     "sweep_native_standalone_load_call_count",
     "sweep_native_standalone_load_total_ms",
     "sweep_native_standalone_load_max_ms",
@@ -467,6 +473,25 @@ def record_sweep_native_transition(
             metrics.values["sweep_native_truncated_calls"] = (
                 int(metrics.values.get("sweep_native_truncated_calls", 0)) + 1
             )
+
+
+def record_sweep_native_event(phase: str, duration_ms: float, *, transitions=0,
+                              output_bytes=0, truncated=False) -> None:
+    """Time the paging ABI without inventing unavailable native subphases."""
+    metrics = current()
+    if metrics is None or phase not in {"open", "page", "close"}:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        for field, value in ((f"sweep_native_event_{phase}_count", 1),
+                             (f"sweep_native_event_{phase}_total_ms", duration_ms)):
+            metrics.values[field] = metrics.values.get(field, 0) + value
+        if phase == "page":
+            for field, value in (("sweep_native_transition_count", transitions),
+                                 ("sweep_native_output_bytes", output_bytes),
+                                 ("sweep_native_truncated_calls", int(truncated))):
+                metrics.values[field] = metrics.values.get(field, 0) + value
 
 
 def _add_native_duration_locked(

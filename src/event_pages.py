@@ -5,8 +5,10 @@ is unfinished when next_time equals its timestamp. Readers retain their cursor
 until close, and must remain inside the caller's waveform lock/group.
 """
 from dataclasses import dataclass
+import time
 
 from .cancellation import check_cancelled
+from . import operation_metrics
 
 PAGE_EVENTS = 1024
 PAGE_BYTES = 256 * 1024
@@ -171,8 +173,10 @@ class FsdbEventReader:
         raw_end = ctypes.c_uint64()
         rc = parser._lib.fsdb_event_end_tick_v1(self.handle, ctypes.byref(raw_end))
         self.end_fs = raw_end.value * parser._scale_fs if rc == 0 else None
+        started = time.perf_counter()
         rc = parser._lib.fsdb_event_open_v1(self.handle, path.encode(), start,
             0xffffffffffffffff if end == -1 else end, ctypes.byref(self.cursor))
+        operation_metrics.record_sweep_native_event("open", (time.perf_counter() - started) * 1000)
         if rc == -2:
             raise KeyError(path)
         if rc < 0:
@@ -186,8 +190,13 @@ class FsdbEventReader:
         if self.handle != self.parser._handle or self.epoch is not self.parser._scope_epoch:
             raise RuntimeError('FSDB event cursor owner changed')
         receipt = _NativeEventPageV1()
-        rc = self.parser._lib.fsdb_event_page_v1(self.handle, self.cursor,
-            self.max_events, self.buffer, self.max_bytes, ctypes.byref(receipt), ctypes.sizeof(receipt))
+        started = time.perf_counter()
+        try:
+            rc = self.parser._lib.fsdb_event_page_v1(self.handle, self.cursor,
+                self.max_events, self.buffer, self.max_bytes, ctypes.byref(receipt), ctypes.sizeof(receipt))
+        finally:
+            operation_metrics.record_sweep_native_event("page", (time.perf_counter() - started) * 1000,
+                transitions=receipt.events, output_bytes=receipt.output_bytes, truncated=bool(receipt.truncated))
         check_cancelled()
         self.parser._check_metadata_identity(self.identity)
         if rc < 0:
@@ -206,6 +215,10 @@ class FsdbEventReader:
 
     def close(self):
         if self.cursor.value and self.parser._handle == self.handle and self.epoch is self.parser._scope_epoch:
-            self.parser._lib.fsdb_event_close_v1(self.handle, self.cursor)
+            started = time.perf_counter()
+            try:
+                self.parser._lib.fsdb_event_close_v1(self.handle, self.cursor)
+            finally:
+                operation_metrics.record_sweep_native_event("close", (time.perf_counter() - started) * 1000)
         self.cursor.value = 0
         self.buffer = None

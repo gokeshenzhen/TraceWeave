@@ -116,7 +116,8 @@ class _ReadAdapter:
                         if not b.admit(event.value):
                             result["truncated"] = True
                             break
-                        row = {"time_ps": event.time_ps, "value": normalize(event.value)}
+                        row = {"time_ps": event.time_ps, "time_fs": event.time_fs,
+                               "value": normalize(event.value)}
                         if event is page.predecessor:
                             previous = row
                         else:
@@ -132,6 +133,10 @@ class _ReadAdapter:
             b.events_read += len(raw.get("transitions", ())) + bool(raw.get("predecessor"))
             b.value_bytes_read += sum(len((row.get("value") or {}).get("bin") or "") for row in
                 chain((raw["predecessor"],) if raw.get("predecessor") else (), raw.get("transitions", ())))
+            scale = getattr(self.parser, "get_header", lambda: {})().get("scale_fs_per_tick")
+            if isinstance(scale, int) and scale < 1000:
+                return {"transitions": [], "predecessor": None, "truncated": True,
+                        "sampling_gaps": ["legacy_sub_ps_order_unavailable"]}
             for row in chain((raw["predecessor"],) if raw.get("predecessor") else (), raw.get("transitions", ())):
                 if not b.admit((row.get("value") or {}).get("bin")):
                     result["truncated"] = True
@@ -143,6 +148,9 @@ class _ReadAdapter:
             result["truncated"] |= bool(raw.get("truncated") or raw.get("transition_count_is_lower_bound"))
         result["predecessor"] = previous
         return result
+
+
+    _sampling_transitions = get_transitions
 
 
 def bounded_parser(parser, budget):
@@ -189,7 +197,7 @@ def sample_identity(parser, wave, clock, signals, start, end, edge):
     owner = parser.parser if isinstance(parser, SelectionParser) else parser
     return (id(owner), getattr(owner, "_scope_epoch", None), file_identity(wave),
             selection_identity(parser, clock), tuple((p, selection_identity(parser, p)) for p in sorted(set(signals))),
-            int(start), int(end), edge, 1, "edge_plus_one_ps_v1")
+            int(start), int(end), edge, 0, "strict_before_edge_v1")
 
 
 @dataclass(frozen=True)
@@ -210,7 +218,8 @@ class TransactionSampleInput:
     def validate(self, parser, wave, clock, signals, start, end, edge, roles):
         self.budget.check()
         if (self.identity != sample_identity(parser, wave, clock, signals, start, end, edge)
-                or self.roles != roles):
+                or self.roles != roles or self.sampled.get("sample_phase") != "before"
+                or self.sampled.get("sample_offset_ps") != 0):
             raise ValueError("incompatible transaction samples: source, selection, roles or time semantics changed")
         n = len(self.sampled.get("edge_times", ()))
         if len(self.boundaries) != n or len(self.uncertain) != n:

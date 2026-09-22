@@ -1735,6 +1735,7 @@ class HandshakeCoverage(SchemaModel):
     # Facts about what inspect_handshake actually evaluated. These are not side
     # or protocol verdicts; discovery/caller context owns those labels.
     clock_sampled: bool = False
+    sampling_gaps: list[str] = Field(default_factory=list)
     valid_ready_resolved: bool = False
     stall_checked: bool = False
     backpressure_checked: bool = False
@@ -1762,6 +1763,7 @@ class HandshakeCoverage(SchemaModel):
 
 
 class HandshakeInspectResult(SchemaModel):
+    sampling_phase: Literal["before"] = "before"
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
@@ -1973,6 +1975,7 @@ class FindingSummary(SchemaModel):
 
 
 class HandshakeSweepResult(SchemaModel):
+    sampling_phase: Literal["before"] = "before"
     wave_path: str
     scope: str | None = None
     edge: str = "posedge"
@@ -2001,6 +2004,7 @@ class HandshakeSweepResult(SchemaModel):
 
 
 class ProtocolHealthSummary(SchemaModel):
+    sampling_phase: Literal["before"] = "before"
     interfaces_inspected: int
     flagged_count: int
     discovered_count: int
@@ -2129,6 +2133,7 @@ class TxnAnalysis(SchemaModel):
 
 
 class TxnReconstructResult(SchemaModel):
+    sampling_phase: Literal["before"] = "before"
     coverage_status: Literal["complete", "partial", "zero_coverage"] = "zero_coverage"
     gaps: list[str] = Field(default_factory=list)
     analysis: TxnAnalysis = Field(default_factory=TxnAnalysis)
@@ -2171,6 +2176,7 @@ class TxnReconstructResult(SchemaModel):
 
 
 class TlulInspectResult(SchemaModel):
+    sampling_phase: Literal["before"] = "before"
     wave_path: str
     clock: str
     start_ps: int

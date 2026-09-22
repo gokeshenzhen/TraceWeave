@@ -803,6 +803,7 @@ def inspect_handshake(
         start_ps=start_ps, end_ps=end_ps, edge=edge,
         sampling_session=_sampling_session,
         compact=_compact_sampling,
+        sample_offset_ps=0, sample_phase="before",
     )
     signal_errors = sampled.get("signal_errors", {})
     transition_signals_truncated = list(
@@ -811,9 +812,10 @@ def inspect_handshake(
     transition_data_truncated = bool(transition_signals_truncated)
     payload_unresolved = [p for p in payload if p in signal_errors]
     resolved_payload = [p for p in payload if p not in signal_errors]
-    warnings: list[str] = []
+    warnings: list[str] = list(sampled.get("sampling_gaps", []))
     coverage: dict[str, Any] = {
         "clock_sampled": False,
+        "sampling_gaps": list(sampled.get("sampling_gaps", [])),
         "valid_ready_resolved": False,
         "stall_checked": False,
         "backpressure_checked": False,
@@ -844,6 +846,7 @@ def inspect_handshake(
         "clock": clock,
         "valid": valid_signal,
         "valid_source": valid_source,
+        "sampling_phase": "before",
         "ready": ready,
         "payload": payload,
         "edge": edge,
@@ -895,7 +898,7 @@ def inspect_handshake(
 
     if transition_data_truncated:
         warnings.append(
-            "TRANSITION DATA TRUNCATED: the native buffer returned only a prefix "
+            "TRANSITION DATA TRUNCATED: the reader or sampling boundary retained only a prefix "
             f"for {len(transition_signals_truncated)} sampled signal(s). Findings "
             "and zero counts cover only that prefix; this is not complete coverage."
         )
@@ -1481,6 +1484,7 @@ def _handshake_input_error(
     return {
         "wave_path": wave_path, "clock": clock, "valid": "", "valid_source": "none",
         "ready": ready, "payload": [], "edge": edge,
+        "sampling_phase": "before",
         "start_ps": int(start_ps), "end_ps": int(end_ps), "active_high": active_high,
         "sample_count": 0, "transfer_count": 0, "stall_count": 0,
         "max_stall_cycles": 0, "max_stall_begin_ps": None,
@@ -1501,6 +1505,7 @@ def _handshake_input_error(
 def _empty_handshake_coverage() -> dict[str, Any]:
     return {
         "clock_sampled": False,
+        "sampling_gaps": [],
         "valid_ready_resolved": False,
         "stall_checked": False,
         "backpressure_checked": False,

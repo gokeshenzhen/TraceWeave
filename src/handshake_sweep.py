@@ -90,7 +90,8 @@ def _iter_clock_groups(
             start_ps=start_ps,
             end_ps=end_ps,
             edge=edge,
-            sample_offset_ps=1,
+            sample_offset_ps=0,
+            sample_phase="before",
             signal_use_counts=dict(signal_uses),
         )
         yield members, session
@@ -828,6 +829,7 @@ def sweep_handshake_anomalies(
         "wave_path": wave_path,
         "scope": scope,
         "edge": edge,
+        "sampling_phase": "before",
         "start_ps": int(start_ps),
         "end_ps": int(end_ps),
         "discovered_count": discovered,

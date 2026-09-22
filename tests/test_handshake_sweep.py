@@ -163,11 +163,17 @@ class _RecordingGroupParser:
         self.inner = VCDParser(path)
         self.transition_group_limit = limit
         self.groups: list[tuple[str, ...]] = []
+        self._transition_group_active = False
 
     @contextmanager
     def transition_group(self, paths):
         self.groups.append(tuple(paths))
-        yield True
+        assert not self._transition_group_active
+        self._transition_group_active = True
+        try:
+            yield True
+        finally:
+            self._transition_group_active = False
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
@@ -823,11 +829,14 @@ def test_sweep_cancellation_inside_clock_group_releases_native_group(
     @contextmanager
     def tracked_transition_group(_paths):
         nonlocal entered, exited
+        assert not getattr(parser, "_transition_group_active", False)
+        parser._transition_group_active = True
         entered += 1
         try:
             yield True
         finally:
             exited += 1
+            parser._transition_group_active = False
 
     def cancel_after_first_interface(**kwargs):
         nonlocal inspect_calls

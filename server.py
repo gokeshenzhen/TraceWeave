@@ -6489,6 +6489,7 @@ async def list_tools():
         Tool(
             name="sweep_handshakes",
             description=(
+                "Samples strictly before each selected physical clock edge (sampling_phase=before). "
                 "Bounded handshake anomaly sweep: discover valid/ready "
                 "interface and every AHB interface, then inspect each over the window in "
                 "one call, returning a comparative fact table (per-interface stalls, "
@@ -6704,6 +6705,8 @@ async def list_tools():
         Tool(
             name="reconstruct_transactions",
             description=(
+                "Samples acceptance and fields strictly before each selected physical clock edge "
+                "(sampling_phase=before); all changes at that timestamp are excluded. "
                 "Reconstruct id-correlated request/response transactions from two "
                 "handshake channels: walk every clock edge, match accepted request beats "
                 "to completion beats by id, and return per-transaction latency plus "
@@ -6859,6 +6862,8 @@ async def list_tools():
         Tool(
             name="inspect_handshake",
             description=(
+                "Samples strictly before each selected physical clock edge (sampling_phase=before); "
+                "all changes at that timestamp are excluded. "
                 "Classify a clocked valid/ready handshake cycle-by-cycle and report "
                 "protocol facts that leave no value pattern in scoreboard logs: stalls "
                 "(valid high, ready low), the longest/over-threshold stall windows, "
@@ -7014,6 +7019,7 @@ async def list_tools():
                 "bits are ordered MSB first. Results identify projections in selections.")
     _tools.extend([
         Tool(name="inspect_tlul", description=(
+            "Uses strict before-edge sampling for A/D fields and nested checks (sampling_phase=before). "
             "Inspect explicitly mapped TL-UL A/D fields with the existing handshake and transaction "
             "engines. Missing mappings return mapping_required; packed widths are never guessed. "
             "Reports accepted fields, stalls, source pairing and latency, reset/unknown history, "
@@ -8611,6 +8617,7 @@ def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> di
         "discovery": result.discovery,
         "finding_summary": result.finding_summary,
         "transition_truncated_count": result.transition_truncated_count,
+        "sampling_phase": result.sampling_phase,
         "skipped_count": len(result.skipped),
     }).model_dump(exclude_none=True)
 

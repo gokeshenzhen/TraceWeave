@@ -221,7 +221,7 @@ class SelectionParser:
                 "transition_count": len(projected), "predecessor": predecessor,
                 "predecessor_kind": "declaration_anchor"}
 
-    def sample_columns(self, paths, edges, offset, sample_times, session):
+    def sample_columns(self, paths, edges, offset, sample_times, session, *, sample_phase="after"):
         """Read and sample each backing declaration once, then project fields."""
         from .cycle_query import _sample_signal_columns_at_edges
         groups = {}
@@ -246,6 +246,7 @@ class SelectionParser:
                 self.parser, [base], edges, offset, sample_times=sample_times,
                 sampling_session=session,
                 safe_prefix_only=True,
+                sample_phase=sample_phase,
             )
             for path, projection in members:
                 if base in failed:

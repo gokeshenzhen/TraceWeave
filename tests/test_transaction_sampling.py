@@ -347,13 +347,24 @@ def test_native_scale_selection_and_legacy_transaction_semantics(scale, legacy, 
     try:
         if legacy:
             monkeypatch.setattr(p, "_supports_event_pages", lambda: False)
+        # Address bit 31 is already high before the 105 ns edge. Using the
+        # rising clock itself as active-high valid tested post-edge values.
+        valid = {"path": f"{root}.addr[31:0]", "bits": [31]}
         result = reconstruct_transactions(get_parser=lambda _: p, wave_path=p.file_path,
-            clock=f"{root}.clk", req_valid=f"{root}.clk", req_ready=f"{root}.clk",
-            cmp_valid=f"{root}.clk", cmp_ready=f"{root}.clk",
+            clock=f"{root}.clk", req_valid=valid, req_ready=valid,
+            cmp_valid=valid, cmp_ready=valid,
             req_id={"path": f"{root}.addr[31:0]", "bits": [31, 29, 30, 28]},
             cmp_id={"path": f"{root}.addr[31:0]", "bits": [31, 29, 30, 28]},
             start_ps=100000, end_ps=109000)
         TxnReconstructResult.model_validate(result)
+        if legacy and scale == "100fs":
+            assert result["coverage_status"] == "partial"
+            assert result["matched_count"] == 0
+            assert "legacy_sub_ps_order_unavailable" in result["gaps"]
+            assert result["analysis"]["legacy_reads"] > 0
+            assert result["analysis"]["events_read"] > 0
+            assert not p._transition_group_active
+            return
         assert result["coverage_status"] == "complete"
         assert result["matched_count"] == 1
         txn = result["transactions"][0]
@@ -398,7 +409,8 @@ async def test_cancelled_transaction_worker_releases_native_group(monkeypatch):
         monkeypatch.setattr(server, "_get_parser", lambda _: p)
         args = dict(wave_path=p.file_path, clock="scale_100fs_tb.clk",
                     req_valid="scale_100fs_tb.clk", req_ready="scale_100fs_tb.clk",
-                    cmp_valid="scale_100fs_tb.clk", cmp_ready="scale_100fs_tb.clk")
+                    cmp_valid="scale_100fs_tb.clk", cmp_ready="scale_100fs_tb.clk",
+                    active_high=False)  # Clock is low strictly before posedge.
         async with anyio.create_task_group() as tasks:
             async def call():
                 await server._dispatch("reconstruct_transactions", args)

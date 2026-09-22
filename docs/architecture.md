@@ -2098,3 +2098,37 @@ analysis workflow, and a short mapped sample cannot establish a cache benefit
 for long multibeat/high-outstanding workloads. A future cross-call cache needs
 its own source/artifact/selection/semantic identity and lifecycle evidence;
 Source Graph and structural-scan cache keys do not supply that contract.
+
+### Protocol acceptance sampling
+
+`inspect_handshake`, `sweep_handshakes`, `reconstruct_transactions` and
+`inspect_tlul` sample controls, reset and payload strictly **before** each selected
+physical clock edge. Their additive `sampling_phase="before"` receipt describes
+this corrected default. An NBA update at the accepting edge cannot erase a
+transfer or create a false premature deassertion. Every data event at the same
+timestamp is excluded, including groups spanning event pages. This models
+synchronous setup values; the waveform does not prove simulator delta ordering
+for a testbench that drives inputs with blocking assignments at the clock edge.
+
+The private sampler uses raw femtoseconds and retains separate physical edges
+even when their public ceiling-to-picoseconds labels coincide. Missing prefix
+values stay unknown; no point query fills them with a later value. An unknown
+clock or conflicting clock events at one timestamp stops analysis at the proven
+prefix. `transition_data_truncated` remains the compatibility partial-coverage
+flag; warnings or gaps identify `clock_unknown`, `clock_event_order_unresolved`
+or `legacy_sub_ps_order_unavailable`. Old wrappers retain before-edge support
+for integral-ps scales; without raw event paging, sub-ps ordering is unprovable
+and returns partial coverage. No empty result in that path proves a clean bus.
+
+Protocol reads reuse existing native groups and close event cursors before
+unloading, including cancellation and errors. Standalone handshake reads cap
+each signal at 1,000,000 events / 64 MiB decoded accounting; transaction/TL-UL
+reads retain their request budgets above. This bounds retained inputs, not FFR
+residency or parser/index memory. Shared columns and reuse identities include
+the sampling phase. Display caps and cursor names never affect acceptance.
+Sweep metrics distinguish event open/page/close call counts and elapsed ABI
+time from legacy profiled transition reads. Page volume contributes to native
+transition/output totals; unavailable internal seek/traverse phases are not
+inferred from page wall time.
+The general `get_signals_by_cycle` and `verify_window` sampling defaults remain
+unchanged; callers can still inspect post-edge state through those tools.

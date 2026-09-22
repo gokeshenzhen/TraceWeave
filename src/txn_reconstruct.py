@@ -199,6 +199,7 @@ def reconstruct_transactions(
             sampled = sample_signals_on_edges(
                 bounded_parser(parser, budget), clock_r, all_signals, start_ps=start_ps,
                 end_ps=end_ps, edge=edge, compact=True, safe_prefix_only=True,
+                sample_offset_ps=0, sample_phase="before",
                 max_edges=sample_limit(parser, all_signals, budget),
             )
             sampled = limit_to_budget_prefix(sampled, budget)
@@ -216,7 +217,8 @@ def reconstruct_transactions(
         stopped = budget.stop_reason or ("sample_budget" if sampled.get("sample_limit_reached") else
                                          "transition_data_truncated" if sampled.get("transition_data_truncated") else None)
         if stopped:
-            result.update(coverage_status="partial", reason=stopped, gaps=[stopped])
+            result.update(coverage_status="partial", reason=stopped,
+                          gaps=[stopped, *sampled.get("sampling_gaps", [])])
         result["analysis"] = _receipt(budget, stop_reason=stopped,
                                        sample_ms=sample_ms)
         return result
@@ -243,7 +245,7 @@ def reconstruct_transactions(
     started = time.perf_counter()
     acc = _walk(result, iter_sample_rows(sampled), cfg)
     walk_ms = (time.perf_counter() - started) * 1000
-    gaps = []
+    gaps = list(sampled.get("sampling_gaps", []))
     if unresolved_fields or signal_errors:
         gaps.append("signal_read_incomplete")
     if sampled.get("transition_data_truncated"):
@@ -612,7 +614,7 @@ def _attach_cursor(result, cursor_store, wave_path, edge, cursor_name, cursor_no
 
 def _empty_result(wave_path, clock, edge, start_ps, end_ps) -> dict[str, Any]:
     return {
-        "wave_path": wave_path, "clock": clock, "edge": edge,
+        "wave_path": wave_path, "clock": clock, "edge": edge, "sampling_phase": "before",
         "start_ps": int(start_ps), "end_ps": int(end_ps),
         "request_count": 0, "completion_count": 0, "matched_count": 0,
         "outstanding_at_end": 0, "max_outstanding": 0, "max_outstanding_time_ps": None,

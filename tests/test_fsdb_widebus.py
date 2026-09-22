@@ -190,7 +190,12 @@ def test_full_sweep_uses_one_native_group_for_shared_clock(parser, monkeypatch):
     assert snapshot["sweep_unique_clocks"] == 1
     assert snapshot["sweep_native_group_count"] == 1
     assert snapshot["sweep_native_group_fallback_count"] == 0
-    assert snapshot["sweep_native_profiled_read_count"] == 10
+    assert snapshot["sweep_native_profiled_read_count"] == 0
+    assert snapshot["sweep_native_event_open_count"] == 10
+    assert snapshot["sweep_native_event_close_count"] == 10
+    assert snapshot["sweep_native_event_page_count"] >= 10
+    assert snapshot["sweep_native_event_page_total_ms"] > 0
+    assert snapshot["sweep_native_output_bytes"] > 0
     assert snapshot["sweep_clock_read_count"] == 1
     assert snapshot["sweep_signal_read_count"] == 9
     assert snapshot["sweep_native_transition_count"] > 0

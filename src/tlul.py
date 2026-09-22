@@ -28,6 +28,7 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     fields = TlulFields.model_validate(fields or {}).model_dump(exclude_none=True)
     missing = [name for name in REQUIRED_FIELDS if name not in fields]
     result = {"wave_path": wave_path, "clock": clock, "start_ps": start_ps, "end_ps": end_ps,
+              "sampling_phase": "before",
               "coverage_status": "zero_coverage", "checks": [], "gaps": [],
               "required_fields": missing, "unmapped_fields": [f for f in OPTIONAL_FIELDS if f not in fields],
               "mapping_status": "explicit" if not missing else "mapping_required",
@@ -61,6 +62,7 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     try:
         sampled = sample_signals_on_edges(bounded_parser(parser, budget), clock, all_signals,
             start_ps=start_ps, end_ps=end_ps, edge=edge, compact=True,
+            sample_offset_ps=0, sample_phase="before",
             max_edges=sample_limit(parser, all_signals, budget, max_cycles), safe_prefix_only=True)
         sampled = limit_to_budget_prefix(sampled, budget)
     except TransactionBudgetExceeded:
@@ -78,6 +80,7 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
         elif sampled["sample_limit_reached"] or sampled["transition_data_truncated"]:
             reason = "sample_limit" if sampled["sample_limit_reached"] else "transition_data_truncated"
             result.update(coverage_status="partial", gaps=[reason], tail=reason)
+        result["gaps"].extend(sampled.get("sampling_gaps", []))
         return attach_selections(result, parser)
 
     inactive = {}
@@ -182,6 +185,7 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     if reset:
         result["checks"].append("sampled_reset_boundaries")
     gaps = result["gaps"]
+    gaps.extend(sampled.get("sampling_gaps", []))
     if budget.stop_reason:
         gaps.append(budget.stop_reason)
         result["tail"] = budget.stop_reason
