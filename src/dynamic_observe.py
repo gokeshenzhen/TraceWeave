@@ -4,6 +4,7 @@ from __future__ import annotations
 from .cancellation import check_cancelled
 from .divergence_compare import bit_value, known, read_stream
 from .dynamic_evidence import Expr, evaluate
+from .dynamic_binding import signal_expression
 
 
 def clock_edges(stream, edge: str, *, start: int, end: int, before=False):
@@ -44,8 +45,25 @@ class ObservationReader:
     def __init__(self, get_parser, wave, start, end, consume=None, session=None):
         self.get_parser, self.wave, self.start, self.end = get_parser, wave, start, end
         self.streams = {}
+        self.bindings = {}
         self.consume = consume
         self.session = session
+
+    def bind(self, expr):
+        """Bind reads locally; keep source names in dependency/A-B identities."""
+        key = (expr.signal, expr.bits, expr.declared_bits)
+        if key not in self.bindings:
+            parser = self.get_parser(self.wave)
+            bound, gaps = expr, []
+            if hasattr(parser, "get_signal_declaration"):
+                try:
+                    bound = signal_expression(parser, expr.signal, expr.bits, expr.declared_bits)
+                except KeyError:
+                    gaps = ["signal_not_dumped"]
+                except ValueError:
+                    gaps = ["dynamic_bit_mapping_unavailable"]
+            self.bindings[key] = bound, gaps
+        return self.bindings[key]
 
     def stream(self, signal):
         check_cancelled()
@@ -73,8 +91,9 @@ class ObservationReader:
         return result
 
     def _sample(self, expr: Expr, time: int, phase="after") -> dict:
+        expr, binding_gaps = self.bind(expr)
         stream = self.stream(expr.signal)
-        gaps = []
+        gaps = list(binding_gaps)
         event = stream.predecessor
         same_time = []
         for index, current in enumerate(stream.transitions):
@@ -128,6 +147,8 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             result["gaps"].append("clock_evidence_unavailable")
             return result
         clock = Expr.from_dict(step["clock"]["expression"])
+        clock, binding_gaps = reader.bind(clock)
+        result["gaps"].extend(binding_gaps)
         edges, gaps = clock_edges(reader.stream(clock.signal), step["clock"]["edge"],
                                   start=history_start, end=time, before=phase == "before")
         result["gaps"].extend(gaps)

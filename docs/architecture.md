@@ -2132,3 +2132,13 @@ transition/output totals; unavailable internal seek/traverse phases are not
 inferred from page wall time.
 The general `get_signals_by_cycle` and `verify_window` sampling defaults remain
 unchanged; callers can still inspect post-edge state through those tools.
+
+Dynamic driver observation resolves typed source references to exact dump
+declarations before reading values. A missing FSDB vector suffix is recovered
+only from the source's declared coordinates and exact declaration metadata;
+there is no basename search. Ordered bits, ascending/negative ranges and aliases
+retain their declared meaning. Read paths are local bindings: dependency names
+and A/B mappings retain source identities. X history shares this declaration
+resolver. Missing declarations, invalid coordinates and cancellation retain
+their existing distinct outcomes. Binding does not prove delta-cycle order,
+asynchronous behavior or completeness of the driver inventory.
