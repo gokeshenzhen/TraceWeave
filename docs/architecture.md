@@ -1367,12 +1367,14 @@ validation, and storage cost?* The third is whether metric-bearing Source Graph
 calls repeat within one case and the default 60-second idle window often enough
 to justify retaining a semantic-session frontend process.
 
-- `server.call_tool` is the single choke point every tool call passes
-  through. It wraps `_dispatch` in a `finally` that calls
+- `server.call_tool` wraps `_dispatch` in a `finally` that calls
   `usage_telemetry.record_call(...)`, appending one JSONL line per call to
-  `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`.
-- Each line records: timestamp, `session_id`, `case` (case-dir basename),
-  tool name, **argument keys + a small whitelist of scalar flags** (never
+  `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl`. This covers handler calls only:
+  keyword-limit adaptation, SDK input validation, and client-side rejection
+  happen before this recorder and are not included in its denominators.
+- Each line records: timestamp, anonymous `session_id`, fixed `artifact_domain`
+  (`simulation` / `formal` / `unknown`) and `attribution_status`,
+  tool name, **argument keys + a small whitelist of fixed decision labels** (never
   argument values or paths — noise + privacy), `ok`/`blocked`, `result_bytes`
   (a token proxy), and `latency_ms`. Failed calls additionally carry a
   classification `error_code` (a code such as `missing_prerequisite` or the
@@ -1392,10 +1394,40 @@ to justify retaining a semantic-session frontend process.
   depth. Artifact fingerprints/digests, cache/source/wave paths,
   signal/scope/value content, free-form diagnostics, and exception text cannot
   enter this block.
-- **A session = a `get_sim_paths` case.** The get_sim_paths handler calls
-  `note_session(identity)`; a new case identity mints a new `session_id`,
-  re-discovering the same case keeps it. This makes "sessions in which a
-  primitive was used at least once" a meaningful presence metric.
+- **Sessions follow discovered artifact owners and observed generations.**
+  `src/telemetry_context.py` registers exact files returned by `get_sim_paths`
+  and `get_formal_paths`. Simulation uses the selected case; formal uses the
+  containing discovered project (deepest when nested), or the export root when
+  no project is recognized. A multi-project discovery has no single session.
+  Repeated discovery reuses a random process-local id; an observed change to a
+  previously registered file starts a new generation and clears that owner's
+  older bindings. Returning to an unchanged earlier project reuses its id.
+  Paths and `(device, inode, size, mtime_ns, ctime_ns)` remain private in memory;
+  stat identity is an ordinary update/replacement check, not a content digest.
+  No paths, names, values, identity hashes, or case basenames are added to JSONL;
+  production writes `case=null`. Legacy `note_session`/direct recorder callers
+  and their old records remain supported.
+- Shared readers match the explicit wave path(s); other requests may match
+  explicit log/compile paths. No explicit registered artifact means `unknown`,
+  including context-only tools that do not supply such a path. Wave ownership
+  takes precedence over additional compile context. Unregistered, changed,
+  unreadable, cross-owner, and conflicting claims never inherit a recent
+  simulation or formal session. The request captures attribution before its
+  first await and checks file versions again on completion, so a concurrent
+  discovery cannot reassign it. This is accounting only, never a tool gate or
+  an inference about proof status, trace kind, or reachability.
+- Retention is bounded to 128 owners and 4,096 file bindings (also at most
+  4,096 entries examined per discovery). Capacity exhaustion clears the registry
+  and latches `unknown/capacity` until server restart; evicting a conflicting
+  claim must never make an ambiguous file look uniquely owned. Telemetry off
+  skips identity I/O entirely. This registry does not read file contents.
+- Explicit point, around-time and cycle readers add a separately allowlisted
+  `readback` block: fixed `kind` (`point`, `batch_point`, `cycle`, `window`) plus
+  numeric requested-signal, returned-sample and returned-timepoint counts.
+  Around-time counts cover center values only; zero-window `values_only` is
+  `batch_point`. X/Z cells count as values; missing/uninitialized cells do not.
+  Failed calls count zero returned samples. These counters measure returned
+  state, not whether the model used it to derive a helper or reach a conclusion.
 - Recording is strictly best-effort — every public function swallows its own
   exceptions so telemetry can never break a tool call.
 - `aggregate(records)` is a pure function backing the offline
@@ -1412,6 +1444,14 @@ to justify retaining a semantic-session frontend process.
   Zero placeholders for stages that were not
   entered are excluded from timing distributions. The report reads only the
   append-only JSONL file and never discovers or scans artifact-cache entries.
+  Its `artifact_usage` block separates formal, simulation, unknown and legacy
+  calls, point/batch/cycle/window calls, sessions with returned state, and
+  sessions containing only discovery/search/summary. New unattributed calls
+  are counted without inventing a shared session; old records keep the legacy
+  `(none)` bucket. Readback labels/counts and attribution are filtered again
+  during aggregation. Legacy records lack readback counters and cannot establish
+  whether state was returned. Session presence is conditional on attributable
+  calls, not on all client requests.
 
 `TELEMETRY_ENABLED` defaults to False. Opt in with `TRACEWEAVE_TELEMETRY=1`
 (or `true`/`yes`/`on`) and restart/reconnect the MCP server. This switch is

@@ -45,8 +45,10 @@ def render(report: dict) -> str:
     lines.append("=" * 60)
     lines.append(f"records : {report['total_records']:,}")
     lines.append(
-        f"sessions: {report['total_sessions']:,}  (a session = one get_sim_paths case)"
+        f"sessions: {report['total_sessions']:,}  (discovered artifact generations; legacy anchors retained)"
     )
+    lines.append("Coverage: handler calls only; SDK/client validation failures are excluded.")
+    lines.append("Unattributed new calls are excluded from session denominators.")
     lines.append("")
 
     cps = report["calls_per_session"]
@@ -61,6 +63,22 @@ def render(report: dict) -> str:
         f"  bytes   : min {_fmt_int(bps['min'])}  median {_fmt_int(bps['median'])}  "
         f"p90 {_fmt_int(bps['p90'])}  max {_fmt_int(bps['max'])}  total {_fmt_int(bps['total'])}"
     )
+    lines.append("")
+
+    lines.append("Artifact domains and returned state samples")
+    lines.append("-" * 60)
+    for domain, stats in report.get("artifact_usage", {}).items():
+        lines.append(
+            f"  {domain:<10} calls={stats['calls']} sessions={stats['sessions']} "
+            f"unattributed={stats['unattributed_calls']} metadata-only={stats['metadata_only_sessions']} "
+            f"with-state={stats['sessions_with_readback']} samples={stats['returned_sample_count']}"
+        )
+        lines.append(
+            f"    point={stats['point_calls']} batch-point={stats['batch_point_calls']} "
+            f"cycle={stats['cycle_calls']} window={stats['window_calls']}"
+        )
+    lines.append("State counts cover explicit point/batch/cycle readers (window centers only).")
+    lines.append("Returned state does not establish model adoption or use in a proof.")
     lines.append("")
 
     lines.append("Auto-debug v2 primitives — session presence")
@@ -103,6 +121,7 @@ def render(report: dict) -> str:
         lines.append(
             "  calls/sessions       "
             f"{source_graph['calls_with_metrics']}/{source_graph['sessions_with_metrics']}"
+            f" (unattributed calls={source_graph.get('unattributed_calls', 0)})"
         )
         frequency = source_graph["query_frequency"]
         calls_per_session = frequency["calls_per_session"]

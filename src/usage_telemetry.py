@@ -31,9 +31,10 @@ Design constraints
   Source Graph adds only numeric aggregates and fixed phase/tier/validation
   labels through an independent second allowlist; no artifact fingerprint,
   cache/source/wave path, signal, scope, value, or diagnostic can enter JSONL.
-* **Session = a get_sim_paths anchor.** The workflow always starts at
-  get_sim_paths, so a new case identity opens a new logical session. The server
-  calls `note_session()` from its get_sim_paths handler.
+* **Explicit artifact ownership.** Simulation/formal discovery registers exact
+  files in a bounded private registry. Shared readers pin attribution at request
+  entry; unregistered, changed or conflicting files stay unknown. Anonymous
+  random session ids are process-local, not hashes of project identities.
 
 The aggregation half (`aggregate`) is a pure function over already-parsed
 records so it can be unit-tested and reused by scripts/telemetry_report.py.
@@ -52,21 +53,19 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import config
+from src.telemetry_context import ArtifactRegistry, Attribution, field_value
 
-# Argument names worth keeping as decision-relevant flags. Only captured when
-# the value is a simple scalar; everything else (paths, values) is dropped.
-_FLAG_WHITELIST = (
-    "profile",
-    "edge",
-    "detail_level",
-    "mode",
-    "return_mode",
-    "simulator",
-    "category",
-    "direction",
-)
+# Fixed labels only: even a scalar in a known argument can contain private text.
+_FLAG_WHITELIST = {
+    "edge": {"posedge", "negedge", "any"},
+    "detail_level": {"summary", "compact", "full"},
+    "mode": {"snapshot", "history", "always", "never", "eventually", "implication", "sequence"},
+    "return_mode": {"full", "values_only"},
+    "simulator": {"auto", "vcs", "xcelium", "unknown"},
+}
 
-_SCALAR_TYPES = (str, int, float, bool)
+_READBACK_KINDS = {"point", "batch_point", "cycle", "window"}
+_READBACK_COUNTS = {"requested_signal_count", "returned_sample_count", "returned_timepoint_count"}
 
 # Privacy-safe operation diagnostics. Values are timings/counts plus one fixed
 # phase label; paths, scopes, signal names and search keywords are never accepted.
@@ -310,6 +309,84 @@ TRACKED_FEATURES = ("cursor", "period", "diff_first_divergence")
 _lock = threading.Lock()
 _session_id: str | None = None
 _session_identity: str | None = None
+_artifact_registry = ArtifactRegistry()
+
+
+def begin_call(arguments: dict) -> Attribution:
+    """Capture before the handler's first await. Disabled telemetry does no I/O."""
+    if not config.TELEMETRY_ENABLED:
+        return Attribution()
+    try:
+        return _artifact_registry.capture(arguments)
+    except Exception:
+        return Attribution(status="unavailable")
+
+
+def note_discovery(tool: str, result) -> Attribution:
+    if not config.TELEMETRY_ENABLED:
+        return Attribution()
+    try:
+        return _artifact_registry.discover(tool, result)
+    except Exception:
+        return Attribution(status="unavailable")
+
+
+def finish_call(attribution: Attribution) -> Attribution:
+    if not config.TELEMETRY_ENABLED:
+        return Attribution()
+    try:
+        return attribution.finish()
+    except Exception:
+        return Attribution(status="unavailable")
+
+
+def _has_value(value):
+    # X/Z is a real returned value; missing or uninitialized cells are not.
+    return value is not None and any(field_value(value, k) is not None for k in ("bin", "hex", "dec"))
+
+
+def readback_counts(tool: str, args: dict, result, ok: bool) -> dict:
+    """Count returned state cells, never retain names, times, values or errors.
+
+    Window counts cover center values only, not transition lists/history. This
+    is intentionally a narrow measure of the three explicit state readers.
+    """
+    if not config.TELEMETRY_ENABLED:
+        return {}
+    try:
+        kind = {"get_signal_at_time": "point", "get_signals_by_cycle": "cycle"}.get(tool)
+        if tool == "get_signals_around_time":
+            kind = "batch_point" if args.get("window_ps") == 0 and args.get("return_mode") == "values_only" else "window"
+        if kind is None:
+            return {}
+        counts = {
+            "kind": kind,
+            "requested_signal_count": 1 if kind == "point" else len(args.get("signal_paths", [])),
+            "returned_sample_count": 0, "returned_timepoint_count": 0,
+        }
+        if not ok:
+            return counts
+        if kind == "point":
+            per_time = [int(_has_value(field_value(result, "value")))]
+        elif kind == "cycle":
+            per_time = [sum(_has_value(v) for v in field_value(row, "signals", {}).values())
+                        for row in field_value(result, "cycles", [])]
+        else:
+            per_time = [sum(_has_value(field_value(row, "value_at_center"))
+                            for row in field_value(result, "signals", {}).values())]
+        counts["returned_sample_count"] = sum(per_time)
+        counts["returned_timepoint_count"] = sum(n > 0 for n in per_time)
+        return counts
+    except Exception:
+        return {}
+
+
+def _sanitize_readback(raw) -> dict:
+    if not isinstance(raw, dict) or not isinstance(raw.get("kind"), str) or raw["kind"] not in _READBACK_KINDS:
+        return {}
+    return {"kind": raw["kind"], **{
+        k: v for k, v in raw.items() if k in _READBACK_COUNTS and type(v) is int and 0 <= v <= 2**63 - 1
+    }}
 
 
 def _new_session_id() -> str:
@@ -342,11 +419,10 @@ def current_session_id() -> str | None:
 
 def _extract_flags(args: dict) -> dict:
     flags: dict[str, Any] = {}
-    for name in _FLAG_WHITELIST:
-        if name in args:
-            value = args[name]
-            if isinstance(value, _SCALAR_TYPES):
-                flags[name] = value
+    for name, allowed in _FLAG_WHITELIST.items():
+        value = args.get(name)
+        if isinstance(value, str) and value in allowed:
+            flags[name] = value
     return flags
 
 
@@ -387,6 +463,8 @@ def record_call(
     latency_ms: float | None = None,
     case: str | None = None,
     diagnostics: dict | None = None,
+    attribution: Attribution | None = None,
+    readback: dict | None = None,
 ) -> None:
     """Append one JSONL line describing a completed tool call.
 
@@ -409,6 +487,15 @@ def record_call(
             "result_bytes": int(result_bytes),
             "latency_ms": round(latency_ms, 1) if latency_ms is not None else None,
         }
+        # Explicit context never falls back to the legacy last-simulation id.
+        # Keep direct legacy callers/old JSONL compatible; production passes an
+        # Attribution on every call and never persists a case basename.
+        if attribution is not None:
+            context = attribution if isinstance(attribution, Attribution) else Attribution()
+            record.update(context.public_fields(), case=None)
+        safe_readback = _sanitize_readback(readback)
+        if safe_readback:
+            record["readback"] = safe_readback
         # A classification code, never a message (messages can embed paths).
         # Omitted on success to keep the line slim.
         if error_code is not None:
@@ -522,6 +609,7 @@ def _timestamp_seconds(value: object) -> float | None:
 
 def _source_graph_operational_report(records: list[dict]) -> dict:
     source_calls = 0
+    unattributed_calls = 0
     source_sessions: set[str] = set()
     disk_hit_sessions: set[str] = set()
     phases: dict[str, int] = {}
@@ -546,21 +634,24 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
             continue
 
         source_calls += 1
-        raw_session_id = rec.get("session_id")
-        sid = (
-            str(raw_session_id)
-            if raw_session_id
-            else f"(unscoped-{source_calls})"
-        )
-        source_sessions.add(sid)
+        if "artifact_domain" in rec:
+            sid = _record_attribution(rec)["session_id"]
+        else:
+            raw_session_id = rec.get("session_id")
+            sid = str(raw_session_id) if raw_session_id else f"(unscoped-{source_calls})"
         timestamp = _timestamp_seconds(rec.get("ts"))
-        session_call_times.setdefault(sid, []).append(timestamp)
+        if sid is not None:
+            source_sessions.add(sid)
+            session_call_times.setdefault(sid, []).append(timestamp)
+        else:
+            unattributed_calls += 1
         if timestamp is not None:
             timestamped_call_count += 1
         tool = str(rec.get("tool") or "(unknown)")
         tool_bucket = per_tool.setdefault(tool, _new_source_graph_tool_bucket())
         tool_bucket["calls"] += 1
-        tool_bucket["sessions"].add(sid)
+        if sid is not None:
+            tool_bucket["sessions"].add(sid)
 
         phase = diagnostics.get("source_graph_phase")
         if isinstance(phase, str):
@@ -575,7 +666,8 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
             all_call_latencies.append(float(latency))
         if isinstance(tier, str) and tier in tier_calls:
             tier_calls[tier] += 1
-            tier_sessions[tier].add(sid)
+            if sid is not None:
+                tier_sessions[tier].add(sid)
             tool_bucket["cache_tiers"][tier] += 1
             if latency is not None:
                 tier_latencies[tier].append(float(latency))
@@ -611,7 +703,7 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
         record_disk_hits = _nonnegative_number(
             diagnostics.get("source_graph_disk_hit_count")
         )
-        if record_disk_hits is not None and record_disk_hits > 0:
+        if record_disk_hits is not None and record_disk_hits > 0 and sid is not None:
             disk_hit_sessions.add(sid)
 
     disk_lookup_count = sums["disk_hit_count"] + sums["disk_miss_count"]
@@ -663,6 +755,7 @@ def _source_graph_operational_report(records: list[dict]) -> dict:
 
     return {
         "calls_with_metrics": source_calls,
+        "unattributed_calls": unattributed_calls,
         "sessions_with_metrics": len(source_sessions),
         "sessions_with_disk_hit": len(disk_hit_sessions),
         "disk_hit_session_presence": _rate(
@@ -740,14 +833,53 @@ def feature_of(tool: str) -> str:
     return PRIMITIVE_GROUPS.get(tool, tool)
 
 
+def _record_attribution(row):
+    """Reapply the fixed-label/id contract to new-format records at aggregation."""
+    return Attribution(row.get("artifact_domain"), row.get("attribution_status"),
+                       row.get("session_id")).public_fields()
+
+
+def _artifact_usage(records) -> dict:
+    """State-return evidence, not evidence that a model used it in reasoning."""
+    report = {}
+    metadata_tools = {"get_sim_paths", "get_formal_paths", "search_signals", "get_waveform_summary"}
+    for domain in ("simulation", "formal", "unknown", "legacy"):
+        rows = [r for r in records if (
+            _record_attribution(r)["artifact_domain"] if "artifact_domain" in r else "legacy"
+        ) == domain]
+        sessions, read_sessions = {}, set()
+        summary = {"calls": len(rows), "unattributed_calls": 0, "returned_sample_count": 0,
+                   **{f"{kind}_calls": 0 for kind in sorted(_READBACK_KINDS)}}
+        for row in rows:
+            sid = _record_attribution(row)["session_id"] if "artifact_domain" in row else row.get("session_id")
+            if sid:
+                sessions.setdefault(sid, set()).add(row.get("tool"))
+            else:
+                summary["unattributed_calls"] += 1
+            counts = _sanitize_readback(row.get("readback"))
+            if counts:
+                summary[f"{counts['kind']}_calls"] += 1
+                n = counts.get("returned_sample_count", 0)
+                summary["returned_sample_count"] += n
+                if n and sid:
+                    read_sessions.add(sid)
+        summary.update(
+            sessions=len(sessions), sessions_with_readback=len(read_sessions),
+            metadata_only_sessions=sum(tools <= metadata_tools for tools in sessions.values()),
+        )
+        report[domain] = summary
+    return report
+
+
 def aggregate(records: Iterable[dict]) -> dict:
     """Summarize raw telemetry records into a report dict.
 
     Returns per-tool call counts / ok-rate / session-presence, the call-count
     and result_bytes distributions per session, and a focused block on the
     TRACKED_FEATURES (presence rate = the fraction of sessions that used the
-    feature at least once). Records with no session_id are bucketed under a
-    synthetic "(none)" session so they are not silently dropped.
+    feature at least once). Legacy records with no session_id keep their
+    synthetic "(none)" bucket. Explicitly unattributed new records count as
+    calls, never as one fictitious shared session.
     """
     records = list(records)
     sessions: dict[str, dict] = {}
@@ -758,16 +890,17 @@ def aggregate(records: Iterable[dict]) -> dict:
         tool = rec.get("tool")
         if not tool:
             continue
-        sid = rec.get("session_id") or "(none)"
+        sid = _record_attribution(rec)["session_id"] if "artifact_domain" in rec else (rec.get("session_id") or "(none)")
         feature = feature_of(tool)
 
-        sess = sessions.setdefault(
-            sid, {"calls": 0, "result_bytes": 0, "tools": set(), "features": set()}
-        )
-        sess["calls"] += 1
-        sess["result_bytes"] += int(rec.get("result_bytes") or 0)
-        sess["tools"].add(tool)
-        sess["features"].add(feature)
+        if sid is not None:
+            sess = sessions.setdefault(
+                sid, {"calls": 0, "result_bytes": 0, "tools": set(), "features": set()}
+            )
+            sess["calls"] += 1
+            sess["result_bytes"] += int(rec.get("result_bytes") or 0)
+            sess["tools"].add(tool)
+            sess["features"].add(feature)
 
         t = per_tool.setdefault(
             tool,
@@ -784,12 +917,14 @@ def aggregate(records: Iterable[dict]) -> dict:
         t["ok"] += 1 if rec.get("ok") else 0
         t["blocked"] += 1 if rec.get("blocked") else 0
         t["bytes"] += int(rec.get("result_bytes") or 0)
-        t["sessions"].add(sid)
+        if sid is not None:
+            t["sessions"].add(sid)
         if not rec.get("ok"):
             code = rec.get("error_code") or "(unrecorded)"
             t["error_codes"][code] = t["error_codes"].get(code, 0) + 1
 
-        feature_sessions.setdefault(feature, set()).add(sid)
+        if sid is not None:
+            feature_sessions.setdefault(feature, set()).add(sid)
 
     total_sessions = len(sessions)
 
@@ -831,6 +966,7 @@ def aggregate(records: Iterable[dict]) -> dict:
         "tracked_features": tracked,
         "per_tool": tool_report,
         "source_graph": _source_graph_operational_report(records),
+        "artifact_usage": _artifact_usage(records),
     }
 
 

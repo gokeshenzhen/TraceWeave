@@ -1261,9 +1261,6 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             "simulator": result.get("simulator"),
             "compile_log": compile_log,
         }
-        # Anchor a telemetry session to the discovered case identity: a new case
-        # opens a new logical session; re-discovering the same case keeps it.
-        usage_telemetry.note_session(new_identity)
     elif tool_name == "build_tb_hierarchy":
         _invalidate_downstream(tool_name)
         _session_state["build_tb_hierarchy"] = {
@@ -7106,12 +7103,14 @@ async def list_tools():
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
     start = time.perf_counter()
+    attribution = usage_telemetry.begin_call(arguments)
     metrics = operation_metrics.OperationMetrics()
     metrics_token = operation_metrics.push(metrics)
     ok = True
     blocked = False
     error_code = None
     text = ""
+    result = None
     try:
         dispatch_args = dict(arguments)
         output_options = schemas.EvidenceOutputOptions.model_validate(
@@ -7148,6 +7147,8 @@ async def call_tool(name: str, arguments: dict):
             error_code = result.error_code or "tool_error"
         elif hierarchy_blocked:
             error_code = str((result.blocker or {}).get("code") or "hierarchy_blocked")
+        if ok and name in {"get_sim_paths", "get_formal_paths"}:
+            attribution = usage_telemetry.note_discovery(name, result)
         return [TextContent(type="text", text=text)]
     except anyio.get_cancelled_exc_class():
         # Client abandoned the request; the finally block still records the
@@ -7166,11 +7167,6 @@ async def call_tool(name: str, arguments: dict):
         return [TextContent(type="text", text=text)]
     finally:
         latency_ms = (time.perf_counter() - start) * 1000.0
-        case = None
-        if name != "get_formal_paths":
-            sim_state = _session_state.get("get_sim_paths")
-            if isinstance(sim_state, dict) and sim_state.get("case_dir"):
-                case = os.path.basename(str(sim_state["case_dir"]).rstrip("/"))
         try:
             usage_telemetry.record_call(
                 name,
@@ -7180,7 +7176,9 @@ async def call_tool(name: str, arguments: dict):
                 blocked=blocked,
                 error_code=error_code,
                 latency_ms=latency_ms,
-                case=case,
+                case=None,
+                attribution=usage_telemetry.finish_call(attribution),
+                readback=usage_telemetry.readback_counts(name, arguments, result, ok),
                 diagnostics=operation_metrics.snapshot(metrics),
             )
         finally:
