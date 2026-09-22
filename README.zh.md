@@ -163,6 +163,8 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 结果会说明实际检查的项目和缺失信息。窗口内尚未完成的请求不直接判为死锁，这些检查也不替代完整的 TL-UL 协议验证。
 
+调试对话较长时，可以要求助手使用紧凑证据输出。重复的字段映射只展示一份，实际检查范围、缺失证据、时间边界和下一步仍会保留。已有客户端默认保持原有输出。示例及客户端接入方式见[紧凑证据输出](docs/architecture.md#compact-evidence-output)。
+
 字段配置与详细支持范围见[总线字段与 TL-UL 使用说明](docs/architecture.md#packed-waveform-selections-and-tl-ul)。
 
 ### 自定义运行期报错格式

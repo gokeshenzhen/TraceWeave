@@ -37,6 +37,79 @@ class SchemaModel(BaseModel):
 TOKEN_BUDGET_SOFT_LIMIT = 80_000
 
 
+class EvidenceOutputOptions(SchemaModel):
+    output_format: Literal["full", "compact"] = Field(
+        default="full",
+        description=(
+            "full preserves the original result. compact returns a lossless "
+            "traceweave.compact.v1 envelope: result plus response-local selection "
+            "references. Coverage and display limits are unchanged; references "
+            "are JSON pointers, not time cursors or stored result handles."
+        ),
+    )
+
+
+# Only inspected result families opt into the shared presentation contract.
+COMPACT_OUTPUT_TOOLS = frozenset({
+    "get_waveform_summary", "get_signal_at_time", "get_signal_transitions",
+    "get_signals_around_time", "get_signals_by_cycle", "inspect_handshake",
+    "inspect_tlul", "reconstruct_transactions", "resolve_packed_fields",
+    "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes",
+    "diff_first_divergence", "trace_divergence", "trace_x_source",
+    "scan_structural_risks", "get_diagnostic_snapshot",
+})
+
+
+class SelectionEvidenceReference(SchemaModel):
+    path: Literal[
+        "/result/channels/a/selections", "/result/channels/d/selections",
+        "/result/transactions/selections",
+    ]
+    target: Literal["/result/selections"] = "/result/selections"
+
+
+class CompactEvidenceResult(SchemaModel):
+    """Lossless projection of the already bounded public result, not a cache."""
+
+    format: Literal["traceweave.compact.v1"] = "traceweave.compact.v1"
+    tool: str
+    result: dict[str, Any]
+    references: list[SelectionEvidenceReference] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        if self.tool not in COMPACT_OUTPUT_TOOLS:
+            raise ValueError("compact_output_tool_unsupported")
+        seen = set()
+        for ref in self.references:
+            if self.tool != "inspect_tlul" or ref.path in seen or not self.result.get("selections"):
+                raise ValueError("compact_evidence_reference_invalid")
+            seen.add(ref.path)
+            parent = self.result
+            for key in ref.path.split("/")[2:-1]:
+                parent = parent.get(key) if isinstance(parent, dict) else None
+            if not isinstance(parent, dict) or "selections" in parent:
+                raise ValueError("compact_evidence_reference_invalid")
+        return self
+
+
+class TransactionDisplayOptions(SchemaModel):
+    max_transactions: StrictInt = Field(
+        default=256, ge=1, le=65536,
+        description=("Display cap only; every admitted sample contributes to analysis. "
+                     "Read analysis.stop_reason separately from display_status."),
+    )
+
+
+class TlulAnalysisOptions(TransactionDisplayOptions):
+    reset_active_low: bool = True
+    edge: Literal["posedge", "negedge"] = "posedge"
+    start_time_ps: int | str = 0
+    end_time_ps: int | str = -1
+    max_cycles: StrictInt = Field(default=65536, ge=1, le=65536)
+    max_wait_cycles: StrictInt = Field(default=16, ge=0)
+
+
 class TruncatableResult(SchemaModel):
     detail_level: str = "summary"
     detail_hint: str | None = None
@@ -364,6 +437,31 @@ class ScanStructuralRisksResult(TruncatableResult):
     categories_scanned: list[str] = Field(default_factory=list)
     skipped_files: list[str] = Field(default_factory=list)
     scan_metrics: dict[str, int | str] = Field(default_factory=dict)
+
+
+class StructuralScanSummary(SchemaModel):
+    """Diagnostic projection; lexical, semantic and display coverage stay separate."""
+
+    eligible_file_count: int
+    files_scanned: int
+    coverage_status: str
+    coverage_warnings: list[str]
+    analysis_mode: Literal["fast", "auto", "deep"]
+    lexical_coverage_status: str
+    categories_scanned: list[str]
+    semantic_status: str
+    semantic_fact_count: int
+    semantic_scope: str | None = None
+    semantic_categories_checked: list[str]
+    semantic_gaps: list[str]
+    semantic_propagation: StructuralPropagationReceipt
+    semantic_query_artifact_status: str
+    semantic_output_truncated: bool
+    total_risks: int
+    risks_returned: int
+    display_truncated: bool
+    high_risk_count: int
+    high_risk_count_basis: Literal["displayed_risks"] = "displayed_risks"
 
 
 class ErrorGroup(SchemaModel):
@@ -1900,6 +1998,24 @@ class HandshakeSweepResult(SchemaModel):
     cursor: CursorRefSchema | None = None
     note: str | None = None
     reason: str | None = None
+
+
+class ProtocolHealthSummary(SchemaModel):
+    interfaces_inspected: int
+    flagged_count: int
+    discovered_count: int
+    truncated: bool
+    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"]
+    coverage_warnings: list[str]
+    suggested_next_actions: list[dict[str, Any]]
+    scope: str | None = None
+    start_ps: int
+    end_ps: int
+    edge: str
+    discovery: dict[str, SignalDiscoveryCoverage]
+    finding_summary: FindingSummary | None = None
+    transition_truncated_count: int
+    skipped_count: int
 
 
 class VerifyEvidence(SchemaModel):

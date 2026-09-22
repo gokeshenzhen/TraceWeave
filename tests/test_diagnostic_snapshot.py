@@ -341,6 +341,17 @@ class TestDiagnosticSnapshot:
             "high_risk_count": 2,
             "semantic_status": "not_run",
             "semantic_fact_count": 0,
+            "analysis_mode": "auto",
+            "lexical_coverage_status": "complete",
+            "categories_scanned": ["slice_overlap", "multi_drive", "narrow_condition_injection"],
+            "semantic_categories_checked": [],
+            "semantic_gaps": [],
+            "semantic_propagation": schemas.StructuralPropagationReceipt().model_dump(exclude_none=True),
+            "semantic_query_artifact_status": "not_requested",
+            "semantic_output_truncated": False,
+            "risks_returned": 3,
+            "display_truncated": False,
+            "high_risk_count_basis": "displayed_risks",
         }
         assert result.recommended_next.available is True
         assert result.total_errors == 3

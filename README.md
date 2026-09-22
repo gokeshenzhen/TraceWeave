@@ -163,6 +163,8 @@ For TL-UL interfaces, once the assistant confirms the field mapping and clock, i
 
 Results state which checks ran and what information is missing. A request still outstanding at the end of the window is not automatically a deadlock, and these checks do not replace full TL-UL protocol verification.
 
+For a long debugging conversation, ask for compact evidence output. Repeated field mappings are shown once, while checked scope, missing evidence, time boundaries and next steps remain available. Existing clients keep their usual output by default. See [compact evidence output](docs/architecture.md#compact-evidence-output) for examples and client integration.
+
 See [bus fields and TL-UL](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#packed-waveform-selections-and-tl-ul) for field configuration and detailed support limits.
 
 ### Custom Runtime Error Formats

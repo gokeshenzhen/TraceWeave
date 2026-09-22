@@ -157,6 +157,7 @@ from src.cycle_query import (
 )
 from pydantic import BaseModel
 import src.schemas as schemas
+from src.evidence_output import serialize_compact_result
 
 
 # Session state and workflow prerequisite gating.
@@ -7042,6 +7043,15 @@ async def list_tools():
                 "fields": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 128},
             }, "required": ["wave_path", "compile_log", "signal_path", "source_signal", "fields"]}),
     ])
+    for tool in _tools:
+        properties = tool.inputSchema["properties"]
+        if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
+            properties.update(schemas.EvidenceOutputOptions.model_json_schema()["properties"])
+        if tool.name in {"inspect_tlul", "reconstruct_transactions"}:
+            model = (schemas.TlulAnalysisOptions if tool.name == "inspect_tlul"
+                     else schemas.TransactionDisplayOptions)
+            for key, prop in model.model_json_schema()["properties"].items():
+                properties[key] = {**properties.get(key, {}), **prop}
     # A/B harness toggle: hide the WHOLE handshake feature (suggestion and
     # inspection tools) from list_tools so a cold
     # "baseline" session cannot see or be hinted by it. Enabled by either
@@ -7078,9 +7088,21 @@ async def call_tool(name: str, arguments: dict):
     error_code = None
     text = ""
     try:
-        result = await _dispatch(name, arguments)
+        dispatch_args = dict(arguments)
+        output_options = schemas.EvidenceOutputOptions.model_validate(
+            {"output_format": dispatch_args.pop("output_format")}
+            if "output_format" in dispatch_args else {}
+        )
+        if output_options.output_format == "compact" and name not in schemas.COMPACT_OUTPUT_TOOLS:
+            raise ValueError("compact_output_tool_unsupported")
+        result = await _dispatch(name, dispatch_args)
         serialize_started = time.perf_counter()
-        text = _serialize_result(result)
+        if output_options.output_format == "compact" and not isinstance(
+            result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
+        ):
+            text = await _run_in_cancellable_thread(lambda: serialize_compact_result(name, result))
+        else:
+            text = _serialize_result(result)
         if name == "sweep_handshakes":
             operation_metrics.set_value(
                 "sweep_result_serialize_ms",
@@ -8244,6 +8266,10 @@ async def _dispatch(name: str, args: dict):
         return await _resolve_packed_fields(args)
 
     elif name == "inspect_tlul":
+        options = schemas.TlulAnalysisOptions.model_validate({
+            key: args[key] for key in schemas.TlulAnalysisOptions.model_fields if key in args
+        })
+        args = {**args, **options.model_dump()}
         def _work():
             return inspect_tlul(
                 get_parser=_get_parser, wave_path=args["wave_path"], clock=args["clock"],
@@ -8311,6 +8337,10 @@ async def _dispatch(name: str, args: dict):
         return schemas.WindowVerifyResult.model_validate(result)
 
     elif name == "reconstruct_transactions":
+        options = schemas.TransactionDisplayOptions.model_validate({
+            key: args[key] for key in schemas.TransactionDisplayOptions.model_fields if key in args
+        })
+        args = {**args, **options.model_dump()}
 
         def _work():
             return reconstruct_transactions(
@@ -8541,20 +8571,32 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
 
 
 def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) -> dict:
-    return {
+    return schemas.StructuralScanSummary.model_validate({
         "eligible_file_count": result.eligible_file_count,
         "files_scanned": result.files_scanned,
         "coverage_status": result.coverage_status,
         "coverage_warnings": result.coverage_warnings,
+        "analysis_mode": result.analysis_mode,
+        "lexical_coverage_status": result.lexical_coverage_status,
+        "categories_scanned": result.categories_scanned,
         "semantic_status": result.semantic.status,
         "semantic_fact_count": result.semantic.total_facts,
+        "semantic_scope": result.semantic.scope,
+        "semantic_categories_checked": result.semantic.categories_checked,
+        "semantic_gaps": result.semantic.gaps,
+        "semantic_propagation": result.semantic.propagation,
+        "semantic_query_artifact_status": result.semantic.query_artifact_status,
+        "semantic_output_truncated": result.semantic.output_truncated,
         "total_risks": result.total_risks,
+        "risks_returned": len(result.risks),
+        "display_truncated": (result.auto_downgraded or len(result.risks) < result.total_risks
+                              or result.semantic.output_truncated),
         "high_risk_count": sum(1 for risk in result.risks if risk.risk_level == "high"),
-    }
+    }).model_dump(exclude_none=True)
 
 
 def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> dict:
-    return {
+    return schemas.ProtocolHealthSummary.model_validate({
         "interfaces_inspected": result.interface_count,
         "flagged_count": result.flagged_count,
         "discovered_count": result.discovered_count,
@@ -8562,7 +8604,15 @@ def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> di
         "coverage_status": result.coverage_status,
         "coverage_warnings": result.coverage_warnings,
         "suggested_next_actions": result.suggested_next_actions,
-    }
+        "scope": result.scope,
+        "start_ps": result.start_ps,
+        "end_ps": result.end_ps,
+        "edge": result.edge,
+        "discovery": result.discovery,
+        "finding_summary": result.finding_summary,
+        "transition_truncated_count": result.transition_truncated_count,
+        "skipped_count": len(result.skipped),
+    }).model_dump(exclude_none=True)
 
 
 def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict:
@@ -9429,7 +9479,7 @@ def _enforce_output_budget(
     ],
 ) -> schemas.TruncatableResult:
     payload = model.model_dump_json(exclude_none=True)
-    model.payload_bytes = len(payload)
+    model.payload_bytes = len(payload.encode("utf-8"))
     if model.payload_bytes <= schemas.TOKEN_BUDGET_SOFT_LIMIT:
         return model
 
@@ -9438,7 +9488,7 @@ def _enforce_output_budget(
         current = shrink(current)
         current.auto_downgraded = True
         payload = current.model_dump_json(exclude_none=True)
-        current.payload_bytes = len(payload)
+        current.payload_bytes = len(payload.encode("utf-8"))
         if current.payload_bytes <= schemas.TOKEN_BUDGET_SOFT_LIMIT:
             return current
     return current
@@ -9721,7 +9771,7 @@ def _shrink_scan_structural_risks_stage2(
             "detail_hint": "Response truncated. Re-run scan_structural_risks with narrower categories.",
             "semantic": _trim_semantic_scan(model.semantic, 3),
             "risks": risks,
-            "categories_scanned": model.categories_scanned[:3],
+            "categories_scanned": model.categories_scanned,
             "skipped_files": [],
         }
     )
@@ -9738,7 +9788,7 @@ def _shrink_scan_structural_risks_terminal(
             "detail_hint": "Response truncated to fit budget. Re-run scan_structural_risks with one category.",
             "semantic": _trim_semantic_scan(model.semantic, 0),
             "risks": [],
-            "categories_scanned": model.categories_scanned[:3],
+            "categories_scanned": model.categories_scanned,
             "skipped_files": [],
         }
     )

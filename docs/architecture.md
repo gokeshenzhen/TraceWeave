@@ -1920,6 +1920,96 @@ existing discovery scope/page budgets, partial coverage, clock ambiguity,
 payload ownership and unconfirmed req/ack exclusions are unchanged. A clean
 mapped interface does not override partial or flagged global sweep evidence.
 
+## Compact evidence output
+
+The inspected waveform, discovery, comparison, X-trace, structural-scan and
+diagnostic tools accept `output_format="compact"`. The default `"full"` retains
+the original JSON shape and formatting. `src/schemas.py` owns the supported tool
+set, `EvidenceOutputOptions`, `CompactEvidenceResult`, the fixed selection
+reference contract, and the shared transaction/TL-UL scalar defaults and bounds.
+Registration derives those properties from the models; dispatch validates them
+before waveform work. The transaction display cap remains 1..65,536 (default
+256), and TL-UL retains its 65,536-cycle default/maximum. Invalid enum/range/type
+values are errors even when an incomplete field mapping would return early.
+
+Compact output is an explicit wire-format change for clients that opt in:
+
+```json
+{"wave_path":"/path/to/run.vcd","output_format":"compact"}
+```
+
+Pass those arguments to `get_waveform_summary`. A TL-UL response uses the same
+envelope contract:
+
+```json
+{
+  "format": "traceweave.compact.v1",
+  "tool": "inspect_tlul",
+  "result": {"selections": [], "channels": {}, "coverage_status": "zero_coverage"},
+  "references": []
+}
+```
+
+The abbreviated example illustrates the envelope, not a complete TL-UL result.
+The actual `result` retains all fields of the full response except exactly
+identical nested selection receipts. For example,
+`{"path":"/result/channels/a/selections","target":"/result/selections"}`
+means the omitted channel receipt is the complete list at the target JSON
+pointer. Only the two channel receipts and the nested transaction receipt can
+be factored; different paths, declared ranges, bit order or contents stay inline.
+There are at most three references, no chains, and no separate evidence table.
+All other result families keep their entire original JSON value within `result`.
+Whitespace is removed; nulls, empty evidence, unknown values, unexecuted checks,
+frontiers, identities and both sides of a comparison retain their original wire
+semantics. Tool errors and missing-prerequisite responses keep their original
+error shape, including on compact requests.
+
+Clients must expand references before validating against the original result
+schema. `src.evidence_output.expand_compact_result(response)` restores that
+exact JSON value and rejects malformed, duplicate or dangling references. This
+is lossless with respect to the already bounded public result, not the entire
+waveform. Analysis limits and existing display caps still apply: read coverage,
+gaps, stop reasons and display truncation independently. Compact mode neither
+recovers omitted transactions nor turns a bounded prefix into complete evidence.
+Request narrower scopes/windows or increase the existing display cap when the
+tool's next action permits it; insufficient retained facts require a new call.
+
+Projection runs after analysis in the existing cancellable worker without a
+waveform lock. It checks cancellation around projection/encoding and between the
+three factoring candidates; an individual Python encoding call is not
+preemptible. It makes no additional waveform/native reads. Temporary JSON
+objects live only for that response; there is no result repository, persistence,
+request coalescing, cache admission, eviction or new pagination API. References
+resolve offline within the captured response after restart, but do not prove
+that its waveform or compiled artifact is still current. Existing `@time`
+cursors and hierarchy handles retain their separate process-scoped lifetimes.
+The existing subtree/file/instance tools remain the way to browse hierarchy.
+
+Diagnostic summaries preserve lexical coverage separately from semantic status,
+scope, checked categories, gaps, propagation and query-artifact disposition.
+Risk totals and returned-risk counts are separate; the legacy `high_risk_count`
+is explicitly labelled as counting displayed risks. Structural output trimming
+preserves the complete checked-category list. Protocol summaries retain discovery
+coverage separately from sweep coverage, window/scope, transition truncation,
+skips, finding summaries and executable next actions. `semantic.status=not_run`,
+partial discovery and zero coverage never become a clean scan. Existing soft
+output-budget accounting uses UTF-8 bytes rather than Unicode character count.
+The budget is a soft limit on minified schema JSON, not a hard transport cap;
+the default indented response can be larger. Diagnostic summary fields are
+additive. Unicode-heavy results can now reach the existing display downgrade
+earlier; their analyzed counts and coverage are still retained.
+
+Reproduce projection costs with `scripts/benchmark_evidence_output.py`: generate
+a packed VCD with `--generate --wave /tmp/packed.vcd --count 2048 --output
+/tmp/unused.json`, then query it using `--source-root`, `--cap`, `--queries` and
+`--output-format full|compact`. Each source/format belongs in a fresh process;
+the script checks independent accepted-edge and payload timing expectations,
+records loaded source/native hashes, parser-open time, sampling/analysis,
+projection, serialization, output rows/bytes, native calls and peak RSS. It does
+not flush OS caches, and excludes imports, conversion and MCP transport.
+Fewer output bytes do not imply fewer reads or lower analysis memory; compact
+projection allocates temporary Python objects and can cost additional CPU/RSS.
+
 ## Transaction sampling and bounded facts
 
 `reconstruct_transactions` consumes the existing compact columns through
