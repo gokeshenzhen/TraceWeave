@@ -99,6 +99,7 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
             evidence['context']['design_identity_sha256'] = design
             side = {**bound.context, 'wave_path': path, 'signal_path': split_selection(request['signal_path'])[0]}
             route = route_factory(services, 'x', side, bound, budget)
+            route.retain_async_controls = True
             while True:
                 clear_graph()
                 session.bind((design, route.stage, route.artifact))
@@ -246,7 +247,7 @@ async def _walk(result, request, services, route, budget, session, design, wave,
             step = {**step, 'branches': [], 'boundary': 'unsupported', 'complete': False,
                     'gaps': [*step.get('gaps', ()), 'dynamic_expression_limit']}
         node['structure'] = {k: step[k] for k in ('backend', 'artifact_sha256', 'boundary', 'complete',
-            'bits', 'clock', 'gaps', 'sources', 'cross_check', 'traversal', 'claim_semantics', 'structural') if k in step}
+            'bits', 'clock', 'async_controls', 'gaps', 'sources', 'cross_check', 'traversal', 'claim_semantics', 'structural') if k in step}
         node['structure']['assignments'] = [{k: b[k] for k in ('id', 'order', 'source', 'port_hops') if k in b}
                                           for b in step.get('branches', ())]
         gaps = list(step.get('gaps', ()))
@@ -263,6 +264,32 @@ async def _walk(result, request, services, route, budget, session, design, wave,
             result['candidates'].append(dict(node_id=node_id, kind='observed_unknown_boundary',
                 competing_hypotheses=_HYPOTHESES, checked=['recorded_target'],
                 unchecked=['boundary_producer', 'true_first_origin']))
+            continue
+        if step.get('async_controls'):
+            from .async_observe import observe_async_controls
+            obs = await wave(lambda: observe_async_controls(step, get_parser=services._get_parser,
+                wave=path, start=start, time=at, phase=phase,
+                unknown_onset_fs=interval['active_interval_start_time_fs'], session=session))
+            node['async_observation'] = obs
+            node['status'] = 'frontier'
+            for gap in obs['gaps']:
+                frontier(node_id, gap)
+            if 'typed_async_control_observations' not in result['coverage']['checks']:
+                result['coverage']['checks'].append('typed_async_control_observations')
+            for control in obs['controls']:
+                if control['edge_at_unknown_onset'] is not True:
+                    continue
+                driver_args = dict(wave_path=path, compile_log=request['compile_log'],
+                                   simulator=request['simulator'])
+                if request.get('top_hint'):
+                    driver_args['top_hint'] = request['top_hint']
+                result['candidates'].append(dict(node_id=node_id, kind='async_control_onset_candidate',
+                    control_signal=control['signal'],
+                    competing_hypotheses=['asynchronous_assignment', 'other_driver_or_scheduling_effect'],
+                    checked=['typed_control_pin', 'recorded_assertion_at_unknown_onset'],
+                    unchecked=['assignment_value', 'simulator_scheduling', 'other_drivers', 'waveform_compile_binding'],
+                    next_actions=[dict(tool='explain_signal_driver', arguments={**driver_args, 'signal_path': target})
+                                  for target in (split_selection(expr.signal)[0], control['signal'])]))
             continue
         if step['boundary'] == 'unsupported' or any(g != 'driver_set_incomplete' for g in gaps):
             node['status'] = 'frontier'

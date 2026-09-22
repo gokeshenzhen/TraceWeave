@@ -1467,6 +1467,8 @@ zero padding; variable and arithmetic shifts remain unsupported. The shared
 `src/dynamic_selection.py` projector preserves ordered bits through muxes,
 concatenations and casts within the existing expression budgets. Evaluation
 rejects inconsistent mux widths instead of silently returning a wider value.
+Single-bit native bitwise AND/OR use the same four-state truth tables as their
+logical equivalents; wider bitwise expressions retain an unsupported gap.
 
 `src/dynamic_observe.py` separates output observation, triggering edge and strict
 predecessor samples; it does not infer simulation scheduling order from integer
@@ -1522,6 +1524,30 @@ and write order. The original `sampling_order_unresolved` frontier remains;
 this is not a supported sampling relation. Precision gaps and uncertain
 controls cannot use this path. Static constant propagation is not historical
 evidence. Full and compact output preserve the same candidate facts and gaps.
+
+History can retain a typed NPI asynchronous boundary with one state driver,
+one clock and at most two reset/set controls. Each control carries a direct
+single-bit expression, pin kind, active level and assertion edge. The optional
+`async_controls` private field is validated at the existing LSF boundary;
+older workers without it keep the previous fallback behavior. Pin kind cannot
+reveal the original reset/set assignment value, including a source X constant,
+so `async_control_value_unmodeled` and temporal/driver frontiers remain. A
+history route keeps these positive NPI observations with an inconclusive,
+partial receipt instead of discarding them on a fallback. Other dynamic routes
+retain their existing fallback policy; one graph still has one provenance.
+
+`src/async_observe.py` reads the typed controls and clock under the same wave
+locks and request observation budgets. Each `async_observation` reports its
+window, observed assertion count/latest time, control level, clock edges and
+whether an edge coincides with the recorded X/Z onset. Missing declarations,
+unknown controls, sub-ps ordering, truncated data and an active window prefix
+without an observed assertion remain separate gaps. Event coincidence may add
+an `async_control_onset_candidate` with executable driver queries for the state
+and control; it never adds a supported temporal edge. Assignment evaluation is
+`not_run`, the value remains `unmodeled`, and `true_origin_proven` remains false.
+Multiple native state writers, unsupported pin types and Source Graph async
+timing still stop at their original incomplete boundaries. No state or waveform
+is retained beyond the existing request cache lifecycle.
 
 `src/x_history_observe.py` consumes PR 04 private event pages under existing wave
 locks. Raw femtoseconds define interval boundaries and timestamp groups; dynamic

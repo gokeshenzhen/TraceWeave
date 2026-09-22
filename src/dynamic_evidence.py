@@ -232,4 +232,19 @@ def validate_step(raw: dict) -> dict:
         Expr.from_dict(raw["clock"]["expression"])
         if raw["clock"]["edge"] not in {"posedge", "negedge"}:
             raise ValueError("dynamic_step_clock_invalid")
+    controls = raw.get('async_controls', [])
+    if not isinstance(controls, list) or len(controls) > 2:
+        raise ValueError('dynamic_async_controls_invalid')
+    if controls:
+        clock = Expr.from_dict(raw['clock']['expression']) if raw.get('clock') else None
+        if (raw.get('boundary') != 'sequential' or raw.get('complete') is not False
+            or 'async_control_value_unmodeled' not in raw.get('gaps', ())
+            or clock is None or clock.op != 'signal' or clock.width != 1):
+            raise ValueError('dynamic_async_controls_invalid')
+        for control in controls:
+            expr = Expr.from_dict(control['expression'])
+            active = control.get('active_value')
+            if (expr.op != 'signal' or expr.width != 1 or control.get('kind') not in {'reset', 'set'}
+                or active not in {'0', '1'} or control.get('assertion_edge') != ('posedge' if active == '1' else 'negedge')):
+                raise ValueError('dynamic_async_controls_invalid')
     return raw

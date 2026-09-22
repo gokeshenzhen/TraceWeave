@@ -142,13 +142,30 @@ def query_step(backend, signal: str) -> dict:
             if cell_type == "npiNlFlipFlopCell":
                 clocks = [p for p in inputs if p.port_type() == "npiNlClockPort"]
                 data = [p for p in inputs if p.port_type() == "npiNlDataPort"]
-                if depth != 0 or len(clocks) != 1 or len(data) != 1 or len(inputs) != 2:
+                controls = [p for p in inputs if p.port_type() in {'npiNlAsyncResetPort', 'npiNlAsyncSetPort'}]
+                if depth != 0 or len(clocks) != 1 or len(data) != 1 or len(controls) > 2 or len(inputs) != 2 + len(controls):
                     raise ProjectionGap("temporal_context_unavailable")
                 edge = {"npiNlRisingActive": "posedge", "npiNlFallingActive": "negedge"}.get(clocks[0].port_state())
                 clock = linked(clocks[0])
                 if edge is None or clock.op != "signal" or clock.width != 1:
                     raise ProjectionGap("temporal_context_unavailable")
                 result.update(boundary="sequential", clock={"expression": asdict(clock), "edge": edge})
+                if controls:
+                    facts = []
+                    for p in controls:
+                        control = linked(p)
+                        active_value = {'npiNlHighActive': '1', 'npiNlLowActive': '0'}.get(p.port_state())
+                        if control.op != 'signal' or control.width != 1 or active_value is None:
+                            raise ProjectionGap('temporal_context_unavailable')
+                        facts.append(dict(kind='reset' if p.port_type() == 'npiNlAsyncResetPort' else 'set',
+                            expression=asdict(control), active_value=active_value,
+                            assertion_edge='posedge' if active_value == '1' else 'negedge'))
+                    # Native pin kind/polarity does not encode the original
+                    # assigned value (including RTL X). Retain observation
+                    # targets, never infer a reset-to-zero/set-to-one value.
+                    result['async_controls'] = facts
+                    result['gaps'].append('temporal_context_unavailable')
+                    return Expr('unsupported', width, reason='async_control_value_unmodeled')
                 return linked(data[0])
             if cell_type == "npiNlMuxCell":
                 controls = [p for p in inputs if p.port_type() == "npiNlControlPort"]
@@ -171,7 +188,11 @@ def query_step(backend, signal: str) -> dict:
             op = {"npiNlLogAndCell": "and", "npiNlLogOrCell": "or", "npiNlNotCell": "not",
                   "npiNlEqCompCell": "eq", "npiNlNotEqCompCell": "ne"}.get(cell_type)
             operands = tuple(linked(p) for p in sorted(inputs, key=lambda p: p.port_order() or 0))
-            if cell_type in {'npiNlLogAndCell', 'npiNlLogOrCell'}:
+            if cell_type in {'npiNlAndCell', 'npiNlOrCell'} and width == 1 and len(operands) == 2 and all(a.width == 1 for a in operands):
+                # Single-bit bitwise and logical truth tables coincide,
+                # including X/Z. Wider bitwise expressions stay unsupported.
+                op = 'and' if cell_type == 'npiNlAndCell' else 'or'
+            if op in {'and', 'or'}:
                 ordered = sorted(inputs, key=lambda p: p.port_order() or 0)
                 if any(p.port_state() not in {'npiNlHighActive', 'npiNlLowActive'} for p in ordered):
                     raise ProjectionGap('guard_unresolved')

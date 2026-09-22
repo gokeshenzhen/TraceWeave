@@ -217,6 +217,23 @@ def test_real_npi_mux_enable_reset_edges_and_synthetic_conditions(real_kdbs):
         not async_step["complete"]
         and "temporal_context_unavailable" in async_step["gaps"]
     )
+    for name, active, kind in [('qasync', '0', 'reset'), ('qasync_xbit', '0', 'reset'), ('qasync_set', '1', 'set')]:
+        partial = query_step(b, 'tw_div_probe.' + name)
+        validate_step(json.loads(json.dumps(partial)))
+        assert not partial['complete'] and 'async_control_value_unmodeled' in partial['gaps'], partial
+        assert partial['async_controls'][0]['active_value'] == active
+        assert partial['async_controls'][0]['kind'] == kind
+        assert value(partial, {}).value is None
+    # Native lowers this X-reset vector to eight distinct FF writers. Their
+    # inventory remains incomplete for this single-driver evidence subset.
+    vector = query_step(b, 'tw_div_probe.qasync_x')
+    assert not vector['complete'] and 'multiple_driver_candidates' in vector['gaps']
+    assert not vector.get('async_controls')
+    for name, en, sel, expected in [('bit_or_out', '0', 'x', 'x'), ('bit_or_out', '0', '1', '1'),
+                                  ('bit_and_out', '0', '1', '1'), ('bit_and_out', '1', '1', '0')]:
+        partial = query_step(b, 'tw_div_probe.' + name)
+        assert partial['complete'], partial
+        assert value(partial, {'tw_div_probe.en': en, 'tw_div_probe.sel': sel}).value == expected
 
 
 def test_real_npi_lsf_worker_uses_same_dynamic_core(real_kdbs):
@@ -226,6 +243,11 @@ def test_real_npi_lsf_worker_uses_same_dynamic_core(real_kdbs):
     response = execute_worker_request(request)
     assert response.status == "ok" and response.result["complete"]
     assert response.result["clock"]["edge"] == "posedge"
+    response = execute_worker_request(DynamicStepWorkerRequest(
+        kdb_path=str(real_kdbs[0]), top='tw_div_probe', signal_path='tw_div_probe.qasync_xbit'))
+    assert response.status == 'ok' and not response.result['complete']
+    assert response.result['async_controls'][0]['active_value'] == '0'
+    assert 'async_control_value_unmodeled' in response.result['gaps']
 
 
 def test_real_alternating_backend_instances_reload_correct_kdb(real_kdbs):
@@ -243,6 +265,65 @@ def test_real_alternating_backend_instances_reload_correct_kdb(real_kdbs):
             ).value
             == expected
         )
+
+
+@pytest.mark.anyio
+async def test_real_npi_async_history_retains_observation_frontier(real_kdbs, tmp_path, monkeypatch):
+    import asyncio
+    import server
+    from src.hierarchy_handles import HandleStore
+    from tests.test_evidence_output import compact_call
+
+    server.reset_session_state()
+    monkeypatch.setenv('TRACEWEAVE_CONNECTIVITY_ROUTE', 'auto')
+    monkeypatch.setenv('TRACEWEAVE_NPI_EXECUTION', 'local')
+    monkeypatch.setenv('TRACEWEAVE_AUTO_KDB', '0')
+    monkeypatch.setattr(server, '_handle_store', HandleStore())
+    def unexpected(**kwargs):
+        raise AssertionError('typed async boundary must retain its single NPI provenance')
+    monkeypatch.setattr(server, 'build_source_graph_trace_plan', unexpected)
+    log = str(real_kdbs[0].parent.parent / 'compile.log')
+    context = dict(compile_log=log, simulator='vcs', top_hint='tw_div_probe')
+    await asyncio.gather(server._dispatch('build_tb_hierarchy', context),
+                         server._dispatch('scan_structural_risks', context))
+    wave = tmp_path / 'async.vcd'
+    wave.write_text('''$timescale 1ps $end
+$scope module tw_div_probe $end
+$var wire 1 ! clk $end
+$var wire 1 @ rst $end
+$var wire 1 # qasync_xbit $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+1@
+0#
+#5
+1!
+#10
+0!
+#12
+0@
+x#
+#15
+1!
+''')
+    args = dict(**context, wave_path=str(wave), signal_path='tw_div_probe.qasync_xbit',
+                mode='history', history_start_ps=0, time_ps=13)
+    expanded, _ = await compact_call(monkeypatch, 'trace_x_source', args)
+    history = expanded['history']
+    assert history['status'] == 'partial' and not history['coverage']['true_origin_proven']
+    assert len(history['nodes']) == 1 and not history['edges']
+    obs = history['nodes'][0]['async_observation']
+    assert obs['controls'][0]['last_observed_edge_ps'] == 12
+    assert obs['clock']['edge_at_unknown_onset'] is False
+    assert obs['assignment_value_status'] == 'unmodeled' and obs['inference_status'] == 'not_run'
+    assert history['candidates'][0]['kind'] == 'async_control_onset_candidate'
+    assert history['context']['backend_status']['actual_backend'] == 'verdi_npi'
+    assert history['context']['backend_status']['attempted_backends'][-1]['status'] == 'inconclusive'
+    bounded = await server._dispatch('trace_x_source', {**args, 'max_events': 1})
+    assert bounded.history.coverage['truncated'] and not bounded.history.candidates
+    assert expanded.get('root_cause') is None
 
 
 @pytest.mark.anyio

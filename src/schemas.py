@@ -1543,6 +1543,8 @@ class XHistoryEvidence(SchemaModel):
 
     A predecessor_sampling_candidate retains sampling_order_unresolved and
     uses candidate_* edges. It cannot establish simulator scheduling order.
+    async_observation records typed control/clock events; its assignment value
+    remains unmodeled and async_control_onset_candidate is not causal proof.
     """
     status: Literal["partial", "blocked", "inconclusive", "signal_is_clean"]
     window: dict[str, Any]

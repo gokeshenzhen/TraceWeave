@@ -6052,6 +6052,8 @@ async def list_tools():
                 "observed X/Z intervals, supported register sampling/hold and combinational evidence. "
                 "Same-edge data predecessors may extend a labelled candidate path while retaining "
                 "the scheduling gap; ambiguous controls or clocks still stop expansion. "
+                "Typed NPI async boundaries expose control assertions and clock observations "
+                "without inferring the reset/set assignment value or a causal relation. "
                 "Missing history, ambiguous scheduling, CDC or unsupported asynchronous controls "
                 "remain boundaries; observed dump onset is never asserted to be the true first origin."
             ),

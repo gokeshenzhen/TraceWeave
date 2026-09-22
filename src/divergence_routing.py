@@ -52,6 +52,7 @@ class DynamicRoute:
         self.probe = {}
         self.source_receipt = None
         self.selected_backend = "source_graph"
+        self.retain_async_controls = False
 
     async def initialize(self):
         self.probe = await self.budget.run(
@@ -238,6 +239,10 @@ class DynamicRoute:
                     "multiple_driver_candidates",
                     "dynamic_expression_limit",
                 }
+                if (self.retain_async_controls and result.get('async_controls')
+                    and result.get('clock') and result.get('boundary') == 'sequential'
+                    and gaps <= {'temporal_context_unavailable', 'async_control_value_unmodeled', 'driver_set_incomplete'}):
+                    terminal.add('async_control_value_unmodeled')
                 if not result.get("complete") and not (gaps & terminal):
                     reason = next(
                         iter(sorted(gaps)), "npi_dynamic_evidence_unavailable"
@@ -293,7 +298,10 @@ class DynamicRoute:
             "selected_backend": self.selected_backend,
             "attempted_backends": [
                 *self.attempts,
-                dict(backend=self.stage, status="success"),
+                (dict(backend=self.stage, status='inconclusive', coverage_status='partial',
+                      reason='async_control_value_unmodeled')
+                 if self.retain_async_controls and result.get('async_controls')
+                 else dict(backend=self.stage, status="success")),
             ],
             "fallback_reason": self.fallback_reason,
             "single_backend_provenance": True,
