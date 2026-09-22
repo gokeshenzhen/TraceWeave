@@ -831,6 +831,19 @@ while callers may explicitly sample the pseudo-clock. Tools that already emit
 standard VCD/FSDB need no provider for direct waveform use; unsupported file
 formats require a separate waveform backend.
 
+Signal search returns candidates and a conditional readback hint in both its
+single-keyword and batch forms. The batch places the shared hint only at the
+outer level and preserves each backend's existing hints. Callers choose the
+signal set and times: use a point query for one signal, or
+`get_signals_around_time(return_mode="values_only", window_ps=0,
+extra_transitions=0)` for several signals at the same known time. Cycle queries
+require an explicit clock and sampling semantics; check actual sample times
+and counts, since an initially high clock does not establish a rising edge at
+the initial timestamp. Read a missing initial state separately by time. Keep
+glitch and asynchronous investigations on transition/window queries.
+`values_only` trims the response after reading; it does not bypass the reader
+or clock-detection guardrails and makes no parser-performance guarantee.
+
 ## Handle-based Hierarchy Access
 
 `build_tb_hierarchy` generates a full hierarchy result server-side (project

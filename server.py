@@ -5154,6 +5154,17 @@ def _bounded_bootstrap_input_properties() -> dict:
 # "@<name>", or a unit literal like "12.34ns". See src/timespec.py.
 _TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c', or a unit literal like '12.34ns'."
 
+_SIGNAL_READBACK_HINT = (
+    "Select full paths from results; matches are candidates, not a read list. "
+    "At a known time, use get_signal_at_time for one selected signal, or "
+    'get_signals_around_time(return_mode="values_only", window_ps=0, '
+    "extra_transitions=0) for several. For clock-aligned sequences use "
+    "get_signals_by_cycle with an explicit clock and sampling offset; check "
+    "returned times/counts and read any missing initial state by timestamp. "
+    "For glitches or asynchronous changes use get_signal_transitions or a full "
+    "time window. Choose signals, times and clock from the task, not match counts."
+)
+
 
 @app.list_tools()
 async def list_tools():
@@ -5539,7 +5550,9 @@ async def list_tools():
             name="get_signals_by_cycle",
             description=(
                 "Return cycle-by-cycle sampled values for multiple signals aligned to a clock edge. "
-                "Useful for state machines, pipelines, and round-by-round algorithm checks."
+                "Useful for state machines, pipelines, and round-by-round algorithm checks. "
+                "Check returned sample times and counts: an initially high clock is not a "
+                "rising edge, so read any required initial state separately by timestamp."
             ),
             inputSchema={
                 "type": "object",
@@ -7299,14 +7312,15 @@ async def _dispatch(name: str, args: dict):
                 return schemas.SearchSignalsBatchResult.model_validate(
                     {
                         "batch": entries,
-                        "hint": "One entry per keyword, in input order. Use the full path "
-                        "from each result's path field as the signal_path argument "
-                        "for tools such as get_signal_at_time.",
+                        "hint": "One entry per keyword, in input order. "
+                        + _SIGNAL_READBACK_HINT,
                     }
                 )
-            return schemas.SearchSignalsResult.model_validate(
-                annotate_signal_search_result(_search_one(keyword))
+            result = annotate_signal_search_result(_search_one(keyword))
+            result["hint"] = " ".join(
+                part for part in (result.get("hint"), _SIGNAL_READBACK_HINT) if part
             )
+            return schemas.SearchSignalsResult.model_validate(result)
 
         return await _run_in_wave_thread(wave_path, _work)
 

@@ -3162,6 +3162,11 @@ class TestSearchSignalsBatch:
         # A zero-match keyword is a fact entry, never an error.
         assert result.batch[2].total_matched == 0
         assert result.batch[2].results == []
+        assert 'return_mode="values_only", window_ps=0, extra_transitions=0' in result.hint
+        assert "get_signals_by_cycle" in result.hint
+        assert "missing initial state by timestamp" in result.hint
+        assert "not match counts" in result.hint
+        assert all("get_signals_around_time" not in (e.hint or "") for e in result.batch)
 
     async def test_single_string_keeps_single_search_shape(self):
         result = await server._dispatch(
@@ -3170,6 +3175,11 @@ class TestSearchSignalsBatch:
         )
         assert isinstance(result, server.schemas.SearchSignalsResult)
         assert result.keyword == "clk"
+        batch = await server._dispatch(
+            "search_signals",
+            {"wave_path": str(self._FIXTURE), "keyword": ["clk"]},
+        )
+        assert batch.hint.endswith(result.hint)
 
     async def test_empty_list_rejected(self):
         with pytest.raises(ValueError, match="must not be empty"):
@@ -3220,6 +3230,12 @@ class TestSearchSignalsBatch:
         assert created[0].searched == ["a", "b"]
         assert [e.keyword for e in result.batch] == ["a", "b"]
         assert [e.hint for e in result.batch] == [search_hint, search_hint]
+        single = await server._dispatch(
+            "search_signals", {"wave_path": "/tmp/x.fsdb", "keyword": "a"}
+        )
+        assert single.hint.startswith(search_hint)
+        assert "get_signals_around_time" in single.hint
+        assert len(created) == 1
 
 
 @pytest.mark.anyio
