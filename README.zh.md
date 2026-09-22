@@ -141,6 +141,11 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 首次连接时，可先要求助手调用 `get_sim_paths`，确认客户端能够执行真实的 MCP 工具调用。完整流程见[调试工作流](docs/workflow.md)。
 
+仓库安装可运行 `.venv/bin/python scripts/check_waveform_readback.py --work-dir /tmp/traceweave-readback-check`
+做无需 EDA license 的读值自检。它通过 MCP 检查服务端工具列表和实际点／批量读值，
+并输出供独立 AI 客户端会话执行的明确请求。服务端检查不会把客户端可见性或模型采用率
+标记为已证实，详见[读值客户端自检](docs/architecture.md#readback-client-check)。
+
 ### 定位波形差异与 X/Z 来源
 
 两次仿真结果不一致时，TraceWeave 可比较指定信号，找到时间窗口内最早能确认的差异，并沿两侧驱动追踪相关的数据、控制和 RTL 逻辑。

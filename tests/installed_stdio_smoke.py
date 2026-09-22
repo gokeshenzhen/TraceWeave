@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import anyio
 from mcp import ClientSession, StdioServerParameters
@@ -19,6 +20,7 @@ async def main() -> None:
     for generic_name in ("server", "config", "src"):
         assert importlib.util.find_spec(generic_name) is None
     assert importlib.util.find_spec("traceweave_mcp._runtime.server") is not None
+    from traceweave_mcp._runtime.src.readback_probe import PROBE_VCD, check_readback
 
     executable = Path(sys.executable).with_name("traceweave-mcp")
     doctor = subprocess.run(
@@ -35,17 +37,22 @@ async def main() -> None:
     assert doctor_report["fsdb"]["wrapper_present"] is False
     assert doctor_report["fsdb"]["status"] == "wrapper_missing"
 
-    params = StdioServerParameters(
-        command=os.fspath(executable),
-        args=[],
-        cwd=Path.cwd(),
-        env=dict(os.environ),
-    )
-
-    async with stdio_client(params) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as session:
-            initialized = await session.initialize()
-            listed = await session.list_tools()
+    with tempfile.TemporaryDirectory(prefix="traceweave-installed-readback-") as temporary:
+        work_dir = Path(temporary)
+        wave = work_dir / "probe.vcd"
+        wave.write_text(PROBE_VCD)
+        params = StdioServerParameters(
+            command=os.fspath(executable), args=[], cwd=Path.cwd(),
+            env={**os.environ, "TRACEWEAVE_TELEMETRY": "0",
+                 "TRACEWEAVE_CACHE_DIR": str(work_dir / "cache")},
+        )
+        with anyio.fail_after(30):
+            async with stdio_client(params) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    initialized = await session.initialize()
+                    listed = await session.list_tools()
+                    readback = await check_readback(session, str(wave), initialized)
+    assert readback["status"] == "passed", readback
 
     tool_names = {tool.name for tool in listed.tools}
     package_version = version("traceweave-mcp")
@@ -58,7 +65,7 @@ async def main() -> None:
         "get_waveform_summary",
     } <= tool_names
     print(
-        f"TraceWeave {package_version}: MCP initialize/list_tools passed "
+        f"TraceWeave {package_version}: MCP initialize/list_tools/readback passed "
         f"with {len(tool_names)} tools"
     )
 

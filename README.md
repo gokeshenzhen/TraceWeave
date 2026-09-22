@@ -141,6 +141,13 @@ The assistant's default investigation follows these steps:
 
 For a first connection check, ask the assistant to call `get_sim_paths` and confirm that actual MCP tool calls run. See the [debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) for the full procedure.
 
+For a repository readback check without an EDA license, run
+`.venv/bin/python scripts/check_waveform_readback.py --work-dir /tmp/traceweave-readback-check`.
+It checks the server catalog and actual point/batch values through MCP, and
+prints explicit requests for a separate AI-client smoke session. Server checks
+leave AI-client visibility and model adoption unverified; see the
+[readback check procedure](docs/architecture.md#readback-client-check).
+
 ### Find Waveform Differences and Trace X/Z Sources
 
 When two simulation runs produce different results, TraceWeave can compare selected signals, locate the earliest difference it can confirm within a time window, and trace the related data, control, and RTL logic on both sides.

@@ -854,6 +854,31 @@ handling. Neither this precheck nor SDK input-validation failures enter
 tool-handler telemetry; client-side rejection may happen before either layer
 and cannot be customized or counted by the server.
 
+### Readback Client Check
+
+`scripts/check_waveform_readback.py` launches an isolated stdio server with
+telemetry disabled and a neutral VCD, without changing client configuration or
+running an EDA tool/model. Its JSON receipt records the launch checkout commit,
+dirty state and server-file digest, the MCP handshake version, SDK-client
+version, tool names/readback schemas, and actual call outcomes/bytes/latency.
+It checks point/batch agreement, initial and uninitialized values, X/Z, missing
+signals, short cycle reads and the recoverable keyword limit. These timings
+are probe observations, not a performance benchmark.
+
+Use `--work-dir /tmp/traceweave-readback-check` to retain the fixture. The
+`ai_client_probe_requests` in the receipt are explicit point/batch calls with
+known expected values. In a separate smoke session, ask the target AI client
+to execute those exact calls using its configured TraceWeave connection, then
+save its version, actually observable tool-catalog evidence, and call results.
+Distinguish a rejected call from a tool the model did not invoke. Leave
+unobservable catalog/version layers `unknown`; the SDK probe cannot attest to
+an AI client's exposure, and neither probe measures natural model adoption.
+Keep this session separate from any formal experiment or agent A/B.
+
+An optional `--server-command <executable> <args...>` checks another local
+stdio installation without claiming its source commit. The installed-wheel
+CI smoke uses the same readback checks, beyond initialize/tools-list alone.
+
 ## Handle-based Hierarchy Access
 
 `build_tb_hierarchy` generates a full hierarchy result server-side (project
