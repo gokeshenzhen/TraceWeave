@@ -24,7 +24,7 @@ def select_expression(expr, positions, *, _budget=None, _depth=0):
         return replace(expr, width=len(positions), value=''.join(expr.value[i] for i in positions))
     if expr.op == 'mux' and all(a.width == expr.width for a in expr.args[1:]):
         return replace(expr, width=len(positions), args=(expr.args[0], *(select(a, positions) for a in expr.args[1:])))
-    if expr.op in {'concat', 'cast'}:
+    if expr.op in {'concat', 'cast'} and not expr.two_state:
         if expr.op == 'concat':
             pieces = [(child, i) for child in expr.args for i in range(child.width)]
         else:

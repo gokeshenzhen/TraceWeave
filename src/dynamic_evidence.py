@@ -10,7 +10,7 @@ from typing import Callable
 
 from .cancellation import check_cancelled
 from .divergence_compare import bit_value, known
-from .expression_values import Value, BINARY, binary, unary, conditional, builtin, stream
+from .expression_values import Value, BINARY, LOGICAL, LEFT_TYPED, binary, unary, conditional, builtin, stream
 
 DYNAMIC_VERSION = "1.0"
 MAX_EXPR_NODES = 256
@@ -44,7 +44,8 @@ class Expr:
                            "reduce_&", "reduce_~&", "reduce_|", "reduce_~|",
                            "reduce_^", "reduce_~^", "reduce_^~", "select",
                            "part_up", "part_down", "project", "function",
-                           "repeat", "stream_left", "stream_right", "inside", "range"} | BINARY):
+                           "repeat", "stream_left", "stream_right", "inside", "range",
+                           "array", "array_select"} | BINARY):
             raise ValueError("dynamic_expression_operator_invalid")
         arity = {"signal": 0, "const": 0, "not": 1, "and": 2, "or": 2,
                  "eq": 2, "ne": 2, "mux": 3, "cast": 1}
@@ -62,7 +63,7 @@ class Expr:
         if self.bounds is not None and (len(self.bounds) != 2 or
                 any(type(i) is not int or abs(i) >= 2**63 for i in self.bounds)):
             raise ValueError("dynamic_selection_bounds_invalid")
-        count = (2 if self.op in BINARY | {"select", "part_up", "part_down", "repeat",
+        count = (2 if self.op in BINARY | {"select", "part_up", "part_down", "array_select", "repeat",
                                           "stream_left", "stream_right", "range"} else
                  1 if self.op.startswith("reduce_") or self.op in {"u+", "u-", "~", "project"} else None)
         if count is not None and len(self.args) != count:
@@ -78,6 +79,12 @@ class Expr:
                 raise ValueError("dynamic_function_invalid")
         if self.op == "inside" and len(self.args) < 2:
             raise ValueError("dynamic_expression_arity_invalid")
+        if self.op == "array" and (self.bounds is None or len(self.bits) != len(self.args) or
+                len(set(self.bits)) != len(self.bits) or any(a.width != self.width for a in self.args) or
+                any(type(i) is not int or not min(self.bounds) <= i <= max(self.bounds) for i in self.bits)):
+            raise ValueError("dynamic_array_mapping_invalid")
+        if self.op == "array_select" and self.bounds is None:
+            raise ValueError("dynamic_array_mapping_invalid")
         if self.op in {"select", "part_up", "part_down"}:
             extent = abs(self.bounds[0] - self.bounds[1]) + 1 if self.bounds else self.args[0].width // self.stride
             if (extent * self.stride != self.args[0].width or self.width % self.stride or
@@ -147,6 +154,41 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
     """Evaluate with conservative four-state logic and retain selected dependencies."""
     budget = MAX_EXPR_NODES
 
+    def array_target(node, use, depth):
+        """Resolve sparse fixed arrays without sampling unselected elements."""
+        nonlocal budget
+        check_cancelled()
+        budget -= 1
+        if budget < 0 or depth > MAX_EXPR_DEPTH:
+            return None, Evaluation(None, [], ["dynamic_expression_limit"], [])
+        if node.op == "array":
+            return node, Evaluation(None, [], [], [])
+        if node.op != "array_select":
+            return None, Evaluation(None, [], ["array_mapping_unavailable"], [])
+        base, index_node = node.args
+        container, history = array_target(base, use, depth+1)
+        index = walk(index_node, "index", depth+1)
+        history.dependencies.extend(index.dependencies)
+        history.gaps.extend(index.gaps)
+        history.branches.extend(index.branches)
+        if container is None:
+            return None, history
+        if index.value is None:
+            return None, history
+        if not known(index.value):
+            history.value = ("0" if node.two_state else "x") * node.width
+            history.gaps.append("index_unknown")
+            return None, history
+        at = Value(index.value, index_node.signed).integer
+        if not min(node.bounds) <= at <= max(node.bounds):
+            history.value = ("0" if node.two_state else "x") * node.width
+            history.gaps.append("index_out_of_range")
+            return None, history
+        if at not in container.bits:
+            history.gaps.append("array_element_not_dumped")
+            return None, history
+        return container.args[container.bits.index(at)], history
+
     def walk(node: Expr, use: str, depth=0) -> Evaluation:
         nonlocal budget
         check_cancelled()
@@ -163,10 +205,39 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
                 gaps.append("signal_not_dumped")
             elif not known(value):
                 gaps.append("value_unknown")
+            if value is not None and node.two_state:
+                value = value.replace("x", "0").replace("z", "0")
             return Evaluation(value, [{**fact, "signal": node.signal, "bits": list(node.bits),
                                        "declared_bits": list(node.declared_bits),
                                        "width": node.width, "role": use, "value": value}], gaps, [],
                               (node.signal, node.bits))
+        if node.op == "array_select":
+            target, indices = array_target(node, use, depth+1)
+            if target is None:
+                return indices
+            if target.op == "array":
+                return Evaluation(None, indices.dependencies, indices.gaps + ["array_requires_selection"], indices.branches)
+            data = walk(target, use, depth+1)
+            return Evaluation(data.value, indices.dependencies + data.dependencies,
+                              list(dict.fromkeys(indices.gaps + data.gaps)),
+                              indices.branches + data.branches, data.reference)
+        if node.op == "array":
+            return Evaluation(None, [], ["array_requires_selection"], [])
+        if node.op in LOGICAL:
+            lhs = walk(node.args[0], "control", depth+1)
+            decisive = ((node.op == "&&" and lhs.truth == "false") or
+                        (node.op == "||" and lhs.truth == "true") or
+                        (node.op == "->" and lhs.truth == "false"))
+            if decisive:
+                return Evaluation("0" if node.op == "&&" else "1", lhs.dependencies, lhs.gaps, lhs.branches)
+            rhs = walk(node.args[1], "control", depth+1)
+            # Missing evidence can still leave a decisive logical result, but
+            # the missing-evidence receipt must survive that determination.
+            result = binary(node.op, Value(lhs.value or "x"), Value(rhs.value or "x")).bits
+            if result == "x" and (lhs.value is None or rhs.value is None):
+                result = None
+            return Evaluation(result, lhs.dependencies + rhs.dependencies,
+                              list(dict.fromkeys(lhs.gaps + rhs.gaps)), lhs.branches + rhs.branches)
         if node.op == "mux":
             cond = walk(node.args[0], "control", depth+1)
             selected = 1 if cond.truth == "true" else 2 if cond.truth == "false" else None
@@ -250,8 +321,9 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             return Evaluation(value, [d for o in observations for d in o.dependencies],
                 list(dict.fromkeys(g for o in observations for g in o.gaps)),
                 [b for o in observations for b in o.branches])
-        children = [walk(a, "control" if node.op in {"not","and","or","eq","ne"} else use,
-                         depth+1) for a in node.args]
+        children = [walk(a, "control" if node.op in {"not","and","or","eq","ne"} else
+                         "index" if node.op in LEFT_TYPED and i == 1 else use,
+                         depth+1) for i,a in enumerate(node.args)]
         deps = [d for c in children for d in c.dependencies]
         gaps = [g for c in children for g in c.gaps]
         branches = [b for c in children for b in c.branches]

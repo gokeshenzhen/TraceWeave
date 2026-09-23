@@ -672,6 +672,44 @@ class WaveformSelectionReceipt(SchemaModel):
     width: int
 
 
+class ExpressionMember(SchemaModel):
+    name: str = Field(min_length=1, max_length=256)
+    lsb: StrictInt = Field(ge=0, le=4095)
+    type: "ExpressionType"
+
+
+class ExpressionType(SchemaModel):
+    """Caller-supplied integral type; width is the packed element width."""
+    width: StrictInt = Field(ge=1, le=4096)
+    signed: bool = False
+    two_state: bool = False
+    packed: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list, max_length=8)
+    unpacked: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list, max_length=8)
+    members: list[ExpressionMember] = Field(default_factory=list, max_length=128)
+
+
+class ExpressionElement(SchemaModel):
+    indices: list[StrictInt] = Field(min_length=1, max_length=8)
+    signal: str | WaveformSelection
+
+
+class ExpressionArray(SchemaModel):
+    """Explicit sparse mapping, never a path template or a memory-state model."""
+    elements: list[ExpressionElement] = Field(max_length=128)
+
+
+class WaveformExpression(SchemaModel):
+    expr: str = Field(min_length=1, max_length=16384)
+    typing: Literal["semantic", "wave_bits"] = "semantic"
+    scope: str | None = Field(default=None, max_length=16384)
+    bindings: dict[str, str | WaveformSelection | ExpressionArray] = Field(default_factory=dict, max_length=128)
+    types: dict[str, ExpressionType] = Field(default_factory=dict, max_length=128)
+    constants: dict[str, str] = Field(default_factory=dict, max_length=128)
+
+
+ExpressionMember.model_rebuild()
+
+
 class TlulFields(SchemaModel):
     a_valid: str | WaveformSelection | None = None
     a_ready: str | WaveformSelection | None = None
