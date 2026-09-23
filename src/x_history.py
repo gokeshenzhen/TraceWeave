@@ -181,16 +181,16 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
 async def _walk(result, request, services, route, budget, session, design, wave, frontier):
     start, time = result['window']['start_ps'], result['window']['end_ps']
     path = request['wave_path']
-    queue = deque([(request['signal_path'], tuple(request.get('signal_bits', ())), time, request['phase'], 0, None, None, None, ())])
+    queue = deque([(request['signal_path'], tuple(request.get('signal_bits', ())), time, request['phase'], 0, None, None, None, (), ())])
     seen = {}
     artifact = None
     while queue:
         budget.check()
-        signal, bits, at, phase, depth, parent, relation, consumer_clock, declared_bits = queue.popleft()
+        signal, bits, at, phase, depth, parent, relation, consumer_clock, declared_bits, array_indices = queue.popleft()
 
         def read():
             parser = services._get_parser(path)
-            expr = signal_expression(parser, signal, bits, declared_bits)
+            expr = signal_expression(parser, signal, bits, declared_bits, array_indices=array_indices)
             identity = session.identity(parser, path, expr.signal)
             stream = session.stream(services._get_parser, path, expr.signal, start, time)
             return expr, identity, unknown_interval(stream, expr, start, at, phase)
@@ -231,6 +231,10 @@ async def _walk(result, request, services, route, budget, session, design, wave,
             result['coverage']['checks'].append('observed_unknown_intervals')
         if depth >= request['max_depth']:
             frontier(node_id, 'budget_exhausted', budget='max_depth')
+            continue
+        if array_indices:
+            node['status'] = 'boundary'
+            frontier(node_id, 'dumped_array_element_boundary')
             continue
         # Query the whole declared source; project only through supported typed
         # expressions. This avoids confusing a dump declaration with a query slice.
@@ -304,7 +308,7 @@ async def _walk(result, request, services, route, budget, session, design, wave,
         node['observation'] = obs
         dependencies = obs['dependencies']
         node['checked_dependencies'] = dependencies
-        unsafe = [g for g in obs['gaps'] if g not in {'value_unknown', 'driver_set_incomplete'}]
+        unsafe = [g for g in obs['gaps'] if g not in {'value_unknown', 'driver_set_incomplete', 'index_unknown'}]
         for gap in unsafe:
             frontier(node_id, gap)
         # A recorded predecessor can guide a bounded candidate path even when
@@ -349,7 +353,7 @@ async def _walk(result, request, services, route, budget, session, design, wave,
                 break
             queue.append((dep['signal'], tuple(dep['bits']), dep['time_ps'], dep['phase'], depth + 1,
                           node_id, action if supported else 'candidate_' + action, clock or consumer_clock,
-                          tuple(dep.get('declared_bits', ()))))
+                          tuple(dep.get('declared_bits', ())), tuple(dep.get('array_indices', ()))))
         if not unique:
             frontier(node_id, 'unknown_constant_boundary' if obs['value'] is not None and not known(obs['value']) else 'no_unknown_dependency')
         node['status'] = 'expanded' if unique else 'boundary'

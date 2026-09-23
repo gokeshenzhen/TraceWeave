@@ -173,11 +173,7 @@ def test_real_npi_mux_enable_reset_edges_and_synthetic_conditions(real_kdbs):
     assert packed["complete"], packed
     assert value(packed, {"tw_div_probe.a": "0011"}).value == "00111010"
     eq = query_step(b, "tw_div_probe.eq_out")
-    assert eq["complete"], eq
-    assert (
-        value(eq, {"tw_div_probe.a": "00000011", "tw_div_probe.b": "11001100"}).value
-        == "11001100"
-    )
+    assert not eq["complete"] and 'npi_operator_semantics_unresolved' in eq['gaps']
     inverted = query_step(b, "tw_div_probe.inverted_out")
     assert inverted["complete"], inverted
     assert (

@@ -196,6 +196,8 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             result["dependencies"].extend(value.dependencies)
             result["gaps"].extend(value.gaps)
             result["value"] = value.value
+            if value.reference:
+                result['reference'] = dict(signal=value.reference[0], bits=list(value.reference[1]))
         else:
             result["gaps"].append("temporal_context_unavailable")
     else:
@@ -206,6 +208,8 @@ def observe_step(step: dict, *, get_parser, wave: str, time: int, history_start:
             result["branches"].extend(value.branches)
             if not unresolved:
                 result["value"] = value.value
+                if value.reference:
+                    result['reference'] = dict(signal=value.reference[0], bits=list(value.reference[1]))
                 if include_state and step["boundary"] == "sequential" and step.get("state"):
                     state = Expr.from_dict(step["state"])
                     if value.reference == (state.signal, state.bits):

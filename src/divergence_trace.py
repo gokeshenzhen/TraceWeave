@@ -514,6 +514,10 @@ async def _walk(
             frontier(node_id, "budget_exhausted", budget="max_depth")
             continue
         steps = {}
+        if any(node[s].get('array_indices') for s in ('a','b')):
+            node['status'] = 'boundary'
+            frontier(node_id, 'dumped_array_element_boundary')
+            continue
         for label in ("a", "b"):
             fact = node[label]
             steps[label] = await routes[label].query(
@@ -611,6 +615,10 @@ async def _walk(
         matches = []
         used_b = set()
         mapping_complete = True
+        index_changed = any('index' in a['roles'] and known(a['value']) and
+            any('index' in b['roles'] and known(b['value']) and a['value'] != b['value'] and
+                mapping.target(a['signal'],a['bits']) == (b['signal'],tuple(b['bits']))
+                for b in deps['b']) for a in deps['a'])
         for a in deps["a"]:
             budget.check()
             mapped = mapping.target(a["signal"], a["bits"])
@@ -622,7 +630,8 @@ async def _walk(
             if len(candidates) != 1:
                 frontier(
                     node_id,
-                    "mapping_missing" if not candidates else "mapping_ambiguous",
+                    ("selected_dependency_changed" if index_changed and a['role']=='data' else
+                     "mapping_missing") if not candidates else "mapping_ambiguous",
                     side="a",
                     dependency=a,
                 )
@@ -637,12 +646,13 @@ async def _walk(
             matches.append((a, b))
         for i, b in enumerate(deps["b"]):
             if i not in used_b:
-                frontier(node_id, "mapping_missing", side="b", dependency=b)
+                frontier(node_id, "selected_dependency_changed" if index_changed and b['role']=='data'
+                         else "mapping_missing", side="b", dependency=b)
                 mapping_complete = False
         matches.sort(
             key=lambda pair: (
                 0
-                if "control" in pair[0]["roles"] or "control" in pair[1]["roles"]
+                if {'control','index'} & set(pair[0]['roles'] + pair[1]['roles'])
                 else 1
             )
         )
@@ -682,22 +692,23 @@ async def _walk(
                 observations[s]["complete"]
                 and observations[s]["value"] == node[s]["value"]
                 and dep["value"] == node[s]["value"]
+                and observations[s].get('reference') == dict(signal=dep['signal'],bits=dep['bits'])
                 for s, dep in (("a", a), ("b", b))
             ):
                 relation = "value_supported_propagation"
             child_id = add(
                 {"a": a, "b": b}, node["depth"] + 1, node_id, relation, roles
             )
-            if "control" in roles:
+            if 'control' in roles or 'index' in roles:
                 result["findings"].append(
                     dict(
-                        kind="control_difference",
+                        kind="index_difference" if 'index' in roles else "control_difference",
                         node_id=child_id,
                         observed_at_node_id=node_id,
                         checked_sides=["a", "b"],
                         competing_explanations=_COMPETING,
                         limitations=[
-                            "a_control_difference_is_not_by_itself_a_unique_root_cause"
+                            "a_control_or_index_difference_is_not_by_itself_a_unique_root_cause"
                         ],
                     )
                 )

@@ -232,6 +232,7 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
                 value = value.replace("x", "0").replace("z", "0")
             return Evaluation(value, [{**fact, "signal": node.signal, "bits": list(node.bits),
                                        "declared_bits": list(node.declared_bits),
+                                       **({"array_indices": list(node.array_indices)} if node.array_indices else {}),
                                        "width": node.width, "role": use, "value": value}], gaps, [],
                               (node.signal, node.bits))
         if node.op == "array_select":

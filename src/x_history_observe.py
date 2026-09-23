@@ -216,7 +216,10 @@ def bind_step_wave(step, parser):
         def visit(node):
             if node.op == 'signal':
                 try:
-                    return signal_expression(parser, node.signal, node.bits, node.declared_bits)
+                    bound = signal_expression(parser, node.signal, node.bits, node.declared_bits,
+                                              array_indices=node.array_indices)
+                    return replace(node, signal=bound.signal, bits=bound.bits,
+                                   declared_bits=bound.declared_bits)
                 except (KeyError, ValueError):
                     return node  # Sampling returns explicit missing/mapping evidence.
             return replace(node, args=tuple(visit(a) for a in node.args))

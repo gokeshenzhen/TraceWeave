@@ -132,7 +132,7 @@ async def test_sync_reset_comes_from_guard_polarity_not_name(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('source', [RTL.replace('@(posedge clk)', '@(posedge clk or negedge rst)'),
-                                  RTL.replace('q <= d', 'q <= d + en')])
+                                  RTL.replace('q <= d', 'q <= $urandom')])
 async def test_unsupported_or_async_structure_does_not_infer_time(tmp_path, source):
     args = await setup(tmp_path, source)
     r = await run(args)

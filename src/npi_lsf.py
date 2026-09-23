@@ -41,7 +41,7 @@ from .verdi_backend import (
 
 _LOG = logging.getLogger(__name__)
 
-NPI_WORKER_PROTOCOL_VERSION: Literal["1.0"] = "1.0"
+NPI_WORKER_PROTOCOL_VERSION: Literal["2.0"] = "2.0"
 NPI_EXECUTION_STATUS_KEY = "_npi_execution_status"
 _MAX_REQUEST_BYTES = 1 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -55,7 +55,7 @@ class _ProtocolModel(BaseModel):
 
 
 class _WorkerRequestBase(_ProtocolModel):
-    protocol_version: Literal["1.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["2.0"] = NPI_WORKER_PROTOCOL_VERSION
 
 
 class _ConnectivityWorkerRequestBase(_WorkerRequestBase):
@@ -111,21 +111,21 @@ _REQUEST_ADAPTER = TypeAdapter(NpiWorkerRequest)
 
 
 class WorkerSuccess(_ProtocolModel):
-    protocol_version: Literal["1.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["2.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["ok"] = "ok"
     result: dict[str, Any]
     kdb_load_quality: Literal["clean", "degraded"] | None = None
 
 
 class WorkerUnavailable(_ProtocolModel):
-    protocol_version: Literal["1.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["2.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["npi_unavailable"] = "npi_unavailable"
     error_code: Literal["npi_load_failed"] = "npi_load_failed"
     stage: Literal["load"] = "load"
 
 
 class WorkerError(_ProtocolModel):
-    protocol_version: Literal["1.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["2.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["error"] = "error"
     error_code: Literal[
         "request_invalid",
