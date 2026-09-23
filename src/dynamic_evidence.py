@@ -10,6 +10,7 @@ from typing import Callable
 
 from .cancellation import check_cancelled
 from .divergence_compare import bit_value, known
+from .expression_values import Value, BINARY, binary, unary, conditional, builtin, stream
 
 DYNAMIC_VERSION = "1.0"
 MAX_EXPR_NODES = 256
@@ -28,12 +29,20 @@ class Expr:
     value: str | None = None
     signed: bool = False
     reason: str | None = None
+    bounds: tuple[int, int] | None = None
+    stride: int = 1
+    function: str | None = None
+    two_state: bool = False
 
     def __post_init__(self):
         if not 1 <= self.width <= MAX_EXPR_WIDTH:
             raise ValueError("dynamic_expression_width_limit")
-        if self.op not in {"signal", "const", "not", "and", "or", "eq", "ne",
-                           "mux", "concat", "cast", "unsupported"}:
+        if self.op not in ({"signal", "const", "not", "and", "or", "eq", "ne",
+                           "mux", "concat", "cast", "unsupported", "u+", "u-", "~",
+                           "reduce_&", "reduce_~&", "reduce_|", "reduce_~|",
+                           "reduce_^", "reduce_~^", "reduce_^~", "select",
+                           "part_up", "part_down", "project", "function",
+                           "repeat", "stream_left", "stream_right", "inside", "range"} | BINARY):
             raise ValueError("dynamic_expression_operator_invalid")
         arity = {"signal": 0, "const": 0, "not": 1, "and": 2, "or": 2,
                  "eq": 2, "ne": 2, "mux": 3, "cast": 1}
@@ -44,6 +53,32 @@ class Expr:
         if self.op == "const" and (not self.value or len(self.value) != self.width
                                     or any(c not in "01xz" for c in self.value)):
             raise ValueError("dynamic_constant_invalid")
+        if type(self.stride) is not int or not 1 <= self.stride <= MAX_EXPR_WIDTH:
+            raise ValueError("dynamic_selection_stride_invalid")
+        if self.bounds is not None and (len(self.bounds) != 2 or
+                any(type(i) is not int or abs(i) >= 2**63 for i in self.bounds)):
+            raise ValueError("dynamic_selection_bounds_invalid")
+        count = (2 if self.op in BINARY | {"select", "part_up", "part_down", "repeat",
+                                          "stream_left", "stream_right", "range"} else
+                 1 if self.op.startswith("reduce_") or self.op in {"u+", "u-", "~", "project"} else None)
+        if count is not None and len(self.args) != count:
+            raise ValueError("dynamic_expression_arity_invalid")
+        if self.op == "project" and (len(self.bits) != self.width or
+                any(type(i) is not int or not 0 <= i < self.args[0].width for i in self.bits)):
+            raise ValueError("dynamic_bit_mapping_unavailable")
+        if self.op == "function":
+            functions = {"$signed", "$unsigned", "$clog2", "$isunknown", "$countones",
+                         "$onehot", "$onehot0", "$countbits"}
+            if self.function not in functions or (len(self.args) < 2 if self.function == "$countbits"
+                                                  else len(self.args) != 1):
+                raise ValueError("dynamic_function_invalid")
+        if self.op == "inside" and len(self.args) < 2:
+            raise ValueError("dynamic_expression_arity_invalid")
+        if self.op in {"select", "part_up", "part_down"}:
+            extent = abs(self.bounds[0] - self.bounds[1]) + 1 if self.bounds else self.args[0].width // self.stride
+            if (extent * self.stride != self.args[0].width or self.width % self.stride or
+                    self.op == "select" and self.width != self.stride):
+                raise ValueError("dynamic_selection_shape_invalid")
 
     @classmethod
     def from_dict(cls, raw: dict, *, _budget=None, _depth=0):
@@ -53,6 +88,7 @@ class Expr:
             raise ValueError("dynamic_expression_limit")
         return cls(**{**raw, "bits": tuple(raw.get("bits", ())),
                       "declared_bits": tuple(raw.get("declared_bits", ())),
+                      "bounds": tuple(raw["bounds"]) if raw.get("bounds") is not None else None,
                       "args": tuple(cls.from_dict(a, _budget=budget, _depth=_depth + 1)
                                     for a in raw.get("args", ()))})
 
@@ -133,6 +169,10 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             children = [walk(node.args[i], use, depth+1) for i in
                         ((selected,) if selected else (1, 2))]
             value = children[0].value if selected else None
+            if selected is None and cond.value is not None and all(c.value is not None for c in children):
+                value = conditional(Value(cond.value),
+                    Value(children[0].value, node.args[1].signed),
+                    Value(children[1].value, node.args[2].signed), width=node.width).bits
             width_gaps = []
             if any(a.width != node.width for a in node.args[1:]):
                 value = None
@@ -144,6 +184,68 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
                                                  "selected": selected}] +
                               [b for c in children for b in c.branches],
                               children[0].reference if selected else None)
+        if node.op in {"select", "part_up", "part_down"}:
+            base, index_node = node.args
+            index = walk(index_node, "index", depth+1)
+            if index.value is None:
+                return Evaluation(None, index.dependencies, index.gaps, index.branches)
+            if not known(index.value):
+                return Evaluation("x" * node.width, index.dependencies,
+                                  list(dict.fromkeys(index.gaps + ["index_unknown"])), index.branches)
+            at = Value(index.value, index_node.signed).integer
+            left, right = node.bounds or (base.width // node.stride - 1, 0)
+            direction = -1 if left >= right else 1
+            count = node.width // node.stride
+            if node.op == "select":
+                indices = [at]
+            else:
+                low = at if node.op == "part_up" else at - count + 1
+                indices = list(range(low, low + count))
+                if direction == -1:
+                    indices.reverse()
+            positions = [((i-left)*direction)*node.stride + j
+                         if min(left, right) <= i <= max(left, right) else None
+                         for i in indices for j in range(node.stride)]
+            if len(positions) != node.width:
+                return Evaluation(None, index.dependencies, ["expression_width_unresolved"], index.branches)
+            if base.op == "signal" and all(p is not None for p in positions):
+                selected_node = replace(base, width=node.width,
+                    bits=tuple(base.bits[p] for p in positions), signed=node.signed)
+                data = walk(selected_node, use, depth+1)
+                value, reference = data.value, data.reference
+            else:
+                data = walk(base, use, depth+1)
+                value = None if data.value is None else "".join(
+                    data.value[p] if p is not None else "x" for p in positions)
+                reference = None
+            gaps = index.gaps + data.gaps
+            if any(p is None for p in positions):
+                gaps.append("index_out_of_range")
+            return Evaluation(value, index.dependencies + data.dependencies,
+                              list(dict.fromkeys(gaps)), index.branches + data.branches, reference)
+        if node.op == "inside":
+            subject = walk(node.args[0], use, depth+1)
+            observations = [subject]
+            matches = []
+            for item in node.args[1:]:
+                endpoints = item.args if item.op == "range" else (item,)
+                observed = [walk(a, use, depth+1) for a in endpoints]
+                observations.extend(observed)
+                if subject.value is None or any(o.value is None for o in observed):
+                    matches.append(None)
+                    continue
+                target = Value(subject.value, node.args[0].signed)
+                inputs = [Value(o.value, a.signed) for o, a in zip(observed, endpoints)]
+                if item.op == "range":
+                    matches.append(binary("&&", binary(">=", target, inputs[0]),
+                                           binary("<=", target, inputs[1])).bits)
+                else:
+                    matches.append(binary("==?", target, inputs[0]).bits)
+            value = ("1" if "1" in matches else None if None in matches else
+                     "x" if "x" in matches else "0")
+            return Evaluation(value, [d for o in observations for d in o.dependencies],
+                list(dict.fromkeys(g for o in observations for g in o.gaps)),
+                [b for o in observations for b in o.branches])
         children = [walk(a, "control" if node.op in {"not","and","or","eq","ne"} else use,
                          depth+1) for a in node.args]
         deps = [d for c in children for d in c.dependencies]
@@ -155,11 +257,13 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
         if node.op == "unsupported":
             gaps.append(node.reason or "dynamic_evidence_unavailable")
         elif node.op == "not":
-            value = {"true": "0", "false": "1", "unknown": "x"}.get(children[0].truth)
+            value = unary("!", Value(values[0])).bits if values[0] is not None else None
         elif node.op in {"and", "or"}:
             truths = [c.truth for c in children]
             decisive = "false" if node.op == "and" else "true"
-            if decisive in truths:
+            if all(v is not None for v in values):
+                value = binary("&&" if node.op == "and" else "||", *(Value(v) for v in values)).bits
+            elif decisive in truths:
                 value = "0" if node.op == "and" else "1"
             elif all(t == ("true" if node.op == "and" else "false") for t in truths):
                 value = "1" if node.op == "and" else "0"
@@ -168,22 +272,51 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
         elif node.op in {"eq", "ne"}:
             if node.args[0].width != node.args[1].width or node.args[0].signed != node.args[1].signed:
                 gaps.append("operand_type_unresolved")
-            elif all(known(v) for v in values):
-                value = str(int((values[0] == values[1]) == (node.op == "eq")))
             elif all(v is not None for v in values):
-                value = "x"
+                value = binary("==" if node.op == "eq" else "!=",
+                    Value(values[0], node.args[0].signed), Value(values[1], node.args[1].signed)).bits
         elif node.op == "concat" and all(v is not None for v in values):
             value = "".join(values)
             refs = [c.reference for c in children]
             if refs and all(r is not None and r[0] == refs[0][0] for r in refs):
                 reference = (refs[0][0], tuple(b for r in refs for b in r[1]))
         elif node.op == "cast" and values[0] is not None:
-            source = values[0]
-            pad = source[0] if node.args[0].signed else "0"
-            value = source[-node.width:].rjust(node.width, pad)
+            value = Value(values[0], node.args[0].signed).resize(node.width,
+                signed=node.signed, two_state=node.two_state).bits
             ref = children[0].reference
-            if ref and node.width <= node.args[0].width:
+            if ref and node.width <= node.args[0].width and not node.two_state:
                 reference = (ref[0], ref[1][-node.width:])
+        elif node.op == "project" and values[0] is not None:
+            value = "".join(values[0][i] for i in node.bits)
+            if children[0].reference:
+                name, bits = children[0].reference
+                reference = name, tuple(bits[i] for i in node.bits)
+        elif all(v is not None for v in values):
+            operands = [Value(v, a.signed) for v, a in zip(values, node.args)]
+            if node.op in BINARY:
+                value = binary(node.op, *operands, width=node.width).bits
+                if node.op in {"/", "%"} and operands[1].known and operands[1].integer == 0:
+                    gaps.append("division_by_zero")
+            elif node.op in {"u+", "u-", "~"} or node.op.startswith("reduce_"):
+                op = node.op[7:] if node.op.startswith("reduce_") else node.op.lstrip("u")
+                value = unary(op, operands[0]).bits
+            elif node.op == "function":
+                value = builtin(node.function, operands).resize(node.width, signed=node.signed).bits
+            elif node.op == "repeat":
+                if operands[0].known and 0 < operands[0].integer <= MAX_EXPR_WIDTH:
+                    count = operands[0].integer
+                    if count * operands[1].width != node.width:
+                        gaps.append("expression_width_unresolved")
+                    else:
+                        value = operands[1].bits * count
+                else:
+                    gaps.append("expression_repeat_count_invalid")
+            elif node.op in {"stream_left", "stream_right"}:
+                if operands[1].known:
+                    value = stream(operands[0], "<<" if node.op == "stream_left" else ">>",
+                                   operands[1].integer).bits
+                else:
+                    gaps.append("expression_stream_size_invalid")
         if value is not None and len(value) != node.width:
             value = None
             gaps.append("expression_width_unresolved")

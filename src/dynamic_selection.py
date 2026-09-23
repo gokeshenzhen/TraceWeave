@@ -41,4 +41,6 @@ def select_expression(expr, positions, *, _budget=None, _depth=0):
             entries = list(indices)
             groups.append(select(entries[0][0], tuple(p[1] for p in entries)))
         return Expr('concat', len(positions), tuple(groups))
-    return Expr('unsupported', len(positions), reason='dynamic_bit_mapping_unavailable')
+    # Retain the entire typed operation: arithmetic carry and sign propagation
+    # make independent narrowing of its operands unsound.
+    return Expr('project', len(positions), (expr,), bits=tuple(positions))
