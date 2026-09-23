@@ -67,9 +67,12 @@ def event_readers(requests, start, end, *, max_events=1024, max_bytes=262144):
         for parser, path in requests:
             if not getattr(parser, '_supports_event_pages', lambda: False)():
                 raise EventPagingUnavailable()
-            base = getattr(parser, '_event_source_path', lambda p: p)(path)
+            expand = getattr(parser, '_event_source_paths', None)
+            bases = (expand(path) if expand else
+                     [getattr(parser, '_event_source_path', lambda p: p)(path)])
             owner = getattr(parser, '_event_owner', parser)
-            groups.setdefault(id(owner), (owner, []))[1].append(base)
+            if bases:
+                groups.setdefault(id(owner), (owner, []))[1].extend(bases)
         for parser, paths in groups.values():
             group = getattr(parser, 'transition_group', None)
             if group is not None and not getattr(parser, '_transition_group_active', False):
