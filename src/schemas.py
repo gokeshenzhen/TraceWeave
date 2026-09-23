@@ -710,6 +710,42 @@ class WaveformExpression(SchemaModel):
 ExpressionMember.model_rebuild()
 
 
+class ExpressionDependency(SchemaModel):
+    signal: str
+    bits: list[int]
+    width: int
+    role: str
+    value: str | None = None
+
+
+class ExpressionObservation(SchemaModel):
+    time_fs: int
+    time_ps: int
+    phase: Literal['after','before','dependency_anchor']
+    value: str | None = None
+    gaps: list[str] = Field(default_factory=list)
+    dependencies: list[ExpressionDependency] = Field(default_factory=list)
+
+
+class WaveformExpressionReceipt(SchemaModel):
+    key: str
+    expr: str
+    typing: Literal['semantic','wave_bits']
+    kind: Literal['derived'] = 'derived'
+    width: int
+    signed: bool
+    two_state: bool
+    type_sources: dict[str,str] = Field(default_factory=dict)
+    dependencies: list[str] = Field(default_factory=list)
+    observations: list[ExpressionObservation] = Field(default_factory=list)
+    observation_count: int = 0
+    observations_truncated: bool = False
+    coverage_status: Literal['not_observed','complete','partial'] = 'not_observed'
+    gaps: list[str] = Field(default_factory=list)
+    side: Literal['a','b'] | None = None
+    wave_path: str | None = None
+
+
 class TlulFields(SchemaModel):
     a_valid: str | WaveformSelection | None = None
     a_ready: str | WaveformSelection | None = None
@@ -735,6 +771,7 @@ class TlulFields(SchemaModel):
 
 class SignalAtTimeResult(SchemaModel):
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     signal: str
     time_ps: int
     time_ns: float
@@ -746,6 +783,7 @@ class SignalAtTimeResult(SchemaModel):
 
 class SignalTransitionsResult(SchemaModel):
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     signal: str
     start_ps: int
     end_ps: int
@@ -757,7 +795,7 @@ class SignalTransitionsResult(SchemaModel):
     # remains a strict closed-window list while clock samplers can classify the
     # first in-window edge without rereading the waveform.
     predecessor: dict[str, Any] | None = None
-    predecessor_kind: Literal["declaration_anchor"] | None = None
+    predecessor_kind: Literal["declaration_anchor", "dependency_anchor"] | None = None
     truncated: bool = False
     transition_count_is_lower_bound: bool = False
     hint: str | None = None
@@ -765,6 +803,7 @@ class SignalTransitionsResult(SchemaModel):
 
 class SignalsAroundTimeResult(SchemaModel):
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     center_time_ps: int
     center_time_ns: float
     window_ps: int
@@ -794,6 +833,7 @@ class CycleEntry(SchemaModel):
 
 class GetSignalsByCycleResult(SchemaModel):
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     transition_data_truncated: bool = False
     transition_signals_truncated: list[str] = Field(default_factory=list)
     clock_path: str
@@ -1683,8 +1723,8 @@ class DivergenceNextAction(SchemaModel):
 
 
 class ComparisonReading(SchemaModel):
-    mode_a: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed']
-    mode_b: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed']
+    mode_a: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
+    mode_b: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
     events_read: int = Field(default=0, ge=0)
     pages_read: int = Field(default=0, ge=0)
     native_read_calls: int | None = Field(default=None, ge=0)
@@ -1693,6 +1733,8 @@ class ComparisonReading(SchemaModel):
 
 
 class DiffFirstDivergenceResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     diverged: bool
     wave_path_a: str
     wave_path_b: str
@@ -1723,6 +1765,11 @@ class DiffFirstDivergenceResult(SchemaModel):
 
 
 class PeriodResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
+    period_fs: int | None = None
+    jitter_fs: int | None = None
+    first_off_beat_time_fs: int | None = None
     wave_path: str
     signal: str
     edge: str
@@ -1819,6 +1866,7 @@ class HandshakeCoverage(SchemaModel):
 class HandshakeInspectResult(SchemaModel):
     sampling_phase: Literal["before"] = "before"
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
     valid: str
@@ -2192,6 +2240,7 @@ class TxnReconstructResult(SchemaModel):
     gaps: list[str] = Field(default_factory=list)
     analysis: TxnAnalysis = Field(default_factory=TxnAnalysis)
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     wave_path: str
     clock: str
     edge: str = "posedge"
@@ -2259,6 +2308,7 @@ class TlulInspectResult(SchemaModel):
     tail: str
     warnings: list[str] = Field(default_factory=list)
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
 
 
 class PackedFieldsResult(SchemaModel):

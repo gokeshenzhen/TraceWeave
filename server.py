@@ -5065,7 +5065,10 @@ def _integer_or_string_schema() -> dict:
 
 
 def _signal_selection_schema() -> dict:
-    return {"anyOf": [{"type": "string"}, schemas.WaveformSelection.model_json_schema()]}
+    expression = schemas.WaveformExpression.model_json_schema()
+    expression.pop('$defs',None)  # Definitions live at each Tool schema root.
+    return {"anyOf": [{"type": "string"}, schemas.WaveformSelection.model_json_schema(),
+                      expression]}
 
 
 async def _resolve_packed_fields(args):
@@ -7015,6 +7018,8 @@ async def list_tools():
         "get_signal_transitions": ("signal_path",),
         "get_signals_around_time": ("signal_paths",),
         "get_signals_by_cycle": ("clock_path", "signal_paths"),
+        "diff_first_divergence": ("signal_a", "signal_b"),
+        "period": ("signal",),
         "inspect_handshake": ("clock", "valid", "ready", "valid_htrans", "payload", "hwrite", "write_data"),
         "reconstruct_transactions": ("clock", "req_valid", "req_ready", "req_id", "req_fields", "req_len",
                                      "cmp_valid", "cmp_ready", "cmp_id", "cmp_last", "cmp_fields",
@@ -7031,7 +7036,9 @@ async def list_tools():
             prop["description"] = prop.get("description", "") + (
                 " Accepts a string or {path,lsb,width}/{path,bits}. Structured path must be an exact "
                 "dump declaration; lsb is a declared index and width extends toward its left bound. "
-                "bits are ordered MSB first. Results identify projections in selections.")
+                "bits are ordered MSB first. Also accepts {expr,bindings,types,typing}; provide explicit "
+                "types for SV semantics or typing=wave_bits for unsigned dump vectors. "
+                "Results identify projections in selections and derived values in expressions.")
     _tools.extend([
         Tool(name="inspect_tlul", description=(
             "Uses strict before-edge sampling for A/D fields and nested checks (sampling_phase=before). "
@@ -7066,6 +7073,8 @@ async def list_tools():
     ])
     for tool in _tools:
         properties = tool.inputSchema["properties"]
+        if tool.name in selectable or tool.name == 'inspect_tlul':
+            tool.inputSchema['$defs'] = schemas.WaveformExpression.model_json_schema().get('$defs',{})
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
             properties.update(schemas.EvidenceOutputOptions.model_json_schema()["properties"])
         if tool.name in {"inspect_tlul", "reconstruct_transactions"}:
@@ -8194,12 +8203,19 @@ async def _dispatch(name: str, args: dict):
                 resolved, reason = (await _run_in_cancellable_thread(
                     lambda ctx=ctx: resolve_divergence_context(ctx, _handle_store)
                 )) if ctx is not None else (None, "context_missing")
-                result["next_actions"].append(driver_action(result=result, side=side, context=ctx,
-                                                            bound=resolved, reason=reason))
+                expression = next((r for r in result.get('expressions',[]) if r.get('side')==side),None)
+                targets = expression['dependencies'][:16] if expression else [result[f'signal_{side}']]
+                for target in targets:
+                    action = driver_action(result={**result,f'signal_{side}':target}, side=side, context=ctx,
+                                           bound=resolved, reason=reason)
+                    if expression:
+                        action['reason'] = 'inspect_expression_dependency'
+                        action['evidence']['expression_key'] = expression['key']
+                    result['next_actions'].append(action)
             from src.verify_condition import _attach_cursor
             _attach_cursor(result, _cursor_store, result["first_divergence_time_ps"],
-                           result["value_a"], result["value_b"], args["wave_path_a"], args["signal_a"],
-                           args["wave_path_b"], args["signal_b"], args.get("cursor_name"), args.get("cursor_note"))
+                           result["value_a"], result["value_b"], args["wave_path_a"], result['signal_a'],
+                           args["wave_path_b"], result['signal_b'], args.get("cursor_name"), args.get("cursor_note"))
             for action in result["next_actions"]:
                 action["evidence"]["cursor_name"] = result["cursor"]["name"]
         return schemas.DiffFirstDivergenceResult.model_validate(result)

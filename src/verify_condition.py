@@ -26,7 +26,7 @@ from . import operation_metrics
 from .cancellation import CANCEL_CHECK_STRIDE, OperationCancelled, check_cancelled
 from .cursor_store import CursorRef, CursorStore
 from .cycle_query import EdgeSamplingSession, sample_signals_on_edges, SignalColumnView
-from .waveform_selection import selection_inputs
+from .waveform_selection import selection_inputs, prepare_selections
 
 
 _SignalColumnView = SignalColumnView
@@ -70,6 +70,15 @@ def diff_first_divergence(
     """
     from .divergence_compare import compare_signals
 
+    original_get_parser = get_parser
+    parsers, keys = {},{}
+    for side,wave,signal in (('a',wave_path_a,signal_a),('b',wave_path_b,signal_b)):
+        parser = parsers[wave] if wave in parsers else original_get_parser(wave)
+        parser, mapped = prepare_selections(parser,{'signal':signal})
+        parsers[wave],keys[side] = parser,mapped['signal']
+    signal_a,signal_b = keys['a'],keys['b']
+    get_parser = parsers.__getitem__
+
     result = compare_signals(
         get_parser=get_parser, wave_path_a=wave_path_a, signal_a=signal_a,
         wave_path_b=wave_path_b, signal_b=signal_b, start_ps=start_ps, end_ps=end_ps,
@@ -78,6 +87,17 @@ def diff_first_divergence(
         _attach_cursor(result, cursor_store, result["first_divergence_time_ps"],
                        result["value_a"], result["value_b"], wave_path_a, signal_a,
                        wave_path_b, signal_b, cursor_name, cursor_note)
+    selections,expressions = [],[]
+    for side,wave in (('a',wave_path_a),('b',wave_path_b)):
+        parser = parsers[wave]
+        if hasattr(type(parser),'receipts'):
+            selections.extend(r for r in parser.receipts() if r['key']==keys[side])
+        if hasattr(type(parser),'expression_receipts'):
+            expressions.extend({**r,'side':side,'wave_path':wave} for r in parser.expression_receipts() if r['key']==keys[side])
+    if selections:
+        result['selections'] = selections
+    if expressions:
+        result['expressions'] = expressions
     return result
 
 
@@ -89,6 +109,7 @@ DEFAULT_PERIOD_TOLERANCE_FRAC = 0.05
 _MIN_EDGES_FOR_PERIOD = 3
 
 
+@selection_inputs('signal')
 def period(
     *,
     get_parser: Callable[[str], Any],
@@ -123,6 +144,9 @@ def period(
     three usable edges — an honest "cannot tell", not a guess.
     """
     parser = get_parser(wave_path)
+    derived = signal in getattr(parser,'expressions',{})
+    if derived and parser.get_signal_width(signal) != 1:
+        raise ValueError('period expression must be 1-bit')
     tr = parser.get_transitions(signal, start_ps, end_ps)
     eff_start = int(tr.get("start_ps", start_ps))
     eff_end = int(tr.get("end_ps", end_ps))
@@ -142,7 +166,18 @@ def period(
         "reason": None,
     }
 
-    edge_times = _edge_times(tr.get("transitions") or (), edge)
+    if derived:
+        rows = tr.get('transitions') or []
+        if tr.get('truncated') or any(r.get('value') is None or r['value'].get('dec') not in (0,1) for r in rows):
+            result['reason'] = 'expression event coverage incomplete or unknown'
+            return result
+        from .cycle_query import _extract_edge_times
+        if edge not in {'posedge','negedge','any'}:
+            raise ValueError('unknown edge mode')
+        edge_times = sorted(t for direction in (('posedge','negedge') if edge=='any' else (edge,))
+            for t in _extract_edge_times(rows,direction,predecessor=tr.get('predecessor'),raw_time=True))
+    else:
+        edge_times = _edge_times(tr.get("transitions") or (), edge)
     result["edges_used"] = len(edge_times)
 
     if len(edge_times) < _MIN_EDGES_FOR_PERIOD:
@@ -159,7 +194,9 @@ def period(
         return result
 
     tolerance = max(1, round(dominant * tolerance_frac))
-    result["period_ps"] = dominant
+    result["period_ps"] = (dominant+999)//1000 if derived else dominant
+    if derived:
+        result['period_fs'] = dominant
 
     max_dev = 0
     off_beats = 0
@@ -174,13 +211,15 @@ def period(
                 # The edge that *ends* the deviating interval is where the
                 # rhythm visibly broke.
                 first_off_beat = edge_times[idx + 1]
-    result["jitter_ps"] = max_dev
+    result["jitter_ps"] = (max_dev+999)//1000 if derived else max_dev
     result["off_beat_count"] = off_beats
-    result["first_off_beat_time_ps"] = first_off_beat
+    result["first_off_beat_time_ps"] = ((first_off_beat+999)//1000 if derived else first_off_beat) if first_off_beat is not None else None
+    if derived:
+        result.update(jitter_fs=max_dev,first_off_beat_time_fs=first_off_beat)
 
     if first_off_beat is not None and cursor_store is not None:
         _attach_period_cursor(
-            result, cursor_store, first_off_beat, dominant,
+            result, cursor_store, result['first_off_beat_time_ps'], result['period_ps'],
             wave_path, signal, edge, cursor_name, cursor_note,
         )
     return result

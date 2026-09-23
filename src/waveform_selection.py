@@ -299,7 +299,19 @@ def prepare_selections(parser, values):
         return any(has_selection(x) for x in v) if isinstance(v, list) else isinstance(v, dict)
     if not any(has_selection(v) for v in values.values()):
         return parser, values
-    adapter = parser if isinstance(parser, SelectionParser) else SelectionParser(parser)
+    def has_expression(v):
+        return any(has_expression(x) for x in v) if isinstance(v,list) else isinstance(v,dict) and 'expr' in v
+    if any(has_expression(v) for v in values.values()):
+        from .expression_observe import ExpressionParser
+        if isinstance(parser,ExpressionParser):
+            adapter = parser
+        elif isinstance(parser,SelectionParser):
+            adapter = ExpressionParser(parser.parser)
+            adapter.projections,adapter._declarations = parser.projections,parser._declarations
+        else:
+            adapter = ExpressionParser(parser)
+    else:
+        adapter = parser if isinstance(parser, SelectionParser) else SelectionParser(parser)
     def bind(v):
         return [bind(x) for x in v] if isinstance(v, list) else adapter.bind(v)
     return adapter, {key: bind(value) for key, value in values.items()}
@@ -313,6 +325,8 @@ def attach_selections(result, parser):
             if projection:
                 action["signal_path"] = projection.source_path()
                 action["signal_selection"] = {"path": projection.path, "bits": list(projection.selection.bits)}
+        if hasattr(type(parser),'expression_receipts'):
+            result['expressions'] = parser.expression_receipts()
     return result
 
 
