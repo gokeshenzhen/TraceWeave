@@ -1,0 +1,707 @@
+{
+  "description": "Hand-authored SV integer expression expectations; validate with an independent simulator before treating these as an oracle.",
+  "cases": [
+    {
+      "id": "precedence",
+      "expression": "a + b * c",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00010111"
+      },
+      "coverage": [
+        "E01",
+        "E03"
+      ]
+    },
+    {
+      "id": "parentheses",
+      "expression": "(a + b) * c",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00110111"
+      },
+      "coverage": [
+        "E01",
+        "E03"
+      ]
+    },
+    {
+      "id": "variable_bit",
+      "expression": "a[b] + c",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00000110"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "index_change",
+      "expression": "a[b] + c",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "100"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "00000101"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "nested_index",
+      "expression": "a[b[c]]",
+      "inputs": {
+        "c": {
+          "width": 8,
+          "value": "00000001"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "shift_left",
+      "expression": "a << b",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "01000000"
+      },
+      "coverage": [
+        "E04"
+      ]
+    },
+    {
+      "id": "shift_right",
+      "expression": "a >> b",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00000001"
+      },
+      "coverage": [
+        "E04"
+      ]
+    },
+    {
+      "id": "arithmetic_right",
+      "expression": "sa >>> b",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "11111111"
+      },
+      "coverage": [
+        "E04",
+        "E11"
+      ]
+    },
+    {
+      "id": "signed_division",
+      "expression": "sa / sc",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "11111110"
+      },
+      "coverage": [
+        "E03"
+      ]
+    },
+    {
+      "id": "signed_remainder",
+      "expression": "sa % sc",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "11111111"
+      },
+      "coverage": [
+        "E03"
+      ]
+    },
+    {
+      "id": "division_zero",
+      "expression": "a / c",
+      "inputs": {
+        "c": {
+          "width": 8,
+          "value": "00000000"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "xxxxxxxx"
+      },
+      "coverage": [
+        "E03"
+      ]
+    },
+    {
+      "id": "power",
+      "expression": "a ** b",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "00000011"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "00011011"
+      },
+      "coverage": [
+        "E03"
+      ]
+    },
+    {
+      "id": "relational",
+      "expression": "sa < sc",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E05"
+      ]
+    },
+    {
+      "id": "mixed_signed_relation",
+      "expression": "sa < c",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E05"
+      ]
+    },
+    {
+      "id": "equality_known_mismatch",
+      "expression": "a == d",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "0000x000"
+        },
+        "d": {
+          "width": 8,
+          "value": "00000001"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E05"
+      ]
+    },
+    {
+      "id": "case_equality",
+      "expression": "a === a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "1010xz01"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E05"
+      ]
+    },
+    {
+      "id": "wildcard_equality",
+      "expression": "a ==? d",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "00001111"
+        },
+        "d": {
+          "width": 8,
+          "value": "0000xx11"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E05"
+      ]
+    },
+    {
+      "id": "bit_and",
+      "expression": "a & d",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "000010x1"
+        },
+        "d": {
+          "width": 8,
+          "value": "00000010"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "000000x0"
+      },
+      "coverage": [
+        "E06"
+      ]
+    },
+    {
+      "id": "bit_not",
+      "expression": "~a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "0000x1z0"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "1111x0x1"
+      },
+      "coverage": [
+        "E06"
+      ]
+    },
+    {
+      "id": "bit_xor",
+      "expression": "a ^ d",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00001101"
+      },
+      "coverage": [
+        "E06"
+      ]
+    },
+    {
+      "id": "logic_decisive",
+      "expression": "s && a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "xxxxxxxx"
+        },
+        "s": {
+          "width": 1,
+          "value": "0"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E07"
+      ]
+    },
+    {
+      "id": "logic_implication",
+      "expression": "s -> a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "xxxxxxxx"
+        },
+        "s": {
+          "width": 1,
+          "value": "0"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E07"
+      ]
+    },
+    {
+      "id": "logic_equivalence",
+      "expression": "s <-> a",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E07"
+      ]
+    },
+    {
+      "id": "unknown_mux",
+      "expression": "s ? a : d",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "00001010"
+        },
+        "d": {
+          "width": 8,
+          "value": "00001000"
+        },
+        "s": {
+          "width": 1,
+          "value": "x"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "000010x0"
+      },
+      "coverage": [
+        "E08"
+      ]
+    },
+    {
+      "id": "reduce_xor",
+      "expression": "^a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10101010"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E09"
+      ]
+    },
+    {
+      "id": "reduce_nand",
+      "expression": "~&a",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "11111110"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E09"
+      ]
+    },
+    {
+      "id": "concat",
+      "expression": "{a[3:0], d[3:0]}",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "10000101"
+      },
+      "coverage": [
+        "E10"
+      ]
+    },
+    {
+      "id": "replicate",
+      "expression": "{2{b}}",
+      "inputs": {},
+      "expected": {
+        "width": 6,
+        "bin": "011011"
+      },
+      "coverage": [
+        "E10"
+      ]
+    },
+    {
+      "id": "part_up",
+      "expression": "a[base +: 3]",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10110110"
+        }
+      },
+      "expected": {
+        "width": 3,
+        "bin": "101"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "part_down",
+      "expression": "a[base -: 3]",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10110110"
+        }
+      },
+      "expected": {
+        "width": 3,
+        "bin": "110"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "part_outside",
+      "expression": "a[base +: 3]",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10110110"
+        },
+        "base": {
+          "width": 4,
+          "value": "0111"
+        }
+      },
+      "expected": {
+        "width": 3,
+        "bin": "xx1"
+      },
+      "coverage": [
+        "E02"
+      ]
+    },
+    {
+      "id": "signed_cast",
+      "expression": "$signed(a) >>> b",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "11111001"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "11111111"
+      },
+      "coverage": [
+        "E11"
+      ]
+    },
+    {
+      "id": "size_cast",
+      "expression": "4'(a + c)",
+      "inputs": {},
+      "expected": {
+        "width": 4,
+        "bin": "1101"
+      },
+      "coverage": [
+        "E11"
+      ]
+    },
+    {
+      "id": "stream_chunks",
+      "expression": "byte'({<<4{a}})",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10101011"
+        }
+      },
+      "expected": {
+        "width": 8,
+        "bin": "10111010"
+      },
+      "coverage": [
+        "E12"
+      ]
+    },
+    {
+      "id": "stream_forward",
+      "expression": "shortint'({>>{a,d}})",
+      "inputs": {},
+      "expected": {
+        "width": 16,
+        "bin": "0000100000000101"
+      },
+      "coverage": [
+        "E12"
+      ]
+    },
+    {
+      "id": "inside_range",
+      "expression": "a inside { [4:9], 12 }",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E13"
+      ]
+    },
+    {
+      "id": "clog2",
+      "expression": "$clog2(a)",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "00001001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000100"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "count_ones",
+      "expression": "$countones(a)",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10xz1100"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000011"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "count_bits",
+      "expression": "$countbits(a, 1'bx, 1'bz)",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10xz1100"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000010"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "isunknown",
+      "expression": "$isunknown(a)",
+      "inputs": {
+        "a": {
+          "width": 8,
+          "value": "10xz1100"
+        }
+      },
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "onehot",
+      "expression": "$onehot(a)",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "bits",
+      "expression": "$bits(a)",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000001000"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "left",
+      "expression": "$left(a)",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000111"
+      },
+      "coverage": [
+        "E14"
+      ]
+    }
+  ],
+  "inputs": {
+    "a": {
+      "width": 8,
+      "value": "00001000"
+    },
+    "b": {
+      "width": 3,
+      "value": "011"
+    },
+    "c": {
+      "width": 8,
+      "value": "00000101"
+    },
+    "d": {
+      "width": 8,
+      "value": "00000101"
+    },
+    "s": {
+      "width": 1,
+      "value": "1"
+    },
+    "base": {
+      "width": 4,
+      "value": "0010"
+    },
+    "sa": {
+      "width": 8,
+      "signed": true,
+      "value": "11111001"
+    },
+    "sc": {
+      "width": 8,
+      "signed": true,
+      "value": "00000011"
+    }
+  }
+}
