@@ -10,6 +10,8 @@ from mcp.client.stdio import stdio_client
 import pytest
 
 import server
+from src.expression_examples import expression_examples
+from scripts.run_expression_examples import run_examples
 from tests.test_expression_observe import wave
 
 
@@ -47,6 +49,18 @@ async def test_all_tool_refs_resolve_and_definition_budget():
     # 207,896-byte baseline, including all tools. Reserve room for guidance
     # and examples while retaining at least a 25% reduction on the wire.
     assert size <= 155_922, size
+
+
+@pytest.mark.anyio
+async def test_published_examples_match_catalog_and_run_over_stdio():
+    catalog = {t.name: t for t in await server.list_tools()}
+    for example in expression_examples():
+        schema = catalog[example["tool"]].inputSchema
+        assert schema["examples"] == [example["arguments"]]
+        Draft202012Validator(schema).validate(example["arguments"])
+    report = await run_examples()
+    assert report["status"] == "passed"
+    assert len(report["calls"]) == 3
 
 
 @pytest.mark.anyio

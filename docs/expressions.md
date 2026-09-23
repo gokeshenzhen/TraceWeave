@@ -3,6 +3,25 @@
 更新：2026-09-23。复用现有 MCP 工具，不新增表达式工具或持久化虚拟信号。
 普通字符串仍表示实际信号路径；公式必须放在显式 `expr` 对象中。
 
+## 直接运行客户端示例
+
+在仓库根目录运行 `.venv/bin/python scripts/run_expression_examples.py`。
+脚本使用仓库自带的 `examples/expressions/demo.vcd`，启动真实 MCP stdio 连接，
+先用 `tools/list` 的 schema 验证输入，再调用现有工具并比较手工计算的预期。
+不需要仿真器。运行环境需有仓库的 MCP、anyio、jsonschema 依赖。
+
+| 示例 | 工具 | 预期 |
+|---|---|---|
+| 动态 bit：`a[i] + e` | `get_signal_at_time` | 5ps 时为 6 |
+| 显式类型和常量：`a[i -: W]`，W=2 | `get_signals_by_cycle` | 四拍为 2、1、2、X；下标每拍重算 |
+| 条件窗口：`a[i] == 1'b1` | `verify_window` | `holds=false`，有反例，无 unknown cycle |
+
+三个工具的 `inputSchema.examples` 提供同一组完整参数，来自
+`src/expression_examples.py`。将示例 `wave_path` 替换为上述 VCD 的绝对路径即可调用。
+脚本输出实际参数和检查结果。第四拍 X 是波形中实际的未知下标；该例的
+`coverage_status=complete`，展示覆盖完整不等于值已知。这里验证客户端通路，
+不代表 AI Agent 的自主使用效果。
+
 ## 点查询与周期查询
 
 ```json

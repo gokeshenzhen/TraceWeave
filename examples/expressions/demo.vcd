@@ -1,0 +1,32 @@
+$timescale 1ps $end
+$scope module tb $end
+$var wire 8 a data [7:0] $end
+$var wire 3 i index [2:0] $end
+$var wire 8 e expected [7:0] $end
+$var wire 1 c clk $end
+$upscope $end
+$enddefinitions $end
+#0
+b00001000 a
+b011 i
+b00000101 e
+0c
+#5
+1c
+#10
+0c
+b100 i
+#15
+1c
+#20
+0c
+b00010000 a
+#25
+1c
+#30
+0c
+bxxx i
+#35
+1c
+#40
+0c

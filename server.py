@@ -7129,6 +7129,11 @@ async def list_tools():
             "sweep_handshakes",
         }
         return [t for t in _tools if t.name not in hidden]
+    from src.expression_examples import expression_examples
+    examples = {e["tool"]: e["arguments"] for e in expression_examples()}
+    for tool in _tools:
+        if tool.name in examples:
+            tool.inputSchema["examples"] = [examples[tool.name]]
     return _tools
 
 
