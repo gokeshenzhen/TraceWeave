@@ -103,6 +103,21 @@ async def test_partial_memory_and_observed_unknown_are_distinct(tmp_path):
     assert unknown["expressions"][0]["coverage_status"] == "complete"
 
 
+@pytest.mark.anyio
+async def test_array_recovery_requires_types_even_in_wave_bits_mode(tmp_path):
+    path = wave(tmp_path).file_path
+    spec = {"expr": "mem[i]", "typing": "wave_bits", "bindings": {
+        "i": "tb.index", "mem": {"elements": [{"indices": [3], "signal": "tb.data"}]}}}
+    missing = await point(path, spec)
+    assert missing["reason"] == "expression_array_type_unresolved"
+    assert missing["operand"] == "mem"
+    assert "unpacked" in missing["recovery"]["message"]
+    assert "JSON integers" in missing["recovery"]["message"]
+    fixed = await point(path, {**spec, "types": {"mem": {"width": 8, "unpacked": [[0, 7]]}}})
+    assert fixed["value"]["dec"] == 8
+    assert fixed["expressions"][0]["coverage_status"] == "complete"
+
+
 def test_unrelated_errors_do_not_gain_expression_recovery():
     result = server._format_error(ValueError("expression_signal_unresolved: not from the expression engine"))
     assert result.error_code is None

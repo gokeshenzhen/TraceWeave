@@ -13,10 +13,11 @@
 | 示例 | 工具 | 预期 |
 |---|---|---|
 | 动态 bit：`a[i] + e` | `get_signal_at_time` | 5ps 时为 6 |
+| 动态数组：`mem[i]`，显式元素和类型 | `get_signal_transitions` | 0、10、20ps 时分别为 17、34、51 |
 | 显式类型和常量：`a[i -: W]`，W=2 | `get_signals_by_cycle` | 四拍为 2、1、2、X；下标每拍重算 |
 | 条件窗口：`a[i] == 1'b1` | `verify_window` | `holds=false`，有反例，无 unknown cycle |
 
-三个工具的 `inputSchema.examples` 提供同一组完整参数，来自
+四个工具的主说明和 `inputSchema.examples` 提供同一组完整参数，来自
 `src/expression_examples.py`。将示例 `wave_path` 替换为上述 VCD 的绝对路径即可调用。
 脚本输出实际参数和检查结果。第四拍 X 是波形中实际的未知下标；该例的
 `coverage_status=complete`，展示覆盖完整不等于值已知。这里验证客户端通路，
@@ -46,6 +47,12 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 
 将同一个表达式对象放进 `get_signals_by_cycle.signal_paths`，即可每拍重算；
 `clock_path` 可使用真实时钟。表达式不会固定第一次看到的下标。
+
+周期查询用 `start_cycle` 或 `start_time_ps` 指定起点，用 `num_cycles` 或
+`end_time_ps` 指定范围；每一对参数只能选一个。单次最多返回 256 拍，需读取
+`effective_num_cycles` / `capped` 并继续查询剩余范围。`sample_offset_ps` 只能为
+非负整数，默认在边沿后 1ps 采样。需要某个边沿前的点值时，可向
+`get_signals_around_time` 提供相应的明确时间。
 
 ## 类型与精确绑定
 
@@ -96,6 +103,9 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 ```
 
 idx=2/3 时只读取选中的元素；idx=4 在声明内但没有 dump 映射，返回缺失证据。
+`scope` 只补全名称前缀，不会自动发现数组元素。即使使用 `wave_bits`，
+unpacked 数组仍需要 `elements` 和 `types` 中的维度；范围边界使用 JSON 整数，
+例如 `[[0,7]]`，不能写成字符串 `[["0","7"]]`。
 越界和未知索引按元素的二态/四态类型产生默认值，并保留下标诊断，
 不能把未 dump 等同于实际观测 X。
 

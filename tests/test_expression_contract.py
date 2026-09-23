@@ -59,10 +59,12 @@ async def test_published_examples_match_catalog_and_run_over_stdio():
     for example in expression_examples():
         schema = catalog[example["tool"]].inputSchema
         assert schema["examples"] == [example["arguments"]]
+        description_example = catalog[example["tool"]].description.split(" Example arguments: ", 1)[1]
+        assert json.loads(description_example) == example["arguments"]
         Draft202012Validator(schema).validate(example["arguments"])
     report = await run_examples()
     assert report["status"] == "passed"
-    assert len(report["calls"]) == 3
+    assert len(report["calls"]) == 4
 
 
 @pytest.mark.anyio

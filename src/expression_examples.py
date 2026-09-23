@@ -12,6 +12,18 @@ def expression_examples(wave_path="/absolute/path/to/TraceWeave/examples/express
             "expected": {"value": 6},
         },
         {
+            "name": "dynamic_array",
+            "tool": "get_signal_transitions",
+            "arguments": {"wave_path": wave_path, "start_time_ps": 0, "end_time_ps": 25,
+                "signal_path": {"expr": "mem[i]", "bindings": {
+                    "i": "tb.index", "mem": {"elements": [
+                        {"indices": [3], "signal": "tb.mem[3][7:0]"},
+                        {"indices": [4], "signal": "tb.mem[4][7:0]"}]}},
+                    "types": {"i": {"width": 3}, "mem": {
+                        "width": 8, "packed": [[7, 0]], "unpacked": [[0, 7]]}}}},
+            "expected": {"times": [0, 10, 20], "values": [17, 34, 51]},
+        },
+        {
             "name": "typed_slice",
             "tool": "get_signals_by_cycle",
             "arguments": {"wave_path": wave_path, "clock_path": "tb.clk", "num_cycles": 4,
@@ -41,6 +53,10 @@ def check_example(example, payload):
     assert receipts and all(r["coverage_status"] == "complete" for r in receipts), receipts
     if example["tool"] == "get_signal_at_time":
         actual = {"value": payload["value"]["dec"]}
+    elif example["tool"] == "get_signal_transitions":
+        actual = {"times": [row["time_ps"] for row in payload["transitions"]],
+                  "values": [row["value"]["dec"] for row in payload["transitions"]]}
+        assert not payload["truncated"]
     elif example["tool"] == "get_signals_by_cycle":
         key = receipts[0]["key"]
         actual = {"values": [row["signals"][key].get("dec") for row in payload["cycles"]]}

@@ -5563,6 +5563,10 @@ async def list_tools():
             description=(
                 "Sample signals or SV expressions each cycle; dynamic indices are re-evaluated at every sample. "
                 "Useful for state machines, pipelines, and round-by-round algorithm checks. "
+                "Choose start_cycle OR start_time_ps, and num_cycles OR end_time_ps. "
+                f"A query returns at most {MAX_CYCLES_PER_QUERY} cycles; continue after the last returned edge. "
+                "sample_offset_ps must be >=0 (default 1, after the edge). For a pre-edge point, "
+                "use get_signals_around_time at the desired timestamp. "
                 "Check returned sample times and counts: an initially high clock is not a "
                 "rising edge, so read any required initial state separately by timestamp."
             ),
@@ -5612,7 +5616,7 @@ async def list_tools():
                     },
                     "sample_offset_ps": {
                         "type": "integer",
-                        "description": "Sampling offset relative to the clock edge in ps. Default: 1, to capture post-delta register values.",
+                        "description": "Nonnegative sampling offset after the clock edge in ps. Default: 1, to capture post-delta register values. Negative offsets are unsupported.",
                         "default": 1,
                         "minimum": 0,
                     },
@@ -7100,6 +7104,10 @@ async def list_tools():
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
+                " Expressions: {expr,bindings,types}; semantic (default) needs declared types. "
+                "typing=wave_bits explicitly uses unsigned dump vectors. scope only prefixes names. "
+                "Unpacked arrays need bindings.<name>.elements and types.<name>.unpacked; "
+                "[left,right] bounds are JSON integers."
                 " Derived results are in expressions: inspect coverage_status/gaps; partial or not_observed "
                 "cannot exclude a problem. Observed X/Z differs from missing data. observations_truncated "
                 "limits displayed evidence only. An error field means failure: use error_code/recovery "
@@ -7134,6 +7142,9 @@ async def list_tools():
     for tool in _tools:
         if tool.name in examples:
             tool.inputSchema["examples"] = [examples[tool.name]]
+            # Keep one runnable example visible even in clients that discard
+            # the optional JSON Schema examples annotation.
+            tool.description += " Example arguments: " + json.dumps(examples[tool.name], separators=(",", ":"))
     return _tools
 
 
