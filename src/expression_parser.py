@@ -10,13 +10,17 @@ from .dynamic_evidence import Expr, evaluate, MAX_EXPR_NODES, MAX_EXPR_DEPTH, MA
 from .expression_values import BINARY, COMPARISONS, LOGICAL, LEFT_TYPED, number
 
 MAX_TEXT = 16384
-_TOKEN = re.compile(r"""\s+|//[^\n]*|/\*.*?\*/|(?:[0-9][0-9_]*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|'[01xXzZ]|[0-9][0-9_]*|\\[^\s]+|[a-zA-Z_$][a-zA-Z_0-9$]*|===|!==|==\?|!=\?|<<<|>>>|<->|\*\*|&&|\|\||<<|>>|<=|>=|==|!=|~&|~\||~\^|\^~|\+:|-:|::|->|[(){}\[\],.?:'+*/%&|^~!<>-]""", re.S)
+_TOKEN = re.compile(r"""\s+|//[^\n]*|/\*.*?\*/|(?:[0-9][0-9_]*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|'[01xXzZ]|[0-9][0-9_]*|\\[^\s]+|[a-zA-Z_$][a-zA-Z_0-9$]*|===|!==|==\?|!=\?|<<<|>>>|<->|\+\+|--|\*\*|&&|\|\||<<|>>|<=|>=|==|!=|~&|~\||~\^|\^~|\+:|-:|::|->|[(){}\[\],.?:'+*/%&|^~!<>-]""", re.S)
 _PREC = {'<->': 1, '->': 1, '||': 3, '&&': 4, '|': 5, '^': 6, '~^': 6, '^~': 6,
          '&': 7, '==': 8, '!=': 8, '===': 8, '!==': 8, '==?': 8, '!=?': 8,
          '<': 9, '<=': 9, '>': 9, '>=': 9, 'inside': 9,
          '<<': 10, '>>': 10, '<<<': 10, '>>>': 10, '+': 11, '-': 11,
          '*': 12, '/': 12, '%': 12, '**': 13}
 _PREFIX = {'+', '-', '!', '~', '&', '~&', '|', '~|', '^', '~^', '^~'}
+_TYPE_QUERIES = {'$bits','$dimensions','$unpacked_dimensions','$left','$right','$low','$high','$size','$increment'}
+_INTEGER_TYPES = {'byte':(8,True,True),'shortint':(16,True,True),'int':(32,True,True),
+                  'longint':(64,True,True),'integer':(32,True,False),'time':(64,False,False),
+                  'bit':(1,False,True),'logic':(1,False,False),'reg':(1,False,False)}
 
 
 @dataclass(frozen=True)
@@ -202,7 +206,7 @@ class Type:
     def __post_init__(self):
         if type(self.width) is not int or not 1 <= self.width <= MAX_EXPR_WIDTH:
             raise ValueError('expression_width_limit')
-        dims = self.packed + self.unpacked
+        dims = self.dimensions
         if len(dims) > 8 or any(len(r) != 2 or any(type(i) is not int or abs(i) >= 2**63 for i in r) for r in dims):
             raise ValueError('expression_dimensions_invalid')
         if self.packed and math.prod(abs(a-b)+1 for a,b in self.packed) != self.width:
@@ -213,7 +217,8 @@ class Type:
 
     @property
     def dimensions(self):
-        return self.unpacked + self.packed
+        packed = self.packed or (((self.width-1,0),) if self.width>1 else ())
+        return self.unpacked + packed
 
 
 @dataclass(frozen=True)
@@ -323,6 +328,7 @@ class Compiler:
         self.resolve = resolve
         self.types = types or {}
         self.count = 0
+        self.type_uses = set()
 
     def compile(self, text):
         result = self.lower(Parser(text).parse())
@@ -397,16 +403,8 @@ class Compiler:
         if node.op == 'cast':
             value = lower(node.args[0])
             target = node.text
-            builtins = {'byte':(8,True,False), 'shortint':(16,True,False), 'int':(32,True,False),
-                        'longint':(64,True,False), 'integer':(32,True,False),
-                        'bit':(1,False,True), 'logic':(1,False,False), 'reg':(1,False,False),
-                        'time':(64,False,False)}
-            # SV integer atom types byte/shortint/int/longint are two-state.
-            if target in {'byte','shortint','int','longint'}:
-                width,signed,_ = builtins[target]
-                typ = _plain(width,signed,True)
-            elif target in builtins:
-                typ = _plain(*builtins[target])
+            if target in _INTEGER_TYPES:
+                typ = _plain(*_INTEGER_TYPES[target])
             elif target in {'signed','unsigned'}:
                 typ = replace(value.type,signed=target == 'signed')
             elif target.replace('_','').isdigit():
@@ -468,9 +466,30 @@ class Compiler:
             width = 1 if node.op == 'inside' else max(c.type.width for c in children)
             return Typed(Expr(node.op,width,tuple(c.expr for c in children)),_plain(width))
         if node.op == 'call':
-            args = [lower(a) for a in node.args]
             name = node.text
-            if name in {'$bits','$dimensions','$unpacked_dimensions','$left','$right','$low','$high','$size','$increment'}:
+            allowed = _TYPE_QUERIES | {'$signed','$unsigned','$clog2','$isunknown','$countones','$countbits','$onehot','$onehot0'}
+            if name not in allowed or (len(node.args)<2 if name=='$countbits' else
+                    len(node.args) not in {1,2} if name in _TYPE_QUERIES-{'$bits','$dimensions','$unpacked_dimensions'} else
+                    len(node.args)!=1):
+                raise ValueError('expression_function_arity_invalid')
+            if name in _TYPE_QUERIES:
+                # Types suffice for the first argument, including a type name
+                # or an undumped explicitly typed declaration. Runtime index
+                # arguments are lowered after restoring the actual resolver.
+                resolve = self.resolve
+                def metadata(name):
+                    typ = self.types.get(name)
+                    if typ is not None:
+                        self.type_uses.add(name)
+                    if typ is None and name in _INTEGER_TYPES:
+                        typ = _plain(*_INTEGER_TYPES[name])
+                    return Typed(Expr('const',typ.width,value='0'*typ.width),typ) if typ else resolve(name)
+                self.resolve = metadata
+                try:
+                    first = lower(node.args[0])
+                finally:
+                    self.resolve = resolve
+                args = [first,*(lower(a) for a in node.args[1:])]
                 typ = args[0].type
                 dims = typ.dimensions
                 if name == '$bits' and len(args) == 1:
@@ -478,15 +497,14 @@ class Compiler:
                 elif name in {'$dimensions','$unpacked_dimensions'} and len(args) == 1:
                     value = len(dims if name == '$dimensions' else typ.unpacked)
                 elif name not in {'$bits','$dimensions','$unpacked_dimensions'} and len(args) in {1,2}:
-                    dim = constant(args[1]) if len(args) == 2 else 1
-                    if not 1 <= dim <= len(dims):
-                        return Typed(Expr('const',32,value='x'*32,signed=True),_plain(32,True))
-                    left,right = dims[dim-1]
-                    value = {'$left':left,'$right':right,'$low':min(left,right),'$high':max(left,right),
-                             '$size':abs(left-right)+1,'$increment':1 if left>=right else -1}[name]
+                    index = args[1] if len(args)==2 else literal('1')
+                    if index.type.unpacked:
+                        raise ValueError('expression_index_not_integral')
+                    return Typed(Expr('dimension',32,(index.expr,),dimensions=dims,function=name,signed=True),_plain(32,True))
                 else:
                     raise ValueError('expression_function_arity_invalid')
                 return Typed(Expr('const',32,value=number(value,32,True).bits,signed=True),_plain(32,True))
+            args = [lower(a) for a in node.args]
             if any(a.type.unpacked for a in args):
                 raise ValueError('expression_array_requires_selection')
             if name in {'$signed','$unsigned'}:

@@ -150,6 +150,23 @@ async def test_unknown_index_history_reaches_index_input(tmp_path,monkeypatch):
     assert not h['coverage']['true_origin_proven']
 
 
+@pytest.mark.anyio
+async def test_unknown_dimension_history_needs_no_array_dump(tmp_path,monkeypatch):
+    ctx=await context(tmp_path,monkeypatch,source='module top(input logic [2:0] b, output logic [7:0] y_variable_bit); logic [7:0] mem [0:7]; assign y_variable_bit=$size(mem,b); endmodule')
+    path=tmp_path/'dimension.vcd'
+    write_wave(path,index='xxx',result='xxxxxxxx')
+    path.write_text(path.read_text().replace('b011 "','b001 "').replace('b00000110 $','b00001000 $'))
+    r=await server._dispatch('trace_x_source',dict(**ctx,wave_path=str(path),signal_path='top.y_variable_bit',
+        mode='history',history_start_ps=0,time_ps=9))
+    h=r.history.model_dump()
+    assert any(n['signal'].startswith('top.b') for n in h['nodes']),h
+    root=h['nodes'][0]
+    assert root['observation']['value']=='xxxxxxxx'
+    assert 'dimension_unknown' in root['observation']['gaps']
+    assert {d['signal'] for d in root['observation']['dependencies']}=={'top.b[2:0]'}
+    assert not h['coverage']['true_origin_proven']
+
+
 def test_wave_binding_preserves_expression_signedness(tmp_path):
     from src.vcd_parser import VCDParser
     from src.x_history_observe import bind_step_wave

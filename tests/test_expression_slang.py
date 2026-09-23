@@ -143,3 +143,70 @@ def test_semantic_array_invalid_index_uses_leaf_default(two_state,expected):
         pytest.fail('unknown index cannot choose a memory element')
     result = evaluate(node,unread)
     assert result.value == expected and 'index_unknown' in result.gaps
+
+
+@pytest.mark.parametrize('escaped',[False,True])
+def test_net_initializer_reads_exact_vcd_memory_identity(tmp_path,escaped):
+    backend=project('module t(input int i); logic [7:0] mem[0:3]; wire [7:0] y=mem[i]+8\'d1; endmodule')
+    step=backend.get_dynamic_step('t.y')
+    assert step['complete'],step
+    path=tmp_path/'memory.vcd'
+    name=('\\' if escaped else '')+'mem[2]'
+    path.write_text(f'''$timescale 1ps $end
+$scope module t $end
+$var wire 32 ! i [31:0] $end
+$var wire 8 " {name} [7:0] $end
+$upscope $end
+$enddefinitions $end
+#0
+b10 !
+b00001111 "
+#10
+''')
+    parser=VCDParser(str(path))
+    result=observe_step(step,get_parser=lambda _:parser,wave=str(path),time=9,history_start=0)
+    assert result['complete'] and result['value']=='00010000',result
+
+
+def test_scalar_memory_index_is_not_a_packed_bit_suffix(tmp_path):
+    backend=project('module t(input int i); logic mem[1:3]; wire y=mem[i]; endmodule')
+    step=backend.get_dynamic_step('t.y')
+    assert step['complete']
+    path=tmp_path/'scalar.vcd'
+    path.write_text('''$timescale 1ps $end
+$scope module t $end
+$var wire 32 ! i [31:0] $end
+$var wire 1 " mem[2] $end
+$upscope $end
+$enddefinitions $end
+#0
+b10 !
+1"
+#10
+''')
+    parser=VCDParser(str(path))
+    result=observe_step(step,get_parser=lambda _:parser,wave=str(path),time=9,history_start=0)
+    assert result['complete'] and result['value']=='1',result
+
+
+def test_conflicting_escaped_memory_spellings_are_not_guessed(tmp_path):
+    backend=project('module t(input int i); logic [7:0] mem[1:3]; wire [7:0] y=mem[i]; endmodule')
+    path=tmp_path/'conflict.vcd'
+    path.write_text('''$timescale 1ps $end
+$scope module t $end
+$var wire 32 ! i [31:0] $end
+$var wire 8 " mem[2] [7:0] $end
+$var wire 8 # \\mem[2] [7:0] $end
+$upscope $end
+$enddefinitions $end
+#0
+b10 !
+b00000000 "
+b11111111 #
+#10
+''')
+    parser=VCDParser(str(path))
+    result=observe_step(backend.get_dynamic_step('t.y'),get_parser=lambda _:parser,
+        wave=str(path),time=9,history_start=0)
+    assert not result['complete'] and result['value'] is None
+    assert 'dynamic_bit_mapping_unavailable' in result['gaps']

@@ -12,7 +12,7 @@ from src.vcd_parser import VCDParser
 
 def step(active='0', kind='reset'):
     ref = lambda name: asdict(Expr('signal', 1, signal='top.' + name, bits=(0,), declared_bits=(0,)))
-    return dict(version='1.0', backend='verdi_npi', signal='top.q', bits=[0], width=1,
+    return dict(version='2.0', backend='verdi_npi', signal='top.q', bits=[0], width=1,
                 state=ref('q'), boundary='sequential', complete=False, branches=[],
                 clock=dict(expression=ref('clk'), edge='posedge'),
                 async_controls=[dict(expression=ref('mode'), kind=kind, active_value=active,

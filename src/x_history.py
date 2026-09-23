@@ -308,7 +308,8 @@ async def _walk(result, request, services, route, budget, session, design, wave,
         node['observation'] = obs
         dependencies = obs['dependencies']
         node['checked_dependencies'] = dependencies
-        unsafe = [g for g in obs['gaps'] if g not in {'value_unknown', 'driver_set_incomplete', 'index_unknown'}]
+        unsafe = [g for g in obs['gaps'] if g not in {
+            'value_unknown', 'driver_set_incomplete', 'index_unknown', 'dimension_unknown'}]
         for gap in unsafe:
             frontier(node_id, gap)
         # A recorded predecessor can guide a bounded candidate path even when

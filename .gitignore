@@ -15,6 +15,7 @@ novas.conf
 novas.rc
 docs/*
 !docs/architecture.md
+!docs/expressions.md
 !docs/debug-discipline.md
 !docs/workflow.md
 .vscode/

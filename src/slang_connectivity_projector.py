@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, Sequence
 from .dynamic_evidence import Expr, TRUE, Assignment as DynamicAssignment
 from . import slang_dynamic
@@ -663,9 +664,23 @@ class SlangConnectivityProjector:
             kind = _kind_name(member)
             if kind in {"Variable", "Net"}:
                 absolute_path = str(member.hierarchicalPath)
+                # A net declaration initializer is a continuous assignment;
+                # variable initialization remains a separate state boundary.
+                initializer = getattr(member, 'initializer', None) if kind == 'Net' else None
+                packed_range = _packed_range(member)
+                if initializer is not None and packed_range is not None:
+                    assignment = SimpleNamespace(right=initializer)
+                    facts = self._assignment_facts(assignment, record, aliases,
+                        kind=EdgeKind.CONTINUOUS_ASSIGN, boundary=BoundaryKind.COMBINATIONAL,
+                        procedure_kind=None, controls=(), guard=None, generate_scope=generate_scope,
+                        fallback_location=self._location(member.location),
+                        targets=(SignalSelection(symbol=_relative_path(absolute_path,record.path),
+                                                 bits=packed_range.indices),),
+                        dynamic=slang_dynamic.assignment(self,assignment,record,aliases,
+                                                        process=str(member.location)))
+                    _extend_unique_assignments(assignments,facts,assignment_keys)
                 if absolute_path in port_internal_paths:
                     continue
-                packed_range = _packed_range(member)
                 location = self._location(member.location)
                 if packed_range is None or location is None:
                     from .slang_dynamic import fixed_array_type
@@ -1327,8 +1342,10 @@ class SlangConnectivityProjector:
         generate_scope: str | None,
         fallback_location: SourceLocation | None,
         dynamic: DynamicAssignment | None = None,
+        targets: tuple[SignalSelection, ...] | None = None,
     ) -> list[AssignmentFact]:
-        targets = self._template_exact_operands(assignment.left, record, aliases)
+        if targets is None:
+            targets = self._template_exact_operands(assignment.left, record, aliases)
         if not targets:
             # Fixed memory writes are a separate storage boundary. They cannot
             # invalidate an otherwise fully projected scalar output driver.

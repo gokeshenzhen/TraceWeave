@@ -158,6 +158,12 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 工具参数与详细支持范围见[波形差异分析](docs/architecture.md#divergence-evidence-and-backtrace)和 [X/Z 历史追踪](docs/architecture.md#bounded-x-history)。
 
+### 计算 SV 表达式
+
+现有波形工具支持显式 `{ "expr": "a[b] + c", ... }` 输入，按 SV 优先级、位宽、signed 和四态规则求值，每次观察都会重新采样下标。点、周期、变化窗口、条件、握手、事务、TL-UL 及 RTL 自动回溯共用计算核心，无需新增 MCP 工具。
+
+使用精确 `bindings` 和显式 `types`，或选择 `typing: "wave_bits"`，将实际 dump 向量作为 unsigned 四态数据读取。固定数组使用有界元素映射；计算公式不会替换输出信号的实际记录值。详见[表达式输入、示例与限制](docs/expressions.md)。
+
 ### 按字段查看总线，检查 TL-UL 接口
 
 当地址、数据和控制信息打包在同一条总线中时，TraceWeave 可依据与波形匹配的源码类型识别字段位置，让助手按字段查看变化，减少手工查位宽、算偏移的工作。无法自动识别时，也支持提供字段与位段的对应关系。

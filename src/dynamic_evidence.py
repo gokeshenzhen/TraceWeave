@@ -49,7 +49,7 @@ class Expr:
                            "reduce_^", "reduce_~^", "reduce_^~", "select",
                            "part_up", "part_down", "project", "function",
                            "repeat", "stream_left", "stream_right", "inside", "range",
-                           "array", "array_ref", "array_select"} | BINARY):
+                           "array", "array_ref", "array_select", "dimension"} | BINARY):
             raise ValueError("dynamic_expression_operator_invalid")
         arity = {"signal": 0, "const": 0, "not": 1, "and": 2, "or": 2,
                  "eq": 2, "ne": 2, "mux": 3, "cast": 1}
@@ -81,6 +81,9 @@ class Expr:
             if self.function not in functions or (len(self.args) < 2 if self.function == "$countbits"
                                                   else len(self.args) != 1):
                 raise ValueError("dynamic_function_invalid")
+        if self.op == 'dimension' and (len(self.args) != 1 or self.width != 32 or
+                self.function not in {'$size','$left','$right','$low','$high','$increment'}):
+            raise ValueError('dynamic_function_invalid')
         if self.op == "inside" and len(self.args) < 2:
             raise ValueError("dynamic_expression_arity_invalid")
         if self.op == "array" and (self.bounds is None or len(self.bits) != len(self.args) or
@@ -220,6 +223,23 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             return Evaluation(None, [], ["dynamic_expression_limit"], [])
         if node.op == "const":
             return Evaluation(node.value, [], [], [])
+        if node.op == 'dimension':
+            index = walk(node.args[0], 'index', depth+1)
+            index.reference = None
+            if index.value is None:
+                return index
+            value = Value(index.value,node.args[0].signed)
+            dim = value.integer if value.known else None
+            if dim is None or not 1 <= dim <= len(node.dimensions):
+                index.value = 'x'*32
+                index.gaps.append('dimension_unknown' if dim is None else 'dimension_out_of_range')
+            else:
+                from .expression_values import number
+                left,right = node.dimensions[dim-1]
+                result = {'$left':left,'$right':right,'$low':min(left,right),'$high':max(left,right),
+                    '$size':abs(left-right)+1,'$increment':1 if left>=right else -1}[node.function]
+                index.value = number(result,32,True).bits
+            return index
         if node.op == "signal":
             fact = sample(node)
             value = bit_value(fact.get("value"), node.width)

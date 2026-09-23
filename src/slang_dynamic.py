@@ -24,6 +24,21 @@ FUNCTIONS = {'$signed','$unsigned','$clog2','$isunknown','$countones','$onehot',
 TYPE_FUNCTIONS = {'$bits','$size','$left','$right','$low','$high','$increment','$dimensions','$unpacked_dimensions'}
 
 
+def declared_dimensions(typ):
+    dims = []
+    typ = typ.canonicalType
+    while typ.isUnpackedArray or typ.isPackedArray:
+        if not typ.hasFixedRange or len(dims)>=8:
+            return None
+        dims.append((int(typ.fixedRange.left),int(typ.fixedRange.right)))
+        typ = typ.arrayElementType.canonicalType
+    if not typ.isIntegral:
+        return None
+    if int(typ.bitWidth)>1:
+        dims.append((int(typ.bitWidth)-1,0))
+    return tuple(dims) if len(dims)<=8 else None
+
+
 def fixed_array_type(typ):
     """Bounded shape facts, without enumerating any storage elements."""
     dimensions = []
@@ -95,6 +110,12 @@ def expression(projector,node,record,aliases,*,budget=None,depth=0):
             return Expr('function',width,tuple(visit(a) for a in node.arguments),signed=signed,function=name)
         if name not in TYPE_FUNCTIONS:
             return fail()
+        if name in {'$size','$left','$right','$low','$high','$increment'}:
+            dims = declared_dimensions(node.arguments[0].type)
+            if dims is None:
+                return fail('expression_dimensions_invalid')
+            index = visit(node.arguments[1]) if len(node.arguments)>1 else Expr('const',32,value=number(1).bits,signed=True)
+            return Expr('dimension',32,(index,),dimensions=dims,function=name,signed=True)
     if kind=='Inside':
         return Expr('inside',1,(visit(node.left),*(visit(a) for a in node.rangeList)))
     if kind=='ValueRange':

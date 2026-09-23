@@ -72,6 +72,18 @@ def bind_expression(parser, raw):
     spec = raw if isinstance(raw, WaveformExpression) else WaveformExpression.model_validate(raw)
     types = {name: integral_type(typ) for name,typ in spec.types.items()}
     declarations, sources, resolved = {}, {}, {}
+
+    def validate_array_mapping(binding, typ):
+        if typ is None or not typ.unpacked:
+            raise ValueError('expression_array_type_unresolved')
+        seen = set()
+        for entry in binding.elements:
+            check_cancelled()
+            indices = tuple(entry.indices)
+            if (len(indices) != len(typ.unpacked) or indices in seen or
+                    any(not min(r) <= i <= max(r) for i,r in zip(indices,typ.unpacked))):
+                raise ValueError('expression_array_mapping_invalid')
+            seen.add(indices)
     # Bindings are exact names. The scope is only a caller-supplied prefix.
     def path_for(name):
         return f'{spec.scope}.{name}' if spec.scope else name
@@ -118,16 +130,12 @@ def bind_expression(parser, raw):
                           signed=typ.signed,two_state=typ.two_state),typ)
 
     def array(binding, typ, name):
-        if typ is None or not typ.unpacked:
-            raise ValueError('expression_array_type_unresolved')
+        validate_array_mapping(binding,typ)
         leaf = replace(typ, unpacked=())
         elements = {}
         for entry in binding.elements:
             check_cancelled()
             indices = tuple(entry.indices)
-            if (len(indices) != len(typ.unpacked) or indices in elements or
-                    any(not min(bounds) <= i <= max(bounds) for i,bounds in zip(indices,typ.unpacked))):
-                raise ValueError('expression_array_mapping_invalid')
             # A mapped but absent element is missing evidence, not an X value.
             try:
                 elements[indices] = signal(entry.signal, leaf, name).expr
@@ -162,7 +170,12 @@ def bind_expression(parser, raw):
         resolved[name] = result
         return result
 
-    typed = Compiler(resolve,types).compile(spec.expr)
+    compiler = Compiler(resolve,types)
+    typed = compiler.compile(spec.expr)
+    for name in compiler.type_uses:
+        sources.setdefault(name,'explicit')
+        if isinstance(spec.bindings.get(name),ExpressionArray):
+            validate_array_mapping(spec.bindings[name],types[name])
     # Unused bindings never force waveform reads or enter the dependency list.
     used = set()
     pending = [typed.expr]

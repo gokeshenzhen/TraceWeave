@@ -1547,7 +1547,7 @@ normal public route instead of changing the mutable current session.
 `src/dynamic_evidence.py` defines a bounded typed expression contract.
 `src/npi_dynamic.py` obtains cell/port, mux polarity and edge facts from NPI and
 expands generated nets to declared signals/constants. `src/slang_dynamic.py`
-projects typed AST guards, priority and timing into Connectivity IR 1.3;
+projects typed AST guards, priority and timing into Connectivity IR 1.4;
 `src/source_graph_dynamic.py` binds statements and positive port paths to one
 prepared artifact. Old IR versions are cache misses, not implicit dynamic proof.
 The LSF `dynamic_step` request calls the same NPI core. NPI's active-design
@@ -1555,15 +1555,21 @@ identity is process-wide; fixed elaboration maps distinguish KDB changes while
 transient native lock files do not invalidate an unchanged design.
 
 NPI pseudo selections expand the full typed cell output before selecting its
-declared bit coordinates. Narrow mux outputs explicitly select contributing
-input bits; unknown extension rules remain gaps. Logical input pin polarity is
-preserved. Constant logical right shifts lower to bounded bit selection and
-zero padding; variable and arithmetic shifts remain unsupported. The shared
-`src/dynamic_selection.py` projector preserves ordered bits through muxes,
-concatenations and casts within the existing expression budgets. Evaluation
-rejects inconsistent mux widths instead of silently returning a wider value.
-Single-bit native bitwise AND/OR use the same four-state truth tables as their
-logical equivalents; wider bitwise expressions retain an unsupported gap.
+ordered declared bits. Typed arithmetic, variable shifts, vector bitwise,
+logical and reduction cells use the shared evaluator. Ambiguous EqComp cells
+(`==` versus `===`), generic OpCells and unproven operand order explicitly
+restart the whole trace on Source Graph. NPI facts are never relabeled as
+Slang evidence. The LSF worker and dynamic step protocols are 2.0.
+
+Slang preserves pure SV operators, casts, packed dimensions, fixed-array leaf
+types, packed fields and net declaration initializers. It samples selected
+array elements only after exact dump metadata binding; array writes never
+reconstruct missing storage. `src/dynamic_selection.py` preserves the entire
+arithmetic computation before projecting result bits, including carries.
+Only an exact reference can establish passthrough; equal numeric values cannot.
+Index differences and changing selected dependencies remain explicit.
+Source Graph build/worker is 3.2, projector schema 1.8, query mapping 1.4 and
+adapter 3.13, so prior expression/cache capabilities cannot silently carry over.
 
 `src/dynamic_observe.py` separates output observation, triggering edge and strict
 predecessor samples; it does not infer simulation scheduling order from integer
@@ -1968,6 +1974,32 @@ cache is not on a shared filesystem. `TRACEWEAVE_NPI_LSF_TIMEOUT` controls
 short connectivity jobs; `TRACEWEAVE_NPI_LSF_KDB_TIMEOUT` separately bounds
 queue wait plus both KDB phases (default 1260 seconds). Scheduler options are
 JSON argv, not shell text, and are limited to scheduler option/value pairs.
+
+## SV waveform expressions
+
+The existing signal-input union adds `WaveformExpression` alongside strings
+and fixed selections. `src/expression_parser.py` performs bounded portable
+parsing and type/context lowering; `src/expression_binding.py` binds exact dump
+declarations and sparse arrays; `src/expression_values.py` supplies shared
+four-state operations. Both frontend projections and public expressions use
+`src/dynamic_evidence.py` for values and selected dependency evidence.
+Type queries use declaration shapes without reading their contents; an optional
+dimension expression is sampled at each observation and retains index evidence.
+
+`src/expression_observe.py` owns request-local derived observations. Point and
+cycle reads reuse real backing values; event reads merge dependency events by
+raw fs time, completing each time group before evaluation. An event predecessor
+is a `dependency_anchor`, not a claimed last output transition. Same-time
+internal changes remain explicit and cannot establish an unambiguous derived
+clock. FSDB groups include real dependencies and never outlive the global wave
+lock; over-capacity groups fall back to bounded sequential declaration reads.
+Cancellation and transaction deadlines remain observable inside these scans.
+
+Window terms, protocol roles, transactions, TL-UL, diff and period reuse the
+same input layer. Derived findings identify their expression and real
+operands; they never manufacture a driver for an `expr@...` display key.
+Signed values retain binary bits; protocol IDs and lengths use their unsigned
+bit patterns. See [expression usage and bounds](expressions.md).
 
 ## Packed waveform selections and TL-UL
 

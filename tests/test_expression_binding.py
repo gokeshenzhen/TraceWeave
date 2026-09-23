@@ -118,3 +118,36 @@ def test_generated_hierarchy_index_is_constant_identity(tmp_path):
     assert observe(b,p)[0].value == '1100'
     with pytest.raises((KeyError,ValueError)):
         bind_expression(p,dict(expr='tb.gen[i].data',typing='wave_bits',constants={'i':'2'}))
+
+
+@pytest.mark.parametrize('name', ['$size','$left','$right','$low','$high','$increment'])
+def test_dimension_parameter_reads_only_its_runtime_index(name):
+    from src.expression_binding import bind_expression
+    class Metadata:
+        def get_signal_declaration(self,path):
+            assert path=='top.dim'
+            return dict(path=path,width=3,declared_range=dict(left=2,right=0))
+    p=Metadata()
+    bound=bind_expression(p,dict(expr=name+'(mem, dim)',bindings={'dim':'top.dim'},types={
+        'mem':dict(width=8,packed=[[7,0]],unpacked=[[1,2],[-1,1]]),'dim':dict(width=3)}))
+    assert bound.paths==('top.dim',)
+    assert bound.type_sources['mem']=='explicit'
+    expected = {'$size':[2,3,8],'$left':[1,-1,7],'$right':[2,1,0],
+        '$low':[1,-1,0],'$high':[2,1,7],'$increment':[-1,-1,1]}[name]
+    for i,want in enumerate(expected,1):
+        result=bound.evaluate(lambda path: f'{i:03b}')
+        assert result.value==f'{want & 0xffffffff:032b}'
+        assert {d['role'] for d in result.dependencies}=={'index'}
+    assert bound.evaluate(lambda _: 'xxx').value=='x'*32
+    assert bound.evaluate(lambda _: '000').value=='x'*32
+
+
+def test_type_query_does_not_require_dump_for_explicit_type():
+    from src.expression_binding import bind_expression
+    class Unreadable:
+        def get_signal_declaration(self,path):
+            pytest.fail('a pure explicit type query must not request dump metadata')
+    p=Unreadable()
+    b=bind_expression(p,dict(expr='$bits(mem)',types={'mem':dict(width=8,unpacked=[[0,7]])}))
+    assert b.evaluate(lambda _:pytest.fail('no values needed')).value==f'{64:032b}'
+    assert not b.paths and b.type_sources=={'mem':'explicit'}

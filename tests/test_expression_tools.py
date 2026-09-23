@@ -97,3 +97,18 @@ def test_derived_period_uses_exact_event_edges_and_raw_units(tmp_path):
     assert parsed.period_fs==1000 and parsed.period_ps==1 and parsed.edges_used==4
     with pytest.raises(ValueError,match='1-bit'):
         period(get_parser=lambda _:base,wave_path=base.file_path,signal=expression())
+
+
+@pytest.mark.anyio
+async def test_public_dynamic_dimension_queries_need_only_index_waveform(tmp_path):
+    base=wave(tmp_path)
+    spec=dict(expr='$size(a,dim)',bindings={'dim':'tb.index'},types={
+        'a':dict(width=8,packed=[[7,0]],unpacked=[[1,2],[0,2]]),'dim':dict(width=3)})
+    point=await server._dispatch('get_signal_at_time',dict(wave_path=base.file_path,signal_path=spec,time_ps=5))
+    assert point.value['dec']==8
+    assert point.expressions[0].dependencies==['tb.index[2:0]']
+    rows=await server._dispatch('get_signal_transitions',dict(wave_path=base.file_path,signal_path=spec,
+        start_time_ps=5,end_time_ps=35))
+    assert rows.predecessor['value']['dec']==8
+    assert [row['time_ps'] for row in rows.transitions]==[10]
+    assert 'dimension_unknown' in rows.expressions[0].gaps

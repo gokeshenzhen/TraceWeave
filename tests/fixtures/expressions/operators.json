@@ -786,6 +786,166 @@
       "coverage": [
         "E01"
       ]
+    },
+    {
+      "id": "dynamic_dimension_size",
+      "expression": "$size(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000001000"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_left",
+      "expression": "$left(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000111"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_right",
+      "expression": "$right(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000000"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_low",
+      "expression": "$low(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000000"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_high",
+      "expression": "$high(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000111"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_increment",
+      "expression": "$increment(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "001"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000001"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_zero",
+      "expression": "$size(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "000"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "dynamic_dimension_unknown",
+      "expression": "$size(a,b)",
+      "inputs": {
+        "b": {
+          "width": 3,
+          "value": "xxx"
+        }
+      },
+      "expected": {
+        "width": 32,
+        "bin": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "builtin_type_bits",
+      "expression": "$bits(int)",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000100000"
+      },
+      "coverage": [
+        "E14"
+      ]
+    },
+    {
+      "id": "builtin_type_dimensions",
+      "expression": "$dimensions(int)",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000000000001"
+      },
+      "coverage": [
+        "E14"
+      ]
     }
   ],
   "inputs": {

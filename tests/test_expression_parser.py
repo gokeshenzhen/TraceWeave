@@ -77,3 +77,9 @@ def test_declared_coordinates_and_member_type():
 def test_escaped_name_and_comments_are_not_code():
     tree = Parser('/* leading */ \\a+b  + 1 // tail').parse()
     assert tree.args[0].text == '\\a+b'
+
+
+@pytest.mark.parametrize('text',['++a','--a','a++','a--','$bits()','$signed()','$size(a,1,2)'])
+def test_effects_and_invalid_function_arity_are_rejected(text):
+    with pytest.raises(ValueError):
+        Compiler(lambda _:Typed(Expr('signal',8,signal='a',bits=tuple(range(7,-1,-1))),Type(8))).compile(text)

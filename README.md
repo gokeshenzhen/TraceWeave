@@ -160,6 +160,12 @@ Results distinguish relationships supported by evidence from leads that need mor
 
 See [waveform comparison](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#divergence-evidence-and-backtrace) and [X/Z history tracing](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#bounded-x-history) for tool parameters and detailed support limits.
 
+### Evaluate SV Expressions
+
+Existing waveform tools accept explicit `{ "expr": "a[b] + c", ... }` inputs. Expressions use SV precedence, widths, signedness and four-state values; indices are sampled again at each observation. Point, cycle, transition, window, handshake, transaction and TL-UL queries share this core with RTL backtracing. No additional MCP tool is required.
+
+Use exact `bindings` and explicit `types`, or choose `typing: "wave_bits"` for an unsigned four-state view of dumped vectors. Fixed arrays use bounded element mappings; reading a formula does not replace the recorded output signal. See [expression inputs, examples and limits](docs/expressions.md).
+
 ### Inspect Bus Fields and TL-UL Interfaces
 
 When address, data, and control information share a packed bus, TraceWeave can identify field positions from source types that match the waveform. The assistant can then inspect individual fields, reducing manual work to look up widths and calculate offsets. You can also provide a field-to-bit mapping when automatic resolution is unavailable.
