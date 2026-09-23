@@ -445,6 +445,8 @@ Conclusions depend on actual coverage. Missing signals, resource limits, or unsu
 
 You can query exported VCD / FSDB files and automatically discover JasperGold artifacts. Property results, trace classification, and reachability semantics must come from the formal tool or the user.
 
+Standalone exports do not require a recognized formal project. When discovery finds waveforms without project entries, `get_formal_paths` includes a short hint for the existing point and batch readers; the caller selects the waveform, signals, and timestamp.
+
 **Where is design data processed?**
 
 File parsing and EDA queries run locally or on the configured LSF compute nodes. Returned debugging evidence enters your AI client's context. TraceWeave usage telemetry is off by default and writes only to local files when enabled.

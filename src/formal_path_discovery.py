@@ -322,6 +322,14 @@ def discover_formal_paths(
             hints.append(f"No supported formal artifacts found under {scan_root}")
         else:
             hints.append("No supported formal artifacts found in the scanned prefix")
+    if wave_files and not projects:
+        hints.append(
+            "Exported waveforms can be read without a recognized formal project. "
+            "Choose a wave_files path, signals and timestamp; use get_signal_at_time "
+            "for one signal or get_signals_around_time(return_mode=\"values_only\", "
+            "window_ps=0, extra_transitions=0) for several. Use get_waveform_summary "
+            "for units and search_signals for path lookup when needed."
+        )
     if any(item["project_layout_state"] == "markers_only" for item in projects):
         hints.append("Some JasperGold projects have markers but no current session log")
     if any(item["project_layout_state"] == "explicit_unverified" for item in projects):

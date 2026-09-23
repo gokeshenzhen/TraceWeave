@@ -822,6 +822,13 @@ and engine caches are excluded and never opened. This keeps proof semantics in
 the formal tool or MCP client, where the producing command and property context
 are available.
 
+When waveforms are found without project entries, both automatic `wave_only`
+discovery and explicit exports add one short readback hint to the existing
+`hints` list. It points to summary/search as needed and the existing point/batch
+readers. The caller selects the waveform, signals and timestamp; discovery does
+not open waveforms or construct a query. The coverage receipt and hint cap still
+apply, including when a limited scan has found only a prefix of the artifacts.
+
 Exported VCD/FSDB files reuse the existing waveform backends. A recognized
 JasperGold VCD `$version` produces only a normalized `producer_hint`; exact
 `:jasper_formal_clock` and `:jasper_formal_reset` search rows receive optional
