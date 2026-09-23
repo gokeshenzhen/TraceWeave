@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from dataclasses import replace
 
+from .expression_errors import ExpressionError
 from .cancellation import check_cancelled
 from .event_pages import Event, EventPage, GroupCursor, IncompleteGroup, limits
 from .expression_binding import bind_expression
@@ -138,7 +139,7 @@ class ExpressionParser(SelectionParser):
         bound = bind_expression(self.parser,spec)
         if bound.key not in self.expressions:
             if len(self.expressions) >= 128:
-                raise ValueError('expression_count_limit')
+                raise ExpressionError('expression_count_limit')
             self.expressions[bound.key] = bound
             self.observations[bound.key] = dict(observations=[],observation_count=0,
                 observations_truncated=False,gaps=[],coverage_status='not_observed',observed_bits=0)
@@ -244,7 +245,7 @@ class ExpressionParser(SelectionParser):
         # Oversized resident groups are read one declaration at a time into a
         # bounded request buffer. Never nest loads inside an active FSDB group.
         if getattr(self.parser,'_transition_group_active',False):
-            raise ValueError('expression_dependency_group_unavailable')
+            raise ExpressionError('expression_dependency_group_unavailable')
         budget, stored = ReadBudget(),[]
         header = self.parser.get_header()
         for p in self.expressions[path].paths:
@@ -261,7 +262,7 @@ class ExpressionParser(SelectionParser):
                     stored.append(StoredReader(pages,readers[0].width,readers[0].end_fs))
             except EventPagingUnavailable:
                 if header.get('scale_fs_per_tick',0) < 1000:
-                    raise ValueError('legacy_sub_ps_order_unavailable')
+                    raise ExpressionError('legacy_sub_ps_order_unavailable')
                 raw = self.parser.get_transitions(p,start_ps=start,end_ps=end)
                 from .divergence_compare import bit_value
                 width = self.parser.get_signal_width(p)
@@ -284,7 +285,7 @@ class ExpressionParser(SelectionParser):
         if path not in self.expressions:
             return super().get_transitions(path,start_ps,end_ps)
         if start_ps < 0 or end_ps < -1 or 0 <= end_ps < start_ps:
-            raise ValueError('expression_window_invalid')
+            raise ExpressionError('expression_window_invalid')
         self.expressions[path].validate(self.parser)
         header = self.parser.get_header()
         rows, previous, truncated = [],None,False
@@ -330,13 +331,13 @@ class ExpressionParser(SelectionParser):
     def sample_columns(self,paths,edges,offset,sample_times,session,*,sample_phase='after'):
         from .cycle_query import _sample_signal_columns_at_edges
         if len(edges)*len(paths) > MAX_PROJECTED_CELLS or len(edges)*sum(self.get_signal_width(p) for p in paths) > MAX_PROJECTED_BITS:
-            raise ValueError('expression_sample_limit')
+            raise ExpressionError('expression_sample_limit')
         sample_times = sample_times if sample_times is not None else [e+offset for e in edges]
         cache, errors, limited, columns = {},{},set(),{}
         def column(p):
             if p not in cache:
                 if len(edges)*(len(cache)+1) > MAX_PROJECTED_CELLS or len(edges)*sum(self.parser.get_signal_width(x) for x in (*cache,p)) > MAX_PROJECTED_BITS:
-                    raise ValueError('expression_dependency_sample_limit')
+                    raise ExpressionError('expression_dependency_sample_limit')
                 raw,failed,truncated = _sample_signal_columns_at_edges(self.parser,[p],edges,offset,
                     sample_times=sample_times,sampling_session=session,safe_prefix_only=True,sample_phase=sample_phase)
                 cache[p] = raw.get(p,[None]*len(edges))

@@ -366,7 +366,9 @@ def selection_inputs(*names):
                 if isinstance(value,str) and value in expressions:
                     width = 1 if name in controls else 2 if name=='valid_htrans' else None
                     if width is not None and parser.get_signal_width(value) != width:
-                        raise ValueError(f'{name} expression must be {width}-bit')
+                        from .expression_errors import ExpressionError
+                        raise ExpressionError('expression_control_width_invalid', parameter=name,
+                            message=f'{name} expression must be {width}-bit')
             result = function(**{**kwargs, **bound, "get_parser": lambda _: parser})
             return attach_selections(result, parser)
         return call

@@ -1687,6 +1687,19 @@ class KeywordLimitErrorResult(ToolErrorResult):
     recovery: str
 
 
+class ExpressionRecovery(SchemaModel):
+    action: str
+    message: str
+
+
+class ExpressionToolErrorResult(ToolErrorResult):
+    reason: str
+    operand: str | None = None
+    position: int | None = Field(default=None, ge=0)
+    parameter: str | None = None
+    recovery: ExpressionRecovery
+
+
 # ---------------------------------------------------------------------------
 # Auto-debug v2: cursors + verify primitives
 # ---------------------------------------------------------------------------

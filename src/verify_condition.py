@@ -146,7 +146,9 @@ def period(
     parser = get_parser(wave_path)
     derived = signal in getattr(parser,'expressions',{})
     if derived and parser.get_signal_width(signal) != 1:
-        raise ValueError('period expression must be 1-bit')
+        from .expression_errors import ExpressionError
+        raise ExpressionError('expression_control_width_invalid', parameter='signal',
+            message='period expression must be 1-bit')
     tr = parser.get_transitions(signal, start_ps, end_ps)
     eff_start = int(tr.get("start_ps", start_ps))
     eff_end = int(tr.get("end_ps", end_ps))

@@ -170,6 +170,8 @@ clock/valid/ready/reset 要求一 bit，`valid_htrans` 要求两 bit。
 
 `expressions` 包含 `kind="derived"`、类型来源、实际采样依赖与 `coverage_status`。
 `observations_truncated` 是证据展示上限，与实际读取覆盖截断分开。
+`complete` 表示观察覆盖完整，不表示表达式为真或结果没有 X/Z；`partial` 和
+`not_observed` 不能用来排除问题。实际观测 X/Z 与未 dump、缺失元素分别记录。
 自动回溯保留两侧实际值和推导值、control/index/data 角色、触发边沿与采样时刻；
 选中数据不同会记 `selected_dependency_changed`，索引差异会记 `index_difference`。
 NPI 缺少确定运算/类型/顺序事实时整条重启到 Slang，不混合后端来源。
@@ -182,3 +184,26 @@ NPI 缺少确定运算/类型/顺序事实时整条重启到 Slang，不混合�
 不执行赋值、自增/自减、任意用户函数/任务/DPI、类/队列/关联或运行时变长数组、
 实数/字符串计算、完整过程块解释或跨时刻公式。普通查询不增加副作用，也不会
 自动寻找未提供的编译上下文。`search_signals` 和 driver/load/path 查询继续处理真实对象。
+
+## 客户端错误恢复
+
+工具仍在 MCP 文本内容中返回 JSON。先检查 `error` 字段，不要仅凭传输成功或
+MCP `isError=false` 判定求值成功。表达式错误保留 `error`，并增加稳定的
+`error_code`、具体 `reason`、已知时的 `operand` / `parameter` / `position`，
+以及 `recovery: {action,message}`。`position` 是表达式文本的零起始字符偏移。
+MCP 层直接拒绝不符合 inputSchema 的参数时，请先按该 schema 修正；请求尚未进入求值器。
+
+| error_code | 客户端下一步 |
+|---|---|
+| `expression_type_unresolved` | 提供相关操作数的声明类型；只有明确需要 unsigned 向量视图时才选择 `wave_bits` |
+| `expression_signal_unresolved` | 对当前波形调用 `search_signals`，修正 `bindings`；不要猜测未 dump 值 |
+| `expression_shape_invalid` | 核对 packed/unpacked 范围、成员偏移、总宽度和稀疏元素映射 |
+| `expression_syntax_invalid` / `expression_unsupported` | 修正值表达式；不执行过程语句、任意函数或副作用 |
+| `expression_constant_required` | 明确提供切片宽度、复制次数等常量；不把动态宽度改称受支持 |
+| `expression_control_width_invalid` | 使用符合角色位宽的表达式；Boolean 控制可写显式比较 |
+| `expression_limit_exceeded` | 拆分公式/依赖、减少宽度，或缩小采样窗口/周期数 |
+| `expression_input_invalid` / `expression_binding_invalid` / `expression_operand_invalid` | 按 `parameter` / `operand` 修正字段、固定选择或运算数 |
+| `expression_sampling_unavailable` | 检查波形版本和读取能力；点查询不能证明缺失的事件顺序 |
+
+修正请求后再重试。数组中未映射的选中元素等缺失观察可能返回正常结果加
+`coverage_status="partial"` 和 `gaps`，并非所有证据不足都抛输入错误。

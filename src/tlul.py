@@ -51,6 +51,10 @@ def inspect_tlul(*, get_parser, wave_path, clock, fields=None, reset=None,
     for name, path in {**mapped, "clock": clock, **({"reset": reset} if reset else {})}.items():
         width = parser.get_signal_width(path)
         if name in ("a_valid", "a_ready", "d_valid", "d_ready", "clock", "reset", "d_error") and width != 1:
+            if path in getattr(parser, 'expressions', {}):
+                from .expression_errors import ExpressionError
+                raise ExpressionError('expression_control_width_invalid', parameter=name,
+                    message=f"{name} must select one bit")
             raise ValueError(f"{name} must select one bit")
     for left, right in (("a_source", "d_source"), ("a_size", "d_size")):
         if left in mapped and right in mapped and parser.get_signal_width(mapped[left]) != parser.get_signal_width(mapped[right]):

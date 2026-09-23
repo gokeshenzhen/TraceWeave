@@ -7099,6 +7099,11 @@ async def list_tools():
         properties = tool.inputSchema["properties"]
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
+            tool.description += (
+                " Derived results are in expressions: inspect coverage_status/gaps; partial or not_observed "
+                "cannot exclude a problem. Observed X/Z differs from missing data. observations_truncated "
+                "limits displayed evidence only. An error field means failure: use error_code/recovery "
+                "and correct the arguments before retrying.")
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
             properties.update(schemas.EvidenceOutputOptions.model_json_schema()["properties"])
         if tool.name in {"inspect_tlul", "reconstruct_transactions"}:
@@ -10028,6 +10033,9 @@ def _serialize_result(result: BaseModel | dict) -> str:
 
 
 def _format_error(exc: Exception) -> schemas.ToolErrorResult:
+    from src.expression_errors import ExpressionError
+    if isinstance(exc, ExpressionError):
+        return schemas.ExpressionToolErrorResult.model_validate(exc.payload())
     message = str(exc)
     if "FSDB parsing unavailable" in message:
         return schemas.ToolErrorResult.model_validate(

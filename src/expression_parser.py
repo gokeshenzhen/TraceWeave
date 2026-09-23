@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import math
 import re
 
+from .expression_errors import ExpressionError
 from .cancellation import check_cancelled
 from .dynamic_evidence import Expr, evaluate, MAX_EXPR_NODES, MAX_EXPR_DEPTH, MAX_EXPR_WIDTH
 from .expression_values import BINARY, COMPARISONS, LOGICAL, LEFT_TYPED, number
@@ -33,21 +34,23 @@ class Syntax:
 class Parser:
     def __init__(self, text):
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
-            raise ValueError('expression_text_limit')
+            raise ExpressionError('expression_text_limit')
         self.tokens = []
         position = 0
         for match in _TOKEN.finditer(text):
             if match.start() != position:
-                raise ValueError(f'expression_invalid_token_at_{position}')
+                raise ExpressionError('expression_invalid_token', position=position,
+                    message=f'expression_invalid_token_at_{position}')
             position = match.end()
             token = match[0]
             if token.isspace() or token.startswith(('//', '/*')):
                 continue
             self.tokens.append(token)
             if len(self.tokens) > MAX_EXPR_NODES * 8:
-                raise ValueError('dynamic_expression_limit')
+                raise ExpressionError('dynamic_expression_limit')
         if position != len(text):
-            raise ValueError(f'expression_invalid_token_at_{position}')
+            raise ExpressionError('expression_invalid_token', position=position,
+                message=f'expression_invalid_token_at_{position}')
         self.tokens.append('<end>')
         self.index = self.nodes = 0
 
@@ -57,22 +60,22 @@ class Parser:
     def take(self, expected=None):
         token = self.peek()
         if expected is not None and token != expected:
-            raise ValueError(f'expression_expected_{expected}')
+            raise ExpressionError('expression_syntax_invalid', message=f'expression_expected_{expected}')
         if token == '<end>':
-            raise ValueError('expression_unexpected_end')
+            raise ExpressionError('expression_unexpected_end')
         self.index += 1
         return token
 
     def node(self, op, args=(), text=''):
         self.nodes += 1
         if self.nodes > MAX_EXPR_NODES:
-            raise ValueError('dynamic_expression_limit')
+            raise ExpressionError('dynamic_expression_limit')
         return Syntax(op, tuple(args), text)
 
     def expression(self, minimum=0, depth=0):
         check_cancelled()
         if depth > MAX_EXPR_DEPTH:
-            raise ValueError('dynamic_expression_limit')
+            raise ExpressionError('dynamic_expression_limit')
         token = self.take()
         if token in _PREFIX:
             node = self.node('unary', (self.expression(14, depth+1),), token)
@@ -106,7 +109,7 @@ class Parser:
         elif token.startswith('\\') or re.fullmatch(r'[a-zA-Z_$][a-zA-Z_0-9$]*', token):
             node = self.node('name', text=token)
         else:
-            raise ValueError('expression_operand_expected')
+            raise ExpressionError('expression_operand_expected')
         while True:
             token = self.peek()
             if token == "'" and node.op in {'literal', 'name'}:
@@ -122,7 +125,7 @@ class Parser:
                 sep = self.take()
                 name = self.take()
                 if not (name.startswith('\\') or re.fullmatch(r'[a-zA-Z_$][a-zA-Z_0-9$]*', name)):
-                    raise ValueError('expression_member_expected')
+                    raise ExpressionError('expression_member_expected')
                 node = self.node('member', (node,), sep + name)
             elif token == '[':
                 self.take('[')
@@ -167,7 +170,7 @@ class Parser:
                     self.take(',')
                 self.take('}')
                 if not items:
-                    raise ValueError('expression_empty_set')
+                    raise ExpressionError('expression_empty_set')
                 node = self.node('inside', (node, *items))
             else:
                 rhs = self.expression(precedence if op in {'->', '<->'} else precedence+1, depth+1)
@@ -183,13 +186,13 @@ class Parser:
                 result.append(self.expression(0, depth))
         self.take(end)
         if not result:
-            raise ValueError('expression_empty_arguments')
+            raise ExpressionError('expression_empty_arguments')
         return tuple(result)
 
     def parse(self):
         node = self.expression()
         if self.peek() != '<end>':
-            raise ValueError('expression_trailing_input')
+            raise ExpressionError('expression_trailing_input')
         return node
 
 
@@ -205,15 +208,15 @@ class Type:
 
     def __post_init__(self):
         if type(self.width) is not int or not 1 <= self.width <= MAX_EXPR_WIDTH:
-            raise ValueError('expression_width_limit')
+            raise ExpressionError('expression_width_limit')
         dims = self.dimensions
         if len(dims) > 8 or any(len(r) != 2 or any(type(i) is not int or abs(i) >= 2**63 for i in r) for r in dims):
-            raise ValueError('expression_dimensions_invalid')
+            raise ExpressionError('expression_dimensions_invalid')
         if self.packed and math.prod(abs(a-b)+1 for a,b in self.packed) != self.width:
-            raise ValueError('expression_packed_shape_invalid')
+            raise ExpressionError('expression_packed_shape_invalid')
         if self.members and any(offset < 0 or offset + member.width > self.width
                                 for _,offset,member in self.members):
-            raise ValueError('expression_member_shape_invalid')
+            raise ExpressionError('expression_member_shape_invalid')
 
     @property
     def dimensions(self):
@@ -241,11 +244,11 @@ def literal(text):
         digits, signed, base, payload = match.groups()
         radix = {'b':2,'o':8,'d':10,'h':16}[base]
         if any(c not in '0123456789abcdef'[:radix] + 'xz?' for c in payload):
-            raise ValueError('expression_literal_invalid')
+            raise ExpressionError('expression_literal_invalid')
         if base == 'd':
             if any(c in 'xz?' for c in payload):
                 if len(payload) != 1:
-                    raise ValueError('expression_literal_invalid')
+                    raise ExpressionError('expression_literal_invalid')
                 bits = 'z' if payload == '?' else payload
             else:
                 bits = bin(int(payload, radix))[2:]
@@ -255,11 +258,11 @@ def literal(text):
                            else format(int(c,radix), f'0{digit_width}b') for c in payload)
         width = int(digits) if digits else max(32,len(bits))
         if not 1 <= width <= MAX_EXPR_WIDTH:
-            raise ValueError('expression_width_limit')
+            raise ExpressionError('expression_width_limit')
         bits = bits[-width:].rjust(width, bits[0] if bits[0] in 'xz' else '0')
         return Typed(Expr('const', width, value=bits, signed=bool(signed)), _plain(width,bool(signed)))
     if not raw.isdigit() or len(raw) > 1233:
-        raise ValueError('expression_literal_invalid')
+        raise ExpressionError('expression_literal_invalid')
     integer = int(raw)
     width = max(32, integer.bit_length())
     value = number(integer, width, True)
@@ -300,11 +303,11 @@ def constant(value):
         node = pending.pop()
         count += 1
         if count > MAX_EXPR_NODES or node.op in {'signal','unsupported','array','array_select'}:
-            raise ValueError('expression_constant_required')
+            raise ExpressionError('expression_constant_required')
         pending.extend(node.args)
     result = evaluate(value.expr, lambda _: {})
     if result.value is None or any(c in result.value for c in 'xz'):
-        raise ValueError('expression_known_constant_required')
+        raise ExpressionError('expression_known_constant_required')
     from .expression_values import Value
     return Value(result.value,value.type.signed).integer
 
@@ -334,16 +337,21 @@ class Compiler:
         result = self.lower(Parser(text).parse())
         # Validate expanded trees as well as the original syntax budget.
         from dataclasses import asdict
-        Expr.from_dict(asdict(result.expr))
+        try:
+            Expr.from_dict(asdict(result.expr))
+        except ValueError as exc:
+            if str(exc) in {'dynamic_expression_limit', 'dynamic_expression_width_limit'}:
+                raise ExpressionError(str(exc)) from exc
+            raise
         if result.type.unpacked:
-            raise ValueError('expression_array_requires_selection')
+            raise ExpressionError('expression_array_requires_selection')
         return result
 
     def lower(self, node, depth=0):
         check_cancelled()
         self.count += 1
         if self.count > MAX_EXPR_NODES or depth > MAX_EXPR_DEPTH:
-            raise ValueError('dynamic_expression_limit')
+            raise ExpressionError('dynamic_expression_limit')
         def lower(n):
             return self.lower(n, depth+1)
         path = static_name(node)
@@ -352,13 +360,14 @@ class Compiler:
                 return self.resolve(path)
             except KeyError:
                 if node.op == 'name':
-                    raise ValueError('expression_signal_unresolved: ' + path) from None
+                    raise ExpressionError('expression_signal_unresolved', operand=path,
+                        message='expression_signal_unresolved: ' + path) from None
         if node.op == 'literal':
             return literal(node.text)
         if node.op == 'unary':
             value = lower(node.args[0])
             if value.type.unpacked:
-                raise ValueError('expression_array_requires_selection')
+                raise ExpressionError('expression_array_requires_selection')
             op = 'u' + node.text if node.text in {'+','-'} else 'not' if node.text == '!' else (
                 node.text if node.text == '~' else 'reduce_' + node.text)
             typ = _plain(1) if op == 'not' or op.startswith('reduce_') else _plain(value.type.width,value.type.signed)
@@ -366,7 +375,7 @@ class Compiler:
         if node.op == 'binary':
             a,b = map(lower,node.args)
             if a.type.unpacked or b.type.unpacked:
-                raise ValueError('expression_array_requires_selection')
+                raise ExpressionError('expression_array_requires_selection')
             op = node.text
             if op in LOGICAL:
                 return Typed(Expr(op,1,(a.expr,b.expr)),_plain(1))
@@ -380,14 +389,14 @@ class Compiler:
         if node.op == 'mux':
             cond,a,b = map(lower,node.args)
             if cond.type.unpacked or a.type.unpacked or b.type.unpacked:
-                raise ValueError('expression_array_requires_selection')
+                raise ExpressionError('expression_array_requires_selection')
             width,signed = max(a.type.width,b.type.width),a.type.signed and b.type.signed
             a,b = context(a,width,signed),context(b,width,signed)
             return Typed(Expr('mux',width,(cond.expr,a.expr,b.expr),signed=signed),_plain(width,signed))
         if node.op == 'concat':
             children = [lower(a) for a in node.args]
             if any(c.type.unpacked for c in children):
-                raise ValueError('expression_concat_operand_invalid')
+                raise ExpressionError('expression_concat_operand_invalid')
             width = sum(c.type.width for c in children)
             typ = _plain(width)
             return Typed(Expr('concat',width,tuple(c.expr for c in children)),typ)
@@ -395,7 +404,7 @@ class Compiler:
             first,second = map(lower,node.args)
             count = constant(first if node.op == 'repeat' else second)
             if not 1 <= count <= MAX_EXPR_WIDTH:
-                raise ValueError('expression_constant_size_invalid')
+                raise ExpressionError('expression_constant_size_invalid')
             width = count*second.type.width if node.op == 'repeat' else first.type.width
             op = 'repeat' if node.op == 'repeat' else 'stream_left' if node.text == '<<' else 'stream_right'
             typ = _plain(width)
@@ -412,9 +421,9 @@ class Compiler:
             elif target in self.types:
                 typ = self.types[target]
             else:
-                raise ValueError('expression_type_unresolved')
+                raise ExpressionError('expression_type_unresolved', operand=target)
             if typ.unpacked or value.type.unpacked:
-                raise ValueError('expression_array_cast_unsupported')
+                raise ExpressionError('expression_array_cast_unsupported')
             # A sized/type cast supplies width context, but its signedness
             # applies to the completed conversion, not to its operand.
             inner = context(value,max(value.type.width,typ.width),value.type.signed)
@@ -423,10 +432,10 @@ class Compiler:
             base = lower(node.args[0])
             index = lower(node.args[1])
             if index.type.unpacked:
-                raise ValueError('expression_index_not_integral')
+                raise ExpressionError('expression_index_not_integral')
             if base.type.unpacked:
                 if node.op != 'index':
-                    raise ValueError('expression_unpacked_slice_unsupported')
+                    raise ExpressionError('expression_unpacked_slice_unsupported')
                 typ = replace(base.type,unpacked=base.type.unpacked[1:])
                 return Typed(Expr('array_select',typ.width,(base.expr,index.expr),
                     bounds=base.type.unpacked[0],signed=typ.signed,two_state=typ.two_state),typ)
@@ -441,7 +450,7 @@ class Compiler:
             if node.text == ':':
                 start = constant(index)
                 if (start < count) != (bounds[0] < bounds[1]) and start != count:
-                    raise ValueError('expression_part_direction_invalid')
+                    raise ExpressionError('expression_part_direction_invalid')
                 low = min(start,count)
                 count = abs(start-count)+1
                 index = Typed(Expr('const',64,value=number(low,64,True).bits,signed=True),_plain(64,True))
@@ -449,7 +458,7 @@ class Compiler:
             else:
                 op = 'part_up' if node.text == '+:' else 'part_down'
             if not 1 <= count <= MAX_EXPR_WIDTH//stride:
-                raise ValueError('expression_part_width_invalid')
+                raise ExpressionError('expression_part_width_invalid')
             width = count*stride
             return Typed(Expr(op,width,(base.expr,index.expr),bounds=bounds,stride=stride),_plain(width))
         if node.op == 'member':
@@ -457,7 +466,7 @@ class Compiler:
             name = node.text[1:]
             member = next((m for m in base.type.members if m[0] == name),None)
             if member is None or base.type.unpacked:
-                raise ValueError('expression_member_type_unresolved')
+                raise ExpressionError('expression_member_type_unresolved', operand=name)
             _,offset,typ = member
             positions = tuple(range(base.type.width-offset-typ.width,base.type.width-offset))
             return Typed(Expr('project',typ.width,(base.expr,),bits=positions,signed=typ.signed),typ)
@@ -468,10 +477,13 @@ class Compiler:
         if node.op == 'call':
             name = node.text
             allowed = _TYPE_QUERIES | {'$signed','$unsigned','$clog2','$isunknown','$countones','$countbits','$onehot','$onehot0'}
-            if name not in allowed or (len(node.args)<2 if name=='$countbits' else
+            if name not in allowed:
+                raise ExpressionError('expression_function_unsupported', operand=name,
+                    message='expression_function_arity_invalid')
+            if (len(node.args)<2 if name=='$countbits' else
                     len(node.args) not in {1,2} if name in _TYPE_QUERIES-{'$bits','$dimensions','$unpacked_dimensions'} else
                     len(node.args)!=1):
-                raise ValueError('expression_function_arity_invalid')
+                raise ExpressionError('expression_function_arity_invalid', operand=name)
             if name in _TYPE_QUERIES:
                 # Types suffice for the first argument, including a type name
                 # or an undumped explicitly typed declaration. Runtime index
@@ -499,14 +511,14 @@ class Compiler:
                 elif name not in {'$bits','$dimensions','$unpacked_dimensions'} and len(args) in {1,2}:
                     index = args[1] if len(args)==2 else literal('1')
                     if index.type.unpacked:
-                        raise ValueError('expression_index_not_integral')
+                        raise ExpressionError('expression_index_not_integral')
                     return Typed(Expr('dimension',32,(index.expr,),dimensions=dims,function=name,signed=True),_plain(32,True))
                 else:
-                    raise ValueError('expression_function_arity_invalid')
+                    raise ExpressionError('expression_function_arity_invalid')
                 return Typed(Expr('const',32,value=number(value,32,True).bits,signed=True),_plain(32,True))
             args = [lower(a) for a in node.args]
             if any(a.type.unpacked for a in args):
-                raise ValueError('expression_array_requires_selection')
+                raise ExpressionError('expression_array_requires_selection')
             if name in {'$signed','$unsigned'}:
                 typ = replace(args[0].type,signed=name == '$signed')
             elif name in {'$onehot','$onehot0','$isunknown'}:
@@ -515,4 +527,4 @@ class Compiler:
                 typ = _plain(32,True)
             return Typed(Expr('function',typ.width,tuple(a.expr for a in args),
                               signed=typ.signed,function=name),typ)
-        raise ValueError('expression_syntax_unsupported')
+        raise ExpressionError('expression_syntax_unsupported')

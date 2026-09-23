@@ -771,6 +771,10 @@ def _full_clock_edges(parser, clock_path, edge):
 def _validate_clock_width(parser, clock_path: str) -> None:
     width = parser.get_signal_width(clock_path)
     if width != 1:
+        if clock_path in getattr(parser, 'expressions', {}):
+            from .expression_errors import ExpressionError
+            raise ExpressionError('expression_control_width_invalid', parameter='clock',
+                message=f"clock signal must be 1-bit, got {width}-bit")
         raise ValueError(f"clock signal must be 1-bit, got {width}-bit")
 
 
