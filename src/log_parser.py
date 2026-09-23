@@ -31,7 +31,9 @@ from .problem_hints import compute_problem_hints_from_events, event_has_x_or_z
 
 _VCS_ASSERT_RE = re.compile(
     r'"([^"]+)",\s*(\d+):\s+'
-    r'([\w.]+):\s+'
+    # VCS names anonymous immediate-assertion scopes unnamed$$_N and may
+    # include generated instance indices in the reporting hierarchy.
+    r'([\w.$\[\]-]+):\s+'
     r'started at (\d+)(ps|ns|us|fs)\s+'
     r'failed at (\d+)(ps|ns|us|fs)',
     re.IGNORECASE,

@@ -120,6 +120,8 @@ def dump_source(project, top):
 
 def checker_result(project, log):
     errors = re.findall(r"(?im)^.*(?:\b(?:error|fatal)\b|assert(?:ion)?[^\n]*fail|NOT successful|did not complete successfully|TW_WATCHDOG|is unfair).*$", log)
+    # A bare immediate assertion has no Error/$error word in VCS output.
+    errors += re.findall(r'(?im)^"[^"\n]+",\s*\d+:\s+\S+:\s+started at \d+(?:ps|ns|us|fs)\s+failed at \d+(?:ps|ns|us|fs).*$', log)
     if project == "P01":
         completed = len(re.findall(r"Checked 1000 stimuli", log)) == 6
     elif project in {"P03", "P04"}:

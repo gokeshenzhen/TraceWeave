@@ -21,6 +21,20 @@ from src.problem_hints import (
 )
 
 
+@pytest.mark.parametrize("scope", ["tb.proc_check_data.unnamed$$_1", "tb.gen_ch[2].proc_check.unnamed$$_3"])
+def test_vcs_anonymous_immediate_assertion_is_a_runtime_failure(tmp_path, scope):
+    log = tmp_path / "sim.log"
+    log.write_text(f'"/rtl/tb.sv", 239: {scope}: started at 68000ps failed at 68000ps\n'
+                   "\tOffending '(exp_data === data_oup)'\n")
+    parser = SimLogParser(str(log), "vcs")
+    assert parser.parse()["runtime_total_errors"] == 1
+    event = parser.parse_failure_events()[0]
+    assert event["time_ps"] == 68000
+    assert event["source_line"] == 239
+    assert event["instance_path"] == scope
+    assert event["failure_source"] == "assertion"
+
+
 VCS_LOG_SAMPLE = """\
 Command: /home/robin/Projects/mcp_demo/tb/../tb/work/simv +UVM_TESTNAME=my_case0
 Chronologic VCS simulator copyright 1991-2018

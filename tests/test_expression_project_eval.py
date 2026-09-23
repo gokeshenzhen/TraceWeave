@@ -7,6 +7,7 @@ from scripts.expression_project_eval import checker_result
 @pytest.mark.parametrize("project,log", [
     ("P01", "Checked 1000 stimuli\n" * 5),
     ("P02", "TW_RR_COMPLETED\nLine: 2 is unfair!"),
+    ("P02", 'TW_RR_COMPLETED\n"tb.sv", 239: tb.proc_check.unnamed$$_1: started at 68000ps failed at 68000ps'),
     ("P03", "Checked 512 stimuli\nError: Mismatch, Expected: ff Got 0"),
     ("P04", "TW_WATCHDOG"),
     ("P05", "Passed: 10000\nFailed: 1"),
