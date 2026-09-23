@@ -5074,6 +5074,8 @@ def _signal_selection_definitions() -> dict:
     definitions = expression.pop("$defs", {})
     definitions["WaveformExpression"] = expression
     definitions["WaveformSignalInput"] = {
+        "description": "A signal path string, a fixed bit selection, or an explicit {expr,...} object. "
+                       "Use bindings for exact dump paths and types for SV semantics; wave_bits explicitly opts into unsigned vectors.",
         "anyOf": [{"type": "string"}, {"$ref": "#/$defs/WaveformSelection"},
                   {"$ref": "#/$defs/WaveformExpression"}]
     }
@@ -5410,7 +5412,7 @@ async def list_tools():
         ),
         Tool(
             name="get_signal_at_time",
-            description="Query a signal value in a waveform file at a specific time in ps. FSDB support depends on fsdb_runtime.enabled.",
+            description="Read a signal or evaluate an SV expression at one time. Pass formulas as {expr,bindings,types} or explicitly use typing=wave_bits. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -5430,7 +5432,7 @@ async def list_tools():
         Tool(
             name="get_signal_transitions",
             description=(
-                "Return transitions for a signal over the strict closed time range "
+                "Return signal or SV expression transitions over the strict closed time range "
                 "[start_time_ps, end_time_ps] (capped at "
                 f"{TRANSITIONS_MAX_RETURNED} by default; truncated=true + hint mark a clipped "
                 "result, transition_count is always the total found). FSDB support depends "
@@ -5467,7 +5469,7 @@ async def list_tools():
         Tool(
             name="get_signals_around_time",
             description=(
-                "Return values and transitions for multiple signals in a NARROW window "
+                "Return values and transitions for signals or SV expressions in a NARROW window "
                 "around a target timestamp (typically the failure time). Designed for "
                 "local causal-chain inspection; NOT for bulk trace extraction. For "
                 "round-by-round or multi-cycle sampling use get_signals_by_cycle.\n"
@@ -5559,7 +5561,7 @@ async def list_tools():
         Tool(
             name="get_signals_by_cycle",
             description=(
-                "Return cycle-by-cycle sampled values for multiple signals aligned to a clock edge. "
+                "Sample signals or SV expressions each cycle; dynamic indices are re-evaluated at every sample. "
                 "Useful for state machines, pipelines, and round-by-round algorithm checks. "
                 "Check returned sample times and counts: an initially high clock is not a "
                 "rising edge, so read any required initial state separately by timestamp."
@@ -6058,6 +6060,7 @@ async def list_tools():
         Tool(
             name="trace_x_source",
             description=(
+                "Start from a real signal path; supported RTL expressions are extracted internally. "
                 "When a signal shows X/Z at a target time, trace its propagation "
                 "chain through upstream driver logic. Uses the selected connectivity "
                 "route (trusted local/LSF NPI, bounded Source Graph, then Static). "
@@ -6309,7 +6312,7 @@ async def list_tools():
         Tool(
             name="diff_first_divergence",
             description=(
-                "Find the first observed known-value difference, with explicit coverage "
+                "Compare signals or independently bound SV expressions for the first observed known-value difference, with explicit coverage "
                 "and earliest_difference_proven. X/Z, missing values, truncation and time "
                 "precision gaps never prove equality. Works across "
                 "two waveforms (passing run vs failing run) or within one waveform "
@@ -6368,6 +6371,7 @@ async def list_tools():
         Tool(
             name="trace_divergence",
             description=(
+                "Use real signal paths as roots; supported RTL expressions are extracted internally. "
                 "Verify a waveform difference and backtrace its active data/control dependencies "
                 "on both sides within explicit time/work limits. Uses the normal trusted NPI, "
                 "Source Graph, Static route. Each side requires its exact compile context and "
@@ -6383,7 +6387,7 @@ async def list_tools():
         Tool(
             name="period",
             description=(
-                "Estimate a signal's dominant period inside a window and flag the "
+                "Estimate a 1-bit signal or SV expression's dominant period inside a window and flag the "
                 "first beat that deviates from it. Use for rhythm/throughput "
                 "questions an LLM cannot eyeball from a transition dump: stalled "
                 "clocks, dropped burst beats, backpressure bubbles, irregular "
@@ -6583,7 +6587,7 @@ async def list_tools():
         Tool(
             name="verify_window",
             description=(
-                "Evaluate a temporal predicate over a clock window and return a precise "
+                "Check signal conditions or SV expression predicates over a clock window and return a precise "
                 "verdict (holds) plus a concrete witness/counterexample (cycle + sampled "
                 "values). You state the predicate; the tool checks it against the waveform "
                 "over the requested cycles. A term is {signal, op, value} "
@@ -6626,7 +6630,7 @@ async def list_tools():
                     },
                     "predicate": {
                         "type": "array",
-                        "description": "always/never/eventually: list of {signal, op, value} terms, AND-combined.",
+                        "description": "always/never/eventually (or sequence gate): AND-combined {signal,op,value} or {expr,...} terms. Expressions use SV truth conversion.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -6654,12 +6658,12 @@ async def list_tools():
                     },
                     "antecedent": {
                         "type": "array",
-                        "description": "implication only: the A predicate (list of terms).",
+                        "description": "implication only: AND-combined A terms, each {signal,op,value} or {expr,...}.",
                         "items": {"type": "object"},
                     },
                     "consequent": {
                         "type": "array",
-                        "description": "implication only: the B predicate that must follow A.",
+                        "description": "implication only: AND-combined B terms that must follow A, each {signal,op,value} or {expr,...}.",
                         "items": {"type": "object"},
                     },
                     "delta": {
@@ -6685,7 +6689,7 @@ async def list_tools():
                             },
                             "restart_when": {
                                 "type": "array",
-                                "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.",
+                                "description": "Optional AND-combined {signal,op,value} or {expr,...} terms. On accepted beats where true, re-seed for a new burst without checking its increment.",
                                 "items": {"type": "object"},
                             },
                         },
@@ -6732,6 +6736,7 @@ async def list_tools():
         Tool(
             name="reconstruct_transactions",
             description=(
+                "Reconstruct transactions using signal paths or SV expressions for channel fields. "
                 "Samples acceptance and fields strictly before each selected physical clock edge "
                 "(sampling_phase=before); all changes at that timestamp are excluded. "
                 "Reconstruct id-correlated request/response transactions from two "
@@ -6889,6 +6894,7 @@ async def list_tools():
         Tool(
             name="inspect_handshake",
             description=(
+                "Inspect a handshake with signal paths or SV expressions for valid, ready and payload; clocks/control must have the required bit width. "
                 "Samples strictly before each selected physical clock edge (sampling_phase=before); "
                 "all changes at that timestamp are excluded. "
                 "Classify a clocked valid/ready handshake cycle-by-cycle and report "
@@ -7044,11 +7050,7 @@ async def list_tools():
                 prop.pop("type", None)
                 prop.update(_signal_selection_schema())
             prop["description"] = prop.get("description", "") + (
-                " Accepts a string or {path,lsb,width}/{path,bits}. Structured path must be an exact "
-                "dump declaration; lsb is a declared index and width extends toward its left bound. "
-                "bits are ordered MSB first. Also accepts {expr,bindings,types,typing}; provide explicit "
-                "types for SV semantics or typing=wave_bits for unsigned dump vectors. "
-                "Results identify projections in selections and derived values in expressions.")
+                " Accepts a path, fixed selection or {expr,...}; see WaveformSignalInput and WaveformExpression.")
         if tool.name == 'verify_window':
             props = tool.inputSchema['properties']
             legacy = props['predicate']['items']
@@ -7062,6 +7064,7 @@ async def list_tools():
             props['delta']['properties']['restart_when']['items'] = term
     _tools.extend([
         Tool(name="inspect_tlul", description=(
+            "Inspect TL-UL fields mapped to signal paths, fixed selections or SV expressions. "
             "Uses strict before-edge sampling for A/D fields and nested checks (sampling_phase=before). "
             "Inspect explicitly mapped TL-UL A/D fields with the existing handshake and transaction "
             "engines. Missing mappings return mapping_required; packed widths are never guessed. "
