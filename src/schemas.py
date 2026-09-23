@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 import config as _config
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, WithJsonSchema, model_serializer, model_validator
 
 
 class SchemaModel(BaseModel):
@@ -679,14 +679,23 @@ class ExpressionMember(SchemaModel):
     type: "ExpressionType"
 
 
+# Both bounds have the same type. Publish homogeneous items so clients that
+# support items but discard prefixItems still expose integer bounds to models.
+# Runtime validation and the immutable pair representation remain unchanged.
+ExpressionRange = Annotated[
+    tuple[StrictInt, StrictInt],
+    WithJsonSchema({"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}),
+]
+
+
 class ExpressionType(SchemaModel):
     """Caller-supplied integral type; width is the packed element width."""
     width: StrictInt = Field(ge=1, le=4096, description="Total packed width of one unpacked element, including all packed dimensions.")
     signed: bool = Field(default=False, description="RTL signedness; affects extension, comparison and arithmetic right shift.")
     two_state: bool = Field(default=False, description="True for a declared two-state integral type; default is four-state.")
-    packed: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list, max_length=8,
+    packed: list[ExpressionRange] = Field(default_factory=list, max_length=8,
         description="Declared [left,right] ranges, outermost first; e.g. [[3,0],[7,0]] for four packed bytes.")
-    unpacked: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list, max_length=8,
+    unpacked: list[ExpressionRange] = Field(default_factory=list, max_length=8,
         description="Fixed unpacked [left,right] ranges, outermost first; requires an elements binding for value reads.")
     members: list[ExpressionMember] = Field(default_factory=list, max_length=128,
         description="Packed struct/union layout: name, lsb offset, type. For packed arrays, describe the innermost aggregate; its final packed range is the aggregate's flattened bits.")

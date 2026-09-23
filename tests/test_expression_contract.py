@@ -7,10 +7,12 @@ import anyio
 from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from pydantic import ValidationError
 import pytest
 
 import server
 from src.expression_examples import expression_examples
+from src.schemas import ExpressionType
 from scripts.run_expression_examples import run_examples
 from tests.test_expression_observe import wave
 
@@ -93,6 +95,30 @@ async def test_signal_inputs_keep_legacy_and_recursive_type_constraints():
 
 
 @pytest.mark.anyio
+async def test_integer_ranges_survive_clients_without_tuple_schemas():
+    # Some MCP clients discard prefixItems and synthesize string items when
+    # items is absent. Bounds must be expressible without tuple-only keywords.
+    for tool in await server.list_tools():
+        schema = tool.inputSchema.get("$defs", {}).get("ExpressionType")
+        if not schema:
+            continue
+        for field in ("packed", "unpacked"):
+            pair = schema["properties"][field]["items"]
+            assert pair["items"] == {"type": "integer"}
+            portable = {k: v for k, v in pair.items() if k != "prefixItems"}
+            validator = Draft202012Validator(portable)
+            for bounds in ([31, 0], [0, 15], [-1, -8]):
+                validator.validate(bounds)
+                value = ExpressionType.model_validate({"width": 32, field: [bounds]})
+                assert getattr(value, field) == [tuple(bounds)]
+                assert isinstance(getattr(value, field)[0], tuple)
+            for bounds in (["31", "0"], [True, 0], [31], [31, 0, 1]):
+                assert not validator.is_valid(bounds), bounds
+                with pytest.raises(ValidationError):
+                    ExpressionType.model_validate({"width": 32, field: [bounds]})
+
+
+@pytest.mark.anyio
 async def test_expression_list_and_call_over_stdio(tmp_path):
     source = wave(tmp_path)
     root = Path(__file__).resolve().parents[1]
@@ -111,4 +137,19 @@ async def test_expression_list_and_call_over_stdio(tmp_path):
                 assert not result.isError
                 payload = json.loads(result.content[0].text)
                 assert payload["value"]["dec"] == 6
+                assert payload["expressions"][0]["coverage_status"] == "complete"
+
+                # An unpacked array maps onto observed words; the declared
+                # packed and unpacked bounds stay integers through MCP JSON.
+                args["signal_path"] = {
+                    "expr": "m[i]", "bindings": {
+                        "m": {"elements": [{"indices": [3], "signal": "tb.data"}]},
+                        "i": "tb.index"},
+                    "types": {"m": {"width": 8, "packed": [[7, 0]], "unpacked": [[0, 7]]},
+                              "i": {"width": 3}}}
+                Draft202012Validator(tool.inputSchema).validate(args)
+                result = await client.call_tool(tool.name, args)
+                assert not result.isError
+                payload = json.loads(result.content[0].text)
+                assert payload["value"]["dec"] == 8
                 assert payload["expressions"][0]["coverage_status"] == "complete"
