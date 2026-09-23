@@ -230,7 +230,7 @@ def fake_npi(*, fail_upstream=False, cancel=False, constants=False):
                 else signal("top." + side, 8)
             )
             return {
-                "version": "1.0",
+                "version": "2.0",
                 "backend": self.name,
                 "signal": signal_path,
                 "width": 8,

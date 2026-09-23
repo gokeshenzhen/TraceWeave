@@ -51,13 +51,14 @@ class ObservationReader:
 
     def bind(self, expr):
         """Bind reads locally; keep source names in dependency/A-B identities."""
-        key = (expr.signal, expr.bits, expr.declared_bits)
+        key = (expr.signal, expr.bits, expr.declared_bits, expr.array_indices)
         if key not in self.bindings:
             parser = self.get_parser(self.wave)
             bound, gaps = expr, []
             if hasattr(parser, "get_signal_declaration"):
                 try:
-                    bound = signal_expression(parser, expr.signal, expr.bits, expr.declared_bits)
+                    bound = signal_expression(parser, expr.signal, expr.bits, expr.declared_bits,
+                                              array_indices=expr.array_indices)
                 except KeyError:
                     gaps = ["signal_not_dumped"]
                 except ValueError:
@@ -92,6 +93,8 @@ class ObservationReader:
 
     def _sample(self, expr: Expr, time: int, phase="after") -> dict:
         expr, binding_gaps = self.bind(expr)
+        if binding_gaps:
+            return dict(value=None, time_ps=time, phase=phase, gaps=binding_gaps)
         stream = self.stream(expr.signal)
         gaps = list(binding_gaps)
         event = stream.predecessor

@@ -32,7 +32,7 @@ def test_dynamic_lsf_request_and_result_validation():
         DynamicStepWorkerRequest,
     )
     malformed = {
-        "version": "1.0",
+        "version": "2.0",
         "backend": "verdi_npi",
         "boundary": "combinational",
         "branches": [{"guard": {"op": "__import__", "width": 1}, "value": {}}],
@@ -43,7 +43,7 @@ def test_dynamic_lsf_request_and_result_validation():
 def test_dynamic_lsf_receipt_and_parent_only_fallback(tmp_path, monkeypatch):
     received = []
     result = {
-        "version": "1.0",
+        "version": "2.0",
         "backend": "verdi_npi",
         "signal": "top.q",
         "width": 1,

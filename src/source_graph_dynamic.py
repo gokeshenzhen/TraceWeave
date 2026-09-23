@@ -166,7 +166,7 @@ def query_step(backend, signal):
             return replace(
                 expr,
                 signal=f"{match.instance_path}.{expr.signal}" if expr.signal else None,
-                declared_bits=declared.indices if declared else (),
+                declared_bits=declared.indices if declared else expr.declared_bits,
                 args=tuple(bind(a) for a in expr.args),
             )
 

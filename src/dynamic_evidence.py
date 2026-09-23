@@ -12,7 +12,7 @@ from .cancellation import check_cancelled
 from .divergence_compare import bit_value, known
 from .expression_values import Value, BINARY, LOGICAL, LEFT_TYPED, binary, unary, conditional, builtin, stream
 
-DYNAMIC_VERSION = "1.0"
+DYNAMIC_VERSION = "2.0"
 MAX_EXPR_NODES = 256
 MAX_EXPR_DEPTH = 32
 MAX_EXPR_WIDTH = 4096
@@ -35,6 +35,10 @@ class Expr:
     two_state: bool = False
     # Unbased unsized literals retain their fill behavior through width context.
     fill: bool = False
+    # A semantic fixed-array identity. Indices are applied lazily and the
+    # resulting element must still bind to an exact waveform declaration.
+    dimensions: tuple[tuple[int, int], ...] = ()
+    array_indices: tuple[int, ...] = ()
 
     def __post_init__(self):
         if not 1 <= self.width <= MAX_EXPR_WIDTH:
@@ -45,7 +49,7 @@ class Expr:
                            "reduce_^", "reduce_~^", "reduce_^~", "select",
                            "part_up", "part_down", "project", "function",
                            "repeat", "stream_left", "stream_right", "inside", "range",
-                           "array", "array_select"} | BINARY):
+                           "array", "array_ref", "array_select"} | BINARY):
             raise ValueError("dynamic_expression_operator_invalid")
         arity = {"signal": 0, "const": 0, "not": 1, "and": 2, "or": 2,
                  "eq": 2, "ne": 2, "mux": 3, "cast": 1}
@@ -85,6 +89,14 @@ class Expr:
             raise ValueError("dynamic_array_mapping_invalid")
         if self.op == "array_select" and self.bounds is None:
             raise ValueError("dynamic_array_mapping_invalid")
+        if (len(self.dimensions) > 8 or len(self.array_indices) > 8 or
+                any(len(d) != 2 or any(type(i) is not int or abs(i) >= 2**63 for i in d)
+                    for d in self.dimensions) or
+                any(type(i) is not int or abs(i) >= 2**63 for i in self.array_indices)):
+            raise ValueError("dynamic_array_mapping_invalid")
+        if self.op == "array_ref" and (not self.signal or not self.dimensions or self.args
+                or len(self.bits) != self.width or len(self.declared_bits) != self.width):
+            raise ValueError("dynamic_array_mapping_invalid")
         if self.op in {"select", "part_up", "part_down"}:
             extent = abs(self.bounds[0] - self.bounds[1]) + 1 if self.bounds else self.args[0].width // self.stride
             if (extent * self.stride != self.args[0].width or self.width % self.stride or
@@ -100,6 +112,8 @@ class Expr:
         return cls(**{**raw, "bits": tuple(raw.get("bits", ())),
                       "declared_bits": tuple(raw.get("declared_bits", ())),
                       "bounds": tuple(raw["bounds"]) if raw.get("bounds") is not None else None,
+                      "dimensions": tuple(tuple(d) for d in raw.get("dimensions", ())),
+                      "array_indices": tuple(raw.get("array_indices", ())),
                       "args": tuple(cls.from_dict(a, _budget=budget, _depth=_depth + 1)
                                     for a in raw.get("args", ()))})
 
@@ -161,7 +175,7 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
         budget -= 1
         if budget < 0 or depth > MAX_EXPR_DEPTH:
             return None, Evaluation(None, [], ["dynamic_expression_limit"], [])
-        if node.op == "array":
+        if node.op in {"array", "array_ref"}:
             return node, Evaluation(None, [], [], [])
         if node.op != "array_select":
             return None, Evaluation(None, [], ["array_mapping_unavailable"], [])
@@ -184,6 +198,15 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             history.value = ("0" if node.two_state else "x") * node.width
             history.gaps.append("index_out_of_range")
             return None, history
+        if container.op == "array_ref":
+            if node.bounds != container.dimensions[0]:
+                history.gaps.append("array_mapping_unavailable")
+                return None, history
+            indices = (*container.array_indices, at)
+            if len(container.dimensions) > 1:
+                return replace(container, dimensions=container.dimensions[1:], array_indices=indices), history
+            path = container.signal + "".join(f"[{i}]" for i in indices)
+            return replace(container, op="signal", signal=path, dimensions=(), array_indices=indices), history
         if at not in container.bits:
             history.gaps.append("array_element_not_dumped")
             return None, history
@@ -215,13 +238,13 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             target, indices = array_target(node, use, depth+1)
             if target is None:
                 return indices
-            if target.op == "array":
+            if target.op in {"array", "array_ref"}:
                 return Evaluation(None, indices.dependencies, indices.gaps + ["array_requires_selection"], indices.branches)
             data = walk(target, use, depth+1)
             return Evaluation(data.value, indices.dependencies + data.dependencies,
                               list(dict.fromkeys(indices.gaps + data.gaps)),
                               indices.branches + data.branches, data.reference)
-        if node.op == "array":
+        if node.op in {"array", "array_ref"}:
             return Evaluation(None, [], ["array_requires_selection"], [])
         if node.op in LOGICAL:
             lhs = walk(node.args[0], "control", depth+1)

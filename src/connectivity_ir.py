@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping
 from .dynamic_evidence import Assignment as DynamicAssignment
 
 
-CONNECTIVITY_IR_VERSION = "1.3"
+CONNECTIVITY_IR_VERSION = "1.4"
 
 
 class DefinitionKind(str, Enum):

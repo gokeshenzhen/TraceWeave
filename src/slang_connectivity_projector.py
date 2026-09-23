@@ -668,11 +668,14 @@ class SlangConnectivityProjector:
                 packed_range = _packed_range(member)
                 location = self._location(member.location)
                 if packed_range is None or location is None:
+                    from .slang_dynamic import fixed_array_type
+                    fixed_array = fixed_array_type(getattr(member, 'type', None))
                     self._gaps.add(
-                        code="signal_shape_unresolved",
+                        code="array_connectivity_unmodeled" if fixed_array else "signal_shape_unresolved",
+                        impact=CoverageStatus.PARTIAL if fixed_array else CoverageStatus.INCONCLUSIVE,
                         message=f"cannot project packed shape for {absolute_path}",
                         constructs=(kind.lower(),),
-                        scopes=(record.path,),
+                        scopes=(absolute_path,) if fixed_array else (record.path,),
                         location=location,
                     )
                     continue
@@ -772,11 +775,14 @@ class SlangConnectivityProjector:
                 continue
             packed_range = _packed_range(port)
             if packed_range is None:
+                from .slang_dynamic import fixed_array_type
+                fixed_array = fixed_array_type(getattr(port, 'type', None))
                 self._gaps.add(
-                    code="port_shape_unresolved",
+                    code="array_connectivity_unmodeled" if fixed_array else "port_shape_unresolved",
+                    impact=CoverageStatus.PARTIAL if fixed_array else CoverageStatus.INCONCLUSIVE,
                     message=f"cannot project packed shape for {record.path}.{port.name}",
                     constructs=("port",),
-                    scopes=(record.path,),
+                    scopes=(f'{record.path}.{port.name}',) if fixed_array else (record.path,),
                     location=location,
                 )
                 continue
@@ -1324,6 +1330,21 @@ class SlangConnectivityProjector:
     ) -> list[AssignmentFact]:
         targets = self._template_exact_operands(assignment.left, record, aliases)
         if not targets:
+            # Fixed memory writes are a separate storage boundary. They cannot
+            # invalidate an otherwise fully projected scalar output driver.
+            from .slang_dynamic import fixed_array_type
+            base = _unwrap_expression(assignment.left)
+            while _kind_name(base) in {'ElementSelect', 'RangeSelect', 'MemberAccess'}:
+                base = _unwrap_expression(base.value)
+            array_path = self._template_symbol_path(base, record, aliases)
+            if array_path and fixed_array_type(getattr(base, 'type', None)):
+                self._skipped_assignments += 1
+                self._gaps.add(code='array_write_not_reconstructed',
+                    message='array writes do not reconstruct undumped storage',
+                    impact=CoverageStatus.PARTIAL,
+                    constructs=('assignment',), scopes=(f'{record.path}.{array_path}',),
+                    location=fallback_location)
+                return []
             self._skip_assignment(
                 record,
                 "assignment_target_unresolved",
@@ -1595,6 +1616,16 @@ class SlangConnectivityProjector:
             if not selected_bits:
                 return None
             return SignalSelection(symbol=base.symbol, bits=selected_bits)
+        relative = self._template_symbol_path(expression, record, aliases)
+        if relative is None:
+            return None
+        symbol = _underlying_symbol(_expression_symbol(expression))
+        packed_range = _packed_range(symbol)
+        if packed_range is None:
+            return None
+        return SignalSelection(symbol=relative, bits=packed_range.indices)
+
+    def _template_symbol_path(self, expression, record, aliases):
         symbol = _expression_symbol(expression)
         if symbol is None:
             return None
@@ -1614,10 +1645,7 @@ class SlangConnectivityProjector:
                     break
         if relative is None:
             return None
-        packed_range = _packed_range(symbol)
-        if packed_range is None:
-            return None
-        return SignalSelection(symbol=relative, bits=packed_range.indices)
+        return relative
 
     def _bound_expression_operands(
         self,
@@ -2088,6 +2116,8 @@ def _packed_range(symbol: Any) -> BitRange | None:
         width = int(fixed.width)
         if width < 1:
             return None
+        if width != int(value_type.bitWidth):
+            return BitRange.from_width(int(value_type.bitWidth))
         return BitRange(int(fixed.left), int(fixed.right))
     except Exception:
         try:
@@ -2393,50 +2423,51 @@ def _selected_bits(
     context_symbol: Any | None = None,
 ) -> tuple[int, ...]:
     kind = _kind_name(expression)
-    base_set = set(base_bits)
-    if kind == "ElementSelect":
-        selector = getattr(expression, "selector", None)
-        index = _constant_int(selector, context_symbol)
-        return (index,) if index in base_set else ()
-    if kind != "RangeSelect":
-        return ()
-    left = _constant_int(expression.left, context_symbol)
-    right = _constant_int(expression.right, context_symbol)
-    if left is None or right is None:
-        return ()
-    selection_kind = str(expression.selectionKind.name)
-    if selection_kind == "Simple":
-        # Slang can retain syntax from an inactive parameterized generate
-        # branch.  An unsigned expression such as ``Offset-2`` may therefore
-        # elaborate to 32'hffff_ffff even when the selected specialization has
-        # a one-bit declaration.  Validate against that declaration before
-        # materializing a Python range; otherwise one malformed / inactive
-        # select can allocate billions of indices and stall a large-SoC
-        # projection.
-        span = abs(left - right) + 1
-        if left not in base_set or right not in base_set or span > len(base_bits):
+    typ = getattr(getattr(expression, "value", None), "type", None)
+    if typ is not None:
+        typ = typ.canonicalType
+        if not typ.isIntegral:
             return ()
-        step = -1 if left > right else 1
-        selected = tuple(range(left, right + step, step))
-        return selected if all(bit in base_set for bit in selected) else ()
-    if selection_kind == "IndexedUp":
-        width = right
-        last = left + width - 1
-    elif selection_kind == "IndexedDown":
-        width = right
-        last = left - width + 1
+    if typ is not None and typ.hasFixedRange:
+        bounds = int(typ.fixedRange.left), int(typ.fixedRange.right)
+    else:
+        bounds = (base_bits[0], base_bits[-1]) if base_bits else (0, 0)
+    first, last = bounds
+    extent = abs(first - last) + 1
+    if not base_bits or len(base_bits) % extent:
+        return ()
+    stride = len(base_bits) // extent
+    direction = -1 if first >= last else 1
+    if kind == "ElementSelect":
+        index = _constant_int(expression.selector, context_symbol)
+        indices = (index,) if index is not None else ()
+    elif kind == "RangeSelect":
+        left = _constant_int(expression.left, context_symbol)
+        right = _constant_int(expression.right, context_symbol)
+        if left is None or right is None:
+            return ()
+        selection_kind = str(expression.selectionKind.name)
+        if selection_kind == "Simple":
+            count = abs(left - right) + 1
+            low = min(left, right)
+            if left != right and (left > right) != (first > last):
+                return ()
+        elif selection_kind in {"IndexedUp", "IndexedDown"}:
+            count = right
+            low = left if selection_kind == "IndexedUp" else left - count + 1
+        else:
+            return ()
+        # Validate before allocating: inactive parameterized branches may
+        # contain wrapped unsigned indices (for example 32'hffffffff).
+        if count < 1 or count > extent or low < min(bounds) or low + count - 1 > max(bounds):
+            return ()
+        indices = tuple(range(low + count - 1, low - 1, -1) if direction == -1 else range(low, low + count))
     else:
         return ()
-    if (
-        width < 1
-        or width > len(base_bits)
-        or left not in base_set
-        or last not in base_set
-    ):
+    if not indices or any(i < min(bounds) or i > max(bounds) for i in indices):
         return ()
-    low, high = sorted((left, last))
-    selected = tuple(bit for bit in base_bits if low <= bit <= high)
-    return selected if len(selected) == width else ()
+    return tuple(bit for i in indices
+                 for bit in base_bits[(i-first)*direction*stride:((i-first)*direction+1)*stride])
 
 
 def _selected_packed_member_bits(
