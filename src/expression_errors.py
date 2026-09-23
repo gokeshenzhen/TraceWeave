@@ -69,6 +69,13 @@ class ExpressionError(ValueError):
 
     def payload(self):
         action, message = _RECOVERY[self.code]
+        if self.reason == "dynamic_expression_limit":
+            from .dynamic_evidence import MAX_EXPR_DEPTH, MAX_EXPR_NODES
+            message = (f"Expression complexity exceeds a bound: depth {MAX_EXPR_DEPTH}, "
+                       f"nodes {MAX_EXPR_NODES}, or tokens {MAX_EXPR_NODES * 8}. "
+                       "Shorten nested ternary chains, remove redundant parentheses, "
+                       "or split into smaller expressions. Narrowing the time window "
+                       "does not reduce expression complexity.")
         if self.reason == "expression_array_type_unresolved":
             message = ("Supply types.<operand> with the per-element width and declared unpacked "
                        "ranges, e.g. {width:8,unpacked:[[0,7]]}. Bounds must be JSON integers. "

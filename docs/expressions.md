@@ -237,5 +237,9 @@ MCP 层直接拒绝不符合 inputSchema 的参数时，请先按该 schema 修�
 | `expression_input_invalid` / `expression_binding_invalid` / `expression_operand_invalid` | 按 `parameter` / `operand` 修正字段、固定选择或运算数 |
 | `expression_sampling_unavailable` | 检查波形版本和读取能力；点查询不能证明缺失的事件顺序 |
 
+当 `reason="dynamic_expression_limit"` 时，超限的是表达式语法或展开后的树复杂度。
+减少嵌套三元运算、冗余括号或公式规模；仅缩小时间窗无效。采样数量超限才通过
+缩小窗口或周期数恢复。预算不因重试而放宽。
+
 修正请求后再重试。数组中未映射的选中元素等缺失观察可能返回正常结果加
 `coverage_status="partial"` 和 `gaps`，并非所有证据不足都抛输入错误。

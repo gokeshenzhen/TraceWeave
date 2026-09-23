@@ -118,6 +118,26 @@ async def test_array_recovery_requires_types_even_in_wave_bits_mode(tmp_path):
     assert fixed["expressions"][0]["coverage_status"] == "complete"
 
 
+@pytest.mark.anyio
+async def test_complexity_recovery_can_remove_redundant_ternary_parentheses(tmp_path):
+    path = wave(tmp_path).file_path
+    nested = "8'd0"
+    for index in reversed(range(17)):
+        nested = f"(i == 5'd{index} ? 8'd{index} : {nested})"
+    spec = {"expr": nested, "typing": "wave_bits", "bindings": {"i": "tb.index"}}
+    limited = await point(path, spec)
+    assert limited["error"] == "dynamic_expression_limit"
+    assert limited["error_code"] == "expression_limit_exceeded"
+    assert limited["recovery"]["action"] == "reduce_request"
+    assert "parentheses" in limited["recovery"]["message"]
+    assert "time window does not" in limited["recovery"]["message"]
+    # SV conditional operators associate to the right without these parentheses.
+    flat = " : ".join(f"i == 5'd{index} ? 8'd{index}" for index in range(17)) + " : 8'd0"
+    repaired = await point(path, {**spec, "expr": flat})
+    assert repaired["value"]["dec"] == 3
+    assert repaired["expressions"][0]["coverage_status"] == "complete"
+
+
 def test_unrelated_errors_do_not_gain_expression_recovery():
     result = server._format_error(ValueError("expression_signal_unresolved: not from the expression engine"))
     assert result.error_code is None
