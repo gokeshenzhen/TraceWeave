@@ -79,6 +79,31 @@ def test_escaped_name_and_comments_are_not_code():
     assert tree.args[0].text == '\\a+b'
 
 
+@pytest.mark.parametrize('bounds,expected', [((1, 0), ('1101', '0110')), ((0, 1), ('0110', '1101'))])
+def test_packed_array_selection_retains_signed_member_layout(bounds, expected):
+    delta = Type(4, signed=True, packed=((3, 0),))
+    typ = Type(16, packed=(bounds, (7, 0)), members=(('delta', 0, delta),))
+    base = Typed(Expr('signal', 16, signal='m', bits=tuple(range(15, -1, -1))), typ)
+    def resolve(name):
+        if name != 'm':
+            raise KeyError(name)
+        return base
+    for index, bits in enumerate(expected):
+        compiled = Compiler(resolve).compile(f'm[{index}].delta')
+        assert compiled.type.signed
+        def sample(expr):
+            return {'value': ''.join('1010011010111101'[15 - bit] for bit in expr.bits)}
+        assert evaluate(compiled.expr, sample).value == bits
+    for invalid in ('m.delta', 'm[0][0].delta'):
+        with pytest.raises(ValueError, match='member_type_unresolved'):
+            Compiler(resolve).compile(invalid)
+
+
+def test_packed_array_field_bounds_are_element_relative():
+    with pytest.raises(ValueError, match='member_shape_invalid'):
+        Type(16, packed=((1, 0), (7, 0)), members=(('bad', 7, Type(2)),))
+
+
 @pytest.mark.parametrize('text',['++a','--a','a++','a--','$bits()','$signed()','$size(a,1,2)'])
 def test_effects_and_invalid_function_arity_are_rejected(text):
     with pytest.raises(ValueError):

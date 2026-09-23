@@ -689,7 +689,7 @@ class ExpressionType(SchemaModel):
     unpacked: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list, max_length=8,
         description="Fixed unpacked [left,right] ranges, outermost first; requires an elements binding for value reads.")
     members: list[ExpressionMember] = Field(default_factory=list, max_length=128,
-        description="Declared packed struct/union layout; each member has name, lsb offset and type.")
+        description="Packed struct/union layout: name, lsb offset, type. For packed arrays, describe the innermost aggregate; its final packed range is the aggregate's flattened bits.")
 
 
 class ExpressionElement(SchemaModel):

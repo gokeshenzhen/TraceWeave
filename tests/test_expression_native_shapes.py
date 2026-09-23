@@ -18,10 +18,13 @@ logic [7:0] mem [1:3];
 logic single_mem [1:3];
 typedef struct packed {logic [3:0] data;logic flag;} item_t;
 item_t entries [0:3];
+item_t [3:2] packed_entries;
 int i,j;
 wire [7:0] y = mem[i] + packed_data[i-2];
 wire field_y = entries[i].data[j];
 wire single_y = single_mem[i];
+wire packed_field_y = packed_entries[i].data[j];
+wire [9:0] packed_elements_bits = packed_entries;
 '''
 
 
@@ -38,6 +41,7 @@ $dumpvars(0,mem[2],mem[3],entries[2],entries[3]);
 $fsdbDumpfile("shapes.fsdb"); $fsdbDumpvars(0,expression_shapes); $fsdbDumpMDA();
 packed_data=8'ha5; i=2; j=1; mem[2]=8'h0f; mem[3]=8'h10;
 entries[2]=5'b10101; entries[3]=5'b01010; single_mem[2]=1; single_mem[3]=0;
+packed_entries={5'b01010,5'b10101};
 #5 i=3;
 #5 j=0;
 #5 $finish;
@@ -53,10 +57,32 @@ endmodule
     for cls,suffix in ((VCDParser,'vcd'),(FSDBParser,'fsdb')):
         parser=cls(str(tmp_path/f'shapes.{suffix}'))
         try:
+            public = ExpressionParser(parser)
+            # FSDB may expose a packed struct array only as separate fields;
+            # this explicitly declared vector view is actually dumped in both
+            # formats. Its layout comes from the test's declaration above.
+            bindings = {'packed_entries': parser.search_signals('packed_elements_bits',
+                         max_results=20)['results'][0]['path']}
+            # i/j searches use exact declaration identity rather than prefix matches.
+            for name in ('i', 'j'):
+                candidates = parser.search_signals('expression_shapes.'+name, max_results=100)['results']
+                bindings[name] = next(r['path'] for r in candidates
+                    if r['path'].split('.')[-1].split('[')[0] == name)
+            key = public.bind(dict(expr='packed_entries[i].data[j]', bindings=bindings,
+                types={'packed_entries': dict(width=10, packed=[[3,2],[4,0]], members=[
+                    dict(name='data', lsb=1, type=dict(width=4, packed=[[3,0]])),
+                    dict(name='flag', lsb=0, type=dict(width=1))]),
+                    'i':dict(width=32,signed=True),'j':dict(width=32,signed=True)}))
+            for at, expected in zip((2000,7000,12000),(1,0,1)):
+                actual = public.get_value_at_time(key,at)
+                assert actual['value']['dec'] == expected
+            assert public.expression_receipts()[0]['coverage_status'] == 'complete'
             for target,values in [('y',[20,26,26]),('field_y',[1,0,1]),('single_y',[1,0,0])]:
                 step=backend.get_dynamic_step('expression_shapes.'+target)
                 assert step['complete'],step
-                dumped = bool(parser.search_signals({'y':'mem','field_y':'entries','single_y':'single_mem'}[target],max_results=8)['results'])
+                symbol = 'expression_shapes.' + {'y':'mem','field_y':'entries','single_y':'single_mem'}[target]
+                dumped = any(r['path'] == symbol or r['path'].startswith(symbol+'[')
+                    for r in parser.search_signals(symbol,max_results=8)['results'])
                 if suffix=='fsdb' and target in {'y','single_y'}:
                     assert dumped  # The native positive array oracle is required.
                 for at,expected in zip((2000,7000,12000),values):

@@ -214,7 +214,10 @@ class Type:
             raise ExpressionError('expression_dimensions_invalid')
         if self.packed and math.prod(abs(a-b)+1 for a,b in self.packed) != self.width:
             raise ExpressionError('expression_packed_shape_invalid')
-        if self.members and any(offset < 0 or offset + member.width > self.width
+        # Packed array members describe the innermost aggregate, whose final
+        # range is its flattened bit layout, not the complete outer array.
+        member_width = abs(self.packed[-1][0] - self.packed[-1][1]) + 1 if self.packed else self.width
+        if self.members and any(offset < 0 or offset + member.width > member_width
                                 for _,offset,member in self.members):
             raise ExpressionError('expression_member_shape_invalid')
 
@@ -443,7 +446,8 @@ class Compiler:
             extent = abs(bounds[0]-bounds[1])+1
             stride = base.type.width//extent
             if node.op == 'index':
-                typ = Type(stride,False,base.type.two_state,base.type.packed[1:])
+                typ = Type(stride,False,base.type.two_state,base.type.packed[1:],
+                           members=base.type.members if len(base.type.packed) > 1 else ())
                 return Typed(Expr('select',stride,(base.expr,index.expr),bounds=bounds,stride=stride),typ)
             amount = lower(node.args[2])
             count = constant(amount)
@@ -465,7 +469,7 @@ class Compiler:
             base = lower(node.args[0])
             name = node.text[1:]
             member = next((m for m in base.type.members if m[0] == name),None)
-            if member is None or base.type.unpacked:
+            if member is None or base.type.unpacked or len(base.type.packed) > 1:
                 raise ExpressionError('expression_member_type_unresolved', operand=name)
             _,offset,typ = member
             positions = tuple(range(base.type.width-offset-typ.width,base.type.width-offset))

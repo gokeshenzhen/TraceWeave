@@ -101,7 +101,10 @@ idx=2/3 时只读取选中的元素；idx=4 在声明内但没有 dump 映射，
 
 多维 unpacked 使用多个维度和 `indices: [i,j]`；多维 packed 使用完整
 `packed` 维度。packed struct/union 通过 `members` 提供布局后可写
-`entries[i].data[j]`。每个映射必须对应实际声明或明确固定选择；不会通过
+`entries[i].data[j]`。packed 结构体数组的 `members` 描述最内层结构体，
+`packed` 的最后一维为该结构体的扁平位范围。例如三个 56-bit 结构体用
+`width:168, packed:[[2,0],[55,0]]`，字段偏移在每个 56-bit 元素内计算。
+每个映射必须对应实际声明或明确固定选择；不会通过
 拼接相似名称的片段补成一个不存在的 aggregate。只有字段被 dump 时，可把
 该真实字段作为独立绑定查询；自动数组读取需要可验证的完整元素映射。
 
