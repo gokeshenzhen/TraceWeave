@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 import server
 import src.source_graph_production as production
@@ -94,9 +95,12 @@ b101010101 b
 @pytest.mark.anyio
 async def test_tool_selection_schema_is_shared_and_tlul_missing_map_is_explicit(tmp_path, monkeypatch):
     tools = {t.name: t for t in await server.list_tools()}
-    spec = tools["get_signal_at_time"].inputSchema["properties"]["signal_path"]["anyOf"]
-    assert spec[0] == {"type": "string"}
-    assert "bits" in spec[1]["properties"]
+    schema = tools["get_signal_at_time"].inputSchema
+    validator = Draft202012Validator(schema)
+    for signal in ("tb.bus", {"path": "tb.bus", "bits": [7, 2]}):
+        validator.validate({"wave_path": "test.vcd", "signal_path": signal, "time_ps": 0})
+    assert not validator.is_valid({"wave_path": "test.vcd", "time_ps": 0,
+        "signal_path": {"path": "tb.bus", "bits": ["bad"]}})
     monkeypatch.setattr(server, "_check_prerequisites", lambda *a: None)
     r = await server._dispatch("inspect_tlul", {"wave_path": str(tmp_path / "absent.vcd"), "clock": "tb.clk"})
     assert r.mapping_status == "mapping_required" and r.checks == []
