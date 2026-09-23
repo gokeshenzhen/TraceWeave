@@ -73,6 +73,7 @@ class GroupCursor:
 
     def take_group(self, at):
         value = None
+        self.group_changed = False
         while self.peek() == at:
             self.checkpoint()
             if self.index == len(self.page.events):
@@ -86,6 +87,10 @@ class GroupCursor:
             if self.last_time is not None and event.time_fs < self.last_time:
                 raise IncompleteGroup('transition_order_invalid')
             self.last_time = event.time_fs
+            if value is not None:
+                from .divergence_compare import bit_value
+                width = getattr(self.reader,'width',None)
+                self.group_changed |= (bit_value(value,width) != bit_value(event.value,width)) if width else value != event.value
             value = event.value
             self.index += 1
             self.compared += 1

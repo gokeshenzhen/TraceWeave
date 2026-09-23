@@ -6,6 +6,7 @@ existing single-call scratch allocation, reported explicitly in the receipt.
 """
 from dataclasses import dataclass
 from itertools import chain
+from contextlib import contextmanager
 import time
 
 from .cancellation import check_cancelled
@@ -73,6 +74,34 @@ class _ReadAdapter:
         # A missing predecessor is unknown, including within an active FSDB
         # group. Never sample an unrelated later event as a prefix seed.
         return {"value": None}
+
+    @contextmanager
+    def _event_pages(self,path,start=0,end=-1,**limits):
+        """Charge raw dependencies when a derived clock opens event readers."""
+        from .event_pages import EventPage
+        b = self.budget
+        b.check()
+        b.read_calls += 1
+        with self.parser._event_pages(path,start,end,**limits) as reader:
+            class BudgetReader:
+                width,end_fs,mode,native = reader.width,reader.end_fs,reader.mode,reader.native
+                def read_page(self):
+                    b.check()
+                    page = reader.read_page()
+                    b.pages += 1
+                    b.output_bytes += page.output_bytes
+                    b.events_read += len(page.events) + bool(page.predecessor)
+                    b.value_bytes_read += sum(len(e.value or '') for e in (*page.events,*((page.predecessor,) if page.predecessor else ())))
+                    previous,rows = None,[]
+                    for event in chain((page.predecessor,) if page.predecessor else (),page.events):
+                        if not b.admit(event.value):
+                            return EventPage(tuple(rows),previous,event.time_fs,truncated=True,output_bytes=page.output_bytes)
+                        if event is page.predecessor:
+                            previous = event
+                        else:
+                            rows.append(event)
+                    return page
+            yield BudgetReader()
 
     def get_transitions(self, path, start_ps=0, end_ps=-1):
         from .vcd_parser import _enrich_value
@@ -154,6 +183,13 @@ class _ReadAdapter:
 
 
 def bounded_parser(parser, budget):
+    from .expression_observe import ExpressionParser
+    if isinstance(parser,ExpressionParser):
+        adapter = ExpressionParser(_ReadAdapter(parser.parser,budget))
+        adapter.projections,adapter._declarations = dict(parser.projections),dict(parser._declarations)
+        adapter.expressions,adapter.observations = parser.expressions,parser.observations
+        adapter._budget_check = budget.check
+        return adapter
     if isinstance(parser, SelectionParser):
         adapter = SelectionParser(_ReadAdapter(parser.parser, budget))
         adapter.projections = dict(parser.projections)
@@ -170,6 +206,16 @@ def sample_limit(parser, paths, budget, requested=None):
         projected = [parser.projections[p] for p in paths if p in parser.projections]
         limit = min(limit, MAX_PROJECTED_CELLS // max(1, len(projected)),
                     MAX_PROJECTED_BITS // max(1, sum(p.selection.width for p in projected)))
+        expressions = getattr(parser,'expressions',{})
+        derived = [expressions[p] for p in paths if p in expressions]
+        limit = min(limit,MAX_PROJECTED_CELLS // max(1,len(derived)),
+                    MAX_PROJECTED_BITS // max(1,sum(b.typed.type.width for b in derived)))
+        if derived:
+            backing = set(p for b in derived for p in b.paths)
+            backing.update(parser._event_source_path(p) for p in paths if p not in expressions)
+            limit = min(limit,budget.limits.sample_cells // max(1,len(backing)),
+                        MAX_PROJECTED_CELLS // max(1,len(backing)),
+                        MAX_PROJECTED_BITS // max(1,sum(parser.parser.get_signal_width(p) for p in backing)))
     return max(0, limit)
 
 

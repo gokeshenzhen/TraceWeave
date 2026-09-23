@@ -327,6 +327,28 @@ def attach_selections(result, parser):
                 action["signal_selection"] = {"path": projection.path, "bits": list(projection.selection.bits)}
         if hasattr(type(parser),'expression_receipts'):
             result['expressions'] = parser.expression_receipts()
+            key = result.get('violating_signal')
+            if key in parser.expressions:
+                result['violating_signal'] = None
+                result['violating_expression'] = key
+                if 'attribution' in result:
+                    result['attribution'] = dict(violating_side=None,exonerated_side=None,
+                        basis='expression_dependency',note='The finding concerns a derived value. Resolve the real dependency drivers before assigning a protocol side.')
+            for finding in result.get('findings',[]):
+                key = finding.get('signal')
+                if key in parser.expressions:
+                    finding['signal'],finding['expression_key'] = None,key
+            actions = []
+            for action in result.get('next_actions',[]):
+                expression = parser.expressions.get(action.get('signal_path'))
+                if expression:
+                    actions.extend({**action,'signal_path':path,'expression_key':expression.key,
+                        'reason':'Inspect this real dependency of the derived value; no unique driver is assigned to the expression.'}
+                        for path in expression.paths[:16])
+                else:
+                    actions.append(action)
+            if 'next_actions' in result:
+                result['next_actions'] = actions
     return result
 
 
@@ -337,6 +359,14 @@ def selection_inputs(*names):
         def call(**kwargs):
             parser = kwargs["get_parser"](kwargs["wave_path"])
             parser, bound = prepare_selections(parser, {n: kwargs[n] for n in names if n in kwargs})
+            controls = {'clock','clock_path','valid','ready','hwrite','reset',
+                'req_valid','req_ready','cmp_valid','cmp_ready','cmp_last','data_valid','data_ready','data_last'}
+            expressions = getattr(parser,'expressions',{})
+            for name,value in bound.items():
+                if isinstance(value,str) and value in expressions:
+                    width = 1 if name in controls else 2 if name=='valid_htrans' else None
+                    if width is not None and parser.get_signal_width(value) != width:
+                        raise ValueError(f'{name} expression must be {width}-bit')
             result = function(**{**kwargs, **bound, "get_parser": lambda _: parser})
             return attach_selections(result, parser)
         return call

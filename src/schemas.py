@@ -747,26 +747,26 @@ class WaveformExpressionReceipt(SchemaModel):
 
 
 class TlulFields(SchemaModel):
-    a_valid: str | WaveformSelection | None = None
-    a_ready: str | WaveformSelection | None = None
-    a_source: str | WaveformSelection | None = None
-    a_opcode: str | WaveformSelection | None = None
-    a_param: str | WaveformSelection | None = None
-    a_size: str | WaveformSelection | None = None
-    a_address: str | WaveformSelection | None = None
-    a_mask: str | WaveformSelection | None = None
-    a_data: str | WaveformSelection | None = None
-    a_user: str | WaveformSelection | None = None
-    d_valid: str | WaveformSelection | None = None
-    d_ready: str | WaveformSelection | None = None
-    d_source: str | WaveformSelection | None = None
-    d_opcode: str | WaveformSelection | None = None
-    d_param: str | WaveformSelection | None = None
-    d_size: str | WaveformSelection | None = None
-    d_sink: str | WaveformSelection | None = None
-    d_data: str | WaveformSelection | None = None
-    d_user: str | WaveformSelection | None = None
-    d_error: str | WaveformSelection | None = None
+    a_valid: str | WaveformSelection | WaveformExpression | None = None
+    a_ready: str | WaveformSelection | WaveformExpression | None = None
+    a_source: str | WaveformSelection | WaveformExpression | None = None
+    a_opcode: str | WaveformSelection | WaveformExpression | None = None
+    a_param: str | WaveformSelection | WaveformExpression | None = None
+    a_size: str | WaveformSelection | WaveformExpression | None = None
+    a_address: str | WaveformSelection | WaveformExpression | None = None
+    a_mask: str | WaveformSelection | WaveformExpression | None = None
+    a_data: str | WaveformSelection | WaveformExpression | None = None
+    a_user: str | WaveformSelection | WaveformExpression | None = None
+    d_valid: str | WaveformSelection | WaveformExpression | None = None
+    d_ready: str | WaveformSelection | WaveformExpression | None = None
+    d_source: str | WaveformSelection | WaveformExpression | None = None
+    d_opcode: str | WaveformSelection | WaveformExpression | None = None
+    d_param: str | WaveformSelection | WaveformExpression | None = None
+    d_size: str | WaveformSelection | WaveformExpression | None = None
+    d_sink: str | WaveformSelection | WaveformExpression | None = None
+    d_data: str | WaveformSelection | WaveformExpression | None = None
+    d_user: str | WaveformSelection | WaveformExpression | None = None
+    d_error: str | WaveformSelection | WaveformExpression | None = None
 
 
 class SignalAtTimeResult(SchemaModel):
@@ -1785,6 +1785,7 @@ class PeriodResult(SchemaModel):
 
 
 class NextAction(SchemaModel):
+    expression_key: str | None = None
     # A forward-link emitted by a bus-fact tool ONLY when it has a concrete
     # finding. Bridges a waveform fact to the next investigation (e.g. attribute a
     # violation to a driving instance). Bus-fact tools never self-attribute
@@ -1797,6 +1798,7 @@ class NextAction(SchemaModel):
 
 
 class HandshakeFinding(SchemaModel):
+    expression_key: str | None = None
     type: str
     severity: str
     # long_stall fields
@@ -1917,6 +1919,7 @@ class HandshakeInspectResult(SchemaModel):
     # is no signal-specific finding. next_actions fires only when a finding
     # exists; it bridges the bus fact to RTL tracing (explain_signal_driver).
     violating_signal: str | None = None
+    violating_expression: str | None = None
     # Structured side attribution for one-sided violations (payload-hold,
     # premature-valid-deassertion). Empty (all None) for a two-sided stall.
     attribution: HandshakeAttribution = Field(default_factory=HandshakeAttribution)
@@ -2131,6 +2134,10 @@ class VerifyEvidence(SchemaModel):
 
 
 class WindowVerifyResult(SchemaModel):
+    selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
+    expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
+    transition_data_truncated: bool = False
+    coverage_status: Literal["complete","partial","zero_coverage"] = "zero_coverage"
     wave_path: str
     clock: str
     edge: str = "posedge"
@@ -2161,6 +2168,7 @@ class WindowVerifyResult(SchemaModel):
     # violating_signal + next_actions: see HandshakeInspectResult. sequence mode
     # populates these on an address/stride violation (master-driven signal).
     violating_signal: str | None = None
+    violating_expression: str | None = None
     next_actions: list[NextAction] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     reason: str | None = None

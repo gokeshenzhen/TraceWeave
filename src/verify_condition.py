@@ -167,8 +167,10 @@ def period(
     }
 
     if derived:
+        from .cycle_query import _clock_value
         rows = tr.get('transitions') or []
-        if tr.get('truncated') or any(r.get('value') is None or r['value'].get('dec') not in (0,1) for r in rows):
+        if (tr.get('truncated') or getattr(parser,'_time_group_ambiguities',{}).get(signal) or
+                any(_clock_value(r.get('value')) not in (0,1) for r in rows)):
             result['reason'] = 'expression event coverage incomplete or unknown'
             return result
         from .cycle_query import _extract_edge_times

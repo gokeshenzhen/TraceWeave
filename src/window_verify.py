@@ -7,11 +7,11 @@ lets the LLM PROPOSE a predicate and get a precise verdict-against-data (with a
 concrete witness / counterexample) in one call — perception+precision the LLM
 cannot do itself (it can't open the waveform, can't count thousands of cycles).
 
-Deliberately TEMPLATES, not a DSL (the Lark-grammar red line stays uncrossed):
-  - a *term* is one condition over one signal: {signal, op, value}
+Temporal modes remain templates; values use the shared SV expression core:
+  - a *term* is {signal, op, value} or an explicit {expr, ...}
     op ∈ eq | ne | gt | ge | lt | le | is_x | is_known
-  - a *predicate* is a list of terms = implicit AND (no OR, no nesting — run two
-    calls for OR)
+  - a *predicate* is a list of terms = implicit AND; an expression term may
+    contain nested logical operators and uses SV four-state truth conversion
   - four *modes*: always(P), never(P), eventually(P),
     implication (A |-> B within N cycles)
 
@@ -24,17 +24,48 @@ Reads existing waveforms only — does NOT rerun simulation.
 from __future__ import annotations
 
 from typing import Any, Callable
+from functools import wraps
 
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from .cursor_store import CursorStore
 from .cycle_query import sample_signals_on_edges
 from .verify_condition import _resolve_signal_path
+from .waveform_selection import prepare_selections,attach_selections
 
 _MODES = ("always", "never", "eventually", "implication", "sequence")
-_TERM_OPS = ("eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known")
+_TERM_OPS = ("eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known", "truth")
 _VALUE_OPS = ("eq", "ne", "gt", "ge", "lt", "le")
 
 
+def _expression_inputs(function):
+    @wraps(function)
+    def call(**kwargs):
+        parser = kwargs['get_parser'](kwargs['wave_path'])
+        def bind(value):
+            nonlocal parser
+            parser,bound = prepare_selections(parser,{'signal':value})
+            return bound['signal']
+        def terms(value):
+            if not isinstance(value,list) or len(value)>128:
+                return value
+            return [dict(signal=bind(t),op='truth') if isinstance(t,dict) and 'expr' in t else
+                    {**t,'signal':bind(t['signal'])} if isinstance(t,dict) and 'signal' in t else t for t in value]
+        updated = {**kwargs,'clock':bind(kwargs['clock'])}
+        for name in ('predicate','antecedent','consequent'):
+            if name in kwargs:
+                updated[name] = terms(kwargs[name])
+        delta = kwargs.get('delta')
+        if isinstance(delta,dict):
+            updated['delta'] = {**delta}
+            if 'signal' in delta:
+                updated['delta']['signal'] = bind(delta['signal'])
+            if 'restart_when' in delta:
+                updated['delta']['restart_when'] = terms(delta['restart_when'])
+        return attach_selections(function(**{**updated,'get_parser':lambda _:parser}),parser)
+    return call
+
+
+@_expression_inputs
 def verify_window(
     *,
     get_parser: Callable[[str], Any],
@@ -147,10 +178,13 @@ def verify_window(
     sampled = sample_signals_on_edges(
         parser, clock, resolved_signals, start_ps=start_ps, end_ps=end_ps, edge=edge,
     )
+    result['transition_data_truncated'] = bool(sampled.get('transition_data_truncated'))
+    result['coverage_status'] = 'partial' if result['transition_data_truncated'] else 'complete'
     signal_errors = sampled.get("signal_errors", {})
     result["signal_errors"] = signal_errors
     unresolved = [s for s in resolved_signals if s in signal_errors]
     if unresolved:
+        result['coverage_status'] = 'zero_coverage'
         result["reason"] = (
             "signal(s) not found: " + ", ".join(unresolved)
             + " — FSDB buses usually need an explicit bit range (e.g. 'top.addr[7:0]')."
@@ -159,6 +193,7 @@ def verify_window(
 
     samples = sampled.get("samples", [])
     if not samples:
+        result['coverage_status'] = 'zero_coverage'
         result["reason"] = (
             f"no {edge} edges of clock {clock!r} in the window — nothing to evaluate"
         )
@@ -179,15 +214,17 @@ def verify_window(
         _eval_simple(result, samples, mode, _resolve_set(predicate))
 
     if result["unknown_cycles"]:
+        result['coverage_status'] = 'partial'
         warnings.append(
             f"{result['unknown_cycles']} cycle(s) had x/z on a referenced signal and "
             "could not be evaluated — not counted as pass or fail."
         )
     if result["inconclusive_count"]:
+        result['coverage_status'] = 'partial'
         warnings.append(
-            f"{result['inconclusive_count']} antecedent(s) fired too close to the window "
-            "end to confirm a response within the window — reported as inconclusive, "
-            "not as violations. Extend the window to check them."
+            f"{result['inconclusive_count']} antecedent(s) could not confirm a response "
+            "within available known samples — reported as inconclusive. Check unknown "
+            "response samples or extend the window."
         )
     if result.get("vacuous"):
         warnings.append(
@@ -198,6 +235,8 @@ def verify_window(
             "the next cycle', e.g. valid/HTRANS held through a wait state), re-run with "
             "overlap=false to start the response window at the next cycle."
         )
+    if result['transition_data_truncated']:
+        warnings.append('Transition coverage is incomplete; holds applies only to evaluated known samples.')
 
     _attach_cursor(result, cursor_store, wave_path, edge, cursor_name, cursor_note)
     return result
@@ -249,7 +288,7 @@ def _eval_implication(
     """
     n = len(samples)
     result["cycles_evaluated"] = n
-    unknown = 0
+    unknown_indices = set()
     ant_count = 0
     violations = 0
     inconclusive = 0
@@ -260,7 +299,7 @@ def _eval_implication(
             check_cancelled()
         a = _eval_predicate(antecedent, s["signals"])
         if a is None:
-            unknown += 1
+            unknown_indices.add(i)
             continue
         if not a:
             continue
@@ -268,22 +307,27 @@ def _eval_implication(
         start = i if overlap else i + 1  # non-overlapping starts next cycle
         last = i + within  # inclusive response window end
         found = False
+        response_unknown = False
         for j in range(start, min(last, n - 1) + 1):
-            if _eval_predicate(consequent, samples[j]["signals"]) is True:
+            response = _eval_predicate(consequent, samples[j]["signals"])
+            if response is None:
+                response_unknown = True
+                unknown_indices.add(j)
+            if response is True:
                 found = True
                 if j == i:
                     responded_same += 1
                 break
         if found:
             continue
-        if last > n - 1:
+        if last > n - 1 or response_unknown:
             # response window extends past the captured trace — cannot conclude.
             inconclusive += 1
         else:
             violations += 1
             if first_violation is None:
                 first_violation = _evidence(s, i, antecedent)
-    result["unknown_cycles"] = unknown
+    result["unknown_cycles"] = len(unknown_indices)
     result["antecedent_count"] = ant_count
     result["violation_count"] = violations
     result["inconclusive_count"] = inconclusive
@@ -431,6 +475,15 @@ def _eval_term(term: dict, sig_values: dict[str, Any]) -> bool | None:
     op = term["op"]
     v = sig_values.get(term["signal"])
     dec = v.get("dec") if isinstance(v, dict) else None
+    bits = v.get('bin') if isinstance(v,dict) else None
+    if op == 'truth':
+        if bits is None:
+            return None
+        from .expression_values import Value
+        truth = Value(bits).truth
+        return True if truth=='1' else False if truth=='0' else None
+    if dec is None and bits is None:
+        return None  # Missing evidence is not an observed X value.
     if op == "is_x":
         return dec is None
     if op == "is_known":
@@ -459,6 +512,8 @@ def _eval_term(term: dict, sig_values: dict[str, Any]) -> bool | None:
 def _validate_terms(terms: Any, label: str) -> str | None:
     if not isinstance(terms, list):
         return f"{label} must be a list of {{signal, op, value}} terms"
+    if len(terms) > 128:
+        return f'{label} term limit is 128'
     for t in terms:
         if not isinstance(t, dict) or "signal" not in t or "op" not in t:
             return f"each {label} term needs at least 'signal' and 'op'"

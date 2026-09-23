@@ -14,6 +14,11 @@ MAX_EVENTS = 65536
 
 def selection_identity(parser, signal):
     """A display key is never a selection identity; keep ordered declared bits."""
+    expression = getattr(parser,'expressions',{}).get(signal)
+    if expression is not None:
+        expression.validate(parser.parser)
+        return ('expression',expression.typed.expr,expression.typed.type,
+                tuple((p,repr(d)) for p,d in expression.declarations.items()))
     projection = getattr(parser, 'projections', {}).get(signal)
     if projection is not None:
         parser._validate(projection)

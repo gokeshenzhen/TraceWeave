@@ -650,4 +650,7 @@ def _ok(value: Any, active_high: bool) -> bool:
 
 
 def _dec(value: Any) -> int | None:
+    if isinstance(value,dict) and value.get('bin') is not None:
+        bits = value['bin']
+        return int(bits,2) if bits and all(b in '01' for b in bits) else None
     return value.get("dec") if isinstance(value, dict) else None

@@ -255,14 +255,28 @@ def _time_fs(row):
     return row.get("time_fs", row["time_ps"] * 1000)
 
 
+def _clock_value(value):
+    # Signed one-bit expressions represent high as dec=-1; edge polarity is
+    # determined by the physical bit, independent of numeric interpretation.
+    value = value or {}
+    bits = value.get('bin')
+    return int(bits) if bits in ('0','1') else value.get('dec')
+
+
 def _before_clock_prefix(result):
     """No protocol acceptance can be ordered through an unknown/glitch clock."""
     rows = result.get("transitions", [])
     previous = result.get("predecessor")
+    ambiguous = result.get('ambiguous_times_fs',[])
+    if ambiguous:
+        stop = min(ambiguous)
+        return {**result,'transitions':[r for r in rows if _time_fs(r)<stop],
+                'truncated':True,'safe_before_fs':stop,
+                'sampling_gaps':[*result.get('sampling_gaps',[]),'clock_event_order_unresolved']}
     for index, row in enumerate(rows):
         if not index % CANCEL_CHECK_STRIDE:
             check_cancelled()
-        value = (row.get("value") or {}).get("dec")
+        value = _clock_value(row.get('value'))
         gap = "clock_unknown" if value not in (0, 1) else None
         if previous and _time_fs(row) == _time_fs(previous) and row.get("value") != previous.get("value"):
             gap = "clock_event_order_unresolved"
@@ -739,6 +753,8 @@ def _full_clock_edges(parser, clock_path, edge):
         check_cancelled()
         return cached
     result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
+    if getattr(parser,'_time_group_ambiguities',{}).get(clock_path):
+        raise ValueError('derived clock has unresolved intra-time-group edges')
     check_cancelled()
     from .waveform_selection import SelectionParser
     if isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
@@ -766,14 +782,14 @@ def _extract_edge_times(
 ) -> list[int]:
     edge_times: list[int] = []
     predecessor_value = (predecessor or {}).get("value") or {}
-    prev_val: int | None = predecessor_value.get("dec")
+    prev_val: int | None = _clock_value(predecessor_value)
     if prev_val not in {0, 1}:
         prev_val = None
     for index, transition in enumerate(transitions):
         if not index % CANCEL_CHECK_STRIDE:
             check_cancelled()
         value = transition.get("value") or {}
-        cur_val = value.get("dec")
+        cur_val = _clock_value(value)
         if cur_val not in {0, 1}:
             prev_val = None
             continue

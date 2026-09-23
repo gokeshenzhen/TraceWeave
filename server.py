@@ -6577,9 +6577,9 @@ async def list_tools():
                 "Evaluate a temporal predicate over a clock window and return a precise "
                 "verdict (holds) plus a concrete witness/counterexample (cycle + sampled "
                 "values). You state the predicate; the tool checks it against the waveform "
-                "over thousands of cycles you cannot read yourself. Templates, not a DSL: "
-                "a term is {signal, op, value} (op: eq/ne/gt/ge/lt/le/is_x/is_known); a "
-                "predicate is a list of terms (implicit AND — run two calls for OR). Modes: "
+                "over the requested cycles. A term is {signal, op, value} "
+                "(op: eq/ne/gt/ge/lt/le/is_x/is_known) or a typed {expr,...} using SV truth "
+                "conversion. A predicate is a list of terms (implicit AND). Modes: "
                 "always(P), never(P), eventually(P), implication (A |-> B within N "
                 "cycles, the protocol-response template; set overlap=false for |=> = a "
                 "stability/hold property where B must STILL hold the NEXT cycle, e.g. "
@@ -7020,6 +7020,7 @@ async def list_tools():
         "get_signals_by_cycle": ("clock_path", "signal_paths"),
         "diff_first_divergence": ("signal_a", "signal_b"),
         "period": ("signal",),
+        "verify_window": ("clock",),
         "inspect_handshake": ("clock", "valid", "ready", "valid_htrans", "payload", "hwrite", "write_data"),
         "reconstruct_transactions": ("clock", "req_valid", "req_ready", "req_id", "req_fields", "req_len",
                                      "cmp_valid", "cmp_ready", "cmp_id", "cmp_last", "cmp_fields",
@@ -7039,6 +7040,17 @@ async def list_tools():
                 "bits are ordered MSB first. Also accepts {expr,bindings,types,typing}; provide explicit "
                 "types for SV semantics or typing=wave_bits for unsigned dump vectors. "
                 "Results identify projections in selections and derived values in expressions.")
+        if tool.name == 'verify_window':
+            props = tool.inputSchema['properties']
+            legacy = props['predicate']['items']
+            legacy['properties']['signal'] = _signal_selection_schema()
+            expression = _signal_selection_schema()['anyOf'][2]
+            term = {'anyOf':[legacy,expression]}
+            for name in ('predicate','antecedent','consequent'):
+                props[name]['items'] = term
+                props[name]['maxItems'] = 128
+            props['delta']['properties']['signal'] = _signal_selection_schema()
+            props['delta']['properties']['restart_when']['items'] = term
     _tools.extend([
         Tool(name="inspect_tlul", description=(
             "Uses strict before-edge sampling for A/D fields and nested checks (sampling_phase=before). "
@@ -7047,7 +7059,7 @@ async def list_tools():
             "Reports accepted fields, stalls, source pairing and latency, reset/unknown history, "
             "carry-in and tail boundaries. Read checks and gaps; no integrity or full compliance claim."),
             inputSchema={"type": "object", "properties": {
-                "wave_path": {"type": "string"}, "clock": {"type": "string"},
+                "wave_path": {"type": "string"}, "clock": _signal_selection_schema(),
                 "fields": {"type": "object", "additionalProperties": False,
                            "properties": {n: _signal_selection_schema() for n in schemas.TlulFields.model_fields}},
                 "reset": _signal_selection_schema(), "reset_active_low": {"type": "boolean", "default": True},

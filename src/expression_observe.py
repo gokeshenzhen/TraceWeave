@@ -47,6 +47,7 @@ class ExpressionEventReader:
         self.first, self.failed = True, False
         self.failure = None
         self.pending_constant = not self.paths and start == 0
+        self.ambiguous_times = set()
         try:
             self.cursors = [GroupCursor(r,consume=self.budget.consume) for r in readers]
             self.states = {p:c.predecessor.value if c.predecessor else None
@@ -85,12 +86,18 @@ class ExpressionEventReader:
                     self.failed, self.failure = True,'expression_page_limit'
                 break
             try:
+                changed = set()
                 for path,cursor in zip(self.paths,self.cursors):
                     if cursor.peek() == at:
                         self.states[path] = cursor.take_group(at)
+                        if cursor.group_changed:
+                            changed.add(path)
                         if cursor.peek() is None and cursor.page.truncated:
                             raise IncompleteGroup('transition_data_truncated')
                 result = self.bound.evaluate(self.states.get)
+                if changed.intersection(d['signal'] for d in result.dependencies):
+                    self.ambiguous_times.add(at)
+                    result.gaps.append('intra_time_group_order_unavailable')
                 self.observe(result,at,'after')
                 if result.value != self.previous or self.pending_constant or (at == 0 and not rows):
                     rows.append(Event(at,(at+999)//1000,result.value))
@@ -120,6 +127,7 @@ class ExpressionParser(SelectionParser):
         super().__init__(parser)
         self.expressions = {}
         self.observations = {}
+        self._time_group_ambiguities = {}
         # Type/source identity belongs to this request; do not reuse a derived
         # clock across bindings or semantic snapshots via the backing token.
         self._clock_cache_token = None
@@ -137,6 +145,7 @@ class ExpressionParser(SelectionParser):
         return bound.key
 
     def _record(self, key, result, time_fs, phase):
+        getattr(self,'_budget_check',check_cancelled)()
         state = self.observations[key]
         state['observation_count'] += 1
         state['gaps'] = list(dict.fromkeys(state['gaps'] + result.gaps))
@@ -297,6 +306,7 @@ class ExpressionParser(SelectionParser):
                     if page.complete or page.truncated:
                         truncated = page.truncated
                         break
+                self._time_group_ambiguities[path] = reader.ambiguous_times
         except IncompleteGroup as exc:
             truncated = True
             self._limited(path,str(exc))
@@ -308,7 +318,8 @@ class ExpressionParser(SelectionParser):
 
     def _sampling_transitions(self,path,start,end):
         if path in self.expressions:
-            return self.get_transitions(path,start,end)
+            result = self.get_transitions(path,start,end)
+            return {**result,'ambiguous_times_fs':sorted(self._time_group_ambiguities.get(path,()))}
         from .cycle_query import _read_before_transitions
         # Preserve ordered static projections without recursing through this
         # class's sampling hook.
@@ -324,6 +335,8 @@ class ExpressionParser(SelectionParser):
         cache, errors, limited, columns = {},{},set(),{}
         def column(p):
             if p not in cache:
+                if len(edges)*(len(cache)+1) > MAX_PROJECTED_CELLS or len(edges)*sum(self.parser.get_signal_width(x) for x in (*cache,p)) > MAX_PROJECTED_BITS:
+                    raise ValueError('expression_dependency_sample_limit')
                 raw,failed,truncated = _sample_signal_columns_at_edges(self.parser,[p],edges,offset,
                     sample_times=sample_times,sampling_session=session,safe_prefix_only=True,sample_phase=sample_phase)
                 cache[p] = raw.get(p,[None]*len(edges))
