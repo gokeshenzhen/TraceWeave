@@ -166,8 +166,6 @@ def binary(op, lhs, rhs, *, width=None):
             pad = a.bits[0] if op == '>>>' and signed else '0'
             bits = pad * amount + a.bits[:common-amount]
         return Value(bits, signed).resize(out_width)
-    if op == '**' and b.known and b.integer == 0:
-        return number(1, out_width, signed)
     if not a.known or not b.known:
         return unknown(out_width, signed if op not in COMPARISONS else False)
     x, y = a.integer, b.integer
@@ -236,6 +234,8 @@ def builtin(name, args):
         states = {a.bits[-1] for a in args[1:]}
         return number(sum(c in states for c in v.bits), 32, True)
     if name == '$clog2' and len(args) == 1:
-        n = int(v.bits, 2) if v.known else 0
+        if not v.known:
+            return unknown(32, True)
+        n = int(v.bits, 2)
         return number((n - 1).bit_length() if n > 0 else 0, 32, True)
     raise ValueError('expression_function_invalid')

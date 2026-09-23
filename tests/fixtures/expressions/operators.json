@@ -666,6 +666,126 @@
       "coverage": [
         "E14"
       ]
+    },
+    {
+      "id": "ternary_before_implication",
+      "expression": "1'b0 -> 1'b1 ? 1'b0 : 1'b0",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "1"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "implication_associativity",
+      "expression": "1'b0 <-> 1'b0 -> 1'b1",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "power_associativity",
+      "expression": "2 ** 3 ** 2",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "00000000000000000000000001000000"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "nested_fill",
+      "expression": "64'(8'b0 | '1)",
+      "inputs": {},
+      "expected": {
+        "width": 64,
+        "bin": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "concat_fill",
+      "expression": "{'1, 3'b000}",
+      "inputs": {},
+      "expected": {
+        "width": 4,
+        "bin": "1000"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "two_state_cast",
+      "expression": "$isunknown(int'(8'bxx00zz11))",
+      "inputs": {},
+      "expected": {
+        "width": 1,
+        "bin": "0"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "signed_size_cast",
+      "expression": "16'(8'shff)",
+      "inputs": {},
+      "expected": {
+        "width": 16,
+        "bin": "1111111111111111"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "conditional_unsigned",
+      "expression": "1'b1 ? 4'shf : 8'd0",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "00001111"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "zero_exponent_unknown",
+      "expression": "8'bxxxxxxxx ** 3'b000",
+      "inputs": {},
+      "expected": {
+        "width": 8,
+        "bin": "xxxxxxxx"
+      },
+      "coverage": [
+        "E01"
+      ]
+    },
+    {
+      "id": "clog2_unknown",
+      "expression": "$clog2(8'bxxxx0000)",
+      "inputs": {},
+      "expected": {
+        "width": 32,
+        "bin": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "coverage": [
+        "E01"
+      ]
     }
   ],
   "inputs": {

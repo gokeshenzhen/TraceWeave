@@ -33,6 +33,8 @@ class Expr:
     stride: int = 1
     function: str | None = None
     two_state: bool = False
+    # Unbased unsized literals retain their fill behavior through width context.
+    fill: bool = False
 
     def __post_init__(self):
         if not 1 <= self.width <= MAX_EXPR_WIDTH:
@@ -53,6 +55,8 @@ class Expr:
         if self.op == "const" and (not self.value or len(self.value) != self.width
                                     or any(c not in "01xz" for c in self.value)):
             raise ValueError("dynamic_constant_invalid")
+        if self.fill and (self.op != "const" or len(set(self.value)) != 1):
+            raise ValueError("dynamic_fill_invalid")
         if type(self.stride) is not int or not 1 <= self.stride <= MAX_EXPR_WIDTH:
             raise ValueError("dynamic_selection_stride_invalid")
         if self.bounds is not None and (len(self.bounds) != 2 or
