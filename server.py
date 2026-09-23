@@ -5065,10 +5065,19 @@ def _integer_or_string_schema() -> dict:
 
 
 def _signal_selection_schema() -> dict:
+    return {"$ref": "#/$defs/WaveformSignalInput"}
+
+
+def _signal_selection_definitions() -> dict:
+    """Keep reusable inputs once per tool, including nested recursive types."""
     expression = schemas.WaveformExpression.model_json_schema()
-    expression.pop('$defs',None)  # Definitions live at each Tool schema root.
-    return {"anyOf": [{"type": "string"}, schemas.WaveformSelection.model_json_schema(),
-                      expression]}
+    definitions = expression.pop("$defs", {})
+    definitions["WaveformExpression"] = expression
+    definitions["WaveformSignalInput"] = {
+        "anyOf": [{"type": "string"}, {"$ref": "#/$defs/WaveformSelection"},
+                  {"$ref": "#/$defs/WaveformExpression"}]
+    }
+    return definitions
 
 
 async def _resolve_packed_fields(args):
@@ -7044,7 +7053,7 @@ async def list_tools():
             props = tool.inputSchema['properties']
             legacy = props['predicate']['items']
             legacy['properties']['signal'] = _signal_selection_schema()
-            expression = _signal_selection_schema()['anyOf'][2]
+            expression = {'$ref': '#/$defs/WaveformExpression'}
             term = {'anyOf':[legacy,expression]}
             for name in ('predicate','antecedent','consequent'):
                 props[name]['items'] = term
@@ -7086,7 +7095,7 @@ async def list_tools():
     for tool in _tools:
         properties = tool.inputSchema["properties"]
         if tool.name in selectable or tool.name == 'inspect_tlul':
-            tool.inputSchema['$defs'] = schemas.WaveformExpression.model_json_schema().get('$defs',{})
+            tool.inputSchema['$defs'] = _signal_selection_definitions()
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
             properties.update(schemas.EvidenceOutputOptions.model_json_schema()["properties"])
         if tool.name in {"inspect_tlul", "reconstruct_transactions"}:
