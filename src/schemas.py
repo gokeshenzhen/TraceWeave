@@ -1696,6 +1696,13 @@ class KeywordLimitErrorResult(ToolErrorResult):
     recovery: str
 
 
+class CycleInputErrorResult(ToolErrorResult):
+    error_code: Literal["invalid_cycle_arguments"] = "invalid_cycle_arguments"
+    issues: list[str] = Field(min_length=1, max_length=3)
+    sampling_executed: Literal[False] = False
+    recovery: str
+
+
 class ExpressionRecovery(SchemaModel):
     action: str
     message: str

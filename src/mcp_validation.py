@@ -3,10 +3,36 @@
 from mcp import types
 
 from config import SIGNAL_SEARCH_MAX_KEYWORDS
-from src.schemas import KeywordLimitErrorResult
+from src.schemas import CycleInputErrorResult, KeywordLimitErrorResult
 
 
-def recover_keyword_limit_errors(app):
+def cycle_input_error(arguments):
+    """Report all recognized cycle conflicts without changing sampling semantics."""
+    issues = []
+    if "start_time_ps" in arguments and "start_cycle" in arguments:
+        issues.append("start_time_ps and start_cycle are mutually exclusive; omit one.")
+    if "end_time_ps" in arguments and "num_cycles" in arguments:
+        issues.append("end_time_ps and num_cycles are mutually exclusive; omit one.")
+    offset = arguments.get("sample_offset_ps", 1)
+    if type(offset) is int and offset < 0:
+        issues.append("sample_offset_ps must be >= 0; negative offsets are unsupported.")
+    if not issues:
+        return None
+    return CycleInputErrorResult(
+        error="Input validation error: invalid cycle sampling arguments.",
+        issues=issues,
+        recovery=(
+            "Fix every listed issue before retrying. Choose start_cycle OR start_time_ps, "
+            "and num_cycles OR end_time_ps. For post-edge samples, use sample_offset_ps=1 "
+            "(the default). For a pre-edge point, use get_signals_around_time with "
+            "center_time_ps at the required time before the edge, window_ps=0, "
+            "extra_transitions=0, return_mode=values_only. Post-edge samples do not "
+            "represent the inputs accepted at that edge."
+        ),
+    )
+
+
+def recover_tool_input_errors(app):
     """Decorate an already registered call_tool handler without replacing it.
 
     This precheck only rejects requests; it never admits a request or invokes
@@ -20,6 +46,10 @@ def recover_keyword_limit_errors(app):
 
         async def handler(request):
             arguments = request.params.arguments or {}
+            error = (
+                cycle_input_error(arguments)
+                if request.params.name == "get_signals_by_cycle" else None
+            )
             keyword = arguments.get("keyword")
             if (
                 request.params.name == "search_signals"
@@ -35,6 +65,7 @@ def recover_keyword_limit_errors(app):
                         f"{SIGNAL_SEARCH_MAX_KEYWORDS} keywords; preserve input order."
                     ),
                 )
+            if error is not None:
                 return types.ServerResult(types.CallToolResult(
                     isError=True,
                     content=[types.TextContent(

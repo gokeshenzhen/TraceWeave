@@ -225,6 +225,13 @@ MCP `isError=false` 判定求值成功。表达式错误保留 `error`，并增�
 以及 `recovery: {action,message}`。`position` 是表达式文本的零起始字符偏移。
 MCP 层直接拒绝不符合 inputSchema 的参数时，请先按该 schema 修正；请求尚未进入求值器。
 
+周期查询的负 `sample_offset_ps` 和定位轴冲突会返回
+`error_code="invalid_cycle_arguments"`、`issues` 清单和字符串 `recovery`，
+且 `sampling_executed=false`。一次修正清单中所有问题：起点选择
+`start_cycle` 或 `start_time_ps`，范围选择 `num_cycles` 或 `end_time_ps`。
+沿后采样默认偏移为 1 ps；沿前值用所需沿前时间的点查询读取，不应把沿后值
+当作该沿接受的输入。
+
 | error_code | 客户端下一步 |
 |---|---|
 | `expression_type_unresolved` | 提供相关操作数的声明类型；只有明确需要 unsigned 向量视图时才选择 `wave_bits` |
