@@ -6,7 +6,7 @@ import hashlib
 import json
 from pydantic import ValidationError
 
-from .expression_errors import ExpressionError
+from .expression_errors import ExpressionError, input_validation_issues
 from .cancellation import check_cancelled
 from .connectivity_ir import BitRange
 from .dynamic_evidence import Expr, evaluate, MAX_EXPR_NODES
@@ -75,9 +75,10 @@ def bind_expression(parser, raw):
     try:
         return _bind_expression(parser, raw)
     except ValidationError as exc:
-        first = exc.errors(include_url=False, include_context=False)[0]
+        issues = input_validation_issues(exc, raw)
         raise ExpressionError('expression_input_invalid',
-            parameter='.'.join(map(str, first['loc'])), message=str(exc)) from exc
+            parameter=issues[0]['parameter'] if issues else None,
+            message='expression_input_invalid: invalid input fields', issues=issues) from exc
 
 
 def _bind_expression(parser, raw):
@@ -212,6 +213,8 @@ def _bind_expression(parser, raw):
             except ExpressionError as exc:
                 if exc.operand is None:
                     exc.operand = name
+                if exc.reason == 'expression_array_type_unresolved':
+                    exc.parameter = 'types.' + name
                 raise
         resolved[name] = result
         return result

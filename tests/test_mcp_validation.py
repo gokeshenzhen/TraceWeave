@@ -162,3 +162,34 @@ async def test_unrelated_cycle_errors_keep_sdk_validation(monkeypatch, invalid):
     assert result.isError is True
     assert result.content[0].text.startswith("Input validation error:")
     dispatch.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_expression_field_errors_are_reported_together_before_dispatch(monkeypatch):
+    dispatch = Mock(side_effect=AssertionError("invalid expression reached waveform work"))
+    monkeypatch.setattr(server, "_dispatch", dispatch)
+    async with create_connected_server_and_client_session(server.app) as session:
+        result = await session.call_tool("get_signals_by_cycle", {
+            "wave_path": WAVE, "clock_path": "top_tb.clk", "signal_paths": [
+                {"expr": "a", "types": {"a": {"width": 0}, "b": {"width": 8, "unpacked": [["0", 7]]}}},
+                {"expr": "mem[i]", "bindings": {"mem": {"path_template": "tb.mem"}}}]})
+    payload = json.loads(result.content[0].text)
+    assert result.isError and payload['error_code'] == 'expression_input_invalid'
+    assert [i['parameter'] for i in payload['issues']] == [
+        'signal_paths.0.types.a.width', 'signal_paths.0.types.b.unpacked.0.0', 'signal_paths.1.bindings.mem']
+    assert 'JSON integers' in payload['recovery']['message']
+    assert result.structuredContent == payload
+    dispatch.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_expression_field_precheck_remains_bounded_and_does_not_require_unused_types():
+    async with create_connected_server_and_client_session(server.app) as session:
+        invalid = await session.call_tool("get_signal_at_time", {
+            "wave_path": WAVE, "time_ps": 0, "signal_path": {
+                "expr": "1'b1", "types": {f'a{i}': {'width': 0} for i in range(32)}}})
+        valid = await session.call_tool("get_signal_at_time", {
+            "wave_path": WAVE, "time_ps": 0, "signal_path": {
+                "expr": "1'b1", "bindings": {'unused': {'elements': []}}}})
+    assert len(json.loads(invalid.content[0].text)['issues']) == 16
+    assert not valid.isError and json.loads(valid.content[0].text)['value']['dec'] == 1

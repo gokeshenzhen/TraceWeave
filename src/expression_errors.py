@@ -57,7 +57,7 @@ _RECOVERY = {
 class ExpressionError(ValueError):
     """A ValueError-compatible failure; only fixed codes enter telemetry."""
 
-    def __init__(self, reason, *, operand=None, position=None, parameter=None, message=None):
+    def __init__(self, reason, *, operand=None, position=None, parameter=None, message=None, issues=None):
         self.reason = reason
         self.code = _CODES.get(reason, reason)
         if self.code not in _RECOVERY:
@@ -65,6 +65,7 @@ class ExpressionError(ValueError):
         self.operand = operand
         self.position = position
         self.parameter = parameter
+        self.issues = (issues or [])[:16]
         super().__init__(reason if message is None else message)
 
     def payload(self):
@@ -80,6 +81,30 @@ class ExpressionError(ValueError):
             message = ("Supply types.<operand> with the per-element width and declared unpacked "
                        "ranges, e.g. {width:8,unpacked:[[0,7]]}. Bounds must be JSON integers. "
                        "typing=wave_bits cannot infer unpacked dimensions. Bind elements explicitly or use a 1D path_template with one {index} (at most 128 elements).")
+        if self.code == "expression_input_invalid":
+            message = ("Fix the listed fields together. Ordinary unsigned [7:0] needs types.a={width:8}; "
+                       "range bounds are JSON integers, e.g. unpacked:[[0,7]]. "
+                       "Arrays need elements OR a 1D path_template with one {index}.")
         return {"error": str(self), "error_code": self.code, "reason": self.reason,
                 "operand": self.operand, "position": self.position, "parameter": self.parameter,
-                "recovery": {"action": action, "message": message}}
+                "recovery": {"action": action, "message": message}, "issues": self.issues}
+
+
+def input_validation_issues(exc, raw, prefix=""):
+    """Project existing Pydantic errors, excluding irrelevant union branches."""
+    issues = []
+    for error in exc.errors(include_url=False, include_context=False, include_input=False):
+        loc = list(error['loc'])
+        if len(loc) >= 3 and loc[0] == 'bindings':
+            binding = raw.get('bindings', {}).get(loc[1]) if isinstance(raw.get('bindings'), dict) else None
+            if isinstance(binding, dict):
+                chosen = 'ExpressionArray' if 'elements' in binding or 'path_template' in binding else 'WaveformSelection'
+                if chosen not in str(loc[2]):
+                    continue
+                del loc[2]
+        parameter = '.'.join(str(p) for p in loc)
+        issues.append({'parameter': '.'.join(p for p in (prefix, parameter) if p),
+                       'message': error['msg'][:300]})
+        if len(issues) == 16:
+            break
+    return issues

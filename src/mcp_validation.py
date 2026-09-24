@@ -1,9 +1,37 @@
 """Narrow recoverable rejections before the SDK's unchanged input validator."""
 
+from itertools import islice
+
 from mcp import types
+from pydantic import ValidationError
 
 from config import SIGNAL_SEARCH_MAX_KEYWORDS
-from src.schemas import CycleInputErrorResult, KeywordLimitErrorResult
+from src.schemas import CycleInputErrorResult, KeywordLimitErrorResult, WaveformExpression, ExpressionToolErrorResult
+from src.expression_errors import ExpressionError, input_validation_issues
+
+
+def expression_input_error(arguments):
+    """Bounded field-only check; no parsing, type inference or waveform access."""
+    pending = [("", arguments)]
+    issues = []
+    for _ in range(512):
+        if not pending or len(issues) >= 16:
+            break
+        path, value = pending.pop()
+        if isinstance(value, dict) and 'expr' in value:
+            try:
+                WaveformExpression.model_validate(value)
+            except ValidationError as exc:
+                issues.extend(input_validation_issues(exc, value, path))
+        elif isinstance(value, (dict, list)):
+            entries = value.items() if isinstance(value, dict) else enumerate(value)
+            pending.extend((f'{path}.{key}' if path else str(key), child)
+                           for key, child in reversed(list(islice(entries, 128))))
+    if issues:
+        error = ExpressionError('expression_input_invalid', parameter=issues[0]['parameter'],
+                                message='Input validation error: invalid expression fields.', issues=issues)
+        return ExpressionToolErrorResult.model_validate(error.payload())
+    return None
 
 
 def cycle_input_error(arguments):
@@ -63,6 +91,8 @@ def recover_tool_input_errors(app):
                         f"{SIGNAL_SEARCH_MAX_KEYWORDS} keywords; preserve input order."
                     ),
                 )
+            if error is None:
+                error = expression_input_error(arguments)
             if error is not None:
                 return types.ServerResult(types.CallToolResult(
                     isError=True,

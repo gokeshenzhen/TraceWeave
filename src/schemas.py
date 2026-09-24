@@ -1722,12 +1722,18 @@ class ExpressionRecovery(SchemaModel):
     message: str
 
 
+class ExpressionInputIssue(SchemaModel):
+    parameter: str
+    message: str
+
+
 class ExpressionToolErrorResult(ToolErrorResult):
     reason: str
     operand: str | None = None
     position: int | None = Field(default=None, ge=0)
     parameter: str | None = None
     recovery: ExpressionRecovery
+    issues: list[ExpressionInputIssue] = Field(default_factory=list, max_length=16)
 
 
 # ---------------------------------------------------------------------------
