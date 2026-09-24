@@ -48,11 +48,17 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 将同一个表达式对象放进 `get_signals_by_cycle.signal_paths`，即可每拍重算；
 `clock_path` 可使用真实时钟。表达式不会固定第一次看到的下标。
 
-周期查询用 `start_cycle` 或 `start_time_ps` 指定起点，用 `num_cycles` 或
-`end_time_ps` 指定范围；每一对参数只能选一个。单次最多返回 256 拍，需读取
-`effective_num_cycles` / `capped` 并继续查询剩余范围。`sample_offset_ps` 只能为
-非负整数，默认在边沿后 1ps 采样。需要某个边沿前的点值时，可向
-`get_signals_around_time` 提供相应的明确时间。
+周期查询用 `start_cycle` 或 `start_time_ps` 指定起点，两者只能选一个。
+`end_time_ps` 指定包含结束边沿的窗口，可同时给 `num_cycles` 限制返回拍数；
+没有结束时间时默认读取 16 拍，有结束时间且省略拍数时读取窗口内最多 256 拍。
+读取 `effective_num_cycles` / `capped`：`capped=true` 表示没有返回整个请求范围，
+用最后一行的 `cycle + 1` 作为下一次 `start_cycle` 继续查询。
+
+`sample_phase` 默认 `after`，在边沿后 `sample_offset_ps`（默认 1ps）读取。
+需要该沿采纳的输入时，指定 `sample_phase: "before"`，省略偏移或设为 0：
+它读取严格物理边沿前的值，排除该时间戳的全部更新。负偏移不受支持。
+沿前模式保留亚皮秒边沿的独立采样；公开 `time_ps` 向上取整，因此不同拍可能有
+相同时间标签，继续查询时使用 cycle 索引。未知或次序不明的时钟会明确拒绝。
 
 ## 类型与精确绑定
 

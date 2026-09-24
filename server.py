@@ -5563,10 +5563,10 @@ async def list_tools():
             description=(
                 "Sample signals or SV expressions each cycle; dynamic indices are re-evaluated at every sample. "
                 "Useful for state machines, pipelines, and round-by-round algorithm checks. "
-                "Choose start_cycle OR start_time_ps, and num_cycles OR end_time_ps. "
-                f"A query returns at most {MAX_CYCLES_PER_QUERY} cycles; continue after the last returned edge. "
-                "sample_offset_ps must be >=0 (default 1, after the edge). For a pre-edge point, "
-                "use get_signals_around_time at the desired timestamp. "
+                "Choose start_cycle OR start_time_ps. With end_time_ps, num_cycles limits the window's returned cycles. "
+                f"At most {MAX_CYCLES_PER_QUERY} cycles; check capped and continue with the next start_cycle. "
+                "sample_phase=before reads strictly before each edge; omit sample_offset_ps or set 0. "
+                "Default after samples edge+1ps; sample_offset_ps must be >=0. "
                 "Check returned sample times and counts: an initially high clock is not a "
                 "rising edge, so read any required initial state separately by timestamp."
             ),
@@ -5600,8 +5600,7 @@ async def list_tools():
                     },
                     "num_cycles": {
                         "type": "integer",
-                        "description": f"Number of cycles to sample. Default: 16. The server caps a single query at {MAX_CYCLES_PER_QUERY} cycles. Mutually exclusive with end_time_ps.",
-                        "default": 16,
+                        "description": f"Maximum cycles to return. Default: 16 without end_time_ps; otherwise all window edges, capped at {MAX_CYCLES_PER_QUERY}.",
                         "minimum": 0,
                     },
                     "start_time_ps": {
@@ -5611,13 +5610,17 @@ async def list_tools():
                     },
                     "end_time_ps": {
                         **_integer_or_string_schema(),
-                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles."
+                        "description": "Inclusive window end. Optional num_cycles limits returned edges; capped=true means the whole window was not returned."
                         + _TIMESPEC_HINT,
+                    },
+                    "sample_phase": {
+                        "type": "string",
+                        "enum": ["after", "before"],
+                        "description": "after (default): edge plus offset. before: last value strictly before the physical edge, excluding all same-timestamp updates.",
                     },
                     "sample_offset_ps": {
                         "type": "integer",
-                        "description": "Nonnegative sampling offset after the clock edge in ps. Default: 1, to capture post-delta register values. Negative offsets are unsupported.",
-                        "default": 1,
+                        "description": "Offset in ps: after defaults to 1; before requires 0 or omission. Negative offsets are unsupported; use sample_phase=before for accepted inputs.",
                         "minimum": 0,
                     },
                 },
@@ -7475,14 +7478,10 @@ async def _dispatch(name: str, args: dict):
             end_time_ps = (
                 _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
             )
-            # Two locating axes, one input per axis (reject mixing within an axis).
+            # One start axis; an explicit count may cap the requested time window.
             if start_time_ps is not None and "start_cycle" in args:
                 raise ValueError(
                     "start_time_ps and start_cycle are mutually exclusive; pass one"
-                )
-            if end_time_ps is not None and "num_cycles" in args:
-                raise ValueError(
-                    "end_time_ps and num_cycles are mutually exclusive; pass one"
                 )
             if (
                 start_time_ps is not None
@@ -7503,10 +7502,11 @@ async def _dispatch(name: str, args: dict):
                     signal_paths=signal_paths,
                     edge=args.get("edge", "posedge"),
                     start_cycle=args.get("start_cycle", 0),
-                    sample_offset_ps=args.get("sample_offset_ps", 1),
+                    sample_offset_ps=args.get("sample_offset_ps"),
+                    sample_phase=args.get("sample_phase", "after"),
                     start_time_ps=start_time_ps,
                     end_time_ps=end_time_ps,
-                    max_cycles=MAX_CYCLES_PER_QUERY,
+                    max_cycles=min(args.get("num_cycles", MAX_CYCLES_PER_QUERY), MAX_CYCLES_PER_QUERY),
                 )
             else:
                 requested_num_cycles = args.get("num_cycles", 16)
@@ -7518,7 +7518,8 @@ async def _dispatch(name: str, args: dict):
                     edge=args.get("edge", "posedge"),
                     start_cycle=args.get("start_cycle", 0),
                     num_cycles=effective_num_cycles,
-                    sample_offset_ps=args.get("sample_offset_ps", 1),
+                    sample_offset_ps=args.get("sample_offset_ps"),
+                    sample_phase=args.get("sample_phase", "after"),
                     requested_num_cycles=requested_num_cycles,
                     capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
                     start_time_ps=start_time_ps,

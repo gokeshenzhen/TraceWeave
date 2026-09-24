@@ -11,23 +11,21 @@ def cycle_input_error(arguments):
     issues = []
     if "start_time_ps" in arguments and "start_cycle" in arguments:
         issues.append("start_time_ps and start_cycle are mutually exclusive; omit one.")
-    if "end_time_ps" in arguments and "num_cycles" in arguments:
-        issues.append("end_time_ps and num_cycles are mutually exclusive; omit one.")
     offset = arguments.get("sample_offset_ps", 1)
     if type(offset) is int and offset < 0:
-        issues.append("sample_offset_ps must be >= 0; negative offsets are unsupported.")
+        issues.append("sample_offset_ps must be >= 0; for pre-edge inputs use sample_phase=before and omit sample_offset_ps.")
+    if arguments.get("sample_phase") == "before" and "sample_offset_ps" in arguments and type(offset) is int and offset != 0:
+        issues.append("sample_phase=before requires sample_offset_ps=0 or omission.")
     if not issues:
         return None
     return CycleInputErrorResult(
         error="Input validation error: invalid cycle sampling arguments.",
         issues=issues,
         recovery=(
-            "Fix every listed issue before retrying. Choose start_cycle OR start_time_ps, "
-            "and num_cycles OR end_time_ps. For post-edge samples, use sample_offset_ps=1 "
-            "(the default). For a pre-edge point, use get_signals_around_time with "
-            "center_time_ps at the required time before the edge, window_ps=0, "
-            "extra_transitions=0, return_mode=values_only. Post-edge samples do not "
-            "represent the inputs accepted at that edge."
+            "Fix every listed issue. Choose start_cycle OR start_time_ps. "
+            "end_time_ps may be combined with num_cycles to limit returned window edges. "
+            "For pre-edge inputs use sample_phase=before and omit sample_offset_ps; "
+            "for post-edge values use sample_phase=after (default offset 1ps)."
         ),
     )
 

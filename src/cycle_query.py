@@ -347,27 +347,38 @@ def get_signals_by_cycle(
     edge: str = "posedge",
     start_cycle: int = 0,
     num_cycles: int = 16,
-    sample_offset_ps: int = 1,
+    sample_offset_ps: int | None = None,
     requested_num_cycles: int | None = None,
     capped: bool = False,
     start_time_ps: int | None = None,
     end_time_ps: int | None = None,
     max_cycles: int | None = None,
+    sample_phase: str = "after",
 ) -> dict[str, Any]:
     """Sample ``signal_paths`` on ``num_cycles`` clock edges from ``start_cycle``.
 
-    Two orthogonal locating axes; pick one per axis (the dispatch layer rejects
-    mixing within an axis):
+    The start is a global cycle index or an inclusive physical time:
 
     * start axis: ``start_cycle`` (index) OR ``start_time_ps`` (ps) — the latter
       snaps to the first edge at/after the given time (``bisect_left``).
-    * count axis: ``num_cycles`` OR ``end_time_ps`` (ps) — the latter counts every
+    * ``end_time_ps`` (ps) counts every
       edge in ``[start, end_time_ps]`` (``bisect_right``), so the window is
       inclusive on both ends and a partial trailing period contributes a cycle
       iff it actually contains an edge. The count is always an exact edge count,
       never a fractional-cycle division. ``max_cycles`` caps a time-derived count
       (sets ``capped``); the slow path stays bounded.
+
+    ``before`` reads strictly before each physical edge with zero offset;
+    ``after`` retains the default edge + 1ps. Before-phase timestamps stay in
+    femtoseconds internally, including cycle slicing and time-window bounds.
     """
+    if sample_phase not in {"before", "after"}:
+        raise ValueError("sample_phase must be before or after")
+    before = sample_phase == "before"
+    if sample_offset_ps is None:
+        sample_offset_ps = 0 if before else 1
+    if before and sample_offset_ps != 0:
+        raise ValueError("before sampling requires zero offset; omit sample_offset_ps or use 0")
     if edge not in {"posedge", "negedge"}:
         raise ValueError(f"edge must be 'posedge' or 'negedge', got {edge!r}")
     if start_cycle < 0:
@@ -381,13 +392,14 @@ def get_signals_by_cycle(
     if end_time_ps is not None and end_time_ps < 0:
         raise ValueError("end_time_ps must be >= 0")
 
-    edge_times, clock_period = _full_clock_edges(parser, clock_path, edge)
+    edge_times, clock_period = _full_clock_edges(parser, clock_path, edge, sample_phase=sample_phase)
+    time_scale = 1000 if before else 1
 
     resolved_from_time = start_time_ps is not None or end_time_ps is not None
     if start_time_ps is not None:
-        start_cycle = bisect_left(edge_times, start_time_ps)
+        start_cycle = bisect_left(edge_times, start_time_ps * time_scale)
     if end_time_ps is not None:
-        derived = max(0, bisect_right(edge_times, end_time_ps) - start_cycle)
+        derived = max(0, bisect_right(edge_times, end_time_ps * time_scale) - start_cycle)
         requested_num_cycles = derived
         if max_cycles is not None and derived > max_cycles:
             num_cycles = max_cycles
@@ -402,6 +414,7 @@ def get_signals_by_cycle(
     result = {
         "clock_path": clock_path,
         "edge": edge,
+        "sample_phase": sample_phase,
         "sample_offset_ps": sample_offset_ps,
         "clock_period_ps": clock_period,
         "total_edges_found": len(edge_times),
@@ -421,7 +434,7 @@ def get_signals_by_cycle(
         return result
 
     per_cycle_signals, signal_errors, limited = _sample_signals_at_edges(
-        parser, signal_paths, target_edges, sample_offset_ps
+        parser, signal_paths, target_edges, sample_offset_ps, sample_phase=sample_phase
     )
     result["signal_errors"] = signal_errors
     result["transition_data_truncated"] = bool(limited)
@@ -430,8 +443,8 @@ def get_signals_by_cycle(
     result["cycles"] = [
         {
             "cycle": start_cycle + index,
-            "time_ps": edge_time,
-            "time_ns": edge_time / 1000,
+            "time_ps": (edge_time + time_scale - 1) // time_scale,
+            "time_ns": ((edge_time + time_scale - 1) // time_scale) / 1000,
             "signals": signals,
         }
         for index, (edge_time, signals) in enumerate(zip(target_edges, per_cycle_signals))
@@ -739,7 +752,7 @@ def _sample_signals_at_edges(
     return per_edge_signals, signal_errors, transition_signals_truncated
 
 
-def _full_clock_edges(parser, clock_path, edge):
+def _full_clock_edges(parser, clock_path, edge, *, sample_phase="after"):
     """Retain global cycle numbering and period while reusing complete reads.
 
     Only snapshot-owning parsers opt in; arbitrary mutable parser adapters keep
@@ -747,12 +760,18 @@ def _full_clock_edges(parser, clock_path, edge):
     """
     check_cancelled()
     token = getattr(parser, "_clock_cache_token", None)
-    key = (clock_path, edge)
+    before = sample_phase == "before"
+    key = (clock_path, edge + ":before" if before else edge)
     cached = clock_edge_cache.cache.get(token, key)
     if cached is not None:
         check_cancelled()
         return cached
-    result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
+    if before:
+        result = _before_clock_prefix(_read_before_transitions(parser, clock_path, 0, -1))
+        if result.get("truncated") or result.get("transition_count_is_lower_bound"):
+            raise ValueError("incomplete or ambiguous clock transitions for before sampling")
+    else:
+        result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
     if getattr(parser,'_time_group_ambiguities',{}).get(clock_path):
         raise ValueError('derived clock has unresolved intra-time-group edges')
     check_cancelled()
@@ -760,8 +779,10 @@ def _full_clock_edges(parser, clock_path, edge):
     if isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
         raise ValueError("incomplete clock transitions for selection; use a narrower time-window inspection")
     _validate_clock_width(parser, clock_path)
-    edges = _extract_edge_times(result.get("transitions", []), edge)
+    edges = _extract_edge_times(result.get("transitions", []), edge, raw_time=before)
     period = _compute_clock_period_ps(edges)
+    if before and period is not None:
+        period //= 1000
     check_cancelled()
     if not (result.get("truncated") or result.get("transition_count_is_lower_bound")):
         clock_edge_cache.cache.put(token, key, edges, period)

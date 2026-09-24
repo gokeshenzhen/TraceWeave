@@ -44,6 +44,42 @@ def test_generic_cycle_query_keeps_post_edge_default(tmp_path):
     assert inspect(p)["transfer_count"] == 1
 
 
+def test_public_before_phase_keeps_sub_ps_edges_and_cache_units_separate(tmp_path):
+    p = wave(tmp_path, "#0\n0!\n0v\n1r\n#1\n1v\n#5\n1!\n0v\n1v\n"
+             "#6\n0v\n#7\n0!\n#8\n1!\n1v\n#10\n0!", scale="100fs")
+    after = get_signals_by_cycle(p, "tb.clk", ["tb.valid"], num_cycles=2)
+    for _ in range(2):  # same physical index must also survive a cache hit
+        result = get_signals_by_cycle(p, "tb.clk", ["tb.valid"], num_cycles=2, sample_phase="before")
+        assert result["sample_offset_ps"] == 0 and result["sample_phase"] == "before"
+        assert [r["time_ps"] for r in result["cycles"]] == [1, 1]
+        assert [r["signals"]["tb.valid"]["dec"] for r in result["cycles"]] == [1, 0]
+    assert get_signals_by_cycle(p, "tb.clk", ["tb.valid"], num_cycles=2) == after
+    next_cycle = get_signals_by_cycle(p, "tb.clk", ["tb.valid"], start_cycle=1, num_cycles=1, sample_phase="before")
+    assert next_cycle["cycles"][0]["cycle"] == 1
+    assert next_cycle["cycles"][0]["signals"]["tb.valid"]["dec"] == 0
+    # A 1ps start excludes both physical edges, even though both display as 1ps.
+    assert not get_signals_by_cycle(p, "tb.clk", ["tb.valid"], start_time_ps=1, sample_phase="before")["cycles"]
+
+
+@pytest.mark.parametrize("body", ["x!", "1!\n0!\n1!"])
+def test_public_before_phase_does_not_invent_global_cycles_after_ambiguous_clock(tmp_path, body):
+    p = wave(tmp_path, "#0\n0!\n1v\n1r\n#5\n1!\n#10\n0!\n#15\n" + body)
+    with pytest.raises(ValueError, match="ambiguous clock"):
+        get_signals_by_cycle(p, "tb.clk", ["tb.valid"], sample_phase="before")
+
+
+def test_public_before_samples_expression_operands_at_same_physical_edge(tmp_path):
+    from src.waveform_selection import prepare_selections
+    p = wave(tmp_path, "#0\n0!\n1v\n1r\n#5\n1!\n0v\n#10\n0!")
+    adapter, selected = prepare_selections(p, {"signal_paths": [
+        {"expr": "v && r", "typing": "wave_bits", "bindings": {"v": "tb.valid", "r": "tb.ready"}}]})
+    paths = selected["signal_paths"]
+    before = get_signals_by_cycle(adapter, "tb.clk", paths, sample_phase="before", num_cycles=1)
+    after = get_signals_by_cycle(adapter, "tb.clk", paths, num_cycles=1)
+    assert before["cycles"][0]["signals"][paths[0]]["dec"] == 1
+    assert after["cycles"][0]["signals"][paths[0]]["dec"] == 0
+
+
 @pytest.mark.parametrize("compact", [False, True])
 def test_sub_ps_edges_do_not_merge_or_sample_future_values(tmp_path, compact):
     p = wave(tmp_path, "#0\n0!\n0v\n1r\n#1\n1v\n#5\n1!\n0v\n1v\n"

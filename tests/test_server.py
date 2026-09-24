@@ -868,19 +868,13 @@ class TestProtocolBundleToolContract:
                 },
             )
 
-    async def test_cycle_query_dispatch_rejects_mixed_count_axis(self):
+    async def test_cycle_query_dispatch_caps_time_window(self):
         fixture = Path(__file__).parent / "fixtures" / "cycle_test.vcd"
-        with pytest.raises(ValueError, match="end_time_ps and num_cycles"):
-            await server._dispatch(
-                "get_signals_by_cycle",
-                {
-                    "wave_path": str(fixture),
-                    "clock_path": "top_tb.clk",
-                    "signal_paths": ["top_tb.data"],
-                    "end_time_ps": 1500,
-                    "num_cycles": 2,
-                },
-            )
+        result = await server._dispatch("get_signals_by_cycle", {
+            "wave_path": str(fixture), "clock_path": "top_tb.clk",
+            "signal_paths": ["top_tb.data"], "end_time_ps": 1500, "num_cycles": 1})
+        assert result["num_cycles_requested"] == 2
+        assert result["num_cycles_returned"] == 1 and result["capped"]
 
 
 class _FakeFsdbParser:

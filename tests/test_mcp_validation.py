@@ -95,12 +95,11 @@ async def test_cycle_rejection_reports_all_conflicts_before_wave_work(monkeypatc
     payload = json.loads(result.content[0].text)
     error = CycleInputErrorResult.model_validate(payload)
     assert error.error_code == "invalid_cycle_arguments"
-    assert len(error.issues) == 3
+    assert len(error.issues) == 2
     assert "start_time_ps" in error.issues[0] and "start_cycle" in error.issues[0]
-    assert "end_time_ps" in error.issues[1] and "num_cycles" in error.issues[1]
-    assert "sample_offset_ps" in error.issues[2]
+    assert "sample_offset_ps" in error.issues[1]
     assert error.sampling_executed is False
-    assert "pre-edge" in error.recovery and "get_signals_around_time" in error.recovery
+    assert "pre-edge" in error.recovery and "sample_phase=before" in error.recovery
     assert "private" not in result.model_dump_json()
     assert result.structuredContent == payload
     dispatch.assert_not_called()
@@ -110,7 +109,7 @@ async def test_cycle_rejection_reports_all_conflicts_before_wave_work(monkeypatc
 @pytest.mark.anyio
 @pytest.mark.parametrize("conflict", [
     {"start_time_ps": 0, "start_cycle": 0},
-    {"end_time_ps": 2000, "num_cycles": 2},
+    {"sample_phase": "before", "sample_offset_ps": 1},
     {"sample_offset_ps": -1},
 ])
 async def test_cycle_recovery_preserves_pre_and_post_edge_values(conflict):
@@ -122,15 +121,29 @@ async def test_cycle_recovery_preserves_pre_and_post_edge_values(conflict):
         # The client chooses its intended sampling phase; the server never silently
         # coerces a negative offset or drops one of the conflicting bounds.
         after = await session.call_tool("get_signals_by_cycle", {**base, "num_cycles": 2})
-        before = await session.call_tool("get_signals_around_time", {
-            "wave_path": WAVE, "signal_paths": ["top_tb.data"],
-            "center_time_ps": 499, "window_ps": 0, "extra_transitions": 0,
-            "return_mode": "values_only",
-        })
+        before = await session.call_tool("get_signals_by_cycle", {
+            **base, "sample_phase": "before", "num_cycles": 2})
     assert after.isError is False and before.isError is False
     cycles = json.loads(after.content[0].text)["cycles"]
     assert [(r["time_ps"], r["signals"]["top_tb.data"]["dec"]) for r in cycles] == [(500, 1), (1500, 2)]
-    assert json.loads(before.content[0].text)["signals"]["top_tb.data"]["value_at_center"]["dec"] == 0
+    assert [r["signals"]["top_tb.data"]["dec"] for r in json.loads(before.content[0].text)["cycles"]] == [0, 1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("count,expected,capped", [(None, 3, False), (0, 0, True), (1, 1, True), (3, 3, False), (20, 3, False)])
+async def test_window_cycle_limit_is_explicit_and_never_claims_full_coverage(count, expected, capped):
+    args = {"wave_path": WAVE, "clock_path": "top_tb.clk", "signal_paths": ["top_tb.data"],
+            "start_time_ps": 500, "end_time_ps": 2500}
+    if count is not None:
+        args["num_cycles"] = count
+    async with create_connected_server_and_client_session(server.app) as session:
+        result = await session.call_tool("get_signals_by_cycle", args)
+    assert not result.isError
+    payload = json.loads(result.content[0].text)
+    assert payload["num_cycles_requested"] == 3
+    assert payload["num_cycles_returned"] == payload["effective_num_cycles"] == expected
+    assert payload["capped"] is capped
+    assert payload["sample_phase"] == "after" and payload["sample_offset_ps"] == 1
 
 
 @pytest.mark.anyio

@@ -859,6 +859,7 @@ class GetSignalsByCycleResult(SchemaModel):
     transition_signals_truncated: list[str] = Field(default_factory=list)
     clock_path: str
     edge: Literal["posedge", "negedge"]
+    sample_phase: Literal["after", "before"] = "after"
     sample_offset_ps: int = 1
     clock_period_ps: int | None = None
     total_edges_found: int
