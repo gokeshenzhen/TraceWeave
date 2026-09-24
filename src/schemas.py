@@ -876,6 +876,7 @@ class GetSignalsByCycleResult(SchemaModel):
     sample_offset_ps: int = 1
     clock_period_ps: int | None = None
     total_edges_found: int
+    clock_edges_complete: bool = True
     start_cycle: int
     num_cycles_requested: int
     effective_num_cycles: int

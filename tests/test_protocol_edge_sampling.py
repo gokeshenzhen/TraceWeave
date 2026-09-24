@@ -66,6 +66,15 @@ def test_public_before_phase_does_not_invent_global_cycles_after_ambiguous_clock
     p = wave(tmp_path, "#0\n0!\n1v\n1r\n#5\n1!\n#10\n0!\n#15\n" + body)
     with pytest.raises(ValueError, match="ambiguous clock"):
         get_signals_by_cycle(p, "tb.clk", ["tb.valid"], sample_phase="before")
+    prefix = get_signals_by_cycle(p, "tb.clk", ["tb.valid"], sample_phase="before", num_cycles=1)
+    assert prefix["cycles"][0]["time_ps"] == 5
+    assert prefix["cycles"][0]["signals"]["tb.valid"]["dec"] == 1
+    assert not prefix["clock_edges_complete"] and not prefix["truncated"]
+    assert not prefix["transition_data_truncated"]  # requested prefix is complete
+    window = get_signals_by_cycle(p, "tb.clk", ["tb.valid"], sample_phase="before", start_time_ps=1, end_time_ps=14)
+    assert window["cycles"] == prefix["cycles"]
+    with pytest.raises(ValueError, match="ambiguous clock"):
+        get_signals_by_cycle(p, "tb.clk", ["tb.valid"], sample_phase="before", end_time_ps=15)
 
 
 def test_public_before_samples_expression_operands_at_same_physical_edge(tmp_path):

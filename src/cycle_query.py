@@ -392,13 +392,16 @@ def get_signals_by_cycle(
     if end_time_ps is not None and end_time_ps < 0:
         raise ValueError("end_time_ps must be >= 0")
 
-    edge_times, clock_period = _full_clock_edges(parser, clock_path, edge, sample_phase=sample_phase)
+    edge_times, clock_period, safe_before_fs, clock_complete = _full_clock_edges(
+        parser, clock_path, edge, sample_phase=sample_phase)
     time_scale = 1000 if before else 1
 
     resolved_from_time = start_time_ps is not None or end_time_ps is not None
     if start_time_ps is not None:
         start_cycle = bisect_left(edge_times, start_time_ps * time_scale)
     if end_time_ps is not None:
+        if safe_before_fs is not None and end_time_ps * time_scale >= safe_before_fs:
+            raise ValueError("requested window reaches incomplete or ambiguous clock transitions; use an earlier end_time_ps")
         derived = max(0, bisect_right(edge_times, end_time_ps * time_scale) - start_cycle)
         requested_num_cycles = derived
         if max_cycles is not None and derived > max_cycles:
@@ -406,6 +409,9 @@ def get_signals_by_cycle(
             capped = True
         else:
             num_cycles = derived
+
+    if safe_before_fs is not None and num_cycles and start_cycle + num_cycles > len(edge_times):
+        raise ValueError("requested cycles reach incomplete or ambiguous clock transitions; reduce num_cycles")
 
     target_edges = edge_times[start_cycle:start_cycle + num_cycles]
     truncated = len(target_edges) < num_cycles
@@ -418,6 +424,7 @@ def get_signals_by_cycle(
         "sample_offset_ps": sample_offset_ps,
         "clock_period_ps": clock_period,
         "total_edges_found": len(edge_times),
+        "clock_edges_complete": clock_complete,
         "start_cycle": start_cycle,
         "num_cycles_requested": original_num_cycles,
         "effective_num_cycles": num_cycles,
@@ -765,28 +772,33 @@ def _full_clock_edges(parser, clock_path, edge, *, sample_phase="after"):
     cached = clock_edge_cache.cache.get(token, key)
     if cached is not None:
         check_cancelled()
-        return cached
+        return *cached, None, True
+    safe_before_fs = None
     if before:
         result = _before_clock_prefix(_read_before_transitions(parser, clock_path, 0, -1))
         if result.get("truncated") or result.get("transition_count_is_lower_bound"):
-            raise ValueError("incomplete or ambiguous clock transitions for before sampling")
+            rows = result.get("transitions", [])
+            safe_before_fs = result.get("safe_before_fs", _time_fs(rows[-1]) if rows else 0)
     else:
         result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
-    if getattr(parser,'_time_group_ambiguities',{}).get(clock_path):
+    if not before and getattr(parser,'_time_group_ambiguities',{}).get(clock_path):
         raise ValueError('derived clock has unresolved intra-time-group edges')
     check_cancelled()
     from .waveform_selection import SelectionParser
-    if isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
+    if not before and isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
         raise ValueError("incomplete clock transitions for selection; use a narrower time-window inspection")
     _validate_clock_width(parser, clock_path)
     edges = _extract_edge_times(result.get("transitions", []), edge, raw_time=before)
+    if safe_before_fs is not None:
+        edges = edges[:bisect_left(edges, safe_before_fs)]
     period = _compute_clock_period_ps(edges)
     if before and period is not None:
         period //= 1000
     check_cancelled()
-    if not (result.get("truncated") or result.get("transition_count_is_lower_bound")):
+    complete = not (result.get("truncated") or result.get("transition_count_is_lower_bound"))
+    if complete:
         clock_edge_cache.cache.put(token, key, edges, period)
-    return edges, period
+    return edges, period, safe_before_fs, complete
 
 
 def _validate_clock_width(parser, clock_path: str) -> None:
