@@ -7109,8 +7109,9 @@ async def list_tools():
             tool.description += (
                 " Expressions: {expr,bindings,types}; semantic (default) needs declared types. "
                 "typing=wave_bits explicitly uses unsigned dump vectors. scope only prefixes names. "
-                "Unpacked arrays need bindings.<name>.elements and types.<name>.unpacked; "
-                "[left,right] bounds are JSON integers."
+                "Types may use {width:8} for unsigned [7:0]. Arrays need types.<name>.unpacked and "
+                "bindings.<name>.elements OR path_template with one {index} (1D, <=128 elements). "
+                "Range bounds are JSON integers."
                 " Derived results are in expressions: inspect coverage_status/gaps; partial or not_observed "
                 "cannot exclude a problem. Observed X/Z differs from missing data. observations_truncated "
                 "limits displayed evidence only. An error field means failure: use error_code/recovery "

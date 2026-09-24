@@ -46,7 +46,7 @@ _RECOVERY = {
     "expression_unsupported": ("rewrite_expression", "Rewrite with supported integral operators or query already dumped intermediate signals. User functions, side effects and unpacked slices are not evaluated."),
     "expression_operand_invalid": ("correct_operand", "Select an integral array element before applying this operator and check the supported system function's argument count."),
     "expression_sampling_unavailable": ("check_waveform", "Check waveform/declaration identity and event-read capability. Use a new query on current artifacts; a point query can inspect a value but cannot prove missing event order."),
-    "expression_signal_unresolved": ("resolve_binding", "Use search_signals on this waveform and bind exact returned paths. For an unpacked array, map bindings.<name>.elements=[{indices:[i],signal:path}] and supply types.<name>.unpacked. scope does not discover array elements. Do not assume undumped values."),
+    "expression_signal_unresolved": ("resolve_binding", "Use search_signals and bind exact paths. For an unpacked array supply types.<name>.unpacked plus bindings.<name>.elements=[{indices:[i],signal:path}], or a 1D path_template with one {index} (at most 128 elements). scope does not discover elements. Do not assume undumped values."),
     "expression_control_width_invalid": ("correct_control_width", "Provide an expression with the role's required width; use an explicit comparison for Boolean controls, and a two-bit expression for valid_htrans."),
     "expression_window_invalid": ("correct_window", "Provide a nonnegative start and an end at or after start; -1 selects the waveform end where supported."),
     "expression_input_invalid": ("correct_input", "Correct the expression object's fields using WaveformExpression in tools/list. Check value types, required fields and declared limits."),
@@ -79,7 +79,7 @@ class ExpressionError(ValueError):
         if self.reason == "expression_array_type_unresolved":
             message = ("Supply types.<operand> with the per-element width and declared unpacked "
                        "ranges, e.g. {width:8,unpacked:[[0,7]]}. Bounds must be JSON integers. "
-                       "typing=wave_bits cannot infer unpacked dimensions; keep explicit elements bindings.")
+                       "typing=wave_bits cannot infer unpacked dimensions. Bind elements explicitly or use a 1D path_template with one {index} (at most 128 elements).")
         return {"error": str(self), "error_code": self.code, "reason": self.reason,
                 "operand": self.operand, "position": self.position, "parameter": self.parameter,
                 "recovery": {"action": action, "message": message}}

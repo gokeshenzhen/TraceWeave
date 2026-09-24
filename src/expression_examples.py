@@ -16,11 +16,9 @@ def expression_examples(wave_path="/absolute/path/to/TraceWeave/examples/express
             "tool": "get_signal_transitions",
             "arguments": {"wave_path": wave_path, "start_time_ps": 0, "end_time_ps": 25,
                 "signal_path": {"expr": "mem[i]", "bindings": {
-                    "i": "tb.index", "mem": {"elements": [
-                        {"indices": [3], "signal": "tb.mem[3][7:0]"},
-                        {"indices": [4], "signal": "tb.mem[4][7:0]"}]}},
+                    "i": "tb.index", "mem": {"path_template": "tb.mem[{index}][7:0]"}},
                     "types": {"i": {"width": 3}, "mem": {
-                        "width": 8, "packed": [[7, 0]], "unpacked": [[0, 7]]}}}},
+                        "width": 8, "unpacked": [[0, 7]]}}}},
             "expected": {"times": [0, 10, 20], "values": [17, 34, 51]},
         },
         {
@@ -29,7 +27,7 @@ def expression_examples(wave_path="/absolute/path/to/TraceWeave/examples/express
             "arguments": {"wave_path": wave_path, "clock_path": "tb.clk", "num_cycles": 4,
                 "sample_offset_ps": 1, "signal_paths": [{
                     "expr": "a[i -: W]", "bindings": {"a": "tb.data", "i": "tb.index"},
-                    "types": {"a": {"width": 8, "packed": [[7, 0]]}, "i": {"width": 3}},
+                    "types": {"a": {"width": 8}, "i": {"width": 3}},
                     "constants": {"W": "2"}}]},
             "expected": {"values": [2, 1, 2, None]},
         },

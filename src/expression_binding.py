@@ -11,7 +11,7 @@ from .cancellation import check_cancelled
 from .connectivity_ir import BitRange
 from .dynamic_evidence import Expr, evaluate, MAX_EXPR_NODES
 from .expression_parser import Compiler, Type, Typed
-from .schemas import WaveformExpression, WaveformSelection, ExpressionArray
+from .schemas import WaveformExpression, WaveformSelection, ExpressionArray, ExpressionElement
 from .waveform_selection import Projection, SelectionParser
 
 
@@ -94,6 +94,18 @@ def _bind_expression(parser, raw):
     def validate_array_mapping(binding, typ):
         if typ is None or not typ.unpacked:
             raise ExpressionError('expression_array_type_unresolved')
+        if binding.path_template is not None:
+            if len(typ.unpacked) != 1:
+                raise ExpressionError('expression_array_mapping_invalid',
+                    message='path_template needs exactly one declared unpacked dimension')
+            left, right = typ.unpacked[0]
+            if abs(right-left)+1 > 128:
+                raise ExpressionError('expression_dependency_limit',
+                    message='path_template exceeds 128 elements; use sparse elements bindings')
+            step = 1 if right >= left else -1
+            binding = ExpressionArray(elements=[ExpressionElement(indices=[i],
+                signal=binding.path_template.replace('{index}', str(i)))
+                for i in range(left, right+step, step)])
         seen = set()
         for entry in binding.elements:
             check_cancelled()
@@ -102,6 +114,7 @@ def _bind_expression(parser, raw):
                     any(not min(r) <= i <= max(r) for i,r in zip(indices,typ.unpacked))):
                 raise ExpressionError('expression_array_mapping_invalid')
             seen.add(indices)
+        return binding
     # Bindings are exact names. The scope is only a caller-supplied prefix.
     def path_for(name):
         return f'{spec.scope}.{name}' if spec.scope else name
@@ -152,7 +165,7 @@ def _bind_expression(parser, raw):
                           signed=typ.signed,two_state=typ.two_state),typ)
 
     def array(binding, typ, name):
-        validate_array_mapping(binding,typ)
+        binding = validate_array_mapping(binding,typ)
         leaf = replace(typ, unpacked=())
         elements = {}
         for entry in binding.elements:

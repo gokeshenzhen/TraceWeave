@@ -76,6 +76,8 @@ async def test_signal_inputs_keep_legacy_and_recursive_type_constraints():
         {"path": "tb.data", "lsb": 0, "width": 8},
         {"path": "tb.data", "bits": [7, 3]},
         {"expr": "a[i]", "typing": "wave_bits", "bindings": {"a": "tb.data", "i": "tb.index"}},
+        {"expr": "m[0]", "bindings": {"m": {"path_template": "tb.m[{index}][7:0]"}},
+         "types": {"m": {"width": 8, "unpacked": [[0, 3]]}}},
         {"expr": "rows[i].payload.flag", "bindings": {
             "rows": {"elements": [{"indices": [0], "signal": "tb.rows[0]"}]}, "i": "tb.index"},
          "types": {"i": {"width": 3}, "rows": {"width": 8, "unpacked": [[0, 7]],

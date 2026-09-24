@@ -690,13 +690,13 @@ ExpressionRange = Annotated[
 
 class ExpressionType(SchemaModel):
     """Caller-supplied integral type; width is the packed element width."""
-    width: StrictInt = Field(ge=1, le=4096, description="Total packed width of one unpacked element, including all packed dimensions.")
-    signed: bool = Field(default=False, description="RTL signedness; affects extension, comparison and arithmetic right shift.")
-    two_state: bool = Field(default=False, description="True for a declared two-state integral type; default is four-state.")
+    width: StrictInt = Field(ge=1, le=4096, description="Total packed bits per element; {width:8} describes unsigned [7:0].")
+    signed: bool = Field(default=False, description="Declared signedness; default unsigned.")
+    two_state: bool = Field(default=False, description="True for two-state; default four-state.")
     packed: list[ExpressionRange] = Field(default_factory=list, max_length=8,
         description="Declared [left,right] ranges, outermost first; e.g. [[3,0],[7,0]] for four packed bytes.")
     unpacked: list[ExpressionRange] = Field(default_factory=list, max_length=8,
-        description="Fixed unpacked [left,right] ranges, outermost first; requires an elements binding for value reads.")
+        description="Unpacked [left,right] ranges, outermost first; requires elements or path_template.")
     members: list[ExpressionMember] = Field(default_factory=list, max_length=128,
         description="Packed struct/union layout: name, lsb offset, type. For packed arrays, describe the innermost aggregate; its final packed range is the aggregate's flattened bits.")
 
@@ -707,13 +707,26 @@ class ExpressionElement(SchemaModel):
 
 
 class ExpressionArray(SchemaModel):
-    """Explicit sparse mapping, never a path template or a memory-state model."""
-    elements: list[ExpressionElement] = Field(max_length=128,
-        description="Sparse mapping to actual dumped elements. Unmapped selected elements are missing evidence, not observed X.")
+    """Sparse elements or a bounded one-dimensional path template."""
+    elements: list[ExpressionElement] = Field(default_factory=list, max_length=128,
+        description="Exact sparse mappings. Missing elements remain missing evidence.")
+    path_template: str | None = Field(default=None, min_length=1, max_length=16384,
+        description="Alternative to elements: one {index}, e.g. tb.mem[{index}][7:0]; expand types.<name>.unpacked (1D, at most 128 elements).")
+
+    @model_validator(mode="after")
+    def check_mapping(self):
+        if self.path_template is not None:
+            if self.elements:
+                raise ValueError("provide elements OR path_template")
+            if self.path_template.count("{index}") != 1 or any(c in self.path_template.replace("{index}", "") for c in "{}"):
+                raise ValueError("path_template requires exactly one {index} and no other placeholders")
+        elif "elements" not in self.model_fields_set:
+            raise ValueError("provide elements OR path_template")
+        return self
 
 
 class WaveformExpression(SchemaModel):
-    """Read-only SV expression, re-evaluated at each sample using current operand values."""
+    """Read-only SV expression, re-evaluated at each sample."""
     expr: str = Field(min_length=1, max_length=16384,
         description="SV value expression, e.g. a[i], data[base+:W], valid && ready, or $countones(mask). No assignments, user functions or temporal syntax.")
     typing: Literal["semantic", "wave_bits"] = Field(default="semantic",
@@ -721,7 +734,7 @@ class WaveformExpression(SchemaModel):
     scope: str | None = Field(default=None, max_length=16384,
         description="Prefix for unbound names, e.g. tb.dut. Explicit bindings override it; this is not a type provider.")
     bindings: dict[str, str | WaveformSelection | ExpressionArray] = Field(default_factory=dict, max_length=128,
-        description="Map expression names to paths from search_signals, fixed selections, or sparse array elements. A bare string input is a path, never a formula.")
+        description="Names to exact search_signals paths, fixed selections, or array bindings. Bare strings are paths.")
     types: dict[str, ExpressionType] = Field(default_factory=dict, max_length=128,
         description="Declared operand types and named cast types. Supply signedness and array/member layout when relevant; dump width alone cannot prove them.")
     constants: dict[str, str] = Field(default_factory=dict, max_length=128,

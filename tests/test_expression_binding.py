@@ -112,6 +112,53 @@ def test_decisive_branch_does_not_read_inactive_memory(tmp_path):
         bind_expression(p,{**spec,'expr':"1'b0 && mem"})
 
 
+@pytest.mark.parametrize('bounds', [[2,3], [3,2], [-2,-1]])
+def test_template_matches_explicit_elements_in_both_range_directions(tmp_path, bounds):
+    p = dump(tmp_path)
+    original = p.get_signal_declaration
+    left, right = bounds
+    paths = {f'tb.mem[{left}][3:0]': 'tb.gen[2].data[3:0]',
+             f'tb.mem[{right}][3:0]': 'tb.pieces[3:0]'}
+    # Alias metadata to real dumped words; values still come from the VCD reader.
+    p.get_signal_declaration = lambda path: original(paths.get(path, path))
+    raw = dict(expr='mem[i]', bindings={'mem': {'path_template': 'tb.mem[{index}][3:0]'}},
+               types={'mem': {'width':4, 'unpacked':[bounds]}}, constants={'i':str(left)})
+    explicit = {**raw, 'bindings': {'mem': {'elements': [
+        {'indices':[index], 'signal':path} for index,path in zip(bounds, paths)]}}}
+    for index in bounds:
+        raw['constants']['i'] = explicit['constants']['i'] = str(index)
+        actual = observe(bind_expression(p, raw), p)
+        expected = observe(bind_expression(p, explicit), p)
+        assert actual[0].value == expected[0].value and actual[1] == expected[1]
+
+
+def test_template_missing_dump_is_not_observed_x_or_zero(tmp_path):
+    p = dump(tmp_path)
+    raw = dict(expr='mem[0]', bindings={'mem': {'path_template':'tb.absent[{index}]'}},
+               types={'mem': {'width':4, 'unpacked':[[0,1]], 'two_state':True}})
+    result, reads = observe(bind_expression(p,raw), p)
+    assert result.value is None and 'array_element_not_dumped' in result.gaps and not reads
+    raw['expr'] = '$size(mem)'
+    assert int(observe(bind_expression(p,raw),p)[0].value,2) == 2
+
+
+@pytest.mark.parametrize('mapping,bounds,reason', [
+    ({'path_template':'tb.mem'}, [[0,3]], 'input_invalid'),
+    ({'path_template':'tb.mem[{index}][{index}]'}, [[0,3]], 'input_invalid'),
+    ({'path_template':'tb.mem[{index}][{other}]'}, [[0,3]], 'input_invalid'),
+    ({'path_template':'tb.mem[{index}]','elements':[{'indices':[0],'signal':'tb.a'}]}, [[0,3]], 'input_invalid'),
+    ({'path_template':'tb.mem[{index}]'}, [[0,2],[0,2]], 'mapping_invalid'),
+    ({'path_template':'tb.mem[{index}]'}, [[0,128]], 'dependency_limit'),
+])
+def test_template_rejects_unsupported_or_unbounded_expansion_without_reads(mapping, bounds, reason):
+    class Unreadable:
+        def get_signal_declaration(self, path):
+            pytest.fail('invalid template must fail before reading waveform metadata')
+    with pytest.raises(ValueError, match=reason + '|path_template'):
+        bind_expression(Unreadable(), dict(expr='mem[i]', bindings={'mem':mapping}, constants={'i':'0'},
+            types={'mem':{'width':8,'unpacked':bounds}}))
+
+
 def test_generated_hierarchy_index_is_constant_identity(tmp_path):
     p = dump(tmp_path)
     b = bind_expression(p,dict(expr='tb.gen[2].data',typing='wave_bits'))

@@ -74,6 +74,8 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 - `constants` 是显式常量表达式绑定。不会展开宏、执行函数或遍历工程猜参数。
   RTL 自动回溯则使用匹配编译上下文中的 Slang/NPI 事实。
 
+普通 `logic [31:0]` 可简写为 `{"width":32}`；默认 unsigned、四态，packed
+范围默认 `[width-1:0]`。signed、升序或非零基址、多维和成员布局须按声明提供。
 例如有符号右移：
 
 ```json
@@ -81,8 +83,8 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
   "expr": "a >>> shift",
   "bindings": {"a": "tb.a[7:0]", "shift": "tb.shift[2:0]"},
   "types": {
-    "a": {"width": 8, "signed": true, "packed": [[7, 0]]},
-    "shift": {"width": 3, "packed": [[2, 0]]}
+    "a": {"width": 8, "signed": true},
+    "shift": {"width": 3}
   }
 }
 ```
@@ -109,8 +111,28 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 ```
 
 idx=2/3 时只读取选中的元素；idx=4 在声明内但没有 dump 映射，返回缺失证据。
+规则命名的一维数组还可用模板简写（与 `elements` 二选一）：
+
+```json
+{
+  "expr": "mem[idx]",
+  "bindings": {
+    "idx": "tb.idx[2:0]",
+    "mem": {"path_template": "tb.mem[{index}][7:0]"}
+  },
+  "types": {
+    "idx": {"width": 3},
+    "mem": {"width": 8, "unpacked": [[0, 7]]}
+  }
+}
+```
+
+模板只替换一个字面 `{index}`，按明确的 unpacked 范围展开，最多 128 个元素。
+支持负下标和降序范围，不做通配搜索；缺失路径仍为缺失证据。更大或多维数组
+继续使用稀疏 `elements`，无需枚举整个声明范围。
+
 `scope` 只补全名称前缀，不会自动发现数组元素。即使使用 `wave_bits`，
-unpacked 数组仍需要 `elements` 和 `types` 中的维度；范围边界使用 JSON 整数，
+unpacked 数组仍需要绑定和 `types` 中的维度；范围边界使用 JSON 整数，
 例如 `[[0,7]]`，不能写成字符串 `[["0","7"]]`。
 越界和未知索引按元素的二态/四态类型产生默认值，并保留下标诊断，
 不能把未 dump 等同于实际观测 X。
