@@ -72,7 +72,7 @@ export VERDI_HOME=/path/to/verdi
 bash scripts/install.sh
 ```
 
-安装器准备 Python 环境、Source Graph 和 FSDB 读取组件，并检查运行环境。它不会修改 shell 启动文件或 MCP 客户端配置；NPI 仍需站点提供相应的运行环境和 license。
+安装器准备 Python 环境、Source Graph 和 FSDB 读取组件，并检查运行环境。它不会修改 shell 启动文件或 MCP 客户端配置。FSDB 支持基于 `VERDI_HOME` 中的 Synopsys FSDB Reader SDK 构建；TraceWeave 不分发该 SDK 的头文件或库。使用 FSDB Reader 须遵守适用的 VC Apps Access Program Agreement（或其后续协议）。NPI 和 KDB 操作仍需站点提供相应的 EDA 运行环境和 license。
 
 已有安装可先执行只读检查：
 
@@ -420,7 +420,7 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
 
 **没有商业 license 也能用吗？**
 
-日志分析、VCD 查询、静态结构扫描和 Source Graph 不需要商业 license。**直接查询已有波形中的信号值或跳变，不需要 NPI license**：VCD 使用内置解析器，FSDB 使用本地 Verdi FSDB Reader 库和 wrapper。Verdi NPI 信号追踪和 KDB 构建需要相应的 EDA 环境与 license。
+日志分析、VCD 查询、静态结构扫描和 Source Graph 不需要商业 license。**直接查询已有波形中的信号值或跳变，不需要 NPI license**：VCD 使用内置解析器；FSDB 使用本地 Verdi FSDB Reader，其使用仍须遵守上文所述协议。Verdi NPI 信号追踪和 KDB 构建需要相应的 EDA 环境与 license。
 
 **路径变量是否支持自恢复**
 

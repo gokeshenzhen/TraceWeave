@@ -72,7 +72,7 @@ export VERDI_HOME=/path/to/verdi
 bash scripts/install.sh
 ```
 
-The installer prepares the Python environment, Source Graph, and FSDB reader, then checks the runtime. It leaves shell startup files and MCP client configuration untouched. NPI still requires the appropriate EDA runtime and license from your site.
+The installer prepares the Python environment, Source Graph, and FSDB reader, then checks the runtime. It leaves shell startup files and MCP client configuration untouched. FSDB support builds against the Synopsys FSDB Reader SDK in `VERDI_HOME`; TraceWeave does not redistribute its headers or libraries. Use of the FSDB Reader is subject to the applicable VC Apps Access Program Agreement (or successor). NPI and KDB operations also require the appropriate EDA runtime and license from your site.
 
 For an existing installation, start with a read-only check:
 
@@ -423,7 +423,7 @@ Usually, you describe the debugging goal and let the assistant select the tools.
 
 **Can I use TraceWeave without a commercial license?**
 
-Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses local Verdi FSDB Reader libraries and the wrapper. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
+Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses the local Verdi FSDB Reader and remains subject to its agreement described above. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
 
 **Can missing path variables be recovered automatically?**
 
