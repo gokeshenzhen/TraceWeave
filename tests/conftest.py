@@ -3,6 +3,9 @@
 
 import sys
 import os
+from pathlib import Path
+
+import pytest
 
 # 测试绝不能写入真实的用户遥测文件：走 server.call_tool 的测试（如
 # TestCallToolErrors）会触发真实的 record_call 落盘，曾把每次 pytest 运行
@@ -20,3 +23,16 @@ os.environ["TRACEWEAVE_NPI_EXECUTION"] = "local"
 ROOT = os.path.dirname(os.path.dirname(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+
+@pytest.fixture
+def require_fsdb_runtime():
+    """Skip real FSDB reads only when optional native prerequisites are absent."""
+    from src import fsdb_parser
+
+    if not Path(fsdb_parser._WRAPPER_SO).is_file():
+        pytest.skip("requires locally built libfsdb_wrapper.so")
+    if not fsdb_parser.get_fsdb_runtime_info()["enabled"]:
+        pytest.skip("requires Verdi FSDB runtime libraries")
+    # Do not catch load/open errors or check feature ABIs here: a configured
+    # runtime must still fail for broken wrappers, missing ABIs or bad fixtures.

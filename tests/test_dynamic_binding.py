@@ -56,7 +56,7 @@ b1010 !
     assert result['dependencies'][0]['bits'] == [right, left]
 
 
-def test_real_native_vector_without_range_is_observed_with_exact_binding():
+def test_real_native_vector_without_range_is_observed_with_exact_binding(require_fsdb_runtime):
     parser = FSDBParser(str(Path(__file__).parent / 'fixtures/scale_1ns.fsdb'))
     source = 'scale_1ns_tb.addr'
     expr = Expr('signal', 4, signal=source, bits=(31, 29, 30, 28),

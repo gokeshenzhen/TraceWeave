@@ -291,7 +291,7 @@ def test_value_reuse_has_bounded_request_local_lifetime(tmp_path):
     assert a["analysis"]["value_reuse_misses"] == b["analysis"]["value_reuse_misses"]
 
 
-def test_native_budget_cancel_timeout_and_failure_close_groups(monkeypatch):
+def test_native_budget_cancel_timeout_and_failure_close_groups(monkeypatch, require_fsdb_runtime):
     p = FSDBParser(str(Path(__file__).parent / "fixtures/scale_100fs.fsdb"))
     path = "scale_100fs_tb.addr[31:0]"
     try:
@@ -341,7 +341,7 @@ def test_native_budget_cancel_timeout_and_failure_close_groups(monkeypatch):
 
 @pytest.mark.parametrize("scale", ["100fs", "1ns"])
 @pytest.mark.parametrize("legacy", [False, True])
-def test_native_scale_selection_and_legacy_transaction_semantics(scale, legacy, monkeypatch):
+def test_native_scale_selection_and_legacy_transaction_semantics(scale, legacy, monkeypatch, require_fsdb_runtime):
     p = FSDBParser(str(Path(__file__).parent / "fixtures" / f"scale_{scale}.fsdb"))
     root = f"scale_{scale}_tb"
     try:
@@ -388,7 +388,7 @@ def test_compact_iterator_borrows_values_without_per_edge_copy():
 
 
 @pytest.mark.anyio
-async def test_cancelled_transaction_worker_releases_native_group(monkeypatch):
+async def test_cancelled_transaction_worker_releases_native_group(monkeypatch, require_fsdb_runtime):
     import server
     p = FSDBParser(str(Path(__file__).parent / "fixtures/scale_100fs.fsdb"))
     started, release, closed = threading.Event(), threading.Event(), threading.Event()

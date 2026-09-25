@@ -138,7 +138,7 @@ def test_native_scope_oracle(tmp_path):
 
 
 @pytest.mark.parametrize("fixture", ["scale_100fs.fsdb", "scale_1ns.fsdb", "wide_bus.fsdb"])
-def test_real_fsdb_pages_match_metadata_and_legacy_search(fixture):
+def test_real_fsdb_pages_match_metadata_and_legacy_search(fixture, require_fsdb_runtime):
     parser = fs.FSDBParser(str(Path(__file__).parent / "fixtures" / fixture))
     try:
         expected = parser.search_signals("", max_results=10000)
@@ -154,7 +154,7 @@ def test_real_fsdb_pages_match_metadata_and_legacy_search(fixture):
 
 
 @pytest.mark.parametrize("change", ["close", "replace", "write", "remove", "symlink"])
-def test_real_fsdb_stale_cursor_rejected_without_continuing(tmp_path, change):
+def test_real_fsdb_stale_cursor_rejected_without_continuing(tmp_path, change, require_fsdb_runtime):
     path = tmp_path / "wave.fsdb"
     shutil.copyfile(Path(__file__).parent / "fixtures/scale_100fs.fsdb", path)
     parser = fs.FSDBParser(str(path))
@@ -266,7 +266,7 @@ def test_identity_change_between_pages_discards_the_prefix(tmp_path, monkeypatch
     assert receipt["scope_total"] is None and receipt["scope_total_lower_bound"] == 0
 
 
-def test_native_cancel_and_change_during_page_are_not_published(tmp_path, monkeypatch):
+def test_native_cancel_and_change_during_page_are_not_published(tmp_path, monkeypatch, require_fsdb_runtime):
     path = tmp_path / "wave.fsdb"
     shutil.copyfile(Path(__file__).parent / "fixtures/scale_100fs.fsdb", path)
     parser = fs.FSDBParser(str(path))
@@ -298,7 +298,7 @@ def test_native_cancel_and_change_during_page_are_not_published(tmp_path, monkey
         parser.close()
 
 
-def test_scope_change_inside_active_group_preserves_cleanup(tmp_path):
+def test_scope_change_inside_active_group_preserves_cleanup(tmp_path, require_fsdb_runtime):
     path = tmp_path / "wave.fsdb"
     shutil.copyfile(Path(__file__).parent / "fixtures/scale_100fs.fsdb", path)
     parser = fs.FSDBParser(str(path))

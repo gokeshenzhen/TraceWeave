@@ -186,7 +186,7 @@ def test_cancellation_and_dependency_budget(tmp_path,monkeypatch):
 @pytest.mark.parametrize('scale,expected',[
     ('100fs',[(0,0),(100000000,0xaa),(100100000,0xbb),(100100500,0xcc)]),
     ('1ns',[(0,0),(100000000,0xaa),(101000000,0xbb)])])
-def test_native_expression_pages_point_and_cleanup(scale,expected):
+def test_native_expression_pages_point_and_cleanup(scale,expected,require_fsdb_runtime):
     base = FSDBParser(str(Path(__file__).parent/'fixtures'/f'scale_{scale}.fsdb'))
     try:
         p = ExpressionParser(base)

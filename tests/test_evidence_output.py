@@ -316,7 +316,7 @@ async def test_cancelled_projection_exits_worker_and_next_request_succeeds(monke
 
 
 @pytest.mark.anyio
-async def test_native_compact_preserves_scale_predecessor_and_display_cap(monkeypatch):
+async def test_native_compact_preserves_scale_predecessor_and_display_cap(monkeypatch, require_fsdb_runtime):
     path = str(Path(__file__).parent / "fixtures/scale_100fs.fsdb")
     original = server.serialize_compact_result
     def unlocked(tool, result):

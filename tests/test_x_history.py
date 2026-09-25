@@ -239,7 +239,7 @@ async def test_source_or_wave_change_discards_all_old_evidence(tmp_path, monkeyp
         await server._dispatch('build_tb_hierarchy', {k: args[k] for k in ('compile_log', 'simulator')})
 
 
-def test_required_native_history_budget_timeout_cancel_cleanup(monkeypatch):
+def test_required_native_history_budget_timeout_cancel_cleanup(monkeypatch, require_fsdb_runtime):
     from src.fsdb_parser import FSDBParser
     p = FSDBParser(str(Path(__file__).parent / 'fixtures/scale_100fs.fsdb'))
     signal = 'scale_100fs_tb.addr[31:0]'

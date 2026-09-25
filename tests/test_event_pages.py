@@ -157,8 +157,8 @@ def test_page_identity_change_rejects_old_prefix(tmp_path):
      [0,0xaaaa0000,0xbbbb0000,0xcccc0000]),
     ('scale_1ns.fsdb','scale_1ns_tb.addr[31:0]',[0,100000000,101000000],
      [0,0xaaaa0000,0xbbbb0000])])
-def test_required_native_exact_time_pages_and_cleanup(filename,signal,times,values):
-    # Required PR acceptance: no skip when the tested ABI or fixture is missing.
+def test_required_native_exact_time_pages_and_cleanup(filename,signal,times,values,require_fsdb_runtime):
+    # With the runtime installed, missing test ABIs or fixtures must still fail.
     p=FSDBParser(str(Path(__file__).parent/'fixtures'/filename))
     try:
         assert p._supports_event_pages()
@@ -186,7 +186,7 @@ def test_required_native_exact_time_pages_and_cleanup(filename,signal,times,valu
     finally:p.close()
 
 
-def test_native_old_wrapper_capability_fallback_is_materialized(monkeypatch):
+def test_native_old_wrapper_capability_fallback_is_materialized(monkeypatch, require_fsdb_runtime):
     p=FSDBParser(str(Path(__file__).parent/'fixtures/scale_1ns.fsdb'))
     try:
         p._open(); monkeypatch.setattr(p._lib,'_traceweave_has_event_pages_v1',False)
@@ -207,7 +207,7 @@ def test_selection_event_projection_keeps_ordered_bits_and_unknowns(tmp_path):
     assert r['width_a']==2 and any(g['reason']=='value_unknown' for g in r['coverage_gaps'])
 
 
-def test_native_cancellation_after_read_and_group_exception_cleanup(monkeypatch):
+def test_native_cancellation_after_read_and_group_exception_cleanup(monkeypatch, require_fsdb_runtime):
     p=FSDBParser(str(Path(__file__).parent/'fixtures/scale_100fs.fsdb'))
     signal='scale_100fs_tb.addr[31:0]'
     event=threading.Event();token=push_cancel_event(event)
@@ -229,7 +229,7 @@ def test_native_cancellation_after_read_and_group_exception_cleanup(monkeypatch)
     finally:pop_cancel_event(token);p.close()
 
 
-def test_native_byte_capacity_reports_unread_tail_and_never_loops():
+def test_native_byte_capacity_reports_unread_tail_and_never_loops(require_fsdb_runtime):
     p=FSDBParser(str(Path(__file__).parent/'fixtures/wide_bus.fsdb'))
     try:
         signal='tb.dat1[1023:0]'
@@ -240,7 +240,7 @@ def test_native_byte_capacity_reports_unread_tail_and_never_loops():
     finally:p.close()
 
 
-def test_page_deadline_checked_after_native_return(monkeypatch):
+def test_page_deadline_checked_after_native_return(monkeypatch, require_fsdb_runtime):
     from src.divergence_budget import Budget, BudgetExceeded
     p=FSDBParser(str(Path(__file__).parent/'fixtures/scale_1ns.fsdb'))
     signal='scale_1ns_tb.addr[31:0]'
@@ -293,7 +293,7 @@ def test_public_raw_time_cursor_is_marked_as_rounded(tmp_path):
     assert r['cursor']['metadata']['first_divergence_time_fs']==100
 
 
-def test_native_reader_cannot_survive_owner_generation_change():
+def test_native_reader_cannot_survive_owner_generation_change(require_fsdb_runtime):
     p=FSDBParser(str(Path(__file__).parent/'fixtures/scale_1ns.fsdb'))
     try:
         with event_readers([(p,'scale_1ns_tb.addr[31:0]')],0,-1) as readers:
