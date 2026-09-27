@@ -143,7 +143,7 @@ def main():
               "loaded_python": fsdb_parser.__file__, "loaded_wrapper": str(wrapper),
               "wrapper_sha256": file_digest(wrapper), "wrapper_override": bool(args.wrapper),
               "source_sha256": {name: file_digest(root / name) for name in
-                                ("src/fsdb_parser.py", "fsdb_wrapper.cpp", "src/divergence_compare.py")},
+                                ("src/fsdb_parser.py", "native/fsdb/fsdb_wrapper.cpp", "src/divergence_compare.py")},
               "native_metadata_v1": getattr(p._lib, "_traceweave_has_metadata_v1", False),
               "native_transition_group": getattr(p._lib, "_traceweave_has_transition_group", False),
               "wave_identities": before, "wave_sha256": [file_digest(path) for path in paths],

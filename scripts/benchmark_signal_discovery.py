@@ -102,9 +102,9 @@ def main():
         wrapper = Path(parser._lib._name).resolve()
         assert wrapper == (args.wrapper.resolve() if args.wrapper else root / "libfsdb_wrapper.so")
         assert parser._stat_identity() == identity, "waveform changed during benchmark"
-        sources = ["fsdb_wrapper.cpp", "src/fsdb_parser.py", "src/handshake_suggest.py",
+        sources = ["native/fsdb/fsdb_wrapper.cpp", "src/fsdb_parser.py", "src/handshake_suggest.py",
                    "src/handshake_sweep.py", "src/cycle_query.py", "src/verify_condition.py",
-                   "src/schemas.py", "fsdb_point_read.h"]
+                   "src/schemas.py", "native/fsdb/fsdb_point_read.h"]
         for module in tuple(sys.modules.values()):
             filename = getattr(module, "__file__", None)
             if filename:

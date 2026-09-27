@@ -174,7 +174,7 @@ def main():
                   open_index_ms=open_ms, queries=results, pid=os.getpid(),
                   loaded={p: sha(Path(p)) for p in loaded},
                   sources={p: sha(root/p) for p in ("server.py", "src/schemas.py", "src/tlul.py",
-                      "src/txn_reconstruct.py", "src/transaction_sampling.py", "src/evidence_output.py", "fsdb_wrapper.cpp")
+                      "src/txn_reconstruct.py", "src/transaction_sampling.py", "src/evidence_output.py", "native/fsdb/fsdb_wrapper.cpp")
                       if (root/p).exists()})
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 

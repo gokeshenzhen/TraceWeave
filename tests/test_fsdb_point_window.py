@@ -12,6 +12,7 @@ import pytest
 from src.fsdb_parser import FSDBParser
 
 ROOT = Path(__file__).resolve().parents[1]
+NATIVE_FSDB = ROOT / "native" / "fsdb"
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +22,7 @@ def native_lifecycle_probe(tmp_path_factory):
         pytest.skip("C++ compiler unavailable")
     executable = tmp_path_factory.mktemp("point_read") / "lifecycle"
     subprocess.run([compiler, "-std=c++11", "-Wall", "-Wextra", "-Werror",
-                    "-I", str(ROOT), str(ROOT / "tests/native/fsdb_point_read_test.cpp"),
+                    "-I", str(NATIVE_FSDB), str(ROOT / "tests/native/fsdb_point_read_test.cpp"),
                     "-o", str(executable)], check=True, capture_output=True, text=True)
     return executable
 
@@ -82,7 +83,7 @@ def test_real_reader_restores_an_existing_view(tmp_path, monkeypatch):
         pytest.skip("requires TW_POINT_READ_FSDB, VERDI_HOME and g++")
     from src import fsdb_parser
     sdk = Path(verdi) / "share/FsdbReader"
-    source = (ROOT / "fsdb_wrapper.cpp").read_text() + r'''
+    source = (NATIVE_FSDB / "fsdb_wrapper.cpp").read_text() + r'''
 extern "C" int test_view(void *p, unsigned long long start, unsigned long long end) {
     FsdbCtx *ctx = (FsdbCtx*)p;
     fsdbTag64 a = _ToTag(ctx, start), b = _ToTag(ctx, end);
@@ -110,7 +111,7 @@ extern "C" int test_session_boundaries(void *p, unsigned long long *out, int cap
 '''
     cpp, library = tmp_path / "probe.cpp", tmp_path / "probe.so"
     cpp.write_text(source)
-    subprocess.run(["g++", "-shared", "-fPIC", "-std=c++11", "-I" + str(ROOT),
+    subprocess.run(["g++", "-shared", "-fPIC", "-std=c++11", "-I" + str(NATIVE_FSDB),
                     "-I" + str(sdk), str(cpp), "-o", str(library),
                     "-L" + str(sdk / "linux64"), "-lnffr", "-lnsys", "-lz",
                     "-Wl,-rpath," + str(sdk / "linux64")], check=True, capture_output=True)

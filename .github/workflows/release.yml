@@ -146,6 +146,7 @@ jobs:
 
           forbidden_basenames = {
               "fsdb_wrapper.cpp",
+              "fsdb_point_read.h",
               "build_wrapper.sh",
               "setup_fsdb.sh",
               "verify_fsdb.sh",
@@ -154,7 +155,7 @@ jobs:
           }
           assert not any(Path(name).name in forbidden_basenames for name in names)
           assert not any(Path(name).name in forbidden_basenames for name in sdist_names)
-          assert not any("/scripts/" in name or "/tests/" in name for name in sdist_names)
+          assert not any("/scripts/" in name or "/tests/" in name or "/native/" in name for name in sdist_names)
           assert not any(name.endswith((".so", ".pyc")) for name in names)
           assert not any(name.endswith((".so", ".pyc")) for name in sdist_names)
           print(

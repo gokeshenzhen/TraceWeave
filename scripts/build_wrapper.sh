@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/build_wrapper.sh
-# Build fsdb_wrapper.cpp into libfsdb_wrapper.so
+# Build native/fsdb/fsdb_wrapper.cpp into libfsdb_wrapper.so
 # Usage: bash scripts/build_wrapper.sh from the TraceWeave repo root,
 # or use the script's absolute path from any directory.
 
@@ -18,7 +18,7 @@ fi
 INC_DIR="$VERDI_HOME/share/FsdbReader"
 LIB_DIR="$VERDI_HOME/share/FsdbReader/linux64"
 OUT="libfsdb_wrapper.so"
-SRC="fsdb_wrapper.cpp"
+SRC="native/fsdb/fsdb_wrapper.cpp"
 RUNTIME_RPATH='$ORIGIN/third_party/verdi_runtime/linux64'
 
 echo "VERDI_HOME = $VERDI_HOME"

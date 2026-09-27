@@ -71,7 +71,8 @@ Auto-debug primitives (cursors + verification)
 
 Native integration
   libfsdb_wrapper.so
-  fsdb_wrapper.cpp
+  native/fsdb/fsdb_wrapper.cpp
+  native/fsdb/fsdb_point_read.h
   Verdi ffrAPI/libs or repo-local runtime symlinks
 
 Config and support
@@ -86,6 +87,12 @@ Verification
 
 ## Notes
 
+- Project-owned C/C++ code lives in `native/<module>/`; external dependencies
+  live in `third_party/<dependency>/`. FSDB runtime symlinks remain under
+  `third_party/verdi_runtime/linux64/`. `scripts/build_wrapper.sh` builds the
+  FSDB sources into the repository-root `libfsdb_wrapper.so`, preserving the
+  Python loader path and `$ORIGIN`-relative runtime lookup. The portable PyPI
+  distribution excludes native sources and shared libraries.
 - VCD point and window reads bisect the existing ordered transition records;
   separately dumped bits retain their declared indices (`valid[0]`, `valid[1]`)
   and disjoint slices retain their ranges. A unique vector range remains
@@ -119,7 +126,7 @@ Verification
   global period and public result schemas remain unchanged.
 - Standalone FSDB point reads temporarily restrict FFR loading to the queried
   time. FFR loads whole flush sessions, so a single-session file gains little
-  from this restriction. `fsdb_point_read.h` saves the current bounds before
+  from this restriction. `native/fsdb/fsdb_point_read.h` saves the current bounds before
   changing them, releases the traversal and load, then restores those bounds
   on success, failure and exceptions. Missing bounds or unsupported windows
   use the previous loading path; an empty partial read retries the original
@@ -759,7 +766,7 @@ Verification
   from repo-local links first, then `VERDI_HOME`. Time contract at this
   boundary: FSDB tags are tick counts, real time = tick × header scale
   (`ffrGetScaleUnit()`, read once at `fsdb_open`). All tick↔ps conversion is
-  collared in two `fsdb_wrapper.cpp` helpers (`_ToTag` floor / `_TagToPs`
+  collared in two `native/fsdb/fsdb_wrapper.cpp` helpers (`_ToTag` floor / `_TagToPs`
   ceil, integer-fs base), so every timestamp crossing into Python is real
   picoseconds. Unknown scale → time-based calls refuse
   (`FSDB_ERR_SCALE_UNKNOWN`) rather than assume 1ps. Native text buffers also

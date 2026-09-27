@@ -130,7 +130,7 @@ def test_native_scope_oracle(tmp_path):
     root = Path(__file__).resolve().parents[1]
     sdk = Path(verdi) / "share/FsdbReader"
     exe = tmp_path / "scope"
-    subprocess.run(["g++", "-std=c++11", "-I" + str(root), "-I" + str(sdk),
+    subprocess.run(["g++", "-std=c++11", "-I" + str(root / "native/fsdb"), "-I" + str(sdk),
                     str(root / "tests/native/fsdb_scope_page_test.cpp"), "-o", str(exe),
                     "-L" + str(sdk / "linux64"), "-lnffr", "-lnsys", "-lz", "-ldl",
                     "-Wl,-rpath," + str(sdk / "linux64")], check=True, capture_output=True)

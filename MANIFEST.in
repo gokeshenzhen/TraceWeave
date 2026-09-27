@@ -5,6 +5,7 @@ include pyproject.toml
 prune assets
 prune benchmarks
 prune docs
+prune native
 prune reference
 prune scripts
 prune tests
