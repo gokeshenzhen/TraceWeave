@@ -10,7 +10,7 @@ from contextlib import contextmanager
 import time
 
 from .cancellation import check_cancelled
-from .event_pages import PAGE_BYTES, PAGE_EVENTS
+from .event_pages import PAGE_BYTES, PAGE_EVENTS, page_records
 from .scope_metadata import file_identity
 from .waveform_batch import event_readers, EventPagingUnavailable
 from .waveform_selection import SelectionParser
@@ -85,18 +85,22 @@ class _ReadAdapter:
         with self.parser._event_pages(path,start,end,**limits) as reader:
             class BudgetReader:
                 width,end_fs,mode,native = reader.width,reader.end_fs,reader.mode,reader.native
+                start_fs = start * 1000
                 def read_page(self):
                     b.check()
                     page = reader.read_page()
                     b.pages += 1
                     b.output_bytes += page.output_bytes
-                    b.events_read += len(page.events) + bool(page.predecessor)
-                    b.value_bytes_read += sum(len(e.value or '') for e in (*page.events,*((page.predecessor,) if page.predecessor else ())))
-                    previous,rows = None,[]
-                    for event in chain((page.predecessor,) if page.predecessor else (),page.events):
+                    b.events_read += len(page_records(page))
+                    b.value_bytes_read += sum(len(e.value or '') for e in page_records(page))
+                    previous,initial,rows = None,None,[]
+                    for event in page_records(page):
                         if not b.admit(event.value):
-                            return EventPage(tuple(rows),previous,event.time_fs,truncated=True,output_bytes=page.output_bytes)
-                        if event is page.predecessor:
+                            return EventPage(tuple(rows),previous,event.time_fs,truncated=True,output_bytes=page.output_bytes,
+                                             initial_state=initial,recording_gaps=page.recording_gaps)
+                        if event is page.initial_state:
+                            initial = event
+                        elif event is page.predecessor:
                             previous = event
                         else:
                             rows.append(event)
@@ -123,7 +127,8 @@ class _ReadAdapter:
                 b.value_table_peak_entries = max(b.value_table_peak_entries, len(values))
                 b.value_table_peak_bytes = max(b.value_table_peak_bytes, value_bytes)
             return value
-        result = dict(transitions=rows, predecessor=None, truncated=False)
+        result = dict(transitions=rows, predecessor=None, initial_state=None, start_ps=start_ps,
+                      truncated=False, sampling_gaps=[])
         if b.stop_reason:
             return {**result, "truncated": True}
         b.read_calls += 1
@@ -137,17 +142,22 @@ class _ReadAdapter:
                     b.check()
                     b.pages += 1
                     b.output_bytes += page.output_bytes
-                    b.events_read += len(page.events) + bool(page.predecessor)
-                    b.value_bytes_read += sum(len(e.value or "") for e in page.events)
-                    if page.predecessor:
-                        b.value_bytes_read += len(page.predecessor.value or "")
-                    for event in chain((page.predecessor,) if page.predecessor else (), page.events):
+                    b.events_read += len(page_records(page))
+                    b.value_bytes_read += sum(len(e.value or "") for e in page_records(page))
+                    result['sampling_gaps'].extend(g.reason for g in page.recording_gaps
+                        if g.reason not in result['sampling_gaps'])
+                    for event in page_records(page):
                         if not b.admit(event.value):
                             result["truncated"] = True
                             break
                         row = {"time_ps": event.time_ps, "time_fs": event.time_fs,
-                               "value": normalize(event.value)}
-                        if event is page.predecessor:
+                               "value": normalize(event.value) if event.value is not None else None,
+                               "event_kind": event.kind}
+                        if event is page.initial_state:
+                            result['initial_state'] = row
+                            if event.time_fs >= start_ps * 1000:
+                                rows.append(row)
+                        elif event is page.predecessor:
                             previous = row
                         else:
                             rows.append(row)
@@ -176,6 +186,7 @@ class _ReadAdapter:
                     rows.append(row)
             result["truncated"] |= bool(raw.get("truncated") or raw.get("transition_count_is_lower_bound"))
         result["predecessor"] = previous
+        rows.sort(key=lambda row: row.get('time_fs', row['time_ps'] * 1000))
         return result
 
 

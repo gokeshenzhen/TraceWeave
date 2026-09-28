@@ -914,13 +914,19 @@ gzip containers, and real/string/special value types are explicitly unsupported.
 Truncated reads carry partial coverage; display caps alone preserve the read
 coverage and total count. `full` and `compact` project the same validated facts.
 
+Protocol discovery, sweeps, handshake/TL-UL inspection, transaction reconstruction,
+`period` and `verify_window` reuse the shared analysis engines. Transaction
+input budgets charge initial states separately from predecessors; missing
+recording intervals never carry an old value forward as acceptance evidence.
+Discovery receipts accept `fst_scope_v1`. Period measurement preserves integer
+fs and refuses unknown or incomplete clock coverage.
+
 The schema adds `fst_runtime`, `fst_backend`, `fst_reading`, `initial_state`,
 `value_status`, and `metadata_query_mode="fst_isolated_v1"`; existing enum values
 remain. Strict enum clients must accept the new summary mode. Unvalidated FST
-cycle/expression/protocol/transaction/comparison/dynamic/X-history calls return
+comparison/dynamic/X-history calls return
 `fst_analysis_not_validated`, `analysis_status="not_run"` and a summary next
-step before any work. Generic event pages and batch analysis remain phase two;
-the private reader transport does not advertise those capabilities. Tests in
+step before any work. Tests in
 `tests/test_fst_*.py` use independent expected event tables and must execute
 with the FST extra installed for FST acceptance.
 

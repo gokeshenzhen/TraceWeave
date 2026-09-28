@@ -2067,7 +2067,7 @@ class SignalDiscoveryCoverage(SchemaModel):
     signal_limit: int = 65_536
     signals_returned: int = 0
     reasons: list[str] = Field(default_factory=list)
-    mode: Literal["paged", "native_scope_v1", "vcd_scope_v1", "legacy_search"] | None = None
+    mode: Literal["paged", "native_scope_v1", "vcd_scope_v1", "fst_scope_v1", "legacy_search"] | None = None
     pages_read: int | None = None
     signals_scanned: int | None = None
     scan_limit: int | None = None

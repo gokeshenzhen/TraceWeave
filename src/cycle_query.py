@@ -312,6 +312,7 @@ def _read_before_transitions(parser, path, start, end):
     result = {"transitions": [], "predecessor": None, "initial_state": None, "start_ps": start, "truncated": False, "sampling_gaps": []}
     try:
         with event_readers([(parser, path)], start, end) as readers:
+            result['end_ps'] = (readers[0].end_fs + 999) // 1000
             count = size = 0
             while True:
                 check_cancelled()

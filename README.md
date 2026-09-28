@@ -46,7 +46,7 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 
 Supports VCS / Xcelium simulation logs and VCD / FSDB waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
-Optional FST support on Linux provides discovery, basic reads, fixed bit selections, expressions and cycle sampling. Protocol analysis, waveform comparison and X history remain gated until validated; the summary lists the currently accepted tools.
+Optional FST support on Linux provides discovery, basic reads, fixed bit selections, expressions, cycle sampling, protocol and transaction analysis. Waveform comparison and X history remain gated until validated; the summary lists the currently accepted tools.
 
 Signal tracing (driver, load, and connectivity path queries) follows **Verdi NPI → Source Graph → basic static analysis (Legacy Static)** by default. It first queries the elaborated KDB; when NPI is unavailable or cannot provide a trustworthy result, it tries Source Graph without a commercial license, then falls back to basic static analysis where supported.
 

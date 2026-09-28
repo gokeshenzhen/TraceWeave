@@ -145,11 +145,16 @@ def period(
     """
     parser = get_parser(wave_path)
     derived = signal in getattr(parser,'expressions',{})
+    exact = derived or getattr(parser, '_exact_sampling', False)
     if derived and parser.get_signal_width(signal) != 1:
         from .expression_errors import ExpressionError
         raise ExpressionError('expression_control_width_invalid', parameter='signal',
             message='period expression must be 1-bit')
-    tr = parser.get_transitions(signal, start_ps, end_ps)
+    if exact:
+        from .cycle_query import _read_before_transitions
+        tr = _read_before_transitions(parser, signal, start_ps, end_ps)
+    else:
+        tr = parser.get_transitions(signal, start_ps, end_ps)
     eff_start = int(tr.get("start_ps", start_ps))
     eff_end = int(tr.get("end_ps", end_ps))
 
@@ -168,18 +173,27 @@ def period(
         "reason": None,
     }
 
-    if derived:
-        from .cycle_query import _clock_value
+    if exact:
+        from .cycle_query import _before_clock_prefix
+        from .event_pages import sampling_anchor
+        width = parser.get_signal_width(signal)
+        if width == 1:
+            tr = _before_clock_prefix(tr)
         rows = tr.get('transitions') or []
         if (tr.get('truncated') or getattr(parser,'_time_group_ambiguities',{}).get(signal) or
-                any(_clock_value(r.get('value')) not in (0,1) for r in rows)):
-            result['reason'] = 'expression event coverage incomplete or unknown'
+                tr.get('sampling_gaps') or any(not r.get('value') or
+                r['value'].get('has_x') or r['value'].get('has_z') for r in rows)):
+            result['reason'] = 'event coverage incomplete or unknown: ' + ','.join(tr.get('sampling_gaps', []))
             return result
         from .cycle_query import _extract_edge_times
         if edge not in {'posedge','negedge','any'}:
             raise ValueError('unknown edge mode')
-        edge_times = sorted(t for direction in (('posedge','negedge') if edge=='any' else (edge,))
-            for t in _extract_edge_times(rows,direction,predecessor=tr.get('predecessor'),raw_time=True))
+        if edge == 'any' and width > 1:
+            edge_times = sorted({r.get('time_fs', r['time_ps'] * 1000) for r in rows
+                                 if r.get('event_kind') != 'initial_state'})
+        else:
+            edge_times = sorted(t for direction in (('posedge','negedge') if edge == 'any' else (edge,))
+                for t in _extract_edge_times(rows,direction,predecessor=sampling_anchor(tr),raw_time=True))
     else:
         edge_times = _edge_times(tr.get("transitions") or (), edge)
     result["edges_used"] = len(edge_times)
@@ -198,8 +212,8 @@ def period(
         return result
 
     tolerance = max(1, round(dominant * tolerance_frac))
-    result["period_ps"] = (dominant+999)//1000 if derived else dominant
-    if derived:
+    result["period_ps"] = (dominant+999)//1000 if exact else dominant
+    if exact:
         result['period_fs'] = dominant
 
     max_dev = 0
@@ -215,10 +229,10 @@ def period(
                 # The edge that *ends* the deviating interval is where the
                 # rhythm visibly broke.
                 first_off_beat = edge_times[idx + 1]
-    result["jitter_ps"] = (max_dev+999)//1000 if derived else max_dev
+    result["jitter_ps"] = (max_dev+999)//1000 if exact else max_dev
     result["off_beat_count"] = off_beats
-    result["first_off_beat_time_ps"] = ((first_off_beat+999)//1000 if derived else first_off_beat) if first_off_beat is not None else None
-    if derived:
+    result["first_off_beat_time_ps"] = ((first_off_beat+999)//1000 if exact else first_off_beat) if first_off_beat is not None else None
+    if exact:
         result.update(jitter_fs=max_dev,first_off_beat_time_fs=first_off_beat)
 
     if first_off_beat is not None and cursor_store is not None:
@@ -274,8 +288,9 @@ def _median(values: list[int]) -> int:
     mid = n // 2
     if n % 2:
         return s[mid]
-    # Even count: average the two central values, rounded to ps.
-    return round((s[mid - 1] + s[mid]) / 2)
+    # Preserve integer time above 2**53, including ties-to-even rounding.
+    total = s[mid - 1] + s[mid]
+    return total // 2 + (total % 2 and (total // 2) % 2)
 
 
 def _attach_period_cursor(
