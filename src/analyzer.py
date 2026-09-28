@@ -16,6 +16,7 @@ from config import (
     DEFAULT_WAVE_WINDOW_PS,
 )
 from .compile_log_parser import parse_compile_log
+from .cancellation import OperationCancelled
 from .log_parser import SimLogParser
 from .problem_hints import problem_hints_from_event
 from .schemas import ProblemHints
@@ -406,6 +407,8 @@ def _recommend_signals(
     for keyword in dedup_keywords[:8]:
         try:
             result = parser.search_signals(keyword, 10)
+        except OperationCancelled:
+            raise
         except Exception:
             continue
         for item in result.get("results", []):
@@ -547,6 +550,8 @@ def _score_activity_near_failure(parser, signal_path: str, failure_time_ps: int 
         return 0, None
     try:
         context = parser.get_signals_around_time([signal_path], failure_time_ps, DEFAULT_WAVE_WINDOW_PS, 2)
+    except OperationCancelled:
+        raise
     except Exception:
         return 0, None
     signal_info = (context.get("signals") or {}).get(signal_path) or {}

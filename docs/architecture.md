@@ -861,7 +861,7 @@ without loading native code. `candidate_ready_unloaded` is only a dependency
 probe. An actual `get_waveform_summary` reports the loaded extension path,
 SHA-256 and version under `fst_backend`. Reconnect after code/dependency changes.
 
-The first round supports `get_waveform_summary`, `search_signals`,
+Basic reads include `get_waveform_summary`, `search_signals`,
 `get_signal_at_time`, `get_signal_transitions`, and `get_signals_around_time`,
 including fixed `{path,bits}` selections. Declaration aliases retain distinct
 paths and coordinates; an around-time call reads each storage handle once.
@@ -884,7 +884,8 @@ recorded observations. Summary metadata coverage does not certify signal data.
 
 `src/fst_worker.py` owns native state in a request-scoped child process.
 The parent never imports the native library, converts to VCD, or retains an
-event index. The callback pauses between bounded pages through an IPC handshake.
+event index. Basic reads pause the callback between bounded IPC pages; batch
+analysis writes only bounded selected-window spools before exposing readers.
 Normal completion, errors, cancellation and deadlines terminate/reap the child
 and remove its private temporary directory before releasing reader admission.
 This is deliberate isolation for a callback API without cooperative native
@@ -894,11 +895,12 @@ File realpath/device/inode/size/mtime/ctime changes invalidate reads and cursors
 close/cache replacement rotates parser identity. There is no persistent FST
 index or result cache.
 
-| Resource | First-round bound |
+| Resource | Bound |
 |---|---|
-| Native children | 4 process-wide; 512 MiB address space each, 30 s per child including admission/open/read |
+| Native children | 4 process-wide; 512 MiB address space each; 30 s per child including admission/open/read |
+| Public FST request | 30 s cumulative across metadata, readers and analysis, including nested comparison inputs; cancellation reaps active native work |
 | Native work | Validated block envelopes; advertised value-block working set above 256 MiB rejected before decode; hard process limit also covers hierarchy/decompression |
-| Private temporary files | 64 MiB per file; directory removed on cleanup |
+| Private temporary files | 64 MiB per file; selected event spools share a 64 MiB batch/session cap; directory removed on cleanup |
 | Metadata | 32,768 declarations and 8 MiB conservative index accounting, whichever comes first; depth 256, name 4,096 bytes |
 | Signal / activity | 65,536 bits per declaration; 4,096 dump activity changes |
 | Event page | Default 1,024 records / 256 KiB; hard 4,096 / 1 MiB, including initial/predecessor records |
@@ -913,6 +915,10 @@ precision below 1 fs, times beyond signed-64-bit fs, external `.hier`, whole-fil
 gzip containers, and real/string/special value types are explicitly unsupported.
 Truncated reads carry partial coverage; display caps alone preserve the read
 coverage and total count. `full` and `compact` project the same validated facts.
+Log correlation and recommendation tools also accept FST; their read work runs
+in a cancellable worker. Packed-field resolution validates the same semantic
+source layout against exact FST declarations. Structural work holds no FST wave
+lock. Snapshot X tracing reports `value_unavailable` for an unrecorded sample.
 
 Protocol discovery, sweeps, handshake/TL-UL inspection, transaction reconstruction,
 `period` and `verify_window` reuse the shared analysis engines. Transaction

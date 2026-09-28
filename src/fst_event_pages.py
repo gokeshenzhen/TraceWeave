@@ -11,7 +11,7 @@ import time
 
 from .cancellation import check_cancelled
 from .event_pages import Event, EventPage, RecordingGap, limits
-from .fst_runtime import FstError, FstProcess
+from .fst_runtime import FstError, FstProcess, request_deadline
 from .scope_metadata import ScopeIdentityChanged, file_identity
 
 RECORD = struct.Struct('>qBI')
@@ -25,7 +25,7 @@ class FstBatch:
         if parser._file_identity is not None and parser._file_identity != self.identity:
             raise ScopeIdentityChanged('FST changed; obtain a new parser')
         parser._file_identity = self.identity
-        self.deadline = deadline if deadline is not None else time.monotonic() + 30
+        self.deadline = request_deadline(deadline if deadline is not None else time.monotonic() + 30)
         self.directory = None
         self.closed = False
         self.readers = set()
@@ -200,7 +200,7 @@ class FstEventReader:
 
 @contextmanager
 def fst_batch(parser, paths, start, end, *, deadline=None, spool_bytes=MAX_SPOOL_BYTES):
-    deadline = deadline if deadline is not None else time.monotonic() + 30
+    deadline = request_deadline(deadline if deadline is not None else time.monotonic() + 30)
     while not parser._lock.acquire(timeout=0.05):
         check_cancelled()
         if time.monotonic() >= deadline:

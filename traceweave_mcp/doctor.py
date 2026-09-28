@@ -175,7 +175,7 @@ def _human_report(report: dict[str, Any]) -> str:
             else "unavailable"
         ),
         f"fsdb: {fsdb['status']}",
-        f"fst: {report['fst']['status']} (basic queries only)",
+        f"fst: {report['fst']['status']} (digital reading and analysis; bounded native workers)",
         f"verdi_npi: {npi['status']} (execution_mode={npi['execution_mode']})",
     ]
     if report["recommended_actions"]:

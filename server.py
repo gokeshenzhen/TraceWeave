@@ -1312,9 +1312,9 @@ Simulation waveform debug workflow:
      source-compile/elaboration logs, use the source-compile log as primary and
      pass the complementary logs in supplementary_compile_logs build order.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
-   - FST is optional: inspect fst_runtime and get_waveform_summary for validated
-     tools and recording gaps. Unvalidated analyses return
-     fst_analysis_not_validated; do not treat not_run as a clean analysis.
+   - FST is optional: inspect fst_runtime and get_waveform_summary for runtime
+     identity, supported tools and recording gaps. Missing observations and
+     partial coverage never establish a clean analysis.
 
 2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
    Both independently parse the same compile_log — call them in parallel.
@@ -7200,7 +7200,15 @@ async def call_tool(name: str, arguments: dict):
         )
         if output_options.output_format == "compact" and name not in schemas.COMPACT_OUTPUT_TOOLS:
             raise ValueError("compact_output_tool_unsupported")
-        result = await _dispatch(name, dispatch_args)
+        from src.fst_runtime import has_fst_input, request_budget
+        if has_fst_input(dispatch_args):
+            try:
+                with request_budget() as deadline, anyio.fail_after(max(0, deadline - time.monotonic())):
+                    result = await _dispatch(name, dispatch_args)
+            except TimeoutError as exc:
+                raise FstError('fst_timeout: total FST request deadline exceeded') from exc
+        else:
+            result = await _dispatch(name, dispatch_args)
         serialize_started = time.perf_counter()
         if output_options.output_format == "compact" and not isinstance(
             result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
@@ -8024,16 +8032,18 @@ async def _dispatch(name: str, args: dict):
     elif name == "analyze_failures":
         simulator = _resolve_session_simulator(args)
         request_context = _build_recommend_request_context(args)
-        result = WaveformAnalyzer(
-            log_path=args["log_path"],
-            parser=_get_parser(args["wave_path"]),
-            simulator=simulator,
-        ).analyze(
-            signal_paths=args["signal_paths"],
-            group_index=args.get("group_index", 0),
-            window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
-            extra_transitions=args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
-        )
+        def analyze():
+            return WaveformAnalyzer(
+                log_path=args["log_path"],
+                parser=_get_parser(args["wave_path"]),
+                simulator=simulator,
+            ).analyze(
+                signal_paths=args["signal_paths"],
+                group_index=args.get("group_index", 0),
+                window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
+                extra_transitions=args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
+            )
+        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
             result["analysis_guide"] = {
@@ -8051,16 +8061,18 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "analyze_failure_event":
         simulator = _resolve_session_simulator(args)
-        result = WaveformAnalyzer(
-            log_path=args["log_path"],
-            parser=_get_parser(args["wave_path"]),
-            simulator=simulator,
-        ).analyze_failure_event(
-            failure_event=args["failure_event"],
-            wave_path=args["wave_path"],
-            compile_log=args.get("compile_log"),
-            top_hint=args.get("top_hint"),
-        )
+        def analyze():
+            return WaveformAnalyzer(
+                log_path=args["log_path"],
+                parser=_get_parser(args["wave_path"]),
+                simulator=simulator,
+            ).analyze_failure_event(
+                failure_event=args["failure_event"],
+                wave_path=args["wave_path"],
+                compile_log=args.get("compile_log"),
+                top_hint=args.get("top_hint"),
+            )
+        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
         return schemas.AnalyzeFailureEventResult.model_validate(result)
 
     elif name == "recommend_failure_debug_next_steps":
@@ -8070,24 +8082,26 @@ async def _dispatch(name: str, args: dict):
         scan_cache = _get_compatible_recommend_scan_cache(request_context)
         parse_cache = _get_compatible_recommend_parse_cache(request_context)
         sweep_cache = _get_compatible_recommend_sweep_cache(request_context)
-        result = WaveformAnalyzer(
-            log_path=args["log_path"],
-            parser=_get_parser(args["wave_path"]),
-            simulator=simulator,
-        ).recommend_debug_next_steps(
-            wave_path=args["wave_path"],
-            compile_log=args.get("compile_log"),
-            top_hint=args.get("top_hint"),
-            structural_risks=[risk.model_dump() for risk in scan_cache.risks]
-            if scan_cache is not None
-            else None,
-            problem_hints=parse_cache.problem_hints.model_dump()
-            if parse_cache and parse_cache.problem_hints
-            else None,
-            handshake_sweep=sweep_cache.model_dump()
-            if sweep_cache is not None
-            else None,
-        )
+        def analyze():
+            return WaveformAnalyzer(
+                log_path=args["log_path"],
+                parser=_get_parser(args["wave_path"]),
+                simulator=simulator,
+            ).recommend_debug_next_steps(
+                wave_path=args["wave_path"],
+                compile_log=args.get("compile_log"),
+                top_hint=args.get("top_hint"),
+                structural_risks=[risk.model_dump() for risk in scan_cache.risks]
+                if scan_cache is not None
+                else None,
+                problem_hints=parse_cache.problem_hints.model_dump()
+                if parse_cache and parse_cache.problem_hints
+                else None,
+                handshake_sweep=sweep_cache.model_dump()
+                if sweep_cache is not None
+                else None,
+            )
+        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
         has_failure_context = False
         if parse_cache is not None:
             has_failure_context = parse_cache.runtime_total_errors > 0

@@ -18,6 +18,8 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .cancellation import check_cancelled
 from .scope_metadata import ScopeIdentityChanged, file_identity
@@ -28,7 +30,10 @@ FST_BASIC_TOOLS = ("get_waveform_summary", "search_signals", "get_signal_at_time
 FST_SUPPORTED_TOOLS = (*FST_BASIC_TOOLS, "get_signals_by_cycle", "period", "verify_window",
     "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes",
     "inspect_handshake", "inspect_tlul", "reconstruct_transactions", "diff_first_divergence",
-    "trace_divergence", "trace_x_source")
+    "trace_divergence", "trace_x_source", "analyze_failures", "analyze_failure_event",
+    "recommend_failure_debug_next_steps", "explain_signal_driver", "resolve_packed_fields")
+REQUEST_TIMEOUT_SEC = 30.0
+_request_deadline = ContextVar('fst_request_deadline', default=None)
 FRAME_BYTES = 1024 * 1024
 MAX_WORKERS = 4
 _slots = threading.BoundedSemaphore(MAX_WORKERS)
@@ -36,6 +41,30 @@ _slots = threading.BoundedSemaphore(MAX_WORKERS)
 
 class FstError(RuntimeError):
     """An explicit format, dependency, resource, or native-reader boundary."""
+
+
+def has_fst_input(arguments):
+    sources = [arguments, *(arguments.get(k, {}) for k in ('side_a', 'side_b'))]
+    return any(isinstance(source, dict) and any(isinstance(source.get(k), str) and
+               source[k].lower().endswith('.fst') for k in ('wave_path','wave_path_a','wave_path_b'))
+               for source in sources)
+
+
+def request_deadline(default):
+    active = _request_deadline.get()
+    return min(active, default) if active is not None else default
+
+
+@contextmanager
+def request_budget():
+    deadline = request_deadline(time.monotonic() + REQUEST_TIMEOUT_SEC)
+    token = _request_deadline.set(deadline)
+    try:
+        yield deadline
+        if time.monotonic() >= deadline:
+            raise FstError('fst_timeout: total FST request deadline exceeded')
+    finally:
+        _request_deadline.reset(token)
 
 
 def fst_runtime_info():
@@ -62,7 +91,7 @@ class FstProcess:
             raise ValueError("invalid FST worker limits")
         self.path = os.path.realpath(path)
         self.identity = file_identity(self.path)
-        self.deadline = time.monotonic() + timeout_sec
+        self.deadline = request_deadline(time.monotonic() + timeout_sec)
         self.process = self.selector = self.directory = None
         self.admitted = False
         self.buffer = bytearray()

@@ -454,7 +454,7 @@ def _build_discovery_result(
         merged_hints.append(fst_runtime["message"])
         merged_hints.append(
             "FST: start with get_waveform_summary, then search_signals and basic point/transition/window reads. "
-            "Cycles, expressions, protocol analysis, comparisons and X history are not yet supported for FST. "
+            "Cycles, expressions, protocols, transactions, comparisons and X history share the analysis tools. "
             "Wave files retain newest-first/path ordering; choose the format explicitly."
         )
     merged_hints = list(dict.fromkeys(merged_hints))
