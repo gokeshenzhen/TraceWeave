@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import select
 import subprocess
 import sys
 import tempfile
@@ -72,6 +73,7 @@ class FstProcess:
             self.process = subprocess.Popen(self.command(), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=self.directory.name,
                 env=env, bufsize=0)
+            os.set_blocking(self.process.stdin.fileno(), False)
             self.selector = selectors.DefaultSelector()
             self.selector.register(self.process.stdout, selectors.EVENT_READ)
             self.send({"path": self.path, "identity": self.identity, "memory_bytes": memory_bytes,
@@ -104,7 +106,16 @@ class FstProcess:
         if len(encoded) > 65536:
             raise FstError("fst_request_limit")
         try:
-            self.process.stdin.write(encoded)
+            pending = memoryview(encoded)
+            fd = self.process.stdin.fileno()
+            while pending:
+                self.check()
+                try:
+                    written = os.write(fd, pending)
+                except BlockingIOError:
+                    select.select([], [fd], [], 0.05)
+                    continue
+                pending = pending[written:]
         except (BrokenPipeError, OSError) as exc:
             raise FstError("fst_worker_failed") from exc
 

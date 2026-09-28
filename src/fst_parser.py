@@ -128,6 +128,9 @@ class FSTParser:
             with FstProcess(self.file_path) as session:
                 yield session
                 session.check()
+        except (FileNotFoundError, PermissionError) as exc:
+            code = "fst_file_not_found" if isinstance(exc, FileNotFoundError) else "fst_permission_denied"
+            raise FstError(f"{code}: {self.file_path}") from exc
         finally:
             self._lock.release()
 
