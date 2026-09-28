@@ -107,6 +107,11 @@ async def trace_x_source(
             )
             continue
 
+        if value_result.get('value') is None:
+            chain.append(dict(depth=depth, signal_path=current_signal,
+                trace_stop_reason='value_unavailable', value_status=value_result.get('value_status'),
+                fst_reading=value_result.get('fst_reading')))
+            continue
         if not has_x_or_z(value_result):
             continue
 
@@ -166,7 +171,7 @@ async def trace_x_source(
                 unresolved_upstream.append(upstream_name)
                 continue
             upstream_value = observation.get("value")
-            if not isinstance(upstream_value, dict):
+            if not isinstance(upstream_value, dict) or upstream_value.get('value') is None:
                 unresolved_upstream.append(upstream_name)
                 continue
 
@@ -366,6 +371,8 @@ def _resolve_signal_full_path(
         except Exception:
             pass
 
+    if getattr(parser, '_exact_names', False):
+        return None  # A clipped fuzzy search cannot establish a unique declaration.
     try:
         results = parser.search_signals(signal_name, max_results=10)
     except OperationCancelled:
@@ -385,6 +392,8 @@ def _determine_trace_status(chain: list[dict[str, Any]], start_signal: str) -> s
     if not chain:
         return "signal_is_clean"
     last = chain[-1]
+    if last.get('trace_stop_reason') == 'value_unavailable':
+        return 'value_unavailable'
     if last.get("trace_stop_reason") == "signal_not_in_waveform":
         return "signal_not_in_waveform"
     if last.get("trace_stop_reason") == "instance_ports_listed":
@@ -429,6 +438,9 @@ def _generate_analysis_guide(
         return {
             "step1": "Signal is clean at the requested time; choose another signal or failure timestamp.",
         }
+
+    if trace_status == 'value_unavailable':
+        return {'step1': 'No recorded value covers the requested time; inspect recording coverage before tracing X/Z.'}
 
     last = chain[-1] if chain else {}
     if last.get("trace_stop_reason") == "instance_ports_listed":

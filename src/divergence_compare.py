@@ -51,6 +51,9 @@ class SignalStream:
     parser: Any = None
     transitions: list[dict] = field(default_factory=list)
     predecessor: dict | None = None
+    initial_state: dict | None = None
+    recording_gaps: tuple = ()
+    start_fs: int = 0
     width: int | None = None
     end: int = -1
     scale_fs: int | None = None
@@ -61,16 +64,40 @@ class SignalStream:
     error: str | None = None
 
 
+def stream_anchor(stream):
+    if any(g.start_fs < stream.start_fs and
+           (g.end_fs > stream.start_fs or g.end_fs == stream.start_fs and g.end_inclusive)
+           for g in stream.recording_gaps):
+        return None
+    initial = stream.initial_state
+    if initial and initial.get('time_fs', initial['time_ps'] * 1000) >= stream.start_fs:
+        initial = None
+    return stream.predecessor or initial
+
+
+def history_gaps(stream, through_fs, *, before=False):
+    """Recording coverage within the observed prefix, excluding future gaps."""
+    return list(dict.fromkeys(g.reason for g in stream.recording_gaps
+        if (g.start_fs < through_fs or g.start_fs == through_fs and not before)
+        and (g.end_fs > stream.start_fs or g.end_fs == stream.start_fs and g.end_inclusive)))
+
+
 def read_stream(get_parser: Callable, wave: str, signal: str,
                 start: int, end: int) -> SignalStream:
-    stream = SignalStream()
+    stream = SignalStream(start_fs=start * 1000)
     try:
         check_cancelled()
         stream.parser = get_parser(wave)
-        raw = stream.parser.get_transitions(signal, start, end)
+        if getattr(stream.parser, '_exact_sampling', False):
+            from .cycle_query import _read_before_transitions
+            raw = _read_before_transitions(stream.parser, signal, start, end)
+        else:
+            raw = stream.parser.get_transitions(signal, start, end)
         check_cancelled()
         stream.transitions = raw.get("transitions") or []
         stream.predecessor = raw.get("predecessor")
+        stream.initial_state = raw.get('initial_state')
+        stream.recording_gaps = tuple(raw.get('recording_gaps', ()))
         stream.truncated = bool(raw.get("truncated"))
         if stream.truncated:
             stream.safe_before = (
@@ -371,7 +398,7 @@ def _compare_pages(readers, args):
         else:
             consume(SignalStream(transitions=[dict(time_ps=e.time_ps, value=e.value) for e in page.events]))
     cursors = [GroupCursor(reader, checkpoint, account) for reader in readers]
-    values = [bit_value(c.predecessor.value, r.width) if c.predecessor else None
+    values = [bit_value(c.anchor.value, r.width) if c.anchor else None
               for c, r in zip(cursors, readers)]
     at, examined = start*1000, False
     try:
@@ -386,6 +413,9 @@ def _compare_pages(readers, args):
                                           else 'transition_order_invalid')
                 if cursor.peek() == at:
                     values[i] = bit_value(cursor.take_group(at), reader.width)
+                for missing in cursor.recording_gaps:
+                    if missing.start_fs <= at:
+                        gap(missing.reason, ('a','b')[i], missing.start_fs)
             examined = True
             for side, value in zip(('a', 'b'), values):
                 if value is None:

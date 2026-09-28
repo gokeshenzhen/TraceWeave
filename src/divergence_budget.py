@@ -77,12 +77,14 @@ class Budget:
         self.cache_peak = max(self.cache_peak, self.cache_bytes + size)
 
     def consume_page(self, page):
+        from .event_pages import page_records
         self.check()
-        self.transitions += len(page.events) + int(page.predecessor is not None)
+        count = len(page_records(page))
+        self.transitions += count
         if self.transitions > DIVERGENCE_MAX_TRANSITIONS:
             raise BudgetExceeded('max_transitions')
         self.cache_peak = max(self.cache_peak, self.cache_bytes + page.output_bytes +
-                              256 * (len(page.events) + bool(page.predecessor)))
+                              256 * count)
 
     def node(self):
         self.check()

@@ -923,10 +923,16 @@ fs and refuses unknown or incomplete clock coverage.
 
 The schema adds `fst_runtime`, `fst_backend`, `fst_reading`, `initial_state`,
 `value_status`, and `metadata_query_mode="fst_isolated_v1"`; existing enum values
-remain. Strict enum clients must accept the new summary mode. Unvalidated FST
-comparison/dynamic/X-history calls return
-`fst_analysis_not_validated`, `analysis_status="not_run"` and a summary next
-step before any work. Tests in
+remain. Strict enum clients must accept the new summary and discovery modes,
+and comparison's `fst_spool_pages_v1`. FST/FST, FST/VCD and native FST/FSDB
+comparisons share the integer-fs page consumer. A future recording gap cannot
+invalidate a proven earlier difference; an earlier gap prevents an earliest
+difference claim. Dynamic and X-history observations retain typed initial
+states and recording gaps through bounded request-local cache slices. They
+never substitute a current recovered input for its earlier sampled value.
+Structural backend identity is independent of waveform format; wave readers
+close before connectivity work. Sub-ps causal scheduling and asynchronous
+assignment values retain their existing explicit proof gaps. Tests in
 `tests/test_fst_*.py` use independent expected event tables and must execute
 with the FST extra installed for FST acceptance.
 

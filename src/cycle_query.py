@@ -309,7 +309,8 @@ def _read_before_transitions(parser, path, start, end):
         return reader(parser, path, start, end)
     from .waveform_batch import event_readers, EventPagingUnavailable
     from .vcd_parser import _enrich_value
-    result = {"transitions": [], "predecessor": None, "initial_state": None, "start_ps": start, "truncated": False, "sampling_gaps": []}
+    result = {"transitions": [], "predecessor": None, "initial_state": None, "start_ps": start,
+              "truncated": False, "sampling_gaps": [], "recording_gaps": []}
     try:
         with event_readers([(parser, path)], start, end) as readers:
             result['end_ps'] = (readers[0].end_fs + 999) // 1000
@@ -317,6 +318,7 @@ def _read_before_transitions(parser, path, start, end):
             while True:
                 check_cancelled()
                 page = readers[0].read_page()
+                result['recording_gaps'].extend(page.recording_gaps)
                 events = page_records(page)
                 result["sampling_gaps"].extend(g.reason for g in page.recording_gaps if g.reason not in result["sampling_gaps"])
                 for event in events:

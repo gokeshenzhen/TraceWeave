@@ -27,7 +27,8 @@ FST_BASIC_TOOLS = ("get_waveform_summary", "search_signals", "get_signal_at_time
                    "get_signal_transitions", "get_signals_around_time")
 FST_SUPPORTED_TOOLS = (*FST_BASIC_TOOLS, "get_signals_by_cycle", "period", "verify_window",
     "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes",
-    "inspect_handshake", "inspect_tlul", "reconstruct_transactions")
+    "inspect_handshake", "inspect_tlul", "reconstruct_transactions", "diff_first_divergence",
+    "trace_divergence", "trace_x_source")
 FRAME_BYTES = 1024 * 1024
 MAX_WORKERS = 4
 _slots = threading.BoundedSemaphore(MAX_WORKERS)

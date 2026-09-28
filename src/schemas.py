@@ -1670,6 +1670,8 @@ class TraceSignalPathResult(SchemaModel):
 
 
 class TraceChainNode(SchemaModel):
+    value_status: str | None = None
+    fst_reading: FstReading | None = None
     depth: int
     signal_path: str
     value_at_time: str | None = None
@@ -1842,8 +1844,8 @@ class DivergenceNextAction(SchemaModel):
 
 
 class ComparisonReading(SchemaModel):
-    mode_a: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
-    mode_b: Literal['native_event_pages_v1', 'vcd_index_pages', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
+    mode_a: Literal['native_event_pages_v1', 'vcd_index_pages', 'fst_spool_pages_v1', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
+    mode_b: Literal['native_event_pages_v1', 'vcd_index_pages', 'fst_spool_pages_v1', 'legacy_materialized', 'event_pages_failed', 'expression_time_groups']
     events_read: int = Field(default=0, ge=0)
     pages_read: int = Field(default=0, ge=0)
     native_read_calls: int | None = Field(default=None, ge=0)

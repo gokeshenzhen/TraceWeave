@@ -106,8 +106,6 @@ def test_unvalidated_waveform_analyses_keep_an_explicit_gate(wave):
             result = call(tool.name, **{key: wave})
             assert result["error_code"] == "fst_analysis_not_validated", tool.name
             assert result["analysis_status"] == "not_run"
-    for key in ("wave_path_a", "wave_path_b"):
-        assert call("diff_first_divergence", **{key: wave})["error_code"] == "fst_analysis_not_validated"
     result = call("get_signal_at_time", wave_path=wave, time_ps=0,
                   signal_path={"expr": "a", "bindings": {"a": "top.bus"}, "typing": "wave_bits"})
     assert result['value']['bin'] == '10xz'

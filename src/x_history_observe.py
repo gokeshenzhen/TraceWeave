@@ -5,7 +5,8 @@ import resource
 
 from .cancellation import OperationCancelled, check_cancelled
 from .divergence_budget import Budget, BudgetExceeded
-from .divergence_compare import SignalStream, bit_value, known, read_stream
+from .divergence_compare import SignalStream, bit_value, known, read_stream, stream_anchor, history_gaps
+from .event_pages import page_records
 from .divergence_mapping import split_selection
 from .dynamic_evidence import Expr, expression_gaps
 from .dynamic_binding import signal_expression
@@ -67,7 +68,7 @@ class HistoryBudget(Budget):
             raise BudgetExceeded('max_events')
         parser = get_parser(wave)
         self.reads += 1
-        stream = SignalStream(parser=parser)
+        stream = SignalStream(parser=parser, start_fs=start * 1000)
         try:
             with event_readers([(parser, signal)], start, end,
                                max_events=min(1024, self.limits['max_events'] - self.transitions)) as readers:
@@ -90,10 +91,17 @@ class HistoryBudget(Budget):
                         raise BudgetExceeded('max_events' if self.transitions >= self.limits['max_events'] else 'max_read_bytes')
                     reader.max_events = allowance
                     page = reader.read_page()
-                    rows = (*((page.predecessor,) if page.predecessor else ()), *page.events)
+                    rows = page_records(page)
                     self.account(rows, page.output_bytes, native=reader.native)
                     def row(event):
-                        return dict(time_ps=event.time_ps, time_fs=event.time_fs, value=event.value)
+                        return dict(time_ps=event.time_ps, time_fs=event.time_fs, value=event.value, event_kind=event.kind)
+                    stream.recording_gaps += page.recording_gaps
+                    if page.initial_state:
+                        if not first:
+                            raise ValueError('replayed_initial_state')
+                        stream.initial_state = row(page.initial_state)
+                        if page.initial_state.time_fs >= start * 1000:
+                            stream.transitions.append(stream.initial_state)
                     if page.predecessor:
                         if not first:
                             raise ValueError('replayed_event_predecessor')
@@ -116,6 +124,7 @@ class HistoryBudget(Budget):
                         raise ValueError('event_page_no_progress')
                     if self.transitions >= self.limits['max_events']:
                         raise BudgetExceeded('max_events')
+                stream.transitions.sort(key=lambda r: r.get('time_fs', r['time_ps'] * 1000))
                 if reader.end_fs is not None and end * 1000 > reader.end_fs:
                     stream.error = 'outside_recorded_range'
         except EventPagingUnavailable:
@@ -137,7 +146,7 @@ class HistoryBudget(Budget):
 
 def unknown_interval(stream, expr, start, time, phase):
     """Report the observed prefix and the active X/Z interval, never true origin."""
-    gaps = []
+    gaps = history_gaps(stream, time * 1000, before=phase == 'before')
     if stream.error:
         gaps.append(stream.error)
     if not stream.range_known:
@@ -153,7 +162,7 @@ def unknown_interval(stream, expr, start, time, phase):
         if bits is None or stream.width != len(expr.declared_bits):
             return None
         return ''.join(bits[expr.declared_bits.index(b)] for b in expr.bits)
-    current = value(stream.predecessor)
+    current = value(stream_anchor(stream))
     first_unknown = start * 1000 if current is not None and not known(current) else None
     onset = first_unknown
     boundary = 'window_start_unknown' if onset is not None else 'predecessor_missing'

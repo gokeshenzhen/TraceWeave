@@ -6,6 +6,7 @@ Recorded event coincidence is evidence for investigation, never causation.
 from .cancellation import check_cancelled
 from .dynamic_evidence import Expr, validate_step
 from .dynamic_observe import ObservationReader, clock_edges
+from .divergence_compare import stream_anchor
 
 
 def observe_async_controls(step, *, get_parser, wave, start, time, phase,
@@ -32,7 +33,7 @@ def observe_async_controls(step, *, get_parser, wave, start, time, phase,
         # At the first recorded instant an absent predecessor cannot disprove
         # an edge; no initial assignment is counted as an assertion.
         onset_covered = (onset is not None and not gaps
-                         and (onset > start or stream.predecessor is not None))
+                         and (onset > start or stream_anchor(stream) is not None))
         return dict(signal=expr.signal, waveform_signal=bound.signal, edge=edge,
                     status='partial' if gaps else 'complete',
                     observed_edge_count=len(times), last_observed_edge_ps=times[-1] if times else None,

@@ -107,8 +107,10 @@ class ObservationSession:
                     rows = stream.transitions
                     lo = bisect_left(rows, start * 1000, key=lambda e:e.get('time_fs', e['time_ps'] * 1000))
                     hi = bisect_right(rows, end * 1000, key=lambda e:e.get('time_fs', e['time_ps'] * 1000))
-                    return replace(stream, transitions=rows[lo:hi],
-                                   predecessor=rows[lo-1] if lo else stream.predecessor)
+                    previous = next((r for r in reversed(rows[:lo])
+                                     if r.get('event_kind', 'transition') == 'transition'), stream.predecessor)
+                    return replace(stream, transitions=rows[lo:hi], start_fs=start * 1000,
+                                   predecessor=previous)
         self.misses += 1
         stream = self.stream_reader(lambda _: parser, wave, signal, start, end)
         if consume:
@@ -116,10 +118,11 @@ class ObservationSession:
         self._check()
         if identity is None or stream.error or stream.truncated or identity != self.identity(parser, wave, signal):
             return stream
-        events = len(stream.transitions) + bool(stream.predecessor)
+        events = len(stream.transitions) + bool(stream.predecessor) + bool(stream.initial_state)
         # Conservative object/key overhead, including enriched integer values.
         nbytes = 1024 + len(repr(identity))*4
-        for i, row in enumerate(chain(stream.transitions, (stream.predecessor,) if stream.predecessor else ())):
+        for i, row in enumerate(chain(stream.transitions, (stream.predecessor,) if stream.predecessor else (),
+                                      (stream.initial_state,) if stream.initial_state else ())):
             if i % 1024 == 0:
                 self._check()
             nbytes += 768 + len(str(row.get('value', '')))*4
@@ -132,7 +135,7 @@ class ObservationSession:
             value = row.get('value')
             return MappingProxyType({**row, 'value':MappingProxyType(dict(value)) if isinstance(value, dict) else value})
         stream = replace(stream, transitions=tuple(freeze(r) for r in stream.transitions),
-                         predecessor=freeze(stream.predecessor))
+                         predecessor=freeze(stream.predecessor), initial_state=freeze(stream.initial_state))
         covered_end = stream.end if end < 0 else end
         self._put(('stream', identity, start, covered_end), stream, events, nbytes)
         return stream

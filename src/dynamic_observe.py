@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from .cancellation import check_cancelled
-from .divergence_compare import bit_value, known, read_stream
+from .divergence_compare import bit_value, known, read_stream, stream_anchor, history_gaps
 from .dynamic_evidence import Expr, evaluate
 from .dynamic_binding import signal_expression
 
 
 def clock_edges(stream, edge: str, *, start: int, end: int, before=False):
-    gaps = []
+    gaps = history_gaps(stream, end * 1000, before=before)
     if stream.error:
         return [], [stream.error]
     if stream.truncated:
@@ -17,7 +17,8 @@ def clock_edges(stream, edge: str, *, start: int, end: int, before=False):
         gaps.append("sampling_order_unresolved")
     if stream.width != 1:
         gaps.append("clock_alignment_unproven")
-    prev = bit_value(stream.predecessor.get("value"), 1) if stream.predecessor else None
+    anchor = stream_anchor(stream)
+    prev = bit_value(anchor.get("value"), 1) if anchor else None
     edges = []
     previous_time = None
     for event in stream.transitions:
@@ -34,7 +35,7 @@ def clock_edges(stream, edge: str, *, start: int, end: int, before=False):
                     edges.append(t)
             elif prev != value:
                 # Initial assignment at the start is not a confirmed edge.
-                if previous_time is not None or stream.predecessor:
+                if previous_time is not None or anchor:
                     gaps.append("clock_alignment_unproven")
         prev, previous_time = value, t
     return edges, list(dict.fromkeys(gaps))
@@ -96,18 +97,18 @@ class ObservationReader:
         if binding_gaps:
             return dict(value=None, time_ps=time, phase=phase, gaps=binding_gaps)
         stream = self.stream(expr.signal)
-        gaps = list(binding_gaps)
-        event = stream.predecessor
+        gaps = list(binding_gaps) + history_gaps(stream, time * 1000, before=phase == 'before')
+        event = stream_anchor(stream)
         same_time = []
         for index, current in enumerate(stream.transitions):
             if index % 1024 == 0:
                 check_cancelled()
-            t = int(current["time_ps"])
-            if t > time:
+            t = current.get('time_fs', int(current['time_ps']) * 1000)
+            if t > time * 1000:
                 break
-            if t == time:
+            if t == time * 1000:
                 same_time.append(current)
-            if t < time or phase == "after":
+            if t < time * 1000 or phase == "after":
                 event = current
         if stream.error:
             gaps.append("signal_not_dumped" if stream.missing else stream.error)
