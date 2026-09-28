@@ -5230,7 +5230,7 @@ async def list_tools():
                     },
                     "wave_file": {
                         "type": "string",
-                        "description": "Optional explicit waveform path (FSDB/VCD/FST), absolute or relative to verif_root. Used verbatim when given; otherwise discovered. FST currently supports basic reads only.",
+                        "description": "Explicit FSDB/VCD/FST path, absolute or relative to verif_root; overrides discovery.",
                     },
                     "compile_log": {
                         "type": "string",
@@ -7126,14 +7126,10 @@ async def list_tools():
     ])
     for tool in _tools:
         properties = tool.inputSchema["properties"]
-        if tool.name in FST_BASIC_TOOLS:
-            tool.description += (
-                " Optional FST supports recorded digital signals and fixed {path,bits} selections only; "
-                "expressions and higher analyses are not yet validated. Inspect fst_runtime from get_sim_paths "
-                "and fst_backend/fst_reading from summary. FST values distinguish recording gaps from X/Z; "
-                "initial_state is separate from real transitions, whose time_fs is exact and time_ps is ceil-labelled. "
-                "FST local windows use a fixed size cap without clock/transient inference."
-            )
+        if tool.name in {"get_signal_at_time", "get_signal_transitions", "get_signals_around_time"}:
+            tool.description += " FST: no expressions."
+        elif tool.name == "get_waveform_summary":
+            tool.description += " Optional FST: basic reads only; see fst_backend/fst_reading limits/gaps."
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
