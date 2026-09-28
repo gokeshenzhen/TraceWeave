@@ -955,6 +955,20 @@ explicitly not run. CI installs the FST extra and runs both regression tests
 and the installed-wheel probe; portable operation without the extra remains
 covered separately.
 
+`scripts/benchmark_fst_round2.py --work-dir DIR --generate` writes reproducible
+FST/VCD event tables, including a seeded 1.6-million-event 128-bit workload.
+Run `--workload narrow|dense_clock|metadata|sweep|transactions|compare|large`
+with `--backend fst|vcd --output FILE` in separate processes. Each run performs
+three same-parser requests without flushing OS caches and verifies independent
+expected facts. `--workload lifecycle` measures cancellation through child
+reaping and private-directory removal, timeout cleanup and identity invalidation.
+Receipts include module/native hashes, index accounting, native callbacks,
+spool bytes, JSON size and sampled parent/child RSS. Index RSS deltas include
+allocator/native effects; summed RSS counts shared mappings more than once.
+Independent decompression CPU/bytes and general projection-only time remain
+unavailable. Private worker metrics use Linux `VmHWM`, avoiding inherited
+pre-exec `ru_maxrss`; public operation metrics retain their fixed whitelist.
+
 ## Formal Artifact Discovery
 
 `get_formal_paths` is a tool-neutral, artifact-only API backed by

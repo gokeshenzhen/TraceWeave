@@ -47,6 +47,11 @@ def test_strict_window_and_real_predecessor(tmp_path):
         assert page["events"] == [] and page["complete"]
         assert page["predecessor"] == [10, "1"]
         assert page["initial_state"] is None
+        assert reader.metrics['native_iterations'] == 1
+        assert reader.metrics['native_callbacks'] == 3  # includes the scanned prefix and first event beyond end
+        assert reader.metrics['index_declarations'] == 1
+        assert reader.metrics['index_accounted_bytes'] > 0
+        assert reader.metrics['index_build_ms'] >= 0
 
 
 def test_initial_state_is_not_a_fabricated_predecessor(tmp_path):

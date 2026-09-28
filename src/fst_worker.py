@@ -24,10 +24,18 @@ MAX_NAME_BYTES = 4096
 MAX_SCOPE_DEPTH = 256
 MAX_BLOCKS = 1048576
 FRAME_BYTES = 1024 * 1024
+METRICS = {}
+
+
+def rss(field='VmRSS'):
+    for line in Path('/proc/self/status').read_text().splitlines():
+        if line.startswith(field + ':'):
+            return int(line.split()[1])
+    return None
 
 
 def emit(value):
-    value["metrics"] = {"worker_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
+    value['metrics'] = {**METRICS, 'worker_peak_rss_kib': rss('VmHWM'), 'worker_rss_kib': rss()}
     raw = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
     if len(raw) > FRAME_BYTES:
         raise ValueError("fst_worker_frame_limit")
@@ -115,7 +123,9 @@ def main():
     import _libfstapi
     native = Path(_libfstapi.__file__)
     digest = hashlib.sha256(native.read_bytes()).hexdigest()
+    opened = time.perf_counter()
     reader = lib.fstReaderOpen(path.encode())
+    METRICS['native_open_ms'] = (time.perf_counter() - opened) * 1000
     if reader == ffi.NULL:
         raise ValueError("fst_corrupt: native reader could not open")
     try:
@@ -150,7 +160,11 @@ def main():
             message = request()
             check()
             if index is None:
+                started = time.perf_counter()
+                METRICS['index_rss_before_kib'] = rss()
                 index = build_index(lib, ffi, reader)
+                METRICS.update(index_build_ms=(time.perf_counter() - started) * 1000,
+                               index_rss_after_kib=rss())
             op = message["op"]
             if op == "metadata":
                 emit({"kind": "metadata", "count": len(index),
@@ -279,6 +293,7 @@ def build_index(lib, ffi, reader):
             index[path] = row
     if scopes or len(index) != lib.fstReaderGetVarCount(reader):
         raise ValueError("fst_corrupt: incomplete hierarchy")
+    METRICS.update(index_declarations=len(index), index_accounted_bytes=nbytes)
     return index
 
 
@@ -436,6 +451,7 @@ def stream_events(api, reader, row, header, message, check):
     rows, used, previous, initial = [], 0, None, None
     first_page, first_event, finished = True, True, False
     last_tick = -1
+    METRICS.update(native_iterations=1, native_callbacks=0)
     lib.fstReaderClrFacProcessMaskAll(reader)
     lib.fstReaderSetFacProcessMask(reader, row["handle"])
     # Scan from the recorded beginning to retain a genuine predecessor time.
@@ -467,6 +483,7 @@ def stream_events(api, reader, row, header, message, check):
 
     def callback(_, tick, handle, pointer):
         nonlocal used, previous, initial, first_event, finished, last_tick
+        METRICS['native_callbacks'] += 1
         if finished:
             return
         try:
