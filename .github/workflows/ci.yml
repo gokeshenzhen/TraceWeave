@@ -76,6 +76,17 @@ jobs:
           timeout 30 "$RUNNER_TEMP/traceweave-clean/bin/python" \
             "$GITHUB_WORKSPACE/tests/installed_source_graph_smoke.py"
 
+      - name: Smoke-test the installed FST extra
+        shell: bash
+        run: |
+          wheels=(dist/*.whl)
+          "$RUNNER_TEMP/traceweave-clean/bin/python" -m pip install \
+            "${wheels[0]}[fst]"
+          cd "$RUNNER_TEMP"
+          timeout 60 "$RUNNER_TEMP/traceweave-clean/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/check_fst_readback.py" --installed \
+            --output "$RUNNER_TEMP/fst-readback.json"
+
   source-graph-setup:
     runs-on: ubuntu-latest
 

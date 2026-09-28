@@ -893,6 +893,19 @@ the private reader transport does not advertise those capabilities. Tests in
 `tests/test_fst_*.py` use independent expected event tables and must execute
 with the FST extra installed for FST acceptance.
 
+`scripts/check_fst_readback.py` starts a fresh MCP process and checks basic
+FST/VCD observations, recording gaps, exact sub-ps windows, fixed selections,
+compact output and capability errors against independent expectations. It
+captures loaded Python paths/hashes from inside that server and the actual
+native identity from the summary. `--require-fsdb` requires the local existing
+FSDB cross-scale fixture comparison; `--installed` exercises the installed
+wheel outside the checkout instead. Use `--work-dir` to retain fixtures and
+`--output` to save the full calls and MCP round-trip times. The fixture has no
+compile/simulation logs, so hierarchy, structural and failure workflows remain
+explicitly not run. CI installs the FST extra and runs both regression tests
+and the installed-wheel probe; portable operation without the extra remains
+covered separately.
+
 ## Formal Artifact Discovery
 
 `get_formal_paths` is a tool-neutral, artifact-only API backed by
