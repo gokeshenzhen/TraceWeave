@@ -210,7 +210,12 @@ class SelectionParser:
         predecessor = result.get("predecessor")
         predecessor = ({**predecessor, "value": p.value(predecessor.get("value"))}
                        if predecessor else None)
-        projected, previous = [], predecessor.get("value") if predecessor else None
+        initial = result.get("initial_state")
+        if initial is not None:
+            initial = {**initial, "value": p.value(initial.get("value"))}
+            result = {**result, "initial_state": initial}
+        anchor = predecessor or initial
+        projected, previous = [], anchor.get("value") if anchor else None
         for row in rows:
             check_cancelled()
             value = p.value(row.get("value"))
@@ -283,6 +288,9 @@ class SelectionParser:
                 signals[path] = entry
                 continue
             mapped = {**entry, "value_at_center": projection.value(entry.get("value_at_center"))}
+            initial = entry.get("initial_state")
+            if initial is not None:
+                mapped["initial_state"] = {**initial, "value": projection.value(initial.get("value"))}
             for name in ("transitions_in_window", "pre_window_transitions"):
                 rows = entry.get(name, [])
                 work += len(rows) * projection.selection.width

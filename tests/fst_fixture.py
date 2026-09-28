@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def write_fst(path, rows, *, declarations=None, scale=-12, timezero=0,
-              start=0, end=30, activity=(), flush=()):
+              start=0, end=30, activity=(), flush=(), scopes_by_name=None):
     from pylibfst import lib, ffi
     path = Path(path)
     declarations = declarations or [("a", 1, "wire", "input", None)]
@@ -15,13 +15,23 @@ def write_fst(path, rows, *, declarations=None, scale=-12, timezero=0,
         lib.fstWriterSetTimescale(writer, scale)
         lib.fstWriterSetTimezero(writer, timezero)
         lib.fstWriterSetVersion(writer, b"TraceWeave independent event-table fixture")
-        lib.fstWriterSetScope(writer, lib.FST_ST_VCD_MODULE, b"top", ffi.NULL)
+        scopes = []
         for name, width, kind, direction, alias in declarations:
+            desired = (scopes_by_name or {}).get(name, ["top"])
+            common = 0
+            while common < min(len(scopes), len(desired)) and scopes[common] == desired[common]:
+                common += 1
+            for _ in scopes[common:]:
+                lib.fstWriterSetUpscope(writer)
+            for scope in desired[common:]:
+                lib.fstWriterSetScope(writer, lib.FST_ST_VCD_MODULE, scope.encode(), ffi.NULL)
+            scopes = list(desired)
             vartype = getattr(lib, "FST_VT_" + ("SV_" if kind in {"bit", "logic"} else "VCD_") + kind.upper())
             handles[name] = lib.fstWriterCreateVar(writer, vartype,
                 getattr(lib, "FST_VD_" + direction.upper()), width,
                 name.encode(), handles[alias] if alias else 0)
-        lib.fstWriterSetUpscope(writer)
+        for _ in scopes:
+            lib.fstWriterSetUpscope(writer)
         lib.fstWriterEmitTimeChange(writer, start)
         activity = dict(activity)
         by_time = {}
