@@ -15,6 +15,7 @@ fixtures can assert byte-equal output across backends.
 from __future__ import annotations
 
 import ctypes
+import time
 from contextlib import contextmanager, ExitStack
 from bisect import bisect_left
 from typing import Any, Protocol, runtime_checkable
@@ -63,6 +64,9 @@ def event_readers(requests, start, end, *, max_events=1024, max_bytes=262144):
     is intentionally not used to manufacture a streaming capability.
     """
     with ExitStack() as stack:
+        # A single budget covers all native preparation plus page consumption.
+        # Prepared FST spools hold no native slot while another file opens.
+        deadline = time.monotonic() + 30
         groups = {}
         for parser, path in requests:
             if not getattr(parser, '_supports_event_pages', lambda: False)():
@@ -73,7 +77,21 @@ def event_readers(requests, start, end, *, max_events=1024, max_bytes=262144):
             owner = getattr(parser, '_event_owner', parser)
             if bases:
                 groups.setdefault(id(owner), (owner, []))[1].extend(bases)
-        for parser, paths in groups.values():
+        spool_remaining = 64 * 1024 * 1024
+        fst_signals = sum(len(set(paths)) for parser, paths in groups.values()
+                          if getattr(parser, '_event_batch', None) is not None)
+        if fst_signals > 128:
+            from .fst_runtime import FstError
+            raise FstError('fst_batch_signal_limit: at most 128 backing declarations per session')
+        for parser, paths in sorted(groups.values(), key=lambda item: (str(getattr(item[0], 'file_path', '')), id(item[0]))):
+            batch = getattr(parser, '_event_batch', None)
+            if batch is not None and getattr(parser, '_active_batch', None) is None:
+                if spool_remaining < 128:
+                    from .fst_runtime import FstError
+                    raise FstError('fst_spool_byte_limit: request spools exhausted')
+                prepared = stack.enter_context(batch(paths, start, end, deadline=deadline,
+                                                     spool_bytes=spool_remaining))
+                spool_remaining -= prepared.metrics['spool_bytes']
             group = getattr(parser, 'transition_group', None)
             if group is not None and not getattr(parser, '_transition_group_active', False):
                 if not stack.enter_context(group(paths)):
@@ -238,6 +256,59 @@ def _empty_result(signals: list[str], start_ps: int, end_ps: int) -> dict[str, A
     }
 
 
+class FSTBatchReader:
+    """Bounded merged window; initial observations remain separate from changes."""
+
+    def __init__(self, parser):
+        self._parser = parser
+
+    def values_in_window(self, signals, start_ps, end_ps):
+        from dataclasses import asdict
+        from .fst_parser import MAX_RESULT_BYTES, MAX_RESULT_EVENTS
+        result = _empty_result(signals, start_ps, end_ps)
+        result.update(initial_states={}, predecessors={}, recording_gaps={})
+        if not signals:
+            return result
+        size = 0
+        with self._parser._event_batch(signals, start_ps, end_ps) as batch:
+            for path in dict.fromkeys(signals):
+                try:
+                    batch.declaration(path)
+                except KeyError:
+                    result['missing'].append(path)
+                    continue
+                with self._parser._event_pages(path, start_ps, end_ps) as reader:
+                    while True:
+                        page = reader.read_page()
+                        for field, event in (('initial_states', page.initial_state), ('predecessors', page.predecessor)):
+                            if event:
+                                size += 512 + 4 * len(event.value or '')
+                                result[field][path] = asdict(event)
+                        if page.recording_gaps:
+                            result['recording_gaps'].setdefault(path, []).extend(asdict(g) for g in page.recording_gaps)
+                            size += 512 * len(page.recording_gaps)
+                        for event in page.events:
+                            if event.kind != 'transition':
+                                continue
+                            size += 512 + 4 * len(event.value or '')
+                            if size > MAX_RESULT_BYTES or len(result['transitions']) >= MAX_RESULT_EVENTS:
+                                result['truncated'] = True
+                                break
+                            result['transitions'].append(dict(time_ps=event.time_ps, time_fs=event.time_fs,
+                                                              signal=path, value=event.value))
+                        if size > MAX_RESULT_BYTES:
+                            result['truncated'] = True
+                        if page.complete or page.truncated or result['truncated']:
+                            result['truncated'] |= page.truncated
+                            break
+                if result['truncated']:
+                    break
+            result['reading'] = dict(batch.metrics)
+        order = {p: i for i, p in enumerate(signals)}
+        result['transitions'].sort(key=lambda row: (row['time_fs'], order[row['signal']]))
+        return result
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -250,4 +321,7 @@ def make_batch_reader(wave_path: str) -> WaveformBatchReader:
         return FSDBBatchReader(FSDBParser(wave_path))
     if lower.endswith(".vcd"):
         return VCDBatchReader(VCDParser(wave_path))
+    if lower.endswith(".fst"):
+        from .fst_parser import FSTParser
+        return FSTBatchReader(FSTParser(wave_path))
     raise ValueError(f"Unsupported waveform extension: {wave_path}")

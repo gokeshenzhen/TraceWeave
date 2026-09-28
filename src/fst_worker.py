@@ -14,6 +14,7 @@ import re
 import resource
 import struct
 import sys
+import time
 
 MAX_DECLARATIONS = 32768
 MAX_INDEX_BYTES = 8 * 1024 * 1024
@@ -192,6 +193,9 @@ def main():
                     raise ValueError("fst_signal_type_unsupported")
                 stream_events(pylibfst, reader, row, header, message, check)
                 return
+            elif op == "batch":
+                spool_events(pylibfst, reader, index, header, message, check)
+                return
             else:
                 raise ValueError("fst_request_invalid")
     finally:
@@ -276,6 +280,151 @@ def build_index(lib, ffi, reader):
     if scopes or len(index) != lib.fstReaderGetVarCount(reader):
         raise ValueError("fst_corrupt: incomplete hierarchy")
     return index
+
+
+def spool_events(api, reader, index, header, message, check):
+    """One masked traversal into bounded, private, per-storage window streams.
+
+    Spooling decouples native callback order from independent consumer cursors.
+    Only the selected window and two prefix records are stored, never a VCD or
+    a full-file Python event index. The parent reaps this worker before readers
+    are opened, so logical cursors cannot exhaust native admission slots.
+    """
+    lib, ffi = api.lib, api.ffi
+    paths = list(dict.fromkeys(message['paths']))
+    if not 1 <= len(paths) <= 128:
+        raise ValueError('fst_batch_signal_limit')
+    cap = message.get('spool_bytes', 64 * 1024 * 1024)
+    if not 128 <= cap <= 64 * 1024 * 1024:
+        raise ValueError('fst_spool_limit_invalid')
+    start, end = message['start_fs'], message['end_fs']
+    scale = header['scale_fs']
+    begin, finish = header['start_tick'] * scale, header['end_tick'] * scale
+    end = finish if end == -1 else end
+    if start < 0 or end < start or end > 2**63 - 1:
+        raise ValueError('fst_time_range_unsupported')
+    declarations, errors, states = {}, {}, {}
+    record = struct.Struct('>qBI')
+    total_bytes = callbacks = selected_events = 0
+    started = time.perf_counter()
+
+    def write(state, at, kind, value):
+        nonlocal total_bytes, selected_events
+        raw = value.encode('ascii')
+        size = record.size + len(raw)
+        if total_bytes + size > cap:
+            raise ValueError('fst_spool_byte_limit: narrow window or reduce signals')
+        state['file'].write(record.pack(at, kind, len(raw)))
+        state['file'].write(raw)
+        total_bytes += size
+        selected_events += kind == 0
+
+    def end_gap(state, at, inclusive=False):
+        gap = state['gap']
+        if gap is None:
+            return
+        lo, reason = gap
+        lo, hi = max(start, lo), min(end, at)
+        right = inclusive if hi == at else True
+        if lo < hi or (lo == hi and right):
+            write(state, lo, 3, json.dumps([hi, reason, right], separators=(',', ':')))
+        state['gap'] = None
+
+    def advance(state, at):
+        activity = header['activity']
+        while state['activity'] < len(activity) and activity[state['activity']][0] * scale <= at:
+            tick, enabled = activity[state['activity']]
+            state['activity'] += 1
+            t = tick * scale
+            if bool(enabled) == state['active']:
+                continue
+            end_gap(state, t)
+            state['gap'] = (t, 'unrecorded_after_dump_resume' if enabled else 'dump_inactive')
+            state['active'] = bool(enabled)
+
+    try:
+        lib.fstReaderClrFacProcessMaskAll(reader)
+        for path in paths:
+            try:
+                row = resolve(index, path)
+                if not row['supported']:
+                    raise ValueError('fst_signal_type_unsupported')
+            except ValueError as exc:
+                errors[path] = str(exc)
+                continue
+            declarations[path] = row
+            handle = row['handle']
+            if handle in states:
+                continue
+            state = dict(file=open(f'{handle}.events', 'wb'), width=row['width'],
+                         first=True, last=-1, initial=None, previous=None,
+                         activity=0, active=True, gap=(begin, 'unrecorded'))
+            states[handle] = state
+            if start < begin:
+                write(state, start, 3, json.dumps([min(end, begin), 'outside_recorded_range', end < begin]))
+            lib.fstReaderSetFacProcessMask(reader, handle)
+        lib.fstReaderSetLimitTimeRange(reader, 0, min(header['end_tick'], end // scale))
+
+        def callback(_, tick, handle, pointer):
+            nonlocal callbacks
+            try:
+                callbacks += 1
+                state = states[int(handle)]
+                at = int(tick) * scale
+                if at < state['last']:
+                    raise ValueError('fst_transition_order_invalid')
+                state['last'] = at
+                if at > end:
+                    return
+                advance(state, at)
+                first = state['first'] and at == begin
+                state['first'] = False
+                if not state['active']:
+                    return
+                value = bytes(ffi.buffer(pointer, state['width'])).decode('ascii').lower()
+                if any(c not in '01xz' for c in value):
+                    raise ValueError('fst_digital_value_unsupported')
+                end_gap(state, at)
+                if first:
+                    state['initial'] = (at, value)
+                elif at < start:
+                    state['previous'] = (at, value)
+                else:
+                    write(state, at, 0, value)
+            except BaseException as exc:
+                try:
+                    emit({'kind': 'error', 'reason': str(exc) if isinstance(exc, ValueError) else 'fst_callback_failed'})
+                finally:
+                    os._exit(2)
+
+        if states:
+            rc = api.fstReaderIterBlocks(reader, callback)
+            if rc != 1 or lib.fstReaderGetFseekFailed(reader):
+                raise ValueError('fst_decode_failed')
+        streams = {}
+        for handle, state in states.items():
+            advance(state, min(end, finish))
+            end_gap(state, min(end, finish), inclusive=True)
+            if end > finish:
+                # fs is an integer lattice; invalidation starts strictly after
+                # the last recorded instant, not at that still-valid instant.
+                write(state, max(start, finish + 1), 3,
+                      json.dumps([end, 'outside_recorded_range', True]))
+            event_bytes = state['file'].tell()
+            prefix = state['previous'] or state['initial']
+            if prefix:
+                write(state, prefix[0], 2 if state['previous'] else 1, prefix[1])
+            streams[str(handle)] = {'event_bytes': event_bytes}
+            state['file'].close()
+        check()
+        emit({'kind': 'batch', 'declarations': declarations, 'errors': errors, 'streams': streams,
+              'batch_metrics': {'native_iterations': int(bool(states)), 'native_callbacks': callbacks,
+                  'window_transitions': selected_events, 'spool_bytes': total_bytes,
+                  'storage_streams': len(states), 'logical_signals': len(paths),
+                  'scan_and_spool_ms': (time.perf_counter() - started) * 1000}})
+    finally:
+        for state in states.values():
+            state['file'].close()
 
 
 def stream_events(api, reader, row, header, message, check):

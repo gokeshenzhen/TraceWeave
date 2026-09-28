@@ -143,7 +143,7 @@ def test_summary_reports_real_loaded_component_and_capability_boundary(tmp_path)
     assert result["fst_backend"]["version"] == "0.2.1"
     assert len(result["fst_backend"]["native_sha256"]) == 64
     assert result["fst_backend"]["analysis_status"] == "not_run"
-    assert not p._supports_event_pages()
+    assert p._supports_event_pages()  # private batching precedes public analysis acceptance
 
 
 def test_missing_coordinates_are_not_guessed_for_structured_selection(tmp_path):

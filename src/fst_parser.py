@@ -1,8 +1,7 @@
-"""Basic FST queries over request-scoped, isolated libfst readers.
+"""FST queries over request-scoped, isolated libfst readers.
 
-No waveform or metadata index is retained between requests. First-round FST
-support deliberately does not advertise the generic event-page capability:
-advanced consumers require separate validation of anchors and recording gaps.
+No waveform or metadata index is retained between requests. Generic pages use
+bounded private spools; public analyses are enabled individually after validation.
 """
 from collections import deque
 from contextlib import contextmanager
@@ -111,9 +110,28 @@ class FSTParser:
         self._file_identity = None
         self._clock_cache_token = ClockCacheToken()
         self._lock = threading.RLock()
+        self._active_batch = None
 
     def _supports_event_pages(self):
-        return False
+        return True
+
+    def _event_batch(self, paths, start, end, *, deadline=None, spool_bytes=64 * 1024 * 1024):
+        from .fst_event_pages import fst_batch
+        return fst_batch(self, list(dict.fromkeys(paths)), start, end, deadline=deadline, spool_bytes=spool_bytes)
+
+    @contextmanager
+    def _event_pages(self, path, start=0, end=-1, *, max_events=1024, max_bytes=262144):
+        from .fst_event_pages import FstEventReader
+        if self._active_batch is None:
+            with self._event_batch([path], start, end):
+                with self._event_pages(path, start, end, max_events=max_events, max_bytes=max_bytes) as reader:
+                    yield reader
+            return
+        reader = FstEventReader(self._active_batch, path, start, end, max_events, max_bytes)
+        try:
+            yield reader
+        finally:
+            reader.close()
 
     @contextmanager
     def _session(self):

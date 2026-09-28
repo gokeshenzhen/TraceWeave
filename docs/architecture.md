@@ -823,6 +823,19 @@ folds an initial observation at its physical time (or exposes a pre-window state
 anchor), preserving complete same-time groups across pages. Selection projection
 preserves those fields. Existing FSDB/VCD pages keep their previous defaults.
 
+FST event sessions now perform one masked native traversal per file into private
+per-storage spools, then reap the child before exposing logical readers. Aliases
+reuse immutable storage with independent positions. Across a batch, at most 128
+backing declarations and 64 MiB of temporary event records are admitted; a shared
+30-second deadline includes preparation, admission and consumption. Requests
+that exceed the spool budget fail explicitly. Only selected-window observations
+and actual prefix evidence are retained, with bounded page decoding in Python.
+This is eager window preparation, so early-exit comparisons still pay its scan
+cost; narrow windows can still scan the selected signals' native prefix.
+Spools, readers and positions expire on close, cancellation or file/epoch change.
+They never enter a persistent cache. Generic page support is an internal
+capability; public analysis gates remain until consumer-specific acceptance.
+
 The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
 bundled MIT libfst; compression dependencies retain their upstream licenses).
 TraceWeave supplies an adapter, without vendoring upstream source or shipping

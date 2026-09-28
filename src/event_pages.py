@@ -67,6 +67,7 @@ class GroupCursor:
         self.page, self.index = None, 0
         self.predecessor = None
         self.initial_state = None
+        self._pending_initial = None
         self.recording_gaps = ()
         self.pages = self.events = self.nbytes = self.compared = 0
         self.last_time = None
@@ -84,12 +85,12 @@ class GroupCursor:
         if self.page is None:
             self.predecessor = page.predecessor
             self.initial_state = page.initial_state
+            if page.initial_state and page.initial_state.time_fs >= getattr(self.reader, 'start_fs', 0):
+                self._pending_initial = page.initial_state
         elif page.predecessor is not None or page.initial_state is not None:
             raise ValueError('replayed_event_predecessor')
         self.recording_gaps += page.recording_gaps
         self._events = page.events
-        if page.initial_state and page.initial_state.time_fs >= getattr(self.reader, 'start_fs', 0):
-            self._events = (page.initial_state, *self._events)
         self.page, self.index = page, 0
 
     @property
@@ -101,23 +102,29 @@ class GroupCursor:
         return self.predecessor or initial
 
     def peek(self):
-        if self.index < len(self._events):
-            return self._events[self.index].time_fs
-        return self.page.next_time
+        upcoming = (self._events[self.index].time_fs if self.index < len(self._events)
+                    else self.page.next_time)
+        if self._pending_initial:
+            return min(upcoming, self._pending_initial.time_fs) if upcoming is not None else self._pending_initial.time_fs
+        return upcoming
 
     def take_group(self, at):
         value = None
         self.group_changed = False
         while self.peek() == at:
             self.checkpoint()
-            if self.index == len(self._events):
+            if self._pending_initial and self._pending_initial.time_fs == at:
+                event, self._pending_initial = self._pending_initial, None
+            elif self.index == len(self._events):
                 if self.page.truncated or self.page.complete:
                     raise IncompleteGroup('transition_data_truncated')
                 self._read()
                 if not self._events and self.page.next_time == at:
                     raise IncompleteGroup('transition_data_truncated')
                 continue
-            event = self._events[self.index]
+            else:
+                event = self._events[self.index]
+                self.index += 1
             if self.last_time is not None and event.time_fs < self.last_time:
                 raise IncompleteGroup('transition_order_invalid')
             self.last_time = event.time_fs
@@ -126,7 +133,6 @@ class GroupCursor:
                 width = getattr(self.reader,'width',None)
                 self.group_changed |= (bit_value(value,width) != bit_value(event.value,width)) if width else value != event.value
             value = event.value
-            self.index += 1
             self.compared += 1
         if self.peek() is not None and self.peek() < at:
             raise IncompleteGroup('transition_order_invalid')
