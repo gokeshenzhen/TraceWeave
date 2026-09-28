@@ -130,9 +130,9 @@ class SelectionParser:
                     def project(event):
                         value = p.value(event.value)
                         return replace(event, value=value['bin'] if value else None)
-                    return EventPage(tuple(project(e) for e in page.events),
-                        project(page.predecessor) if page.predecessor else None,
-                        page.next_time, page.complete, page.truncated, page.output_bytes)
+                    return replace(page, events=tuple(project(e) for e in page.events),
+                        predecessor=project(page.predecessor) if page.predecessor else None,
+                        initial_state=project(page.initial_state) if page.initial_state else None)
             yield ProjectedReader()
 
     def bind(self, spec):

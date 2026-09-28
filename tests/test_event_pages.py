@@ -14,6 +14,40 @@ from src.waveform_batch import event_readers
 from src.waveform_selection import SelectionParser
 
 
+@pytest.mark.parametrize('start', [0, 1000])
+def test_initial_observation_is_separate_from_real_predecessor(start):
+    from src.event_pages import RecordingGap, page_records
+    initial = Event(0, 0, '0', kind='initial_state')
+    gap = RecordingGap(2000, 4000, 'dump_inactive')
+    class Reader:
+        start_fs = start
+        def read_page(self):
+            return EventPage((Event(2000, 2, None, kind='recording_gap'),
+                              Event(4000, 4, '1')), complete=True,
+                             initial_state=initial, recording_gaps=(gap,))
+    cursor = GroupCursor(Reader())
+    assert cursor.predecessor is None
+    assert cursor.events == len(page_records(cursor.page)) == 3
+    assert cursor.recording_gaps == (gap,)
+    if start:
+        assert cursor.anchor is initial and cursor.peek() == 2000
+    else:
+        assert cursor.anchor is None and cursor.take_group(0) == '0'
+    assert cursor.take_group(2000) is None
+    assert cursor.take_group(4000) == '1'
+
+
+def test_initial_state_cannot_be_replayed_on_a_later_page():
+    initial = Event(0, 0, '0', kind='initial_state')
+    class Reader:
+        def read_page(self):
+            return EventPage((), initial_state=initial, next_time=1000)
+    cursor = GroupCursor(Reader())
+    cursor.take_group(0)
+    with pytest.raises(ValueError, match='replayed_event_predecessor'):
+        cursor.take_group(1000)
+
+
 def waveform(tmp_path, rows, *, width=1, scale='1ps', end=30, name='a.vcd'):
     path = tmp_path / name
     path.write_text(f'$timescale {scale} $end\n$scope module top $end\n'

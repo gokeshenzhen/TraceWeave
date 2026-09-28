@@ -816,6 +816,13 @@ Verification
 
 ## FST Basic Reading
 
+Private event pages distinguish `initial_state` from a genuine `predecessor`.
+Typed recording-boundary events invalidate carried state, while separate
+`RecordingGap` intervals retain the reason and endpoint semantics. `GroupCursor`
+folds an initial observation at its physical time (or exposes a pre-window state
+anchor), preserving complete same-time groups across pages. Selection projection
+preserves those fields. Existing FSDB/VCD pages keep their previous defaults.
+
 The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
 bundled MIT libfst; compression dependencies retain their upstream licenses).
 TraceWeave supplies an adapter, without vendoring upstream source or shipping
