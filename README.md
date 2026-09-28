@@ -97,6 +97,11 @@ Install the extra in the MCP server's Python environment: `python3.11 -m pip ins
 
 For example, ask: “Find the FST waveform under `/path/to/run`, show its summary, find `top.data`, and read its transitions from 10 ns to 20 ns.” The basic tools preserve X/Z and distinguish missing recording intervals from observed values. Nonzero time offsets, real/string signals, external hierarchy files, and whole-file gzip containers are currently unsupported. Reads exceeding the bounded index, native memory, result, or time limits stop explicitly; narrow the query or use a smaller dump. See [FST boundaries and resource limits](docs/architecture.md#fst-basic-reading).
 
+Use the same analysis tools to inspect FST handshakes, reconstruct transactions,
+compare an FST signal against VCD/FSDB, or trace an earlier X after its input has
+recovered. Source-based analysis keeps its usual compile-context prerequisites.
+Recording gaps and incomplete clock history remain partial evidence.
+
 ## Client Setup
 
 After a repository installation, generate a client configuration template with absolute paths:

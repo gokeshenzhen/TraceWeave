@@ -81,9 +81,9 @@ jobs:
         run: |
           wheels=(dist/*.whl)
           "$RUNNER_TEMP/traceweave-clean/bin/python" -m pip install \
-            "${wheels[0]}[fst]"
+            "${wheels[0]}[fst,source-graph]"
           cd "$RUNNER_TEMP"
-          timeout 60 "$RUNNER_TEMP/traceweave-clean/bin/python" \
+          timeout 180 "$RUNNER_TEMP/traceweave-clean/bin/python" \
             "$GITHUB_WORKSPACE/scripts/check_fst_readback.py" --installed \
             --output "$RUNNER_TEMP/fst-readback.json"
 

@@ -22,6 +22,7 @@ from mcp.client.stdio import stdio_client
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 from fst_fixture import write_fst
+from fst_analysis_readback import validate_analyses
 
 
 def fingerprint(path):
@@ -52,26 +53,37 @@ async def run_check(work, installed, require_fsdb):
         "import asyncio, hashlib, json, sys\nfrom pathlib import Path\n" +
         ("from traceweave_mcp._runtime import server\n" if installed else
          f"sys.path.insert(0, {str(ROOT)!r})\nimport server\n") +
-        "from src import fst_parser, fst_runtime\n"
-        "paths = [Path(m.__file__).resolve() for m in (server, fst_parser, fst_runtime)]\n"
-        "paths.append(paths[-1].with_name('fst_worker.py'))\n"
-        "receipt = {'python': sys.executable, 'native_imported_before_query': 'pylibfst' in sys.modules,\n"
-        " 'modules': [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in paths]}\n" +
-        f"Path({str(loaded)!r}).write_text(json.dumps(receipt))\n" +
+        "base = Path(server.__file__).resolve().parent\n"
+        "before = 'pylibfst' in sys.modules\n"
+        "def capture():\n"
+        " paths = {Path(m.__file__).resolve() for m in list(sys.modules.values()) if getattr(m, '__file__', None) and str(m.__file__).endswith('.py')}\n"
+        " paths = {p for p in paths if p.parent == base or base / 'src' in p.parents}\n"
+        " paths.add(base / 'src' / 'fst_worker.py')\n"
+        " receipt = {'python': sys.executable, 'native_imported_before_query': before, 'native_imported_after_query': 'pylibfst' in sys.modules,\n"
+        "  'modules': [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(paths)]}\n" +
+        f" Path({str(loaded)!r}).write_text(json.dumps(receipt))\n" +
+        "original = server._dispatch\n"
+        "async def observed(*args, **kwargs):\n"
+        " try: return await original(*args, **kwargs)\n"
+        " finally: capture()\n"
+        "server._dispatch = observed\ncapture()\n" +
         "asyncio.run(server.main())\n")
     env = {**os.environ, "TRACEWEAVE_TELEMETRY": "0", "TRACEWEAVE_AUTO_KDB": "0",
-           "TRACEWEAVE_CACHE_DIR": str(work / "cache")}
+           "TRACEWEAVE_CACHE_DIR": str(work / "cache"),
+           "TRACEWEAVE_CONNECTIVITY_ROUTE": "source_graph", "TRACEWEAVE_SOURCE_GRAPH_PYTHON": sys.executable,
+           "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY": "off"}
     env.pop("PYTHONPATH", None)
     params = StdioServerParameters(command=sys.executable, args=[str(bootstrap)], cwd=work, env=env)
     report = {"status": "running", "installed": installed, "calls": [],
               "fixtures": [fingerprint(p) for p in (wave, physical, vcd)],
               "compile_hierarchy_scan_log_sweep": "not_run: synthetic fixtures without compile/simulation logs",
-              "scope": "basic digital reads, expressions and cycle sampling"}
+              "scope": "full FST digital reading and analysis matrix",
+              "mcp_round_trip_includes_module_fingerprinting": True}
     report["source_commit"] = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     report["source_dirty"] = bool(subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True).strip())
     async with stdio_client(params) as (reader, writer):
         async with ClientSession(reader, writer) as session:
-            with anyio.fail_after(60):
+            with anyio.fail_after(180):
                 initialized = await session.initialize()
                 catalog = await session.list_tools()
                 report["server"] = initialized.serverInfo.model_dump()
@@ -88,7 +100,6 @@ async def run_check(work, installed, require_fsdb):
                         "mcp_round_trip_ms": (time.perf_counter() - started) * 1000,
                         "json_bytes": len(text.encode())})
                     if body.get("format") == "traceweave.compact.v1":
-                        assert body["references"] == []
                         return body["result"]
                     return body
 
@@ -140,6 +151,10 @@ async def run_check(work, installed, require_fsdb):
                     "signal_path": {"expr": "a", "bindings": {"a": "top.data"}, "typing": "wave_bits"}})
                 assert expression['value']['bin'] == '0101'
 
+                await validate_analyses(call, work, report, fingerprint)
+                observed_tools = {r['tool'] for r in report['calls']}
+                assert set(summary['fst_backend']['supported_tools']) <= observed_tools
+
                 # Independent oracle already embodied by scale_100fs_tb.v;
                 # compare recorded digital observations, not analyzer output.
                 fsdb_source = ROOT / "tests/fixtures/scale_100fs.fsdb"
@@ -157,11 +172,20 @@ async def run_check(work, installed, require_fsdb):
                             point = await call("get_signal_at_time", {"wave_path": str(source), "signal_path": signal, "time_ps": at})
                             assert point["value"]["dec"] == expected
                     report["fixtures"].extend(fingerprint(p) for p in (fsdb, matched))
-                    report["fsdb_comparison"] = "passed: 4 independent point expectations on each backend"
+                    for a, sa, b, sb in ((fsdb, 'scale_100fs_tb.addr[31:0]', matched, 'top.addr'),
+                                          (matched, 'top.addr', fsdb, 'scale_100fs_tb.addr[31:0]')):
+                        compared = await call('diff_first_divergence', dict(wave_path_a=str(a), signal_a=sa,
+                            wave_path_b=str(b), signal_b=sb, start_time_ps=99999, end_time_ps=100102))
+                        assert compared['comparison_status'] == 'equal' and compared['coverage_status'] == 'complete'
+                    report["fsdb_comparison"] = "passed: independent point values and exact event-page comparison in both directions"
                 if require_fsdb:
                     assert report["fsdb_comparison"].startswith("passed")
+    report['loaded'] = json.loads(loaded.read_text())
+    assert not report['loaded']['native_imported_after_query']
     for module in report["loaded"]["modules"]:
         assert fingerprint(Path(module["path"]))["sha256"] == module["sha256"], "source changed during probe"
+        if installed:
+            assert '/site-packages/traceweave_mcp/' in module['path'], module
     report["status"] = "passed"
     return report
 

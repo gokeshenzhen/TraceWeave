@@ -946,18 +946,19 @@ assignment values retain their existing explicit proof gaps. Tests in
 `tests/test_fst_*.py` use independent expected event tables and must execute
 with the FST extra installed for FST acceptance.
 
-`scripts/check_fst_readback.py` starts a fresh MCP process and checks basic
-FST/VCD observations, recording gaps, exact sub-ps windows, fixed selections,
-compact output and capability errors against independent expectations. It
-captures loaded Python paths/hashes from inside that server and the actual
-native identity from the summary. `--require-fsdb` requires the local existing
-FSDB cross-scale fixture comparison; `--installed` exercises the installed
-wheel outside the checkout instead. Use `--work-dir` to retain fixtures and
-`--output` to save the full calls and MCP round-trip times. The fixture has no
-compile/simulation logs, so hierarchy, structural and failure workflows remain
-explicitly not run. CI installs the FST extra and runs both regression tests
-and the installed-wheel probe; portable operation without the extra remains
-covered separately.
+`scripts/check_fst_readback.py` starts a fresh MCP process and checks every
+waveform tool, including nested expression/packed-field inputs, protocol and
+transaction facts, comparisons, snapshot/history X tracing and log correlation.
+It captures the actually loaded Python paths/hashes inside that server after
+calls and the native identity from the summary. `--require-fsdb` also requires
+native cross-scale point values and exact event-page comparisons in both
+directions. `--installed` exercises an independent wheel outside the checkout;
+the full probe requires both `fst` and `source-graph` extras. Use `--work-dir`
+to retain fixtures and `--output` to save calls and MCP round-trip times (which
+include module fingerprinting). Synthetic compile/log/wave inputs execute the
+parallel hierarchy/structural workflow; zero protocol coverage stays explicit.
+CI installs both extras for the installed-wheel probe; portable operation
+without these extras remains covered separately.
 
 `scripts/benchmark_fst_round2.py --work-dir DIR --generate` writes reproducible
 FST/VCD event tables, including a seeded 1.6-million-event 128-bit workload.
