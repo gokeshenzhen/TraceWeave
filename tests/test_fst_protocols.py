@@ -1,5 +1,6 @@
 """Round-two protocol oracles shared only at the fixture event table."""
 from dataclasses import replace
+from contextlib import contextmanager
 
 import pytest
 
@@ -172,3 +173,30 @@ def test_ahb_apb_discovery_does_not_guess_direction(tmp_path):
     assert len(checked('suggest_protocol_bundles',fst,protocol='apb')['candidates']) == 1
     r = checked('inspect_handshake',fst,clock='top.clk',ready='top.hready',valid_htrans='top.htrans',payload=['top.haddr'])
     assert r['transfer_count'] == 3 and r['payload_hold_violations'] == 0
+
+
+def test_sweep_reuses_bounded_native_packs_and_cleans_cancel(tmp_path,monkeypatch):
+    from src.handshake_sweep import sweep_handshake_anomalies
+    from src.cancellation import OperationCancelled
+    widths={f'p{i}_{field}':1 for i in range(12) for field in ('valid','ready')}
+    rows=[{name:int(not name.endswith('ready') or not name.startswith('p0_')) for name in widths}]*20
+    fst,_=cycle_pair(tmp_path,widths,rows)
+    parser=FSTParser(fst); original=parser._event_batch; packs=[]; directories=[]
+    @contextmanager
+    def measured(paths,*args,**kw):
+        with original(paths,*args,**kw) as batch:
+            packs.append(paths);directories.append(batch.directory.name)
+            yield batch
+    parser._event_batch=measured
+    r=sweep_handshake_anomalies(get_parser=lambda _:parser,wave_path=str(fst))
+    assert r['interface_count']==12 and r['flagged_count']==1 and r['coverage_status']=='complete'
+    assert len(packs)==2 and all(len(p)<=16 for p in packs)
+    from pathlib import Path
+    assert all(not Path(p).exists() for p in directories)
+    assert parser._active_batch is None
+    import src.handshake_sweep as sweep
+    def cancel(**kwargs):raise OperationCancelled()
+    monkeypatch.setattr(sweep,'inspect_handshake',cancel)
+    with pytest.raises(OperationCancelled):
+        sweep_handshake_anomalies(get_parser=lambda _:parser,wave_path=str(fst))
+    assert parser._active_batch is None and all(not Path(p).exists() for p in directories)

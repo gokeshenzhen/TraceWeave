@@ -628,6 +628,9 @@ def sweep_handshake_anomalies(
             if transition_group is not None and pack["paths"]
             else nullcontext(False)
         )
+        if transition_group is None and getattr(parser, '_event_batch', None) and pack['paths']:
+            from .waveform_batch import sampling_batch
+            group_context = sampling_batch(parser, list(pack['paths']), start_ps, end_ps)
         if transition_group is not None and pack["paths"]:
             operation_metrics.record_sweep_group_pack(
                 clock_count=int(pack.get("clock_count", 0)),

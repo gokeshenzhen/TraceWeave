@@ -846,6 +846,10 @@ reuse the common engine. Exact declaration lookup remains independent of the
 analysis gate, and local windows retain their separate conservative inference
 policy. Column sampling shares request-local spools across backing dependencies;
 no FST clock index is retained across requests.
+Full sweeps also prepare one FST batch per existing bounded signal pack. Clock
+and interface consumers reuse that pack's immutable spools; the batch closes
+on success, error or cancellation before the next pack begins. FSDB continues
+to use its existing native transition group and process-global lock.
 
 The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
 bundled MIT libfst; compression dependencies retain their upstream licenses).
