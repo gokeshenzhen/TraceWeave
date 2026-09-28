@@ -46,6 +46,8 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 
 支持 VCS / Xcelium 仿真日志及 VCD / FSDB 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
 
+Linux 上可选启用 FST 基础读取：文件发现、摘要、信号搜索、点值、跳变和局部窗口，支持固定 bit 选择。FST 周期采样、表达式、协议分析、波形比较和 X 历史尚待验收，调用时会明确返回 `not_run` 错误。
+
 信号追踪（驱动、负载与连通路径查询）默认采用 **Verdi NPI → Source Graph → 基础静态分析（Legacy Static）** 三级路由：优先查询已展开的 KDB；NPI 不可用或无法提供可信结果时，尝试免商业 license 的 Source Graph，必要时再按支持范围回退到基础静态分析。
 
 面向大型设计的能力与已验证的部分规模：
@@ -88,6 +90,12 @@ traceweave-mcp --doctor
 ```
 
 如果只需要日志、VCD 和基础静态分析，可安装 `traceweave-mcp`，省略 `[source-graph]`。PyPI 包不包含 FSDB 读取组件；需要 FSDB 时请选择仓库安装。
+
+### 可选 FST 读取
+
+在 MCP 服务使用的 Python 环境安装：`python3.11 -m pip install "traceweave-mcp[fst]"`。仓库安装则使用 `.venv/bin/python -m pip install "pylibfst==0.2.1"`。重新连接服务后，通过 `traceweave-mcp --doctor` 或 `get_sim_paths` 检查依赖状态。已有 VCD/FSDB 用户无需安装此依赖。
+
+例如：“找到 `/path/to/run` 下的 FST 波形，查看摘要，搜索 `top.data`，读取 10 ns 到 20 ns 的跳变。”基础工具保留 X/Z，并区分缺失记录区间与实际观测值。当前不支持非零时间偏移、real/string 信号、外置层级文件和整文件 gzip 容器。索引、原生内存、结果量或时间超过限制时会明确停止；可缩小查询或使用更小的 dump。详见 [FST 能力与资源限制](docs/architecture.md#fst-basic-reading)。
 
 ## 客户端配置
 

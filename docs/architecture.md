@@ -46,6 +46,9 @@ Waveform backends
   src/vcd_parser.py
   src/fsdb_parser.py
   src/fsdb_signal_index.py
+  src/fst_parser.py              # optional basic digital queries with gap receipts
+  src/fst_runtime.py             # bounded, cancellable process transport
+  src/fst_worker.py              # isolated libfst reader; request-scoped native state
   src/cycle_query.py
   src/waveform_batch.py           # FSDB+VCD batch reader (time-window)
   src/waveform_selection.py       # request-local declared-coordinate projections
@@ -810,6 +813,85 @@ Verification
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single
   chronological walk; the VCD path is pure Python.
+
+## FST Basic Reading
+
+The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
+bundled MIT libfst; compression dependencies retain their upstream licenses).
+TraceWeave supplies an adapter, without vendoring upstream source or shipping
+another native bridge. Use the dependency's wheel for the server interpreter;
+source builds follow the dependency's own build requirements. Existing
+FSDB/VCD installations do not import or require pylibfst.
+
+On Linux, `get_sim_paths` discovers `.fst` alongside existing formats, retaining
+newest-first/path ordering and explicit `wave_file` selection. Its additive
+`fst_runtime` receipt and `--doctor` report missing/wrong-version dependencies
+without loading native code. `candidate_ready_unloaded` is only a dependency
+probe. An actual `get_waveform_summary` reports the loaded extension path,
+SHA-256 and version under `fst_backend`. Reconnect after code/dependency changes.
+
+The first round supports `get_waveform_summary`, `search_signals`,
+`get_signal_at_time`, `get_signal_transitions`, and `get_signals_around_time`,
+including fixed `{path,bits}` selections. Declaration aliases retain distinct
+paths and coordinates; an around-time call reads each storage handle once.
+Missing vector coordinates cannot support a structured selection. Unknown
+direction/type/signedness or array layouts are never inferred. Scope paging
+uses private identity-bound cursors; no public event cursor is introduced.
+
+Raw times are integer fs; public `time_ps` labels use ceiling and `time_fs`
+preserves exact event order. The first value at the file start is an
+`initial_state`, separate from true changes and the strictly pre-window
+`predecessor`. Selected signals are scanned from the recorded beginning to
+establish an actual predecessor time, rather than mislabelling a block
+snapshot. Libfst's block time filter is not a strict event filter; the adapter
+clips by physical time and consumes every admitted page before reporting a
+complete result. Same-tick callback order does not prove delta/NBA order.
+Actual X/Z, missing signals, times outside the recorded range, dump inactivity,
+and a resume without a newly recorded value remain distinct. `value_status`
+and `fst_reading.gaps` qualify evidence; two-state inputs establish only their
+recorded observations. Summary metadata coverage does not certify signal data.
+
+`src/fst_worker.py` owns native state in a request-scoped child process.
+The parent never imports the native library, converts to VCD, or retains an
+event index. The callback pauses between bounded pages through an IPC handshake.
+Normal completion, errors, cancellation and deadlines terminate/reap the child
+and remove its private temporary directory before releasing reader admission.
+This is deliberate isolation for a callback API without cooperative native
+cancellation. FST requests use the existing per-path wave lock plus a parser
+lock; each native handle has a separate process. FSDB keeps its global lock.
+File realpath/device/inode/size/mtime/ctime changes invalidate reads and cursors;
+close/cache replacement rotates parser identity. There is no persistent FST
+index or result cache.
+
+| Resource | First-round bound |
+|---|---|
+| Native children | 4 process-wide; 512 MiB address space each, 30 s per child including admission/open/read |
+| Native work | Validated block envelopes; advertised value-block working set above 256 MiB rejected before decode; hard process limit also covers hierarchy/decompression |
+| Private temporary files | 64 MiB per file; directory removed on cleanup |
+| Metadata | 32,768 declarations and 8 MiB conservative index accounting, whichever comes first; depth 256, name 4,096 bytes |
+| Signal / activity | 65,536 bits per declaration; 4,096 dump activity changes |
+| Event page | Default 1,024 records / 256 KiB; hard 4,096 / 1 MiB, including initial/predecessor records |
+| Public read result | 65,536 changes / 8 MiB conservative value accounting; aliases also debit output memory |
+| Local window | 128 signals, 128 history changes each, existing fixed fallback window limit; no clock/transient inference |
+
+Native buffers can exceed a page's size inside the worker; page limits are not
+represented as total-memory bounds. Reading a late narrow window may scan a
+large selected-signal prefix and hit the deadline. Large metadata can require
+a smaller dump rather than just a narrower time window. Nonzero `timezero`,
+precision below 1 fs, times beyond signed-64-bit fs, external `.hier`, whole-file
+gzip containers, and real/string/special value types are explicitly unsupported.
+Truncated reads carry partial coverage; display caps alone preserve the read
+coverage and total count. `full` and `compact` project the same validated facts.
+
+The schema adds `fst_runtime`, `fst_backend`, `fst_reading`, `initial_state`,
+`value_status`, and `metadata_query_mode="fst_isolated_v1"`; existing enum values
+remain. Strict enum clients must accept the new summary mode. Unvalidated FST
+cycle/expression/protocol/transaction/comparison/dynamic/X-history calls return
+`fst_analysis_not_validated`, `analysis_status="not_run"` and a summary next
+step before any work. Generic event pages and batch analysis remain phase two;
+the private reader transport does not advertise those capabilities. Tests in
+`tests/test_fst_*.py` use independent expected event tables and must execute
+with the FST extra installed for FST acceptance.
 
 ## Formal Artifact Discovery
 

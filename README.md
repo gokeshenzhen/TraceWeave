@@ -46,6 +46,8 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 
 Supports VCS / Xcelium simulation logs and VCD / FSDB waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
+Optional FST support on Linux provides discovery, summary, signal search, point values, transitions, and local windows, including fixed bit selections. FST cycle sampling, expressions, protocol analysis, waveform comparison, and X history are pending validation and return an explicit `not_run` error.
+
 Signal tracing (driver, load, and connectivity path queries) follows **Verdi NPI → Source Graph → basic static analysis (Legacy Static)** by default. It first queries the elaborated KDB; when NPI is unavailable or cannot provide a trustworthy result, it tries Source Graph without a commercial license, then falls back to basic static analysis where supported.
 
 Capabilities for large designs, with selected examples of validated scale:
@@ -88,6 +90,12 @@ traceweave-mcp --doctor
 ```
 
 For logs, VCD, and basic static analysis only, install `traceweave-mcp` without `[source-graph]`. The PyPI package does not include the FSDB reader; use the repository installation for FSDB.
+
+### Optional FST reads
+
+Install the extra in the MCP server's Python environment: `python3.11 -m pip install "traceweave-mcp[fst]"`. For a repository installation, use `.venv/bin/python -m pip install "pylibfst==0.2.1"`. Reconnect the server, then check `traceweave-mcp --doctor` or `get_sim_paths`. Existing VCD/FSDB users do not need this dependency.
+
+For example, ask: “Find the FST waveform under `/path/to/run`, show its summary, find `top.data`, and read its transitions from 10 ns to 20 ns.” The basic tools preserve X/Z and distinguish missing recording intervals from observed values. Nonzero time offsets, real/string signals, external hierarchy files, and whole-file gzip containers are currently unsupported. Reads exceeding the bounded index, native memory, result, or time limits stop explicitly; narrow the query or use a smaller dump. See [FST boundaries and resource limits](docs/architecture.md#fst-basic-reading).
 
 ## Client Setup
 

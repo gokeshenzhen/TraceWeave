@@ -10,15 +10,13 @@ import threading
 
 from .cancellation import check_cancelled
 from .clock_edge_cache import ClockCacheToken
-from .fst_runtime import FstError, FstProcess
+from .fst_runtime import FstError, FstProcess, FST_BASIC_TOOLS
 from .scope_metadata import ScopeCursor, ScopeIdentityChanged, file_identity, normalize_scope, page_limits
 
 MAX_RESULT_EVENTS = 65536
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 MAX_SIGNALS = 128
 MAX_HISTORY = 128
-_BASIC_TOOLS = ("get_waveform_summary", "search_signals", "get_signal_at_time",
-                "get_signal_transitions", "get_signals_around_time")
 
 
 def _value(bits):
@@ -105,6 +103,8 @@ def _receipt(header, start, end, observations=(), *, truncated=False, metadata=F
 
 
 class FSTParser:
+    _basic_queries_only = True
+
     def __init__(self, file_path):
         self.file_path = str(file_path)
         self._scope_epoch = object()
@@ -178,7 +178,7 @@ class FSTParser:
                     "sample_signals": metadata["sample_signals"], "metadata_query_mode": "fst_isolated_v1",
                     "sample_signals_order": "lexical", "top_modules_complete": True,
                     "fst_backend": {**header["backend"], "storage_count": header["storage_count"],
-                        "supported_tools": list(_BASIC_TOOLS), "analysis_status": "not_run",
+                        "supported_tools": list(FST_BASIC_TOOLS), "analysis_status": "not_run",
                         "observation_scope": "recorded_digital_values_only"},
                     "fst_reading": _receipt(header, 0, end * 1000, metadata=True)}
 

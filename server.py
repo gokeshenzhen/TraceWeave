@@ -73,6 +73,7 @@ from src.clock_edge_cache import discard_clock_edges
 from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
+from src.fst_runtime import FST_BASIC_TOOLS, FstError, fst_runtime_info
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import (
@@ -1311,6 +1312,10 @@ Simulation waveform debug workflow:
      source-compile/elaboration logs, use the source-compile log as primary and
      pass the complementary logs in supplementary_compile_logs build order.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
+   - FST is optional: inspect fst_runtime and get_waveform_summary. Only basic
+     summary/search/point/transition/window queries and fixed bit selections are
+     validated. FST cycle/expression/protocol/comparison/history calls return
+     fst_analysis_not_validated; do not treat not_run as a clean analysis.
 
 2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
    Both independently parse the same compile_log — call them in parallel.
@@ -4842,18 +4847,27 @@ def _finalize_connectivity_backend_status(
 
 def _get_parser(wave_path: str):
     """Return a cached parser instance to avoid reparsing VCDs or reopening FSDBs."""
-    signature = _get_wave_signature(wave_path)
+    ext = wave_path.lower().rsplit(".", 1)[-1]
+    try:
+        signature = _get_wave_signature(wave_path)
+    except (FileNotFoundError, PermissionError) as exc:
+        if ext == "fst":
+            code = "fst_file_not_found" if isinstance(exc, FileNotFoundError) else "fst_permission_denied"
+            raise FstError(f"{code}: {wave_path}") from exc
+        raise
     cached = _parser_cache.get(wave_path)
     if cached is not None and cached[0] == signature:
         return cached[1]
     if cached is not None:
         discard_clock_edges(cached[1])
         _dispose_cached_object(cached[1])
-    ext = wave_path.lower().rsplit(".", 1)[-1]
     if ext == "vcd":
         parser = VCDParser(wave_path)
     elif ext == "fsdb":
         parser = FSDBParser(wave_path)
+    elif ext == "fst":
+        from src.fst_parser import FSTParser
+        parser = FSTParser(wave_path)
     else:
         raise ValueError(f"Unsupported waveform format: .{ext}")
     _parser_cache[wave_path] = (signature, parser)
@@ -4987,7 +5001,10 @@ def _validate_signals_around_time_args(
     if window_ps < 0:
         raise ValueError("window_ps must be non-negative")
 
-    clock_path, clock_period_ps = _detect_wave_clock(parser)
+    # FST's first-round boundary excludes clock inference, especially across
+    # recording gaps and distinct physical edges sharing one public ps label.
+    basic_only = getattr(parser, "_basic_queries_only", False)
+    clock_path, clock_period_ps = (None, None) if basic_only else _detect_wave_clock(parser)
 
     if clock_period_ps and clock_period_ps > 0:
         requested_cycles = window_ps // clock_period_ps
@@ -5004,6 +5021,11 @@ def _validate_signals_around_time_args(
                 f"N cycles = N * clock_period_ps."
             )
     elif window_ps > FALLBACK_WAVE_WINDOW_PS:
+        if basic_only:
+            raise ValueError(
+                f"FST basic window_ps must be <= {FALLBACK_WAVE_WINDOW_PS}; narrow the window. "
+                "FST clock inference and cycle queries are not yet validated."
+            )
         detect_reason = getattr(parser, "_cached_clock_detect_reason", None)
         reason_suffix = f" (detection error: {detect_reason})" if detect_reason else ""
         raise ValueError(
@@ -5208,7 +5230,7 @@ async def list_tools():
                     },
                     "wave_file": {
                         "type": "string",
-                        "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered.",
+                        "description": "Optional explicit waveform path (FSDB/VCD/FST), absolute or relative to verif_root. Used verbatim when given; otherwise discovered. FST currently supports basic reads only.",
                     },
                     "compile_log": {
                         "type": "string",
@@ -5365,7 +5387,7 @@ async def list_tools():
         Tool(
             name="search_signals",
             description=(
-                "Search for signals in a waveform file (FSDB/VCD) and return full hierarchical paths. "
+                "Search for signals in a waveform file (FSDB/VCD/FST) and return full hierarchical paths. "
                 "Use this when the client knows a leaf signal name but not the full path. "
                 "keyword accepts a single string OR a list of strings: pass a list to batch several "
                 "lookups in one call (one result entry per keyword, in input order) instead of issuing "
@@ -7104,6 +7126,14 @@ async def list_tools():
     ])
     for tool in _tools:
         properties = tool.inputSchema["properties"]
+        if tool.name in FST_BASIC_TOOLS:
+            tool.description += (
+                " Optional FST supports recorded digital signals and fixed {path,bits} selections only; "
+                "expressions and higher analyses are not yet validated. Inspect fst_runtime from get_sim_paths "
+                "and fst_backend/fst_reading from summary. FST values distinguish recording gaps from X/Z; "
+                "initial_state is separate from real transitions, whose time_fs is exact and time_ps is ceil-labelled. "
+                "FST local windows use a fixed size cap without clock/transient inference."
+            )
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
@@ -7244,6 +7274,19 @@ async def call_tool(name: str, arguments: dict):
 
 
 async def _dispatch(name: str, args: dict):
+    fst_paths = [args[key] for key in ("wave_path", "wave_path_a", "wave_path_b")
+                 if isinstance(args.get(key), str) and args[key].lower().endswith(".fst")]
+    def has_expression(value):
+        if isinstance(value, dict):
+            return "expr" in value or any(has_expression(v) for v in value.values())
+        return isinstance(value, list) and any(has_expression(v) for v in value)
+    if fst_paths and (name not in FST_BASIC_TOOLS or has_expression(args)):
+        return schemas.FstCapabilityErrorResult(
+            error="FST currently supports basic recorded-digital queries and fixed bit selections; "
+                  "this analysis has not been validated.",
+            supported_tools=list(FST_BASIC_TOOLS),
+            suggested_call={"tool": "get_waveform_summary", "arguments": {"wave_path": fst_paths[0]}},
+        )
     # An exact action is independent of the mutable most-recent session gate.
     bound = None
     if name == "explain_signal_driver" and args.get("compile_context") is not None:
@@ -7345,7 +7388,7 @@ async def _dispatch(name: str, args: dict):
 
                 def _search_one(kw: str) -> dict:
                     return index.search(kw, max_r)
-            elif ext == "vcd":
+            elif ext in {"vcd", "fst"}:
                 parser = _get_parser(wave_path)
 
                 def _search_one(kw: str) -> dict:
@@ -7451,7 +7494,8 @@ async def _dispatch(name: str, args: dict):
             # protocol value (e.g. an interconnect mux glitching to idle at each edge).
             # Must run BEFORE values_only stripping: it needs the window transitions
             # to detect the dip-and-return signature.
-            annotate_center_transients(result)
+            if not getattr(parser, "_basic_queries_only", False):
+                annotate_center_transients(result)
             if return_mode == "values_only":
                 _strip_signals_to_values_only(result)
             result["resolved_aliases"] = aliases
@@ -10055,6 +10099,10 @@ def _format_error(exc: Exception) -> schemas.ToolErrorResult:
     if isinstance(exc, ExpressionError):
         return schemas.ExpressionToolErrorResult.model_validate(exc.payload())
     message = str(exc)
+    if isinstance(exc, FstError):
+        return schemas.ToolErrorResult(
+            error=message, error_code=message.split(":", 1)[0], fst_runtime=fst_runtime_info(),
+        )
     if "FSDB parsing unavailable" in message:
         return schemas.ToolErrorResult.model_validate(
             {

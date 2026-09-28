@@ -53,6 +53,9 @@ def collect_diagnostics() -> dict[str, Any]:
     runtime_root = Path(runtime_config.__file__).resolve().parent
     wrapper = runtime_root / "libfsdb_wrapper.so"
     runtime_info = runtime_config.get_fsdb_runtime_info()
+    namespace = getattr(runtime_config, "__package__", None)
+    fst_module = importlib.import_module((namespace + "." if namespace else "") + "src.fst_runtime")
+    fst_info = fst_module.fst_runtime_info()
 
     dependencies = {
         "mcp": _distribution_version("mcp"),
@@ -139,6 +142,7 @@ def collect_diagnostics() -> dict[str, Any]:
             "native_runtime_source": runtime_info.get("source"),
             "missing_runtime_libraries": list(runtime_info.get("missing_libs") or []),
         },
+        "fst": fst_info,
         "verdi_npi": {
             "status": npi_status,
             "execution_mode": npi_execution,
@@ -171,6 +175,7 @@ def _human_report(report: dict[str, Any]) -> str:
             else "unavailable"
         ),
         f"fsdb: {fsdb['status']}",
+        f"fst: {report['fst']['status']} (basic queries only)",
         f"verdi_npi: {npi['status']} (execution_mode={npi['execution_mode']})",
     ]
     if report["recommended_actions"]:

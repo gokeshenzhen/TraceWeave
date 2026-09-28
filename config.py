@@ -27,7 +27,7 @@ FSDB_REQUIRED_LIBS = ("libnsys.so", "libnffr.so")
 
 COMPILE_LOG_PATTERNS = ["*comp*.log", "*elab*.log"]
 SIM_LOG_PATTERNS = ["*run*.log", "xm*.log", "sim*.log", "vcs.log"]
-WAVE_PATTERNS = ["*.fsdb", "*.vcd"]
+WAVE_PATTERNS = ["*.fsdb", "*.vcd", "*.fst"]
 
 MCP_CONFIG_FILE = ".mcp.yaml"
 DISCOVER_MAX_DEPTH_CASE = 1

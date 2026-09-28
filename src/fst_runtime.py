@@ -7,6 +7,7 @@ its admission slot; client cancellation never leaves an abandoned native scan.
 from __future__ import annotations
 
 import importlib.util
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ from .cancellation import check_cancelled
 from .scope_metadata import ScopeIdentityChanged, file_identity
 
 FST_VERSION = "0.2.1"
+FST_BASIC_TOOLS = ("get_waveform_summary", "search_signals", "get_signal_at_time",
+                   "get_signal_transitions", "get_signals_around_time")
 FRAME_BYTES = 1024 * 1024
 MAX_WORKERS = 4
 _slots = threading.BoundedSemaphore(MAX_WORKERS)
@@ -31,14 +34,25 @@ class FstError(RuntimeError):
 
 
 def fst_runtime_info():
-    available = importlib.util.find_spec("pylibfst") is not None
-    return {"enabled": available, "dependency": "pylibfst", "required_version": FST_VERSION,
-            "message": ("FST basic reads available; advanced analyses await second-round validation"
-                        if available else "FST unavailable: install traceweave-mcp[fst] in the server interpreter")}
+    try:
+        installed = importlib.metadata.version("pylibfst")
+    except importlib.metadata.PackageNotFoundError:
+        installed = None
+    present = importlib.util.find_spec("pylibfst") is not None
+    status = ("platform_unsupported" if not sys.platform.startswith("linux") else
+              "dependency_missing" if not present or installed is None else
+              "version_unsupported" if installed != FST_VERSION else "candidate_ready_unloaded")
+    return {"enabled": status == "candidate_ready_unloaded", "dependency": "pylibfst",
+            "required_version": FST_VERSION, "installed_version": installed, "status": status,
+            "message": ("FST basic reads candidate ready (native library not loaded); advanced analyses not validated"
+                        if status == "candidate_ready_unloaded" else
+                        "FST requires Linux and traceweave-mcp[fst] in the server interpreter (pylibfst 0.2.1)")}
 
 
 class FstProcess:
     def __init__(self, path, *, timeout_sec=30.0, memory_bytes=512 * 1024 * 1024):
+        if not sys.platform.startswith("linux"):
+            raise FstError("fst_platform_unsupported: isolated FST reading currently requires Linux")
         if not 0 < timeout_sec <= 300 or not 64 * 1024 * 1024 <= memory_bytes <= 1024**3:
             raise ValueError("invalid FST worker limits")
         self.path = os.path.realpath(path)

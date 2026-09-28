@@ -148,6 +148,15 @@ class NextRequiredStep(SchemaModel):
     reason: str
 
 
+class FstRuntimeInfo(SchemaModel):
+    enabled: bool
+    dependency: Literal["pylibfst"]
+    required_version: str
+    installed_version: str | None = None
+    status: Literal["platform_unsupported", "dependency_missing", "version_unsupported", "candidate_ready_unloaded"]
+    message: str
+
+
 class SimPathsResult(SchemaModel):
     verif_root: str
     case_name: str | None = None
@@ -157,6 +166,7 @@ class SimPathsResult(SchemaModel):
     case_dir: str | None = None
     simulator: str | None = None
     fsdb_runtime: dict[str, Any] = Field(default_factory=dict)
+    fst_runtime: FstRuntimeInfo | None = None
     compile_logs: list[FileEntry] = Field(default_factory=list)
     sim_logs: list[FileEntry] = Field(default_factory=list)
     wave_files: list[FileEntry] = Field(default_factory=list)
@@ -594,6 +604,36 @@ class DiffResult(SchemaModel):
     convergence_summary: str | None = None
 
 
+class FstRecordingGap(SchemaModel):
+    start_fs: int
+    end_fs: int
+    start_inclusive: bool
+    end_inclusive: bool
+    reason: Literal["outside_recorded_range", "unrecorded", "dump_inactive",
+                    "unrecorded_after_dump_resume", "read_limit"]
+
+
+class FstReading(SchemaModel):
+    mode: Literal["isolated_libfst_v1"]
+    coverage_status: Literal["complete", "partial"]
+    recorded_start_fs: int
+    recorded_end_fs: int
+    gaps: list[FstRecordingGap]
+    time_labels: Literal["ceil_ps"]
+    native_memory_limit_bytes: int
+
+
+class FstBackend(SchemaModel):
+    dependency: Literal["pylibfst"]
+    version: str
+    native_path: str
+    native_sha256: str
+    storage_count: int
+    supported_tools: list[str]
+    analysis_status: Literal["not_run"]
+    observation_scope: Literal["recorded_digital_values_only"]
+
+
 class WaveformSummaryResult(SchemaModel):
     file: str
     format: str
@@ -610,11 +650,13 @@ class WaveformSummaryResult(SchemaModel):
     total_signals: int
     top_modules: list[str] | None = None
     sample_signals: list[str] | None = None
-    metadata_query_mode: Literal["native_v1", "legacy_search"] | None = None
+    metadata_query_mode: Literal["native_v1", "legacy_search", "fst_isolated_v1"] | None = None
     sample_signals_order: Literal["lexical", "legacy_ranked"] | None = None
     top_modules_complete: bool | None = None
     producer_hint: str | None = None
     producer_evidence: str | None = None
+    fst_backend: FstBackend | None = None
+    fst_reading: FstReading | None = None
 
 
 class SearchSignalsResult(SchemaModel):
@@ -810,6 +852,9 @@ class SignalAtTimeResult(SchemaModel):
     time_ps: int
     time_ns: float
     value: dict[str, Any] | None = None
+    value_status: Literal["recorded", "outside_recorded_range", "unrecorded", "dump_inactive",
+                          "unrecorded_after_dump_resume", "read_incomplete"] | None = None
+    fst_reading: FstReading | None = None
     # Set when a bare bus name was auto-completed to name[msb:lsb]; carries the
     # original input so the caller sees the path was resolved.
     resolved_from: str | None = None
@@ -829,6 +874,8 @@ class SignalTransitionsResult(SchemaModel):
     # remains a strict closed-window list while clock samplers can classify the
     # first in-window edge without rereading the waveform.
     predecessor: dict[str, Any] | None = None
+    initial_state: dict[str, Any] | None = None
+    fst_reading: FstReading | None = None
     predecessor_kind: Literal["declaration_anchor", "dependency_anchor"] | None = None
     truncated: bool = False
     transition_count_is_lower_bound: bool = False
@@ -1699,7 +1746,15 @@ class ToolErrorResult(SchemaModel):
     error: str
     error_code: str | None = None
     fsdb_runtime: dict[str, Any] | None = None
+    fst_runtime: FstRuntimeInfo | None = None
     fallback: dict[str, Any] | None = None
+
+
+class FstCapabilityErrorResult(ToolErrorResult):
+    error_code: Literal["fst_analysis_not_validated"] = "fst_analysis_not_validated"
+    analysis_status: Literal["not_run"] = "not_run"
+    supported_tools: list[str]
+    suggested_call: dict[str, Any]
 
 
 class KeywordLimitErrorResult(ToolErrorResult):
