@@ -7431,7 +7431,9 @@ async def _dispatch(name: str, args: dict):
             parser = _get_parser(args["wave_path"])
             parser, selected = prepare_selections(parser, {"signal_path": args["signal_path"]})
             raw_path = selected["signal_path"]
-            resolved_path = _resolve_signal_path(parser, raw_path)
+            # FST already resolves exact declarations / unique range aliases.
+            # A capped search cannot prove that an ambiguous name is unique.
+            resolved_path = raw_path if getattr(parser, "_basic_queries_only", False) else _resolve_signal_path(parser, raw_path)
             try:
                 result = parser.get_value_at_time(
                     resolved_path, _resolve_time(args["time_ps"])
@@ -7479,7 +7481,8 @@ async def _dispatch(name: str, args: dict):
                 )
             parser, selected = prepare_selections(parser, {"signal_paths": args.get("signal_paths") or []})
             raw_paths = selected["signal_paths"]
-            signal_paths, aliases = _resolve_signal_list(parser, raw_paths)
+            signal_paths, aliases = ((raw_paths, {}) if getattr(parser, "_basic_queries_only", False)
+                                     else _resolve_signal_list(parser, raw_paths))
             _validate_signals_around_time_args(
                 parser, center_ps, window_ps, signal_paths
             )

@@ -135,3 +135,16 @@ def test_missing_native_dependency_is_local_to_fst(wave, tmp_path, monkeypatch):
     vcd.write_text("$timescale 1ps $end\n$scope module top $end\n$var wire 1 ! a $end\n"
                    "$upscope $end\n$enddefinitions $end\n#0\n1!\n#30\n")
     assert call("get_signal_at_time", wave_path=str(vcd), signal_path="top.a", time_ps=5)["value"]["bin"] == "1"
+
+
+def test_ambiguous_declaration_is_not_resolved_from_a_clipped_search(tmp_path):
+    # A legacy fallback sees only one of the two candidates in its first
+    # 100 matches. The exact FST declaration lookup must remain authoritative.
+    declarations = [(f"aa_bus{i:03}", 1, "wire", "input", None) for i in range(99)]
+    declarations += [("bus [0:0]", 1, "wire", "input", None), ("bus [1:1]", 1, "wire", "input", None)]
+    wave = str(write_fst(tmp_path / "ambiguous.fst", [(0, name, "1") for name, *_ in declarations],
+                         declarations=declarations))
+    point = call("get_signal_at_time", wave_path=wave, signal_path="top.bus", time_ps=0)
+    assert "fst_signal_ambiguous" in point.get("error", "")
+    around = call("get_signals_around_time", wave_path=wave, signal_paths=["top.bus"], center_time_ps=0, window_ps=1)
+    assert "fst_signal_ambiguous" in around["signals"]["top.bus"]["error"]
