@@ -167,3 +167,22 @@ def test_fixed_selection_projects_initial_state_and_true_transitions(tmp_path):
     around = p.get_signals_around_time([key], 0, 2)["signals"][key]
     assert around["initial_state"]["value"]["bin"] == "z1"
     assert around["value_at_center"]["bin"] == "z1"
+
+
+def test_array_element_indices_are_not_guessed_as_packed_coordinates(tmp_path):
+    declarations = [("flag[2]", 1, "wire", "input", None),
+                    ("mem[2]", 8, "wire", "input", None),
+                    ("mem[4] [7:0]", 8, "wire", "input", None),
+                    ("bit_at_four [4]", 1, "wire", "input", None)]
+    parser = FSTParser(write_fst(tmp_path / "arrays.fst", [(0, n, "1" * w) for n, w, *_ in declarations],
+                                 declarations=declarations))
+    assert parser.get_summary()["total_signals"] == 4
+    assert parser.get_value_at_time("top.mem[2]", 0)["value"]["bin"] == "11111111"
+    with pytest.raises(FstError, match="declared_range_unknown"):
+        parser.get_signal_declaration("top.mem[2]")
+    assert parser.get_signal_declaration("top.flag[2]")["declared_range"] == {"left": 0, "right": 0}
+    assert parser.get_signal_declaration("top.mem[4]")["declared_range"] == {"left": 7, "right": 0}
+    assert parser.get_signal_declaration("top.bit_at_four")["declared_range"] == {"left": 4, "right": 4}
+    for missing in ("top.flag", "top.mem", "top.mem[3]"):
+        with pytest.raises(KeyError, match="not_found"):
+            parser.get_value_at_time(missing, 0)

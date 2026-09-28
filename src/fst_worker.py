@@ -242,6 +242,11 @@ def build_index(lib, ffi, reader):
             scope = ".".join(scopes)
             path = scope + "." + name if scope else name
             explicit = re.search(r"\[(-?\d+)(?::(-?\d+))?\]$", name)
+            # An attached single index can name a dumped array element. Only
+            # a separated range token (or an explicit colon range) supplies
+            # packed coordinates; never alias mem[2] to an undumped mem.
+            if explicit and ":" not in explicit[0] and match is None:
+                explicit = None
             if name.startswith("\\") and not match:
                 explicit = None
             coords = None
