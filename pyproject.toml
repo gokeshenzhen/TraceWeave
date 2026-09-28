@@ -40,6 +40,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fst = [
+  "pylibfst==0.2.1",
+]
 source-graph = [
   "pyslang==11.0.0",
 ]
