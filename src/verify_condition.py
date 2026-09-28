@@ -1577,7 +1577,7 @@ def _resolve_signal_path(parser: Any, path: str) -> str:
     exactly one signal's path is ``<path>[...]``. Best-effort: any failure leaves
     the path unchanged so the caller still surfaces it via ``signal_errors``.
     """
-    if not path:
+    if not path or getattr(parser, "_exact_names", False):
         return path
     try:
         parser.get_signal_width(path)

@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import time
 from bisect import bisect_left, bisect_right
-from statistics import median
 from typing import Any
 
 from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
 from . import clock_edge_cache, operation_metrics
+from .event_pages import sampling_anchor, page_records
 
 
 class SignalColumnView:
@@ -160,7 +160,7 @@ class EdgeSamplingSession:
         self._clock_result = _read_sweep_transition_result(
             parser, clock_path, start_ps, end_ps, kind="clock", sample_phase=sample_phase
         )
-        if sample_phase == "before":
+        if sample_phase == "before" or getattr(parser, "_exact_sampling", False):
             self._clock_result = _before_clock_prefix(self._clock_result)
         _validate_clock_width(parser, clock_path)
         edge_extract_started = time.perf_counter()
@@ -168,8 +168,8 @@ class EdgeSamplingSession:
             self._edge_times = _extract_edge_times(
                 self._clock_result.get("transitions", []),
                 edge,
-                predecessor=self._clock_result.get("predecessor"),
-                raw_time=sample_phase == "before",
+                predecessor=sampling_anchor(self._clock_result),
+                raw_time=sample_phase == "before" or getattr(parser, "_exact_sampling", False),
             )
         finally:
             operation_metrics.add_sweep_cpu_timing(
@@ -177,10 +177,10 @@ class EdgeSamplingSession:
                 (time.perf_counter() - edge_extract_started) * 1000.0,
             )
         self._sample_times = [
-            edge_time + sample_offset_ps for edge_time in self._edge_times
+            edge_time + sample_offset_ps * (1000 if getattr(parser, "_exact_sampling", False) else 1) for edge_time in self._edge_times
         ]
         self._clock_period_ps = _compute_clock_period_ps(self._edge_times)
-        if sample_phase == "before" and self._clock_period_ps is not None:
+        if (sample_phase == "before" or getattr(parser, "_exact_sampling", False)) and self._clock_period_ps is not None:
             self._clock_period_ps //= 1000
         return (
             self._clock_result,
@@ -240,7 +240,7 @@ def _read_sweep_transition_result(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        if sample_phase == "before":
+        if sample_phase == "before" or getattr(parser, "_exact_sampling", False):
             return _read_before_transitions(parser, signal_path, start_ps, end_ps)
         return parser.get_transitions(
             signal_path, start_ps=start_ps, end_ps=end_ps
@@ -266,7 +266,11 @@ def _clock_value(value):
 def _before_clock_prefix(result):
     """No protocol acceptance can be ordered through an unknown/glitch clock."""
     rows = result.get("transitions", [])
-    previous = result.get("predecessor")
+    previous = sampling_anchor(result)
+    if previous and _clock_value(previous.get('value')) not in (0, 1):
+        return {**result, 'transitions': [], 'truncated': True,
+                'safe_before_fs': result.get('start_ps', 0) * 1000,
+                'sampling_gaps': [*result.get('sampling_gaps', []), 'clock_unknown']}
     ambiguous = result.get('ambiguous_times_fs',[])
     if ambiguous:
         stop = min(ambiguous)
@@ -305,14 +309,15 @@ def _read_before_transitions(parser, path, start, end):
         return reader(parser, path, start, end)
     from .waveform_batch import event_readers, EventPagingUnavailable
     from .vcd_parser import _enrich_value
-    result = {"transitions": [], "predecessor": None, "truncated": False}
+    result = {"transitions": [], "predecessor": None, "initial_state": None, "start_ps": start, "truncated": False, "sampling_gaps": []}
     try:
         with event_readers([(parser, path)], start, end) as readers:
             count = size = 0
             while True:
                 check_cancelled()
                 page = readers[0].read_page()
-                events = ((page.predecessor,) if page.predecessor else ()) + page.events
+                events = page_records(page)
+                result["sampling_gaps"].extend(g.reason for g in page.recording_gaps if g.reason not in result["sampling_gaps"])
                 for event in events:
                     check_cancelled()
                     count += 1
@@ -321,13 +326,18 @@ def _read_before_transitions(parser, path, start, end):
                         result["truncated"] = True
                         break
                     row = {"time_ps": event.time_ps, "time_fs": event.time_fs,
-                           "value": _enrich_value(event.value)}
-                    if event is page.predecessor:
+                           "value": _enrich_value(event.value) if event.value is not None else None, "event_kind": event.kind}
+                    if event is page.initial_state:
+                        result["initial_state"] = row
+                        if event.time_fs >= start * 1000:
+                            result["transitions"].append(row)
+                    elif event is page.predecessor:
                         result["predecessor"] = row
                     else:
                         result["transitions"].append(row)
                 if result["truncated"] or page.truncated or page.complete:
                     result["truncated"] |= page.truncated
+                    result["transitions"].sort(key=_time_fs)
                     return result
     except EventPagingUnavailable:
         result = parser.get_transitions(path, start_ps=start, end_ps=end)
@@ -394,7 +404,7 @@ def get_signals_by_cycle(
 
     edge_times, clock_period, safe_before_fs, clock_complete = _full_clock_edges(
         parser, clock_path, edge, sample_phase=sample_phase)
-    time_scale = 1000 if before else 1
+    time_scale = 1000 if before or getattr(parser, "_exact_sampling", False) else 1
 
     resolved_from_time = start_time_ps is not None or end_time_ps is not None
     if start_time_ps is not None:
@@ -456,6 +466,10 @@ def get_signals_by_cycle(
         }
         for index, (edge_time, signals) in enumerate(zip(target_edges, per_cycle_signals))
     ]
+    if getattr(parser, '_exact_sampling', False):
+        result['clock_period_fs'] = _compute_clock_period_ps(edge_times)
+        for row, at in zip(result['cycles'], target_edges):
+            row['time_fs'] = at
     return result
 
 
@@ -493,7 +507,8 @@ def sample_signals_on_edges(
     if sample_phase not in {"before", "after"} or (sample_phase == "before" and sample_offset_ps):
         raise ValueError("before sampling requires zero offset; phase must be before or after")
     before = sample_phase == "before"
-    safe_prefix_only |= before
+    exact = before or getattr(parser, "_exact_sampling", False)
+    safe_prefix_only |= exact
 
     check_cancelled()
     from .waveform_selection import SelectionParser
@@ -515,7 +530,7 @@ def sample_signals_on_edges(
         clock_result = _read_sweep_transition_result(
             parser, clock_path, start_ps, end_ps, kind="clock", sample_phase=sample_phase
         )
-        if before:
+        if exact:
             clock_result = _before_clock_prefix(clock_result)
         _validate_clock_width(parser, clock_path)
         edge_extract_started = time.perf_counter()
@@ -523,23 +538,23 @@ def sample_signals_on_edges(
             edge_times = _extract_edge_times(
                 clock_result.get("transitions", []),
                 edge,
-                predecessor=clock_result.get("predecessor"),
-                raw_time=before,
+                predecessor=sampling_anchor(clock_result),
+                raw_time=exact,
             )
         finally:
             operation_metrics.add_sweep_cpu_timing(
                 "edge_extract",
                 (time.perf_counter() - edge_extract_started) * 1000.0,
             )
-        sample_times = [edge_time + sample_offset_ps for edge_time in edge_times]
+        sample_times = [edge_time + sample_offset_ps * (1000 if exact else 1) for edge_time in edge_times]
         clock_period_ps = _compute_clock_period_ps(edge_times)
-        if before and clock_period_ps is not None:
+        if exact and clock_period_ps is not None:
             clock_period_ps //= 1000
 
     if safe_prefix_only and clock_result.get("truncated"):
         rows = clock_result.get("transitions", [])
-        safe_before = (_time_fs(rows[-1]) if before else rows[-1]["time_ps"]) if rows else -1
-        if before:
+        safe_before = (_time_fs(rows[-1]) if exact else rows[-1]["time_ps"]) if rows else -1
+        if exact:
             safe_before = clock_result.get("safe_before_fs", safe_before)
         keep = bisect_left(sample_times, safe_before)
         edge_times, sample_times = edge_times[:keep], sample_times[:keep]
@@ -592,7 +607,7 @@ def sample_signals_on_edges(
     for signal_path in signal_transition_truncations:
         if signal_path not in transition_signals_truncated:
             transition_signals_truncated.append(signal_path)
-    public_edges = [(at + 999) // 1000 for at in edge_times] if before else edge_times
+    public_edges = [(at + 999) // 1000 for at in edge_times] if exact else edge_times
     result = {
         "clock_path": clock_path,
         "edge": edge,
@@ -622,7 +637,21 @@ def sample_signals_on_edges(
     return result
 
 
-def _sample_signal_columns_at_edges(
+def _sample_signal_columns_at_edges(parser, signal_paths, target_edges, sample_offset_ps, *,
+        sample_times=None, sampling_session=None, safe_prefix_only=False, sample_phase="after"):
+    from .waveform_batch import sampling_batch
+    exact = sample_phase == "before" or getattr(parser, "_exact_sampling", False)
+    scale = 1000 if exact else 1
+    start = target_edges[0] // scale if target_edges else 0
+    end = ((target_edges[-1] + scale - 1) // scale +
+           (0 if sample_phase == "before" else sample_offset_ps + 1)) if target_edges else 0
+    with sampling_batch(parser, signal_paths, start, end):
+        return _sample_signal_columns_impl(parser, signal_paths, target_edges, sample_offset_ps,
+            sample_times=sample_times, sampling_session=sampling_session,
+            safe_prefix_only=safe_prefix_only, sample_phase=sample_phase)
+
+
+def _sample_signal_columns_impl(
     parser,
     signal_paths: list[str],
     target_edges: list[int],
@@ -646,10 +675,12 @@ def _sample_signal_columns_at_edges(
                                      sample_times, sampling_session, sample_phase=sample_phase)
 
     before = sample_phase == "before"
-    range_start = target_edges[0] // 1000 if before else target_edges[0]
-    range_end = (target_edges[-1] + 999) // 1000 if before else target_edges[-1] + sample_offset_ps + 1
+    exact = before or getattr(parser, "_exact_sampling", False)
+    range_start = target_edges[0] // 1000 if exact else target_edges[0]
+    range_end = ((target_edges[-1] + 999) // 1000 + (0 if before else sample_offset_ps + 1)
+                 if exact else target_edges[-1] + sample_offset_ps + 1)
     if sample_times is None:
-        sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+        sample_times = [edge_time + sample_offset_ps * (1000 if getattr(parser, "_exact_sampling", False) else 1) for edge_time in target_edges]
 
     for signal_path in dict.fromkeys(signal_paths):
         check_cancelled()
@@ -669,12 +700,12 @@ def _sample_signal_columns_at_edges(
                 signal_path,
                 transitions_result.get("transitions", []),
                 sample_times,
-                predecessor=transitions_result.get("predecessor"),
+                predecessor=sampling_anchor(transitions_result),
                 before=before,
             )
             if safe_prefix_only and transitions_result.get("truncated"):
                 rows = transitions_result.get("transitions", [])
-                safe_before = (_time_fs(rows[-1]) if before else rows[-1]["time_ps"]) if rows else -1
+                safe_before = (_time_fs(rows[-1]) if exact else rows[-1]["time_ps"]) if rows else -1
                 first_unknown = bisect_left(sample_times, safe_before)
                 columns[signal_path][first_unknown:] = [None] * (len(sample_times) - first_unknown)
         except KeyError as exc:
@@ -707,7 +738,7 @@ def _sample_signals_at_edges(
         return per_edge_signals, signal_errors, transition_signals_truncated
 
     from .waveform_selection import SelectionParser
-    if isinstance(parser, SelectionParser) or safe_prefix_only or sample_phase == "before":
+    if isinstance(parser, SelectionParser) or safe_prefix_only or sample_phase == "before" or getattr(parser, "_exact_sampling", False):
         columns, errors, truncated = _sample_signal_columns_at_edges(
             parser, signal_paths, target_edges, sample_offset_ps,
             sample_times=sample_times, sampling_session=sampling_session,
@@ -722,7 +753,7 @@ def _sample_signals_at_edges(
     range_start = target_edges[0]
     range_end = target_edges[-1] + sample_offset_ps + 1
     if sample_times is None:
-        sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+        sample_times = [edge_time + sample_offset_ps * (1000 if getattr(parser, "_exact_sampling", False) else 1) for edge_time in target_edges]
 
     # AHB may surface HWRITE both as address payload and as the write-data
     # qualifier. Sampling it twice is pure duplicate work and the per-edge dict
@@ -750,7 +781,7 @@ def _sample_signals_at_edges(
                 signal_path,
                 transitions,
                 sample_times,
-                predecessor=transitions_result.get("predecessor"),
+                predecessor=sampling_anchor(transitions_result),
             )
             for index, value in enumerate(sampled_values):
                 per_edge_signals[index][signal_path] = value
@@ -768,13 +799,14 @@ def _full_clock_edges(parser, clock_path, edge, *, sample_phase="after"):
     check_cancelled()
     token = getattr(parser, "_clock_cache_token", None)
     before = sample_phase == "before"
+    exact = before or getattr(parser, "_exact_sampling", False)
     key = (clock_path, edge + ":before" if before else edge)
     cached = clock_edge_cache.cache.get(token, key)
     if cached is not None:
         check_cancelled()
         return *cached, None, True
     safe_before_fs = None
-    if before:
+    if exact:
         result = _before_clock_prefix(_read_before_transitions(parser, clock_path, 0, -1))
         if result.get("truncated") or result.get("transition_count_is_lower_bound"):
             rows = result.get("transitions", [])
@@ -788,11 +820,11 @@ def _full_clock_edges(parser, clock_path, edge, *, sample_phase="after"):
     if not before and isinstance(parser, SelectionParser) and (result.get("truncated") or result.get("transition_count_is_lower_bound")):
         raise ValueError("incomplete clock transitions for selection; use a narrower time-window inspection")
     _validate_clock_width(parser, clock_path)
-    edges = _extract_edge_times(result.get("transitions", []), edge, raw_time=before)
+    edges = _extract_edge_times(result.get("transitions", []), edge, predecessor=sampling_anchor(result), raw_time=exact)
     if safe_before_fs is not None:
         edges = edges[:bisect_left(edges, safe_before_fs)]
     period = _compute_clock_period_ps(edges)
-    if before and period is not None:
+    if exact and period is not None:
         period //= 1000
     check_cancelled()
     complete = not (result.get("truncated") or result.get("transition_count_is_lower_bound"))
@@ -844,7 +876,9 @@ def _compute_clock_period_ps(edge_times: list[int]) -> int | None:
     deltas = [curr - prev for prev, curr in zip(edge_times, edge_times[1:]) if curr >= prev]
     if not deltas:
         return None
-    return int(median(deltas))
+    ordered = sorted(deltas)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) // 2
 
 
 def _sample_signal_values(
@@ -890,9 +924,10 @@ def _lookup_signal_values(
     """Return parser value references at monotonic sample times in linear time."""
     if not sample_times:
         return []
-    transition_times = [_time_fs(row) if before else row["time_ps"] for row in transitions]
+    exact = before or getattr(parser, "_exact_sampling", False)
+    transition_times = [_time_fs(row) if exact else row["time_ps"] for row in transitions]
     fallback_value = (predecessor or {}).get("value")
-    fallback_queried = before or fallback_value is not None
+    fallback_queried = exact or fallback_value is not None
     raw_values: list[Any] = []
     transition_index = -1
     next_transition = 0

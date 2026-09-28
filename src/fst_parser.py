@@ -8,8 +8,7 @@ from contextlib import contextmanager
 import threading
 
 from .cancellation import check_cancelled
-from .clock_edge_cache import ClockCacheToken
-from .fst_runtime import FstError, FstProcess, FST_BASIC_TOOLS
+from .fst_runtime import FstError, FstProcess, FST_SUPPORTED_TOOLS
 from .scope_metadata import ScopeCursor, ScopeIdentityChanged, file_identity, normalize_scope, page_limits
 
 MAX_RESULT_EVENTS = 65536
@@ -102,13 +101,16 @@ def _receipt(header, start, end, observations=(), *, truncated=False, metadata=F
 
 
 class FSTParser:
-    _basic_queries_only = True
+    _exact_names = True
+    _bounded_local_windows = True
+    _infer_center_transients = False
+    _exact_sampling = True
 
     def __init__(self, file_path):
         self.file_path = str(file_path)
         self._scope_epoch = object()
         self._file_identity = None
-        self._clock_cache_token = ClockCacheToken()
+        self._clock_cache_token = None  # no cross-request FST observation cache
         self._lock = threading.RLock()
         self._active_batch = None
 
@@ -156,7 +158,7 @@ class FSTParser:
         with self._lock:
             self._scope_epoch = object()
             self._file_identity = None
-            self._clock_cache_token = ClockCacheToken()
+            self._clock_cache_token = None
 
     @staticmethod
     def _declaration(session, path):
@@ -168,21 +170,28 @@ class FSTParser:
             raise
 
     def get_signal_declaration(self, signal_path):
+        row = self._declaration_row(signal_path)
+        if not row["supported"]:
+            raise FstError("fst_signal_type_unsupported")
+        if row["declared_range"] is None:
+            raise FstError("fst_declared_range_unknown: supply a dump with explicit coordinates")
+        return {"path": row["path"], "width": row["width"], "declared_range": row["declared_range"],
+                "identity": self._file_identity, "storage_key": row["handle"]}
+
+    def _declaration_row(self, path):
+        if self._active_batch is not None:
+            return self._active_batch.declaration(path)
         with self._session() as session:
-            row = self._declaration(session, signal_path)
-            if not row["supported"]:
-                raise FstError("fst_signal_type_unsupported")
-            if row["declared_range"] is None:
-                raise FstError("fst_declared_range_unknown: supply a dump with explicit coordinates")
-            return {"path": row["path"], "width": row["width"], "declared_range": row["declared_range"],
-                    "identity": self._file_identity, "storage_key": row["handle"]}
+            return self._declaration(session, path)
+
+    def resolve_signal_path(self, path):
+        return self._declaration_row(path)['path']
 
     def get_signal_width(self, signal_path):
-        with self._session() as session:
-            row = self._declaration(session, signal_path)
-            if not row["supported"]:
-                raise FstError("fst_signal_type_unsupported")
-            return row["width"]
+        row = self._declaration_row(signal_path)
+        if not row["supported"]:
+            raise FstError("fst_signal_type_unsupported")
+        return row["width"]
 
     def get_summary(self):
         with self._session() as session:
@@ -199,7 +208,7 @@ class FSTParser:
                     "sample_signals": metadata["sample_signals"], "metadata_query_mode": "fst_isolated_v1",
                     "sample_signals_order": "lexical", "top_modules_complete": True,
                     "fst_backend": {**header["backend"], "storage_count": header["storage_count"],
-                        "supported_tools": list(FST_BASIC_TOOLS), "analysis_status": "not_run",
+                        "supported_tools": list(FST_SUPPORTED_TOOLS), "analysis_status": "not_run",
                         "observation_scope": "recorded_digital_values_only"},
                     "fst_reading": _receipt(header, 0, end * 1000, metadata=True)}
 

@@ -56,6 +56,23 @@ class EventPagingUnavailable(Exception):
 
 
 @contextmanager
+def sampling_batch(parser, paths, start, end):
+    """Prepare FST backing declarations once for existing column consumers."""
+    owner = getattr(parser, '_event_owner', parser)
+    if getattr(owner, '_event_batch', None) is None or getattr(owner, '_active_batch', None) is not None:
+        yield
+        return
+    expand = getattr(parser, '_event_source_paths', None)
+    bases = list(dict.fromkeys(p for path in paths for p in
+        (expand(path) if expand else [getattr(parser, '_event_source_path', lambda p: p)(path)])))
+    if not bases:
+        yield
+        return
+    with owner._event_batch(bases, start, end):
+        yield
+
+
+@contextmanager
 def event_readers(requests, start, end, *, max_events=1024, max_bytes=262144):
     """Private batch session over existing parsers, under the caller's wave lock.
 

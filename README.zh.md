@@ -46,7 +46,7 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 
 支持 VCS / Xcelium 仿真日志及 VCD / FSDB 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
 
-Linux 上可选启用 FST 基础读取：文件发现、摘要、信号搜索、点值、跳变和局部窗口，支持固定 bit 选择。FST 周期采样、表达式、协议分析、波形比较和 X 历史尚待验收，调用时会明确返回 `not_run` 错误。
+Linux 上可选启用 FST，支持文件发现、基础读取、固定 bit 选择、表达式和周期采样。协议分析、波形比较和 X 历史按验收结果逐项开放；摘要列出当前已验收的工具。
 
 信号追踪（驱动、负载与连通路径查询）默认采用 **Verdi NPI → Source Graph → 基础静态分析（Legacy Static）** 三级路由：优先查询已展开的 KDB；NPI 不可用或无法提供可信结果时，尝试免商业 license 的 Source Graph，必要时再按支持范围回退到基础静态分析。
 

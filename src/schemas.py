@@ -909,6 +909,7 @@ class CycleEntry(SchemaModel):
     cycle: int
     time_ps: int
     time_ns: float
+    time_fs: int | None = None
     signals: dict[str, SignalValue] = Field(default_factory=dict)
 
 
@@ -922,6 +923,7 @@ class GetSignalsByCycleResult(SchemaModel):
     sample_phase: Literal["after", "before"] = "after"
     sample_offset_ps: int = 1
     clock_period_ps: int | None = None
+    clock_period_fs: int | None = None
     total_edges_found: int
     clock_edges_complete: bool = True
     start_cycle: int

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce first-round FST acceptance through a fresh stdio MCP process.
+"""Reproduce FST reading acceptance through a fresh stdio MCP process.
 
 Uses synthetic event tables with independent expectations, not simulator logs.
 Optional FSDB comparison uses the repository's existing cross-scale fixture;
@@ -66,7 +66,7 @@ async def run_check(work, installed, require_fsdb):
     report = {"status": "running", "installed": installed, "calls": [],
               "fixtures": [fingerprint(p) for p in (wave, physical, vcd)],
               "compile_hierarchy_scan_log_sweep": "not_run: synthetic fixtures without compile/simulation logs",
-              "scope": "basic digital reads; advanced analyses intentionally not_run"}
+              "scope": "basic digital reads, expressions and cycle sampling"}
     report["source_commit"] = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     report["source_dirty"] = bool(subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True).strip())
     async with stdio_client(params) as (reader, writer):
@@ -132,11 +132,13 @@ async def run_check(work, installed, require_fsdb):
                 narrow = await call("get_signal_transitions", {"wave_path": str(physical), "signal_path": "top.a", "start_time_ps": 2, "end_time_ps": 2})
                 assert [r["time_fs"] for r in narrow["transitions"]] == [2000]
                 assert narrow["predecessor"]["time_fs"] == 1200 and narrow["predecessor"]["time_ps"] == 2
-                blocked = await call("get_signals_by_cycle", {"wave_path": str(wave), "clock_path": "top.clk", "signal_paths": ["top.data"]})
-                assert blocked["error_code"] == "fst_analysis_not_validated" and blocked["analysis_status"] == "not_run"
-                blocked = await call("get_signal_at_time", {"wave_path": str(wave), "time_ps": 10,
+                cycles = await call("get_signals_by_cycle", {"wave_path": str(physical), "clock_path": "top.a",
+                    "signal_paths": ["top.a"], "sample_phase": "before", "num_cycles": 1})
+                assert cycles['cycles'][0]['signals']['top.a']['dec'] == 0
+                assert cycles['clock_edges_complete'] is False  # later X interrupts the clock prefix
+                expression = await call("get_signal_at_time", {"wave_path": str(wave), "time_ps": 10,
                     "signal_path": {"expr": "a", "bindings": {"a": "top.data"}, "typing": "wave_bits"}})
-                assert blocked["error_code"] == "fst_analysis_not_validated"
+                assert expression['value']['bin'] == '0101'
 
                 # Independent oracle already embodied by scale_100fs_tb.v;
                 # compare recorded digital observations, not analyzer output.

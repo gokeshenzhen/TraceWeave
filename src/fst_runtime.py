@@ -25,6 +25,7 @@ from .scope_metadata import ScopeIdentityChanged, file_identity
 FST_VERSION = "0.2.1"
 FST_BASIC_TOOLS = ("get_waveform_summary", "search_signals", "get_signal_at_time",
                    "get_signal_transitions", "get_signals_around_time")
+FST_SUPPORTED_TOOLS = (*FST_BASIC_TOOLS, "get_signals_by_cycle")
 FRAME_BYTES = 1024 * 1024
 MAX_WORKERS = 4
 _slots = threading.BoundedSemaphore(MAX_WORKERS)
@@ -45,7 +46,7 @@ def fst_runtime_info():
               "version_unsupported" if installed != FST_VERSION else "candidate_ready_unloaded")
     return {"enabled": status == "candidate_ready_unloaded", "dependency": "pylibfst",
             "required_version": FST_VERSION, "installed_version": installed, "status": status,
-            "message": ("FST basic reads candidate ready (native library not loaded); advanced analyses not validated"
+            "message": ("FST candidate ready (native library not loaded); summary lists validated analyses"
                         if status == "candidate_ready_unloaded" else
                         "FST requires Linux and traceweave-mcp[fst] in the server interpreter (pylibfst 0.2.1)")}
 

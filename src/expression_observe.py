@@ -10,7 +10,7 @@ from dataclasses import replace
 
 from .expression_errors import ExpressionError
 from .cancellation import check_cancelled
-from .event_pages import Event, EventPage, GroupCursor, IncompleteGroup, limits
+from .event_pages import Event, EventPage, GroupCursor, IncompleteGroup, limits, page_records
 from .expression_binding import bind_expression
 from .expression_values import Value
 from .waveform_selection import SelectionParser, MAX_PROJECTED_CELLS, MAX_PROJECTED_BITS
@@ -26,7 +26,7 @@ class ReadBudget:
 
     def consume(self, page):
         check_cancelled()
-        self.events += len(page.events) + bool(page.predecessor)
+        self.events += len(page_records(page))
         self.nbytes += page.output_bytes
         if self.events > MAX_EVENTS or self.nbytes > MAX_BYTES:
             raise IncompleteGroup('expression_observation_limit')
@@ -39,26 +39,32 @@ class ExpressionEventReader:
     def __init__(self, bound, readers, start, end_fs, max_events, max_bytes, observe, budget=None):
         limits(max_events,max_bytes)
         self.bound, self.width, self.end_fs = bound,bound.typed.type.width,end_fs
+        self.start_fs = start * 1000
         self.max_events, self.max_bytes = max_events,max_bytes
         self.observe, self.budget = observe,budget or ReadBudget()
         self.paths = bound.paths
         self.cursors, self.states = [], {}
         self.previous = None
         self.predecessor = None
+        self.initial_state = None
         self.first, self.failed = True, False
         self.failure = None
         self.pending_constant = not self.paths and start == 0
         self.ambiguous_times = set()
         try:
             self.cursors = [GroupCursor(r,consume=self.budget.consume) for r in readers]
-            self.states = {p:c.predecessor.value if c.predecessor else None
+            self.states = {p:c.anchor.value if c.anchor else None
                            for p,c in zip(self.paths,self.cursors)}
             initial = self.bound.evaluate(self.states.get)
             self.previous = initial.value
-            anchors = [c.predecessor.time_fs for c in self.cursors if c.predecessor]
+            anchors = [c.anchor.time_fs for c in self.cursors if c.anchor]
             if start > 0 and (anchors or not self.paths):
                 at = max(anchors,default=0)
-                self.predecessor = Event(at,(at+999)//1000,initial.value)
+                anchor = Event(at,(at+999)//1000,initial.value)
+                if any(c.initial_state for c in self.cursors) and not any(c.predecessor for c in self.cursors):
+                    self.initial_state = replace(anchor, kind='initial_state')
+                else:
+                    self.predecessor = anchor
                 self.observe(initial,at,'dependency_anchor')
         except IncompleteGroup as exc:
             self.failed, self.failure = True,str(exc)
@@ -69,13 +75,15 @@ class ExpressionEventReader:
     def read_page(self):
         check_cancelled()
         predecessor = self.predecessor if self.first else None
+        initial_state = self.initial_state if self.first else None
         self.first = False
         rows = []
-        nbytes = 32 + self.width if predecessor else 0
+        nbytes = 32 + self.width if predecessor or initial_state else 0
         if nbytes > self.max_bytes:
             self.failed, self.failure = True,'expression_page_limit'
             predecessor = None
-        while not self.failed and len(rows) + bool(predecessor) < self.max_events:
+            initial_state = None
+        while not self.failed and len(rows) + bool(predecessor or initial_state) < self.max_events:
             check_cancelled()
             at = 0 if self.pending_constant else self.next_time()
             if at is None:
@@ -101,7 +109,9 @@ class ExpressionEventReader:
                     result.gaps.append('intra_time_group_order_unavailable')
                 self.observe(result,at,'after')
                 if result.value != self.previous or self.pending_constant or (at == 0 and not rows):
-                    rows.append(Event(at,(at+999)//1000,result.value))
+                    kinds = set().union(*(c.group_kinds for c in self.cursors if c.last_time == at))
+                    kind = 'initial_state' if kinds == {'initial_state'} else 'transition'
+                    rows.append(Event(at,(at+999)//1000,result.value,kind=kind))
                     nbytes += 32 + self.width
                     self.previous = result.value
                 self.pending_constant = False
@@ -109,7 +119,7 @@ class ExpressionEventReader:
                 self.failed, self.failure = True,str(exc)
         upcoming = 0 if self.pending_constant else self.next_time()
         complete = not self.failed and upcoming is None and all(c.page.complete for c in self.cursors)
-        return EventPage(tuple(rows),predecessor,upcoming,complete,self.failed,nbytes)
+        return EventPage(tuple(rows),predecessor,upcoming,complete,self.failed,nbytes,initial_state)
 
 
 class StoredReader:
@@ -288,11 +298,11 @@ class ExpressionParser(SelectionParser):
             raise ExpressionError('expression_window_invalid')
         self.expressions[path].validate(self.parser)
         header = self.parser.get_header()
-        rows, previous, truncated = [],None,False
+        rows, previous, initial, truncated = [],None,None,False
         effective_end = header['simulation_duration_ps'] if end_ps < 0 else end_ps
         def row(event):
             return dict(time_ps=event.time_ps,time_fs=event.time_fs,time_ns=event.time_ps/1000,
-                        value=self._public_value(path,event.value))
+                        value=self._public_value(path,event.value), event_kind=event.kind)
         try:
             with self._standalone_reader(path,start_ps,end_ps) as reader:
                 while True:
@@ -300,7 +310,13 @@ class ExpressionParser(SelectionParser):
                     page = reader.read_page()
                     if page.predecessor:
                         previous = row(page.predecessor)
-                    rows.extend(row(e) for e in page.events)
+                    if page.initial_state:
+                        initial = row(page.initial_state)
+                    for event in page.events:
+                        if event.kind == 'initial_state':
+                            initial = row(event)
+                        else:
+                            rows.append(row(event))
                     if len(rows)*self.get_signal_width(path) > MAX_PROJECTED_BITS:
                         truncated = True
                         break
@@ -315,11 +331,15 @@ class ExpressionParser(SelectionParser):
             self._limited(path)
         return dict(signal=path,start_ps=start_ps,end_ps=effective_end,transitions=rows,
                     transition_count=len(rows),predecessor=previous,predecessor_kind='dependency_anchor',
+                    initial_state=initial,
                     truncated=truncated,transition_count_is_lower_bound=truncated)
 
     def _sampling_transitions(self,path,start,end):
         if path in self.expressions:
             result = self.get_transitions(path,start,end)
+            initial = result.get('initial_state')
+            if initial and initial['time_fs'] >= start * 1000:
+                result['transitions'] = sorted([initial, *result['transitions']], key=lambda r: r['time_fs'])
             return {**result,'ambiguous_times_fs':sorted(self._time_group_ambiguities.get(path,()))}
         from .cycle_query import _read_before_transitions
         # Preserve ordered static projections without recursing through this
@@ -332,7 +352,8 @@ class ExpressionParser(SelectionParser):
         from .cycle_query import _sample_signal_columns_at_edges
         if len(edges)*len(paths) > MAX_PROJECTED_CELLS or len(edges)*sum(self.get_signal_width(p) for p in paths) > MAX_PROJECTED_BITS:
             raise ExpressionError('expression_sample_limit')
-        sample_times = sample_times if sample_times is not None else [e+offset for e in edges]
+        sample_times = sample_times if sample_times is not None else [
+            e + offset * (1000 if getattr(self, '_exact_sampling', False) else 1) for e in edges]
         cache, errors, limited, columns = {},{},set(),{}
         def column(p):
             if p not in cache:
@@ -355,7 +376,7 @@ class ExpressionParser(SelectionParser):
                 for i,at in enumerate(sample_times):
                     result = bound.evaluate(lambda p: {'value':column(p)[i],
                         'gaps':['transition_data_truncated'] if p in limited and column(p)[i] is None else []})
-                    self._record(path,result,at if sample_phase == 'before' else at*1000,sample_phase)
+                    self._record(path,result,at if sample_phase == 'before' or getattr(self, '_exact_sampling', False) else at*1000,sample_phase)
                     output.append(self._public_value(path,result.value))
                 columns[path] = output
                 if limited.intersection(bound.paths):

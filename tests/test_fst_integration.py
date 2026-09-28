@@ -9,7 +9,7 @@ pytest.importorskip("pylibfst", reason="install the optional [fst] extra")
 from fst_fixture import write_fst
 import server
 from src.evidence_output import expand_compact_result
-from src.fst_runtime import FST_BASIC_TOOLS, FstProcess
+from src.fst_runtime import FST_BASIC_TOOLS, FST_SUPPORTED_TOOLS, FstProcess
 from src.path_discovery import discover_sim_paths
 from src.scope_metadata import ScopeIdentityChanged
 
@@ -56,7 +56,7 @@ def test_public_summary_search_and_fixed_selection(wave):
     summary = call("get_waveform_summary", wave_path=wave)
     assert summary["format"] == "FST" and summary["total_signals"] == 2
     assert summary["fst_backend"]["storage_count"] == 1
-    assert summary["fst_backend"]["supported_tools"] == list(FST_BASIC_TOOLS)
+    assert summary["fst_backend"]["supported_tools"] == list(FST_SUPPORTED_TOOLS)
     search = call("search_signals", wave_path=wave, keyword="bus")
     assert search["results"][0]["path"] == "top.bus[3:0]"
     selected = {"path": "top.alias", "bits": [3, 0]}
@@ -97,12 +97,12 @@ def test_display_cap_and_values_only_keep_coverage(wave):
     assert entry["window_transition_count"] == 3 and "transitions_in_window" not in entry
 
 
-def test_every_waveform_analysis_in_catalog_has_a_first_round_gate(wave):
+def test_unvalidated_waveform_analyses_keep_an_explicit_gate(wave):
     catalog = anyio.run(server.list_tools)
     for tool in catalog:
         properties = tool.inputSchema.get("properties", {})
         key = next((k for k in ("wave_path", "wave_path_a", "wave_path_b") if k in properties), None)
-        if key and tool.name not in FST_BASIC_TOOLS:
+        if key and tool.name not in FST_SUPPORTED_TOOLS:
             result = call(tool.name, **{key: wave})
             assert result["error_code"] == "fst_analysis_not_validated", tool.name
             assert result["analysis_status"] == "not_run"
@@ -110,7 +110,7 @@ def test_every_waveform_analysis_in_catalog_has_a_first_round_gate(wave):
         assert call("diff_first_divergence", **{key: wave})["error_code"] == "fst_analysis_not_validated"
     result = call("get_signal_at_time", wave_path=wave, time_ps=0,
                   signal_path={"expr": "a", "bindings": {"a": "top.bus"}, "typing": "wave_bits"})
-    assert result["error_code"] == "fst_analysis_not_validated"
+    assert result['value']['bin'] == '10xz'
 
 
 def test_parser_cache_replacement_and_missing_file_errors(tmp_path, wave):

@@ -50,6 +50,14 @@ def page_records(page):
             *((page.predecessor,) if page.predecessor else ()), *page.events)
 
 
+def sampling_anchor(result):
+    """Select state strictly before the read window without renaming its origin."""
+    initial = result.get('initial_state')
+    if initial and initial.get('time_fs', initial['time_ps'] * 1000) >= result.get('start_ps', 0) * 1000:
+        initial = None
+    return result.get('predecessor') or initial
+
+
 def limits(events, nbytes):
     if not 1 <= events <= 4096 or not 128 <= nbytes <= 1048576:
         raise ValueError('event page limits require 1..4096 events and 128..1048576 bytes')
@@ -111,6 +119,7 @@ class GroupCursor:
     def take_group(self, at):
         value = None
         self.group_changed = False
+        self.group_kinds = set()
         while self.peek() == at:
             self.checkpoint()
             if self._pending_initial and self._pending_initial.time_fs == at:
@@ -128,6 +137,7 @@ class GroupCursor:
             if self.last_time is not None and event.time_fs < self.last_time:
                 raise IncompleteGroup('transition_order_invalid')
             self.last_time = event.time_fs
+            self.group_kinds.add(event.kind)
             if value is not None:
                 from .divergence_compare import bit_value
                 width = getattr(self.reader,'width',None)

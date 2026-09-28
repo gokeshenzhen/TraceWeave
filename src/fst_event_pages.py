@@ -92,8 +92,9 @@ class FstEventReader:
         self.start_fs = start * 1000
         self.end_fs = batch.header['end_tick'] * batch.header['scale_fs']
         requested_end = self.end_fs if end < 0 else end * 1000
-        if self.start_fs != batch.start_fs or requested_end != (self.end_fs if batch.end_fs < 0 else batch.end_fs):
+        if self.start_fs < batch.start_fs or requested_end > (self.end_fs if batch.end_fs < 0 else batch.end_fs):
             raise FstError('fst_batch_window_mismatch')
+        self.requested_end = requested_end
         declaration = batch.declaration(path)
         self.width = declaration['width']
         handle = str(declaration['handle'])
@@ -102,8 +103,26 @@ class FstEventReader:
         batch.readers.add(self)
         self.file.seek(self.stop)
         self.prefix = self._read_record()
+        if self.prefix and self.prefix[0].time_fs > requested_end:
+            self.prefix = None
         self.file.seek(0)
         self.pending = self._next_event()
+        gap_at_start = None
+        while self.pending and self.pending[0].time_fs < self.start_fs:
+            batch.check()
+            event, gap, size = self.pending
+            if gap:
+                gap_at_start = (event, gap, size) if gap.end_fs >= self.start_fs else None
+            else:
+                self.prefix = self.pending
+                gap_at_start = None
+            self.pending = self._next_event()
+        self.deferred = None
+        if gap_at_start:
+            from dataclasses import replace
+            event, gap, size = gap_at_start
+            self.deferred, self.pending = self.pending, (replace(event, time_fs=self.start_fs,
+                time_ps=start), replace(gap, start_fs=self.start_fs), size)
         self.first = True
 
     def _read_record(self):
@@ -129,7 +148,13 @@ class FstEventReader:
         return event, gap, 64 + count
 
     def _next_event(self):
-        return self._read_record() if self.file.tell() < self.stop else None
+        row = self._read_record() if self.file.tell() < self.stop else None
+        if row and row[0].time_fs > self.requested_end:
+            return None
+        if row and row[1] and row[1].end_fs > self.requested_end:
+            from dataclasses import replace
+            row = row[0], replace(row[1], end_fs=self.requested_end, end_inclusive=True), row[2]
+        return row
 
     def read_page(self):
         self.batch.check()
@@ -157,7 +182,10 @@ class FstEventReader:
                 gaps.append(gap)
             used += size
             count += 1
-            self.pending = self._next_event()
+            if self.deferred:
+                self.pending, self.deferred = self.deferred, None
+            else:
+                self.pending = self._next_event()
         complete = self.pending is None
         return EventPage(tuple(rows), previous,
                          None if complete else self.pending[0].time_fs,

@@ -836,6 +836,17 @@ Spools, readers and positions expire on close, cancellation or file/epoch change
 They never enter a persistent cache. Generic page support is an internal
 capability; public analysis gates remain until consumer-specific acceptance.
 
+FST cycle and expression queries are now accepted. Sampling preserves integer fs
+for both before and after phases, including several edges sharing a public ps
+label; cycle rows additionally expose `time_fs` and `clock_period_fs`. Initial
+observations seed state without inventing a transition; recording boundaries
+invalidate it. An unknown, interrupted or ambiguous clock stops the trusted
+prefix. Expression types, fixed selections and sparse/template array bindings
+reuse the common engine. Exact declaration lookup remains independent of the
+analysis gate, and local windows retain their separate conservative inference
+policy. Column sampling shares request-local spools across backing dependencies;
+no FST clock index is retained across requests.
+
 The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
 bundled MIT libfst; compression dependencies retain their upstream licenses).
 TraceWeave supplies an adapter, without vendoring upstream source or shipping

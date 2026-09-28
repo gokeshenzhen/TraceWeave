@@ -124,6 +124,7 @@ class SelectionParser:
             class ProjectedReader:
                 width = p.selection.width
                 end_fs, mode, native = reader.end_fs, reader.mode, reader.native
+                start_fs = start * 1000
                 def read_page(self):
                     adapter._validate(p)
                     page = reader.read_page()

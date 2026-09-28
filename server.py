@@ -73,7 +73,7 @@ from src.clock_edge_cache import discard_clock_edges
 from src.log_parser import SimLogParser, diff_failure_events, get_error_context
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
-from src.fst_runtime import FST_BASIC_TOOLS, FstError, fst_runtime_info
+from src.fst_runtime import FST_BASIC_TOOLS, FST_SUPPORTED_TOOLS, FstError, fst_runtime_info
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
 from src.compile_log_parser import (
@@ -1312,9 +1312,8 @@ Simulation waveform debug workflow:
      source-compile/elaboration logs, use the source-compile log as primary and
      pass the complementary logs in supplementary_compile_logs build order.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
-   - FST is optional: inspect fst_runtime and get_waveform_summary. Only basic
-     summary/search/point/transition/window queries and fixed bit selections are
-     validated. FST cycle/expression/protocol/comparison/history calls return
+   - FST is optional: inspect fst_runtime and get_waveform_summary for validated
+     tools and recording gaps. Unvalidated analyses return
      fst_analysis_not_validated; do not treat not_run as a clean analysis.
 
 2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
@@ -5003,7 +5002,7 @@ def _validate_signals_around_time_args(
 
     # FST's first-round boundary excludes clock inference, especially across
     # recording gaps and distinct physical edges sharing one public ps label.
-    basic_only = getattr(parser, "_basic_queries_only", False)
+    basic_only = getattr(parser, "_bounded_local_windows", False)
     clock_path, clock_period_ps = (None, None) if basic_only else _detect_wave_clock(parser)
 
     if clock_period_ps and clock_period_ps > 0:
@@ -7126,10 +7125,8 @@ async def list_tools():
     ])
     for tool in _tools:
         properties = tool.inputSchema["properties"]
-        if tool.name in {"get_signal_at_time", "get_signal_transitions", "get_signals_around_time"}:
-            tool.description += " FST: no expressions."
-        elif tool.name == "get_waveform_summary":
-            tool.description += " Optional FST: basic reads only; see fst_backend/fst_reading limits/gaps."
+        if tool.name == "get_waveform_summary":
+            tool.description += " Optional FST: see fst_backend/fst_reading capabilities and gaps."
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
@@ -7272,15 +7269,10 @@ async def call_tool(name: str, arguments: dict):
 async def _dispatch(name: str, args: dict):
     fst_paths = [args[key] for key in ("wave_path", "wave_path_a", "wave_path_b")
                  if isinstance(args.get(key), str) and args[key].lower().endswith(".fst")]
-    def has_expression(value):
-        if isinstance(value, dict):
-            return "expr" in value or any(has_expression(v) for v in value.values())
-        return isinstance(value, list) and any(has_expression(v) for v in value)
-    if fst_paths and (name not in FST_BASIC_TOOLS or has_expression(args)):
+    if fst_paths and name not in FST_SUPPORTED_TOOLS:
         return schemas.FstCapabilityErrorResult(
-            error="FST currently supports basic recorded-digital queries and fixed bit selections; "
-                  "this analysis has not been validated.",
-            supported_tools=list(FST_BASIC_TOOLS),
+            error="This FST analysis has not been validated; see supported_tools.",
+            supported_tools=list(FST_SUPPORTED_TOOLS),
             suggested_call={"tool": "get_waveform_summary", "arguments": {"wave_path": fst_paths[0]}},
         )
     # An exact action is independent of the mutable most-recent session gate.
@@ -7429,7 +7421,7 @@ async def _dispatch(name: str, args: dict):
             raw_path = selected["signal_path"]
             # FST already resolves exact declarations / unique range aliases.
             # A capped search cannot prove that an ambiguous name is unique.
-            resolved_path = raw_path if getattr(parser, "_basic_queries_only", False) else _resolve_signal_path(parser, raw_path)
+            resolved_path = raw_path if getattr(parser, "_exact_names", False) else _resolve_signal_path(parser, raw_path)
             try:
                 result = parser.get_value_at_time(
                     resolved_path, _resolve_time(args["time_ps"])
@@ -7477,7 +7469,7 @@ async def _dispatch(name: str, args: dict):
                 )
             parser, selected = prepare_selections(parser, {"signal_paths": args.get("signal_paths") or []})
             raw_paths = selected["signal_paths"]
-            signal_paths, aliases = ((raw_paths, {}) if getattr(parser, "_basic_queries_only", False)
+            signal_paths, aliases = ((raw_paths, {}) if getattr(parser, "_exact_names", False)
                                      else _resolve_signal_list(parser, raw_paths))
             _validate_signals_around_time_args(
                 parser, center_ps, window_ps, signal_paths
@@ -7493,7 +7485,7 @@ async def _dispatch(name: str, args: dict):
             # protocol value (e.g. an interconnect mux glitching to idle at each edge).
             # Must run BEFORE values_only stripping: it needs the window transitions
             # to detect the dip-and-return signature.
-            if not getattr(parser, "_basic_queries_only", False):
+            if getattr(parser, "_infer_center_transients", True):
                 annotate_center_transients(result)
             if return_mode == "values_only":
                 _strip_signals_to_values_only(result)
