@@ -25,7 +25,8 @@ They are not locations of the injected RTL fault.
   Copy golden.sv to native.sv and repeat to recover host 0. The C++ context is
   1250ps but SV $time is quantized to 1000ps; do not infer this from a wave header.
 * `cocotb_fail.log`: actual runtime excerpt using cocotb 1.9.2. Compile mutant.sv
-  with top `dut`, the cocotb Verilator runner and test_data.py. Timer(1.25ns)
+  with top `dut`, the cocotb Verilator runner and test_data.py (copy
+  test_data.py.txt to the external run directory). Timer(1.25ns)
   triggers the original Python expected-data assertion. The XML result contains
   a failure although the runner host returns 0. Warning/build output is omitted.
 
