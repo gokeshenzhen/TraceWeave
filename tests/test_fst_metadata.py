@@ -46,7 +46,10 @@ def test_accounting_bounds_unique_retained_objects_with_unicode_and_depth(tmp_pa
                      scopes_by_name={n: scopes for n in names})
     reader = lib.fstReaderOpen(str(path).encode())
     try:
-        index = fst_worker.build_index(lib, ffi, reader)
+        import _libfstapi
+        from src.fst_hierarchy import hierarchy_bytes, records
+        index = fst_worker.build_index(lib, ffi, reader,
+            records(hierarchy_bytes(path, _libfstapi.__file__)))
     finally:
         lib.fstReaderClose(reader)
     stack, seen, retained = [index], set(), 0

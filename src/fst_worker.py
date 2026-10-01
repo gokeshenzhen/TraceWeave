@@ -19,6 +19,16 @@ import struct
 import sys
 import time
 
+if __package__:
+    from .fst_hierarchy import hierarchy_bytes, records, validate
+else:
+    # Script/runpy workers run in private temporary directories. Load the
+    # sibling by absolute path without relying on cwd or changing sys.path.
+    import runpy
+    _hierarchy = runpy.run_path(str(Path(__file__).with_name("fst_hierarchy.py")))
+    hierarchy_bytes, records, validate = (
+        _hierarchy[name] for name in ("hierarchy_bytes", "records", "validate"))
+
 MAX_DECLARATIONS = 32768
 MAX_INDEX_BYTES = 32 * 1024 * 1024
 MAX_WIDTH = 65536
@@ -80,7 +90,7 @@ def preflight(path, memory):
     if os.path.exists(path + ".hier"):
         raise ValueError("fst_external_hierarchy_unsupported")
     size = os.stat(path).st_size
-    blocks, waves, hierarchy = 0, 0, False
+    blocks, waves, hierarchy = 0, 0, 0
     with open(path, "rb") as stream:
         pos = 0
         while pos < size:
@@ -106,7 +116,9 @@ def preflight(path, memory):
                 if packed > length or unpacked + packed + count * 16 + traversal_bytes > memory // 2:
                     raise ValueError("fst_native_block_memory_limit")
                 waves += 1
-            hierarchy |= kind in {4, 6, 7}
+            hierarchy += kind in {4, 6, 7}
+            if hierarchy > 1:
+                raise ValueError("fst_corrupt: ambiguous embedded hierarchy")
             pos += 1 + length
             blocks += 1
             if blocks > MAX_BLOCKS:
@@ -141,6 +153,9 @@ def main():
     import _libfstapi
     native = Path(_libfstapi.__file__)
     digest = hashlib.sha256(native.read_bytes()).hexdigest()
+    hierarchy = hierarchy_bytes(path, native)
+    validate(hierarchy)
+    check()
     opened = time.perf_counter()
     reader = lib.fstReaderOpen(path.encode())
     METRICS['native_open_ms'] = (time.perf_counter() - opened) * 1000
@@ -180,7 +195,8 @@ def main():
             if index is None:
                 started = time.perf_counter()
                 METRICS['index_rss_before_kib'] = rss()
-                index = build_index(lib, ffi, reader)
+                index = build_index(lib, ffi, reader, records(hierarchy))
+                del hierarchy
                 ordered_paths = sorted(index)
                 accounted = METRICS['index_accounted_bytes'] + sys.getsizeof(ordered_paths)
                 if accounted > MAX_INDEX_BYTES:
@@ -264,7 +280,7 @@ def resolve(index, path):
     raise ValueError("fst_signal_not_found" if not matches else "fst_signal_ambiguous")
 
 
-def build_index(lib, ffi, reader):
+def build_index(lib, ffi, reader, hierarchy_records):
     if lib.fstReaderGetVarCount(reader) > MAX_DECLARATIONS:
         raise ValueError("fst_metadata_entry_limit")
     scopes, index = [], {}
@@ -288,29 +304,25 @@ def build_index(lib, ffi, reader):
              for name in dir(lib) if name.startswith("FST_VT_") and name not in {"FST_VT_MIN", "FST_VT_MAX"}}
     unsupported = {0, 3, 4, 18, 19, 20, 21, 29}
     directions = {1: "input", 2: "output", 3: "inout", 4: "buffer", 5: "linkage"}
-    while True:
-        node = lib.fstReaderIterateHier(reader)
-        if node == ffi.NULL:
-            break
-        if node.htyp == lib.FST_HT_SCOPE:
-            if node.u.scope.name_length > MAX_NAME_BYTES or len(scopes) >= MAX_SCOPE_DEPTH:
+    for node in hierarchy_records:
+        if node[0] == "scope":
+            if len(scopes) >= MAX_SCOPE_DEPTH:
                 raise ValueError("fst_scope_limit")
-            name = ffi.string(node.u.scope.name).decode("utf-8", "strict")
+            name = node[1]
             parent = scopes[-1] if scopes else root
             path = parent.path + "." + name if scopes else name
             scope = Scope(path, parent.ancestors + (path,), parent.top if scopes else path)
             account(sys.getsizeof(scope) + sys.getsizeof(path) + sys.getsizeof(scope.ancestors))
             scopes.append(scope)
             scope_count += 1
-        elif node.htyp == lib.FST_HT_UPSCOPE:
+        elif node[0] == "upscope":
             if not scopes:
                 raise ValueError("fst_corrupt: unbalanced scopes")
             scopes.pop()
-        elif node.htyp == lib.FST_HT_VAR:
-            var = node.u.var
-            if var.name_length > MAX_NAME_BYTES or var.length > MAX_WIDTH:
+        elif node[0] == "var":
+            _, name, width, direction, handle, is_alias, typ = node
+            if width > MAX_WIDTH:
                 raise ValueError("fst_signal_width_or_name_limit")
-            name = ffi.string(var.name).decode("utf-8", "strict")
             match = re.search(r"\s+(\[-?\d+(?::-?\d+)?\])$", name)
             if match and not name.startswith("\\"):
                 name = name[:match.start()] + match[1]
@@ -328,16 +340,16 @@ def build_index(lib, ffi, reader):
             base = path
             if explicit:
                 left, right = int(explicit[1]), int(explicit[2] or explicit[1])
-                if abs(left - right) + 1 != var.length:
+                if abs(left - right) + 1 != width:
                     raise ValueError("fst_declaration_range_unsupported")
                 coords = (left, right)
                 base = path[:len(path) - len(explicit[0])].rstrip()
-            elif var.length == 1:
+            elif width == 1:
                 coords = (0, 0)
-            row = Declaration(path, base, name, scope, int(var.length), int(var.handle),
-                bool(var.is_alias), directions.get(int(var.direction), "unknown"),
-                types.get(int(var.typ), "unknown"), coords,
-                int(var.typ) in types and int(var.typ) not in unsupported and var.length > 0)
+            row = Declaration(path, base, name, scope, width, handle,
+                is_alias, directions.get(direction, "unknown"),
+                types.get(typ, "unknown"), coords,
+                typ in types and typ not in unsupported and width > 0)
             if path in index:
                 raise ValueError("fst_declaration_conflict")
             if len(index) >= MAX_DECLARATIONS:
