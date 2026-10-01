@@ -1,0 +1,41 @@
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_core_pcie.v:734:5: Cell has missing pin: 'in_tlp_seq'
+ERROR:cocotb:  734 |     pcie_tlp_demux_inst (
+ERROR:cocotb:      |     ^~~~~~~~~~~~~~~~~~~
+ERROR:cocotb:                     /home/robin/Projects/traceweave-fst-corundum/fpga/common/lib/pcie/rtl/pcie_tlp_demux_bar.v:73:62: ... Location of port declaration
+ERROR:cocotb:   73 |     input  wire [IN_TLP_SEG_COUNT*SEQ_NUM_WIDTH-1:0]         in_tlp_seq,
+ERROR:cocotb:      |                                                              ^~~~~~~~~~
+ERROR:cocotb:                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.034
+ERROR:cocotb:                     ... Use "/* verilator lint_off PINMISSING */" and lint_on around source to disable this message.
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_core_pcie.v:734:5: Cell has missing pin: 'out_tlp_seq'
+ERROR:cocotb:  734 |     pcie_tlp_demux_inst (
+ERROR:cocotb:      |     ^~~~~~~~~~~~~~~~~~~
+ERROR:cocotb:                     /home/robin/Projects/traceweave-fst-corundum/fpga/common/lib/pcie/rtl/pcie_tlp_demux_bar.v:88:62: ... Location of port declaration
+ERROR:cocotb:   88 |     output wire [PORTS*OUT_TLP_SEG_COUNT*SEQ_NUM_WIDTH-1:0]  out_tlp_seq,
+ERROR:cocotb:      |                                                              ^~~~~~~~~~~
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_interface.v:944:1: Cell has missing pin: 'pause_req'
+ERROR:cocotb:  944 | irq_fifo (
+ERROR:cocotb:      | ^~~~~~~~
+ERROR:cocotb:                     /home/robin/Projects/traceweave-fst-corundum/fpga/common/lib/axis/rtl/axis_fifo.v:124:35: ... Location of port declaration
+ERROR:cocotb:  124 |     input  wire                   pause_req,
+ERROR:cocotb:      |                                   ^~~~~~~~~
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_interface.v:944:1: Cell has missing pin: 'pause_ack'
+ERROR:cocotb:  944 | irq_fifo (
+ERROR:cocotb:      | ^~~~~~~~
+ERROR:cocotb:                     /home/robin/Projects/traceweave-fst-corundum/fpga/common/lib/axis/rtl/axis_fifo.v:125:35: ... Location of port declaration
+ERROR:cocotb:  125 |     output wire                   pause_ack,
+ERROR:cocotb:      |                                   ^~~~~~~~~
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_interface.v:944:1: Cell has missing pin: 'status_depth'
+ERROR:cocotb:  944 | irq_fifo (
+ERROR:cocotb:      | ^~~~~~~~
+ERROR:cocotb:                     /home/robin/Projects/traceweave-fst-corundum/fpga/common/lib/axis/rtl/axis_fifo.v:130:35: ... Location of port declaration
+ERROR:cocotb:  130 |     output wire [$clog2(DEPTH):0] status_depth,
+ERROR:cocotb:      |                                   ^~~~~~~~~~~~
+ERROR:cocotb:%Warning-PINMISSING: /home/robin/Projects/traceweave-fst-corundum/fpga/common/rtl/mqnic_interface.v:944:1: Cell has missing pin: 'status_depth_commit'
+ERROR:cocotb:  944 | irq_fifo (
+ERROR:cocotb:      | ^~~~~~~~
+INFO:cocotb:     0.00ns INFO     cocotb                             Running on Verilator version 5.034 2025-02-24
+INFO:cocotb:     0.00ns INFO     cocotb                             Running tests with cocotb v1.9.2 from /home/robin/Projects/traceweave-fst-corundum/.venv-sim/lib/python3.12/site-packages/cocotb
+INFO:cocotb:     0.00ns INFO     cocotb                             Seeding Python random module with supplied seed 20260928
+INFO:cocotb:     0.00ns INFO     cocotb.regression                  Found test test_mqnic_core_pcie_us.run_test_nic
+INFO:cocotb:     0.00ns INFO     cocotb.regression                  running run_test_nic (1/1)
+INFO:cocotb:     0.00ns INFO     cocotb.pcie.RootComplex            PCIe root complex model

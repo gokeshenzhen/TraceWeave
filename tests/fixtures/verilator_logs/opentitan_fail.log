@@ -1,0 +1,89 @@
+Simulation of OpenTitan Earl Grey
+=================================
+
+Tracing can be toggled by sending SIGUSR1 to this process:
+$ kill -USR1 3893714
+
+JTAG: Virtual JTAG interface dmi0 is listening on port 44853. Use
+OpenOCD and the following configuration to connect:
+  interface remote_bitbang
+  remote_bitbang_host localhost
+  remote_bitbang_port 44853
+                   0GPIO: creating gpiodpi
+
+GPIO: FIFO pipes created at /cache/Projects/traceweave-verilator-acceptance/O1/native/gpio0-read (read) and /cache/Projects/traceweave-verilator-acceptance/O1/native/gpio0-write (write) for 32-bit wide GPIO.
+GPIO: To measure the values of the pins as driven by the device, run
+$ cat /cache/Projects/traceweave-verilator-acceptance/O1/native/gpio0-read  # '0' low, '1' high, 'X' floating
+GPIO: To drive the pins, run a command like
+$ echo 'h09 l31' > /cache/Projects/traceweave-verilator-acceptance/O1/native/gpio0-write  # Pull the pin 9 high, and pin 31 low.
+$ echo 'wh10' > /cache/Projects/traceweave-verilator-acceptance/O1/native/gpio0-write  # Pull pin 10 high through a weak pull-up.
+No UARTDPI_LOG_uart0 plusarg found.
+
+UART: Created /dev/pts/2 for uart0. Connect to it with any terminal program, e.g.
+$ screen /dev/pts/2
+UART: Additionally writing all UART output to 'uart0.log'.
+
+SPI: Created /dev/pts/5 for spi0. Connect to it with any terminal program, e.g.
+$ screen /dev/pts/5
+NOTE: a SPI transaction is run for every 4 characters entered.
+SPI: Monitor output file created at /cache/Projects/traceweave-verilator-acceptance/O1/native/spi0.log. Works well with tail:
+$ tail -f /cache/Projects/traceweave-verilator-acceptance/O1/native/spi0.log
+
+USBDPI: Monitor output file created at /cache/Projects/traceweave-verilator-acceptance/O1/native/usb0.log. Works well with tail:
+$ tail -f /cache/Projects/traceweave-verilator-acceptance/O1/native/usb0.log
+TOP.chip_sim_tb.u_dut.top_earlgrey.u_flash_ctrl.u_eflash.u_flash.gen_prim_flash_banks[0].u_prim_flash_bank.unnamedblk1: ReadLatency:1 ProgLatency:50 EraseLatency:200
+TOP.chip_sim_tb.u_dut.top_earlgrey.u_flash_ctrl.u_eflash.u_flash.gen_prim_flash_banks[1].u_prim_flash_bank.unnamedblk1: ReadLatency:1 ProgLatency:50 EraseLatency:200
+
+Simulation running, end by pressing CTRL-c.
+Tracing enabled.
+Writing simulation traces to waveform.fst
+TOP.chip_sim_tb.u_dut.top_earlgrey.u_rv_core_ibex.ibex_tracer_i.unnamedblk2.unnamedblk3: Writing execution trace to trace_core_00000000.log
+192412: (src/lowrisc_dv_sw_test_status_0/sw_test_status_if.sv:61) [TOP.chip_sim_tb.u_sw_test_status_if] SW test transitioned to SwTestStatusInBootRom.
+449522: (src/lowrisc_dv_sw_test_status_0/sw_test_status_if.sv:61) [TOP.chip_sim_tb.u_sw_test_status_if] SW test transitioned to SwTestStatusInTest.
+2641452: (src/lowrisc_dv_sw_test_status_0/sw_test_status_if.sv:61) [TOP.chip_sim_tb.u_sw_test_status_if] SW test transitioned to SwTestStatusFailed.
+[2641452] %Error: sw_test_status_if.sv:85: Assertion failed in TOP.chip_sim_tb.u_sw_test_status_if: 2641452: (src/lowrisc_dv_sw_test_status_0/sw_test_status_if.sv:85) [TOP.chip_sim_tb.u_sw_test_status_if] ==== SW TEST FAILED ====
+Verilator sim termination requested
+Your simulation wrote to 0x411f0080
+
+TEST FAILED CHECKS
+ _____         _      __       _ _          _ _ 
+|_   _|__  ___| |_   / _| __ _(_) | ___  __| | |
+  | |/ _ \/ __| __| | |_ / _` | | |/ _ \/ _` | |
+  | |  __/\__ \ |_  |  _| (_| | | |  __/ (_| |_|
+  |_|\___||___/\__| |_|  \__,_|_|_|\___|\__,_(_)
+
+- src/lowrisc_dv_top_earlgrey_chip_verilator_sim_0.1/chip_sim_tb.sv:207: Verilog $finish
+[TRACEWEAVE_OPENTITAN] time=2641453 ps event=stop
+Received stop request, shutting down simulation.
+
+Simulation statistics
+=====================
+Executed cycles:  1320726
+Wallclock time:   127.38 s
+Simulation speed: 10368.4 cycles/s (10.3684 kHz)
+Trace file size:  3142185 B
+
+You can view the simulation traces by calling
+$ gtkwave waveform.fst
+øI00001 test_rom.c:190] kBuildInfo: scm_revision=54697461
+I00002 test_rom.c:267] Test ROM complete, jumping to flash (addr: 20000480)!
+I00001 ottf_main.c:175] Running sw/device/tests/aes_smoketest.c
+I00002 ottf_main.c:182] Enabling OTTF alert catcher
+I00003 aes_testutils.c:283] CHECK-fail: (uint8_t *)out_data.data  unmatches kAesModesCipherTextEcb256
+I00004 aes_testutils.c:283] CHECK-fail: [0] got: 0xf2; want: 0xf3
+I00005 aes_testutils.c:283] CHECK-fail: [1] got: 0xee; want: 0xee
+I00006 aes_testutils.c:283] CHECK-fail: [2] got: 0xd1; want: 0xd1
+I00007 aes_testutils.c:283] CHECK-fail: [3] got: 0xbd; want: 0xbd
+I00008 aes_testutils.c:283] CHECK-fail: [4] got: 0xb5; want: 0xb5
+I00009 aes_testutils.c:283] CHECK-fail: [5] got: 0xd2; want: 0xd2
+I00010 aes_testutils.c:283] CHECK-fail: [6] got: 0xa0; want: 0xa0
+I00011 aes_testutils.c:283] CHECK-fail: [7] got: 0x3c; want: 0x3c
+I00012 aes_testutils.c:283] CHECK-fail: [8] got: 0x06; want: 0x06
+I00013 aes_testutils.c:283] CHECK-fail: [9] got: 0x4b; want: 0x4b
+I00014 aes_testutils.c:283] CHECK-fail: [10] got: 0x5a; want: 0x5a
+I00015 aes_testutils.c:283] CHECK-fail: [11] got: 0x7e; want: 0x7e
+I00016 aes_testutils.c:283] CHECK-fail: [12] got: 0x3d; want: 0x3d
+I00017 aes_testutils.c:283] CHECK-fail: [13] got: 0xb1; want: 0xb1
+I00018 aes_testutils.c:283] CHECK-fail: [14] got: 0x81; want: 0x81
+I00019 aes_testutils.c:283] CHECK-fail: [15] got: 0xf8; want: 0xf8
+I00020 status.c:43] FAIL!

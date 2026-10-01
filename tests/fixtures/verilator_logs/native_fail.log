@@ -1,0 +1,3 @@
+[1000] %Error: native.sv:10: Assertion failed in TOP.native.check_data: DMA_CHECK expected=10 actual=11
+%Error: /cache/Projects/traceweave-verilator-acceptance/N1/native.sv:10: Verilog $stop
+Aborting...

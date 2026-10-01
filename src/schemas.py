@@ -501,6 +501,7 @@ class SuggestedToolCall(SchemaModel):
 
 
 class ParseSimLogResult(TruncatableResult):
+    native_time_unit: Literal["fs", "ps", "ns", "us", "ms", "s"] | None = None
     log_file: str
     # Generic, boundary-safe pointer set when a scoreboard/compare-style failure
     # is detected: such failures are often a SYMPTOM of a lower-level bus-protocol

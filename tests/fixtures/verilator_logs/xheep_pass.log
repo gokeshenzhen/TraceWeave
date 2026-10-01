@@ -1,0 +1,195 @@
+[TESTBENCH]: No OpenOCD is used
+[TESTBENCH]: loading firmware  ../firmware.hex
+[TESTBENCH]: Max sim time is 5000000 clock cycles
+[TESTBENCH]: No Boot Option specified, using jtag (boot_sel=0)
+                   0: the parameter FPU_SS_ZFINX is 0
+                   0: the parameter QUADRILATERO is 0
+                   0: the parameter JTAG_DPI is 0
+                   0: the parameter EXT_DOMAINS is 00000000
+                   0: the parameter USE_EXTERNAL_DEVICE_EXAMPLE is 1
+                   0: the parameter CLK_FREQUENCY is     100000 KHz
+[X-HEEP]: NUM_BYTES =        128KB
+
+UART: Created /dev/pts/2 for uart0. Connect to it with any terminal program, e.g.
+$ screen /dev/pts/2
+UART: Additionally writing all UART output to 'uart0.log'.
+Failed to open PDM file.
+ > Please check if this the simulation was launched using
+   `make *-sim` or `make run-pdm2pcm`.
+Failed to open PDM file.
+ > Please check if this the simulation was launched using
+   `make *-sim` or `make run-pdm2pcm`.
+Reset Released
+Set Exit Loop
+Memory Loaded
+[TRACEWEAVE_XHEEP] time=9118055000 ps event=software_exit value=0
+Simulation finished after 911902 clock cycles
+Program Finished with value 0
+
+
+===================================
+
+    TESTING SINGLE MODE   
+
+===================================
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 8-bit
+Destination type size: 8-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 8-bit
+Destination type size: 16-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 8-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 8-bit
+Destination type size: 8-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 8-bit
+Destination type size: 16-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 8-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 16-bit
+Destination type size: 16-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 16-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 16-bit
+Destination type size: 16-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 16-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 32-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+TEST:
+Data size: 16
+Signed: 1
+Source type size: 32-bit
+Destination type size: 32-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+
+
+===================================
+
+    TESTING ADDRESS MODE   
+
+===================================
+
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+>> Finished transaction. 
+DMA address mode success.
+
+
+=====================================
+
+    TESTING ADDRESS MODE IN EXTERNAL MEMORY  
+
+=====================================
+
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+>> Finished transaction. 
+DMA address mode in external memory success.
+
+
+===================================
+
+    TESTING MULTIPLE TRANSACTIONS   
+
+===================================
+
+tran: 0 	Ok!
+>> Finished 1 transactions. That is good.
+DMA multiple transactions success.
+
+
+===================================
+
+    TESTING WINDOW INTERRUPT   
+
+===================================
+
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!
+
+We had 0 window interrupts.
+DMA window success
+

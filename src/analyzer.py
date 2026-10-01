@@ -42,9 +42,10 @@ _ROLE_KEYWORDS = {
 
 
 class WaveformAnalyzer:
-    def __init__(self, log_path: str, parser, simulator: str):
+    def __init__(self, log_path: str, parser, simulator: str, native_time_unit: str | None = None):
         self.log_path = log_path
         self.parser = parser
+        self.native_time_unit = native_time_unit
         self.simulator = simulator
 
     def analyze(
@@ -56,7 +57,7 @@ class WaveformAnalyzer:
         log_before: int = DEFAULT_LOG_CONTEXT_BEFORE,
         log_after: int = DEFAULT_LOG_CONTEXT_AFTER,
     ) -> dict:
-        log_parser = SimLogParser(self.log_path, self.simulator)
+        log_parser = SimLogParser(self.log_path, self.simulator, self.native_time_unit)
         log_result = log_parser.parse()
         groups = log_result.get("groups", [])
         events = log_parser.parse_failure_events()
@@ -88,7 +89,7 @@ class WaveformAnalyzer:
             after=log_after,
         )
         wave_context = None
-        if signal_paths and first_time_ps > 0:
+        if signal_paths and first_time_ps is not None:
             wave_context = self.parser.get_signals_around_time(
                 signal_paths,
                 first_time_ps,
@@ -132,7 +133,7 @@ class WaveformAnalyzer:
         )
 
         time_anchor = {
-            "time_ps": failure_event.get("time_ps") or None,
+            "time_ps": failure_event.get("time_ps"),
             "kind": "exact" if failure_event.get("time_ps") is not None else "log_only",
             "log_line": failure_event.get("line"),
             "wave_path": wave_path,
@@ -164,7 +165,7 @@ class WaveformAnalyzer:
         problem_hints: dict[str, Any] | ProblemHints | None = None,
         handshake_sweep: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        log_parser = SimLogParser(self.log_path, self.simulator)
+        log_parser = SimLogParser(self.log_path, self.simulator, self.native_time_unit)
         events = log_parser.parse_failure_events()
         if not events:
             runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)

@@ -196,7 +196,7 @@ _formal_result_provenance: dict | None = None
 # baseline across common rerun flows where the simulator overwrites the same
 # run.log path before the LLM asks for an explicit diff.
 _log_snapshots: dict[str, dict] = {}
-_log_snapshot_history: dict[tuple[str, str], list[str]] = {}
+_log_snapshot_history: dict[tuple[str, ...], list[str]] = {}
 
 # Holds the full build_tb_hierarchy payload keyed by content-addressed handle.
 # The slim LLM-facing payload references this via `hierarchy_handle`; handle
@@ -1076,6 +1076,7 @@ def _log_snapshot_id(
     simulator: str,
     stat_info: dict,
     all_failure_events: list[dict],
+    native_time_unit: str | None = None,
 ) -> str:
     events_material = json.dumps(all_failure_events, sort_keys=True, default=str)
     events_digest = hashlib.sha256(events_material.encode("utf-8")).hexdigest()[:16]
@@ -1086,6 +1087,8 @@ def _log_snapshot_id(
             events_digest,
         ]
     )
+    if native_time_unit is not None:
+        material += "|native_time_unit=" + native_time_unit
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
     return f"log_{digest}"
 
@@ -1095,9 +1098,10 @@ def _capture_log_snapshot(
     simulator: str,
     all_failure_events: list[dict],
     stat_info: dict | None = None,
+    native_time_unit: str | None = None,
 ) -> str:
     stat_info = stat_info or _log_stat_info(log_path)
-    snapshot_id = _log_snapshot_id(log_path, simulator, stat_info, all_failure_events)
+    snapshot_id = _log_snapshot_id(log_path, simulator, stat_info, all_failure_events, native_time_unit)
     entry = {
         "snapshot_id": snapshot_id,
         "log_path": log_path,
@@ -1108,8 +1112,9 @@ def _capture_log_snapshot(
         "log_mtime_ns": stat_info["mtime_ns"],
         "log_size": stat_info["size"],
     }
+    entry["native_time_unit"] = native_time_unit
     _log_snapshots[snapshot_id] = entry
-    key = (entry["realpath"], simulator)
+    key = (entry["realpath"], simulator, native_time_unit) if native_time_unit else (entry["realpath"], simulator)
     history = _log_snapshot_history.setdefault(key, [])
     if snapshot_id not in history:
         history.append(snapshot_id)
@@ -1120,9 +1125,11 @@ def _find_previous_log_snapshot(
     log_path: str,
     simulator: str,
     exclude_snapshot_id: str | None = None,
+    native_time_unit: str | None = None,
 ) -> dict | None:
     realpath = os.path.realpath(log_path)
-    history = _log_snapshot_history.get((realpath, simulator), [])
+    key = (realpath, simulator, native_time_unit) if native_time_unit else (realpath, simulator)
+    history = _log_snapshot_history.get(key, [])
     for snapshot_id in reversed(history):
         if snapshot_id == exclude_snapshot_id:
             continue
@@ -1133,7 +1140,7 @@ def _find_previous_log_snapshot(
     return None
 
 
-def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict]:
+def _snapshot_events(snapshot_id: str, simulator: str, native_time_unit: str | None = None) -> tuple[list[dict], dict]:
     snapshot = _log_snapshots.get(snapshot_id)
     if snapshot is None:
         raise ValueError(
@@ -1145,6 +1152,8 @@ def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict
             f"log snapshot {snapshot_id} was parsed with simulator={snapshot.get('simulator')}, "
             f"but this diff requested simulator={simulator}."
         )
+    if snapshot.get("native_time_unit") != native_time_unit:
+        raise ValueError("log snapshot native_time_unit differs from this diff; use the same verified setting")
     return list(snapshot["all_failure_events"]), {
         "source": "snapshot",
         "snapshot_id": snapshot_id,
@@ -1153,11 +1162,11 @@ def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict
 
 
 def _parse_log_events_for_diff(
-    log_path: str, simulator: str
+    log_path: str, simulator: str, native_time_unit: str | None = None
 ) -> tuple[list[dict], dict]:
     stat_info = _log_stat_info(log_path)
-    events = SimLogParser(log_path, simulator).parse_failure_events()
-    snapshot_id = _capture_log_snapshot(log_path, simulator, events, stat_info)
+    events = SimLogParser(log_path, simulator, native_time_unit).parse_failure_events()
+    snapshot_id = _capture_log_snapshot(log_path, simulator, events, stat_info, native_time_unit)
     return events, {
         "source": "path",
         "snapshot_id": snapshot_id,
@@ -1169,7 +1178,7 @@ def _resolve_base_events_for_diff(
     args: dict, simulator: str
 ) -> tuple[list[dict], dict]:
     if args.get("base_snapshot_id"):
-        return _snapshot_events(args["base_snapshot_id"], simulator)
+        return _snapshot_events(args["base_snapshot_id"], simulator, args.get("native_time_unit"))
 
     base_log_path = args.get("base_log_path")
     new_log_path = args.get("new_log_path")
@@ -1178,7 +1187,7 @@ def _resolve_base_events_for_diff(
         and new_log_path
         and os.path.realpath(base_log_path) == os.path.realpath(new_log_path)
     ):
-        previous = _find_previous_log_snapshot(new_log_path, simulator)
+        previous = _find_previous_log_snapshot(new_log_path, simulator, native_time_unit=args.get("native_time_unit"))
         if previous is not None:
             return list(previous["all_failure_events"]), {
                 "source": "auto_previous_snapshot",
@@ -1187,10 +1196,10 @@ def _resolve_base_events_for_diff(
             }
 
     if base_log_path:
-        return _parse_log_events_for_diff(base_log_path, simulator)
+        return _parse_log_events_for_diff(base_log_path, simulator, args.get("native_time_unit"))
 
     if new_log_path:
-        previous = _find_previous_log_snapshot(new_log_path, simulator)
+        previous = _find_previous_log_snapshot(new_log_path, simulator, native_time_unit=args.get("native_time_unit"))
         if previous is not None:
             return list(previous["all_failure_events"]), {
                 "source": "auto_previous_snapshot",
@@ -1210,13 +1219,13 @@ def _resolve_base_events_for_diff(
 
 def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
     if args.get("new_snapshot_id"):
-        return _snapshot_events(args["new_snapshot_id"], simulator)
+        return _snapshot_events(args["new_snapshot_id"], simulator, args.get("native_time_unit"))
     if args.get("new_log_path"):
-        return _parse_log_events_for_diff(args["new_log_path"], simulator)
+        return _parse_log_events_for_diff(args["new_log_path"], simulator, args.get("native_time_unit"))
     if args.get("base_snapshot_id") and not args.get("base_log_path"):
         parse_cache = _result_provenance.get("parse_sim_log")
         if parse_cache and parse_cache.get("log_snapshot_id"):
-            return _snapshot_events(parse_cache["log_snapshot_id"], simulator)
+            return _snapshot_events(parse_cache["log_snapshot_id"], simulator, args.get("native_time_unit"))
     raise ValueError(
         "diff_sim_failure_results requires new_snapshot_id or new_log_path."
     )
@@ -5296,7 +5305,7 @@ async def list_tools():
         Tool(
             name="parse_sim_log",
             description=(
-                "Parse a VCS or Xcelium simulation log and return grouped runtime failures by signature. "
+                "Parse a VCS, Xcelium, or Verilator simulation log and return grouped runtime failures by signature. "
                 "The simulator argument is required and is not auto-detected here. "
                 "candidate_previous_logs uses bounded evidence sampling and excludes compile/elaboration logs. "
                 "The first error group automatically includes about 100 lines of surrounding log context "
@@ -5305,11 +5314,15 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "native_time_unit": {
+                        "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
+                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                    },
                     "log_path": {
                         "type": "string",
                         "description": "Absolute path to the simulation log, for example irun.log",
                     },
-                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "max_groups": {
                         "type": "integer",
                         "description": f"Maximum number of error groups to return. Default: {DEFAULT_MAX_GROUPS}",
@@ -5343,6 +5356,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "native_time_unit": {
+                        "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
+                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                    },
                     "base_log_path": {
                         "type": "string",
                         "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot.",
@@ -5361,7 +5378,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted.",
+                        "description": "vcs / xcelium / verilator / auto. Defaults to simulator discovered by get_sim_paths when omitted.",
                     },
                 },
                 "required": [],
@@ -5768,6 +5785,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "native_time_unit": {
+                        "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
+                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                    },
                     "log_path": {
                         "type": "string",
                         "description": "Simulation log path, for example irun.log",
@@ -5786,7 +5807,7 @@ async def list_tools():
                         "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
                         "default": DEFAULT_WAVE_WINDOW_PS,
                     },
-                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "group_index": {
                         "type": "integer",
                         "description": "Failure group index to analyze. Default: 0",
@@ -5810,9 +5831,13 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "native_time_unit": {
+                        "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
+                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                    },
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "failure_event": {
                         "type": "object",
                         "description": "Normalized failure_event from parse_sim_log for the same log",
@@ -5833,9 +5858,13 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "native_time_unit": {
+                        "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
+                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                    },
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "compile_log": {"type": "string"},
                     "top_hint": {"type": "string"},
                 },
@@ -5938,7 +5967,7 @@ async def list_tools():
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
                     },
                     "top_hint": {"type": "string"},
                     "recursive": {
@@ -5991,7 +6020,7 @@ async def list_tools():
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
                     },
                     "top_hint": {"type": "string"},
                     "max_depth": {
@@ -6043,7 +6072,7 @@ async def list_tools():
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Optional — auto-injected from get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto. Optional — auto-injected from get_sim_paths.",
                     },
                     "top_hint": {"type": "string"},
                     "expand_assigns": {
@@ -6085,7 +6114,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Optional — auto-detected from the log when omitted.",
+                        "description": "vcs / xcelium / verilator / auto. Optional — auto-detected from the log when omitted.",
                     },
                     "top_hint": {
                         "type": "string",
@@ -6138,7 +6167,7 @@ async def list_tools():
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
                     },
                     "top_hint": {"type": "string"},
                     "max_depth": {
@@ -8052,6 +8081,7 @@ async def _dispatch(name: str, args: dict):
                 log_path=args["log_path"],
                 parser=_get_parser(args["wave_path"]),
                 simulator=simulator,
+                native_time_unit=args.get("native_time_unit"),
             ).analyze(
                 signal_paths=args["signal_paths"],
                 group_index=args.get("group_index", 0),
@@ -8081,6 +8111,7 @@ async def _dispatch(name: str, args: dict):
                 log_path=args["log_path"],
                 parser=_get_parser(args["wave_path"]),
                 simulator=simulator,
+                native_time_unit=args.get("native_time_unit"),
             ).analyze_failure_event(
                 failure_event=args["failure_event"],
                 wave_path=args["wave_path"],
@@ -8102,6 +8133,7 @@ async def _dispatch(name: str, args: dict):
                 log_path=args["log_path"],
                 parser=_get_parser(args["wave_path"]),
                 simulator=simulator,
+                native_time_unit=args.get("native_time_unit"),
             ).recommend_debug_next_steps(
                 wave_path=args["wave_path"],
                 compile_log=args.get("compile_log"),
@@ -8783,6 +8815,7 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
     sim_state = _session_state.get("get_sim_paths") or {}
     return {
         "log_path": args.get("log_path"),
+        "native_time_unit": args.get("native_time_unit"),
         "wave_path": args.get("wave_path"),
         "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
         "compile_log": args.get("compile_log")
@@ -8848,6 +8881,8 @@ def _get_compatible_recommend_parse_cache(
     if parse_cache is None or provenance is None:
         return None
     if provenance.get("simulator") != request_context.get("simulator"):
+        return None
+    if provenance.get("native_time_unit") != request_context.get("native_time_unit"):
         return None
     if not _same_realpath(provenance.get("log_path"), request_context.get("log_path")):
         return None
@@ -9952,7 +9987,7 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     stat_info = _log_stat_info(args["log_path"])
     log_mtime = stat_info["mtime"]
     log_size = stat_info["size"]
-    parser = SimLogParser(args["log_path"], simulator)
+    parser = SimLogParser(args["log_path"], simulator, args.get("native_time_unit"))
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
     max_events_per_group = args.get(
@@ -9967,12 +10002,13 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
     all_events = parser.parse_failure_events()
     log_snapshot_id = _capture_log_snapshot(
-        args["log_path"], simulator, all_events, stat_info
+        args["log_path"], simulator, all_events, stat_info, args.get("native_time_unit")
     )
     previous_snapshot = _find_previous_log_snapshot(
         args["log_path"],
         simulator,
         exclude_snapshot_id=log_snapshot_id,
+        native_time_unit=args.get("native_time_unit"),
     )
 
     if detail_level == "summary":
@@ -10025,6 +10061,7 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     summary["first_group_context"] = first_group_context
     problem_hints = compute_problem_hints(summary, all_events)
     summary["problem_hints"] = problem_hints
+    summary["native_time_unit"] = args.get("native_time_unit")
     summary["log_snapshot_id"] = log_snapshot_id
     summary["previous_log_snapshot_id"] = (
         previous_snapshot.get("snapshot_id") if previous_snapshot is not None else None
@@ -10098,6 +10135,7 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     _result_provenance["parse_sim_log"] = {
         "log_path": validated.log_file,
         "simulator": validated.simulator,
+        "native_time_unit": args.get("native_time_unit"),
         "all_failure_events": all_events,
         "log_mtime": log_mtime,
         "log_mtime_ns": stat_info["mtime_ns"],

@@ -195,6 +195,27 @@ See [bus fields and TL-UL](https://github.com/gokeshenzhen/TraceWeave/blob/main/
 
 ### Custom Runtime Error Formats
 
+### Verilator runtime logs
+
+`parse_sim_log(log_path=..., simulator="verilator")` recognizes native runtime
+assertions / `$error` / `$fatal` / `$stop`, cocotb test failures with bounded Python
+tracebacks, X-HEEP `example_dma` comparisons and software exit values, and
+OpenTitan software comparisons / status failures. Compiler warnings and errors,
+`ERROR:cocotb:` logger wrappers, source echoes, normal `$finish`, and software
+exit zero are excluded. Other custom TB text needs explicit custom patterns.
+
+Bare native timestamps stay `time_ps=None` unless `native_time_unit="ps"` (or
+fs/ns/us/ms/s) is supplied with independently verified TB/context evidence.
+This setting applies only to native/custom/UVM bare simulation timestamps.
+Explicit units take precedence. Conversion uses exact decimal arithmetic and
+rounds up sub-ps time to integer ps. Cycle counts, UART rows, and host wallclock
+time do not acquire waveform timestamps. Optional TraceWeave acceptance
+observers provide software-exit or termination anchors, not the first bad RTL
+transaction. Detection source locations are checker locations, not root causes.
+Use the same verified unit setting in analysis and snapshot/log diff calls;
+snapshots with different settings cannot be compared. Unknown-time analysis
+returns log context without querying 0ps.
+
 `parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
 
 If your messages share a label but the text after it varies, matching that label is enough:

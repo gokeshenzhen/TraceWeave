@@ -1,0 +1,43 @@
+[TESTBENCH]: No OpenOCD is used
+[TESTBENCH]: loading firmware  ../firmware.hex
+[TESTBENCH]: Max sim time is 5000000 clock cycles
+[TESTBENCH]: No Boot Option specified, using jtag (boot_sel=0)
+                   0: the parameter FPU_SS_ZFINX is 0
+                   0: the parameter QUADRILATERO is 0
+                   0: the parameter JTAG_DPI is 0
+                   0: the parameter EXT_DOMAINS is 00000000
+                   0: the parameter USE_EXTERNAL_DEVICE_EXAMPLE is 1
+                   0: the parameter CLK_FREQUENCY is     100000 KHz
+[X-HEEP]: NUM_BYTES =        128KB
+
+UART: Created /dev/pts/2 for uart0. Connect to it with any terminal program, e.g.
+$ screen /dev/pts/2
+UART: Additionally writing all UART output to 'uart0.log'.
+Failed to open PDM file.
+ > Please check if this the simulation was launched using
+   `make *-sim` or `make run-pdm2pcm`.
+Failed to open PDM file.
+ > Please check if this the simulation was launched using
+   `make *-sim` or `make run-pdm2pcm`.
+Reset Released
+Set Exit Loop
+Memory Loaded
+Simulation finished after 5000002 clock cycles
+[TRACEWEAVE_XHEEP] time=50000020000 ps event=timeout
+Simulation was terminated before program finished
+
+
+===================================
+
+    TESTING SINGLE MODE   
+
+===================================
+
+TEST:
+Data size: 16
+Signed: 0
+Source type size: 8-bit
+Destination type size: 8-bit
+tran: 0 	Ok!
+load: 0 	Ok!
+laun: 0 	Ok!

@@ -145,6 +145,12 @@ _PREVIOUS_LOG_RUNTIME_MARKERS = (
     "$finish called",
     "$finish at simulation time",
     "*e,asrtst",
+    "program finished with value",
+    "simulation running, end by",
+    "running on verilator version",
+    "verilog $finish",
+    "verilog $stop",
+    "[traceweave_xheep]",
 )
 
 
@@ -312,11 +318,15 @@ class ParsedError:
 
 
 class SimLogParser:
-    def __init__(self, log_path: str, simulator: str):
+    def __init__(self, log_path: str, simulator: str, native_time_unit: str | None = None):
         self.log_path = log_path
         self.simulator = simulator.lower()
-        if self.simulator not in {"vcs", "xcelium"}:
-            raise ValueError("simulator must be 'vcs' or 'xcelium'")
+        if self.simulator not in {"vcs", "xcelium", "verilator"}:
+            raise ValueError("simulator must be 'vcs', 'xcelium', or 'verilator'")
+        from .verilator_log_parser import UNITS
+        if native_time_unit is not None and (self.simulator != "verilator" or native_time_unit not in UNITS):
+            raise ValueError("native_time_unit requires verilator and one of fs, ps, ns, us, ms, s")
+        self.native_time_unit = native_time_unit
         self._custom_patterns = self._load_custom_patterns()
         self._bare_time_unit: BareTimeInference | None = None
 
@@ -339,13 +349,18 @@ class SimLogParser:
 
         self._bare_time_unit = _infer_bare_time_unit(all_lines, self.simulator)
 
+        verilator_errors = None
+        if self.simulator == "verilator":
+            from .verilator_log_parser import parse_errors
+            verilator_errors = parse_errors(all_lines, self.native_time_unit, multiline_enabled, self._match_verilator_fallback)
         events: list[dict[str, Any]] = []
         i = 0
         while i < len(all_lines):
             line = all_lines[i].rstrip("\n")
             line_num = i + 1
             line_lower = line.lower()
-            error = self._try_match(line, line_lower, line_num)
+            error = (verilator_errors.get(i) if verilator_errors is not None else
+                     self._try_match(line, line_lower, line_num))
             if error is None:
                 i += 1
                 continue
@@ -388,7 +403,7 @@ class SimLogParser:
 
     def diff_against(self, new_log_path: str) -> dict[str, Any]:
         base_events = self.parse_failure_events()
-        new_events = SimLogParser(new_log_path, self.simulator).parse_failure_events()
+        new_events = SimLogParser(new_log_path, self.simulator, self.native_time_unit).parse_failure_events()
         return diff_failure_events(base_events, new_events)
 
     def get_error_context(
@@ -398,6 +413,27 @@ class SimLogParser:
         after: int = DEFAULT_LOG_CONTEXT_AFTER,
     ) -> dict[str, Any]:
         return get_error_context(self.log_path, line, before, after)
+
+    def _match_verilator_fallback(self, line: str, line_num: int) -> ParsedError | None:
+        from .verilator_log_parser import extract_time, time_fields
+        error = self._match_uvm(line, line_num) or self._match_custom(line, line_num)
+        if error is None:
+            return None
+        match = _UVM_RE.search(line)
+        if match:
+            timing = time_fields(match.group(4), match.group(5), self.native_time_unit)
+        else:
+            # Custom regex time units are explicit only when present in the input.
+            timing = extract_time(line, self.native_time_unit)
+            for pattern in self._custom_patterns:
+                compiled = pattern.get("compiled")
+                custom = compiled.search(line) if compiled else None
+                if custom and custom.groupdict().get("time"):
+                    timing = time_fields(custom.groupdict()["time"], custom.groupdict().get("time_unit"), self.native_time_unit)
+                    break
+        for key, value in timing.items():
+            setattr(error, key, value)
+        return self._filter_runtime_candidate(error, line.lower())
 
     def _try_match(self, line: str, line_lower: str, line_num: int) -> ParsedError | None:
         if self.simulator == "vcs":
@@ -1012,7 +1048,11 @@ def _build_summary(
         "schema_version": SCHEMA_VERSION,
         "contract_version": CONTRACT_VERSION,
         "failure_events_schema_version": FAILURE_EVENTS_SCHEMA_VERSION,
-        "parser_capabilities": _get_parser_capabilities(),
+        "parser_capabilities": _get_parser_capabilities() + ([
+            "verilator_native_runtime", "cocotb_runtime_traceback",
+            "xheep_software_oracle", "opentitan_software_oracle",
+            "exact_decimal_time", "unresolved_native_time",
+        ] if simulator == "verilator" else []),
         "runtime_total_errors": total_errors,
         "runtime_fatal_count": fatal_count,
         "runtime_error_count": total_errors - fatal_count,

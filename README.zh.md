@@ -192,6 +192,22 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 ### 自定义运行期报错格式
 
+### Verilator 运行日志
+
+`parse_sim_log(log_path=..., simulator="verilator")` 支持原生 assertion、
+`$error` / `$fatal` / `$stop`，带有界 Python traceback 的 cocotb test failed，
+X-HEEP `example_dma` 数据比较及软件退出值，以及 OpenTitan 软件比较和状态失败。
+编译 warning/error、`ERROR:cocotb:` 外层级别、源码回显、正常 `$finish` 和软件退出 0
+不会计作运行失败。其他自定义 TB 文本需要明确配置 custom patterns。
+
+裸原生时间默认保持 `time_ps=None`。只有独立核实 TB/context 后才传
+`native_time_unit="ps"`（也支持 fs/ns/us/ms/s），它只换算原生/custom/UVM 的裸仿真时间；
+日志显式单位优先。换算使用精确十进制，亚 ps 向上取整到公开整数 ps。
+周期数、UART 行和宿主墙钟不获得波形时间。可选 TraceWeave 验收观察器只给软件退出或
+终止锚点，不代表首个错误 RTL 交易；源码位置是检测点，不能直接作为根因。
+分析和 snapshot/log diff 必须使用同一已核实单位；不同单位设置的快照拒绝比较。
+未知时间仍返回日志上下文，不自动查询 0ps。
+
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 
 如果日志使用同一个标签，后面的内容每次不同，只匹配标签就够了：
