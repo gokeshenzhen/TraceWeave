@@ -5305,18 +5305,16 @@ async def list_tools():
         Tool(
             name="parse_sim_log",
             description=(
-                "Parse a VCS, Xcelium, or Verilator simulation log and return grouped runtime failures by signature. "
-                "The simulator argument is required and is not auto-detected here. "
-                "candidate_previous_logs uses bounded evidence sampling and excludes compile/elaboration logs. "
-                "The first error group automatically includes about 100 lines of surrounding log context "
-                "in first_group_context; use get_error_context for other groups."
+                "Group runtime failures from VCS, Xcelium, or Verilator logs. "
+                "Requires simulator. Includes first-group context. candidate_previous_logs excludes compile/elaboration logs with bounded sampling. "
+                "Verilator compiler/host diagnostics are excluded; unknown time stays null."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "native_time_unit": {
                         "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
-                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                        "description": "Verified Verilator bare unit; explicit units win.",
                     },
                     "log_path": {
                         "type": "string",
@@ -5336,7 +5334,7 @@ async def list_tools():
                     },
                     "max_events_per_group": {
                         "type": "integer",
-                        "description": f"Maximum failure_events returned per group in compact/full modes. Default: {DEFAULT_MAX_EVENTS_PER_GROUP}",
+                        "description": f"Events per group in compact/full modes. Default: {DEFAULT_MAX_EVENTS_PER_GROUP}",
                         "default": DEFAULT_MAX_EVENTS_PER_GROUP,
                     },
                 },
@@ -5346,27 +5344,24 @@ async def list_tools():
         Tool(
             name="diff_sim_failure_results",
             description=(
-                "Compare normalized failure events from two simulation logs. "
-                "Returns resolved, persistent, and newly introduced failures, plus changes in failure type, "
-                "X/Z presence, first-failure timing, and a convergence summary. "
-                "If a simulator overwrites the same log path between runs, pass new_log_path only "
-                "after parse_sim_log has captured the baseline snapshot, or pass snapshot IDs returned "
-                "by parse_sim_log."
+                "Compare failure events: resolved, persistent, new, timing, X/Z, and convergence. "
+                "For overwritten logs, capture parse_sim_log snapshots before rerunning, "
+                "then use snapshot IDs or new_log_path with its previous snapshot."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "native_time_unit": {
                         "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
-                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                        "description": "Verified Verilator bare unit; explicit units win.",
                     },
                     "base_log_path": {
                         "type": "string",
-                        "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot.",
+                        "description": "Baseline log; alternatively use snapshots or a captured same-path rerun.",
                     },
                     "new_log_path": {
                         "type": "string",
-                        "description": "New simulation log. For same-path reruns, this may be the overwritten log path.",
+                        "description": "New log path; may be overwritten after baseline capture.",
                     },
                     "base_snapshot_id": {
                         "type": "string",
@@ -5378,7 +5373,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Defaults to simulator discovered by get_sim_paths when omitted.",
+                        "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                 },
                 "required": [],
@@ -5779,15 +5774,15 @@ async def list_tools():
         Tool(
             name="analyze_failures",
             description=(
-                "Core failure-analysis tool. Focuses on the first occurrence of a single failure group and returns "
-                "the log summary, raw error context, and waveform snapshot. FSDB support depends on fsdb_runtime.enabled."
+                "Inspect one failure group with "
+                "log context and a waveform snapshot at its reliable timestamp."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "native_time_unit": {
                         "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
-                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                        "description": "Verified Verilator bare unit; explicit units win.",
                     },
                     "log_path": {
                         "type": "string",
@@ -5833,7 +5828,7 @@ async def list_tools():
                 "properties": {
                     "native_time_unit": {
                         "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
-                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                        "description": "Verified Verilator bare unit; explicit units win.",
                     },
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
@@ -5851,8 +5846,8 @@ async def list_tools():
         Tool(
             name="recommend_failure_debug_next_steps",
             description=(
-                "Choose the highest-priority failure to investigate from the current log, waveform, and optional hierarchy, "
-                "then recommend signals, instances, and suspected failure class. "
+                "Prioritize a failure using log, waveform, and hierarchy; "
+                "recommend signals, instances, and failure class. "
                 "Also suggests a diff_sim_failure_results call to use on the next run."
             ),
             inputSchema={
@@ -5860,7 +5855,7 @@ async def list_tools():
                 "properties": {
                     "native_time_unit": {
                         "type": "string", "enum": ["fs", "ps", "ns", "us", "ms", "s"],
-                        "description": "Verilator only: caller-verified unit for bare native timestamps. Omit if unknown. Explicit input units always take precedence; UART/cycle/wallclock text stays untimed.",
+                        "description": "Verified Verilator bare unit; explicit units win.",
                     },
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
@@ -5967,7 +5962,7 @@ async def list_tools():
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                     "top_hint": {"type": "string"},
                     "recursive": {
@@ -6020,7 +6015,7 @@ async def list_tools():
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                     "top_hint": {"type": "string"},
                     "max_depth": {
@@ -6072,7 +6067,7 @@ async def list_tools():
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Optional — auto-injected from get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                     "top_hint": {"type": "string"},
                     "expand_assigns": {
@@ -6114,7 +6109,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Optional — auto-detected from the log when omitted.",
+                        "description": "vcs / xcelium / verilator / auto; log auto-detection.",
                     },
                     "top_hint": {
                         "type": "string",
@@ -6167,7 +6162,7 @@ async def list_tools():
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / verilator / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
+                        "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                     "top_hint": {"type": "string"},
                     "max_depth": {
