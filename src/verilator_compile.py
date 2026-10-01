@@ -71,10 +71,12 @@ def invocation(text: str, log_dir: str) -> tuple[str | None, str]:
             cwd = str((Path(log_dir) / parts[0]).resolve())
             line = shell[2]
         # cocotb runner announces an explicit execution directory after command.
-        if line.startswith('INFO: Running command '):
-            line = line[len('INFO: Running command '):]
-            if ' in directory ' in line:
-                line, cwd = line.rsplit(' in directory ', 1)
+        for prefix in ('INFO: Running command ', 'Running command: ', 'Running command '):
+            if line.startswith(prefix):
+                line = line[len(prefix):]
+                break
+        if ' in directory ' in line:
+            line, cwd = line.rsplit(' in directory ', 1)
         matched = _COMMAND.match(line)
         if matched and _HDLMODE.search(matched[1]):
             return matched[1], str(Path(cwd).resolve())

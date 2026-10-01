@@ -87,3 +87,13 @@ def test_missing_and_recursive_filelists_are_explicit(tmp_path):
     result=parse_compile_log(str(path))
     assert len(result['parse_warnings'])==2
     assert any('depth/cycle' in w for w in result['parse_warnings'])
+
+
+def test_actual_cocotb_test_runner_command_wrapper(tmp_path):
+    path=context(tmp_path)
+    path.write_text(f"INFO:cocotb:Running command: perl /tools/verilator/bin/verilator -cc -f design.vc in directory {tmp_path}\n")
+    result=parse_compile_log(str(path))
+    assert result['simulator']=='verilator' and result['primary_top']=='tb'
+    assert result['compile_cwd']==str(tmp_path)
+    assert len(result['files']['user'])==2
+    assert result['parse_warnings']==[]
