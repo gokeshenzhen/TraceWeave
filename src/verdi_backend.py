@@ -51,7 +51,7 @@ def probe_verdi_backend(
     into the tool response.
     """
     simulator_raw = (compile_result.get("simulator") or "unknown").lower()
-    simulator = simulator_raw if simulator_raw in ("vcs", "xcelium") else "unknown"
+    simulator = simulator_raw if simulator_raw in ("vcs", "xcelium", "verilator") else "unknown"
 
     case_dir = _resolve_case_dir(compile_log_path, compile_result)
     kdb_path: str | None = None
@@ -61,7 +61,7 @@ def probe_verdi_backend(
         kdb_path, kdb_flow = _probe_vcs_kdb(case_dir)
     elif simulator == "xcelium":
         kdb_path, kdb_flow = _probe_vericom_kdb(case_dir)
-    else:
+    elif simulator == "unknown":
         # Best-effort: still look for KDB anywhere obvious, preferring a clean
         # candidate across both layouts before retaining a degraded one.
         vcs_path, vcs_flow = _probe_vcs_kdb(case_dir)

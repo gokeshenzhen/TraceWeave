@@ -1476,7 +1476,7 @@ class SourceGraphBackendReceipt(SchemaModel):
 
 
 class BackendStatus(SchemaModel):
-    simulator: Literal["vcs", "xcelium", "unknown"] = "unknown"
+    simulator: Literal["vcs", "xcelium", "verilator", "unknown"] = "unknown"
     # ``backend`` retains its legacy meaning (policy-selected backend).  The
     # additive fields make a multi-attempt NPI -> Source Graph -> Static route
     # explicit without changing existing callers.
@@ -1824,7 +1824,7 @@ class CursorDeleteResult(SchemaModel):
 
 class DivergenceContext(SchemaModel):
     compile_log: str = Field(min_length=1)
-    simulator: Literal["auto", "vcs", "xcelium"] = "auto"
+    simulator: Literal["auto", "vcs", "xcelium", "verilator"] = "auto"
     supplementary_compile_logs: list[str] = Field(default_factory=list, max_length=16)
     top_hint: str | None = None
     hierarchy_handle: str | None = None

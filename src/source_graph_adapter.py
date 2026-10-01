@@ -96,6 +96,7 @@ _MAX_FILELIST_DEPTH = 64
 _MAX_FILELIST_TOKENS = 1_000_000
 _MANIFEST_CACHE_MAX_ENTRIES = 8
 _BASE_OPTIONS = {
+    "verilator": ("--compat", "all", "--single-unit", "-Wno-unknown-sys-name", "-DVERILATOR=1"),
     "vcs": (
         "--compat",
         "vcs",
@@ -690,7 +691,7 @@ def _translate_tokens(
     index = 0
     if skip_executable and tokens:
         executable = Path(tokens[0]).name
-        if executable in {"vcs", "vlogan", "vhdlan", "xrun", "irun"}:
+        if executable in {"vcs", "vlogan", "vhdlan", "xrun", "irun", "verilator", "verilator_bin"}:
             index = 1
         else:
             state.options_complete = False
@@ -706,6 +707,40 @@ def _translate_tokens(
             return
         token = tokens[index]
         suffix = Path(token).suffix.lower()
+        if state.simulator == "verilator":
+            from .verilator_compile import VALUE_FLAGS
+            if token.startswith("-G") and len(token) > 2:
+                state.options.append(token); index += 1; continue
+            if token in {"--timescale", "--timescale-override"} and index + 1 < len(tokens):
+                state.options.extend(("--timescale", tokens[index + 1])); index += 2; continue
+            if token in VALUE_FLAGS:
+                if index + 1 >= len(tokens):
+                    _mark_unclassified(state)
+                index += 2
+                continue
+            if token in {"--top-module", "--top"} and index + 1 < len(tokens):
+                _append_top(state, tokens[index + 1]); index += 2; continue
+            if token.startswith("--top-module="):
+                _append_top(state, token.split("=", 1)[1]); index += 1; continue
+            if token in {"--sv", "--cc", "-cc", "--sc", "-sc", "--exe", "--build", "--xml-only", "--lint-only", "--assert", "--no-timing", "--timing", "--trace", "--trace-fst", "--trace-structs", "--trace-params", "-Wall", "-Wno-fatal", "--vpi", "--public-flat-rw"} or token.startswith(("-Wno-", "-Wwarn-")):
+                index += 1; continue
+            if not token.startswith(("-", "+")) and suffix == ".vlt":
+                path = _resolve_path(token, base, state)
+                if path is not None:
+                    state.support_files.add(path)
+                    # Waivers and trace selection do not alter RTL. Other control
+                    # directives stay an objective exclusion, never silently exact.
+                    try:
+                        content = path.read_text(errors="replace") if path.stat().st_size <= 1024 * 1024 else ""
+                    except OSError:
+                        content = ""
+                    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", content, flags=re.S).replace("\\\n", " ")
+                    body = re.sub(r"\n\s+(-[A-Za-z])", r" \1", body)
+                    if not content or any(line.strip() and not line.strip().startswith(("`verilator_config", "lint_off", "lint_on", "tracing_on", "tracing_off", "split_var", "isolate_assignments")) for line in body.splitlines()):
+                        state.options_complete = False
+                        state.gap_codes.add("verilator_configuration_unmodeled")
+                        state.objective_exclusions.add("verilator_configuration_unmodeled")
+                index += 1; continue
 
         # Simulator switches can carry values that look like source paths
         # (for example ``+define+ROM=/images/boot.v``, ``-DMODEL=foo.sv``,
@@ -1419,6 +1454,16 @@ def _manifest_snapshot_key(
             or str(Path(record["path"]).resolve(strict=False)) in snapshot_paths
             for record in user_records
         )
+    # New Verilator controls are support inputs, not HDL hierarchy files.
+    # Stat-validate them before every manifest-cache hit, including normal waivers.
+    configuration_records = []
+    if compile_result.get("simulator") == "verilator":
+        evidence = compile_result.get("compile_evidence") or {}
+        for rendered in evidence.get("configuration_files", ()):
+            record = _stat_record(Path(rendered))
+            if record is None:
+                return None
+            configuration_records.append(record)
     payload = {
         "adapter_version": SOURCE_GRAPH_ADAPTER_VERSION,
         "compile_log": log_record,
@@ -1443,6 +1488,8 @@ def _manifest_snapshot_key(
             else None
         ),
     }
+    if configuration_records:
+        payload["verilator_configuration_stats"] = configuration_records
     if content_snapshot is not None and payload["compile_content_snapshot"] is None:
         return None
     try:

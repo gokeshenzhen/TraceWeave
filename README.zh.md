@@ -44,7 +44,7 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 | SoC 层级深、模块和接口多 | 按需浏览层次、查找实例与源码，追踪信号的驱动、消费者和连通路径 |
 | 想验证一个调试假设 | 按周期采样，检查时序条件、握手保持和事务完成情况，取得具体证据 |
 
-支持 VCS / Xcelium 仿真日志及 VCD / FSDB 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
+支持 VCS / Xcelium / Verilator 仿真日志及 VCD / FSDB / FST 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
 
 Linux 上可选启用 FST，支持文件发现、基础读取、固定 bit 选择、表达式、周期采样、协议与事务分析、跨格式比较及 X 历史。摘要列出当前已验收的工具。
 
@@ -207,6 +207,20 @@ X-HEEP `example_dma` 数据比较及软件退出值，以及 OpenTitan 软件比
 终止锚点，不代表首个错误 RTL 交易；源码位置是检测点，不能直接作为根因。
 分析和 snapshot/log diff 必须使用同一已核实单位；不同单位设置的快照拒绝比较。
 未知时间仍返回日志上下文，不自动查询 0ps。
+
+Verilator 发现使用有界日志头尾采样，支持延后的 cocotb banner。
+层次和结构分析需要真实 HDL 命令（`verilator --cc/--xml-only ...`）、显式
+`--top-module`、执行 cwd（如 Make entering-directory 行）及可读的有序 `-f`/`-F`
+输入。include、define 和 top 参数覆盖接入既有 Source Graph frontend；C++ 和 `.vlt`
+控制文件不混入 HDL。waiver/trace/优化控制作为支持输入纳入指纹，未建模控制保留明确
+覆盖缺口。缺少 HDL 命令、filelist 或 top 时不猜测；纯 C++ 构建日志不能代替 HDL
+上下文，不自动恢复无关侧车或遍历 vendor 全树。
+
+先 `get_sim_paths`，再对同一 compile log 并行执行 `build_tb_hierarchy` 与
+`scan_structural_risks`，然后解析/分析运行日志。失败有波形时执行 `sweep_handshakes`；
+zero/partial coverage 不能排除 OBI 故障。源码查询使用实际 HDL top 路径；波形中的
+Verilator 合成 `TOP.` 前缀不是 HDL instance，只在确认后续段等于编译 top 后移除。
+Static/Source Graph 仍保留有界覆盖，不引入 Verilator NPI/KDB 后端。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 

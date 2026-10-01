@@ -567,7 +567,7 @@ def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
         return probe_verdi_backend(compile_result, compile_log_path=compile_log)
     except Exception:
         return {
-            "simulator": simulator if simulator in ("vcs", "xcelium") else "unknown",
+            "simulator": simulator if simulator in ("vcs", "xcelium", "verilator") else "unknown",
             "backend": "static",
             "parser_match": "approximate",
             "kdb_path": None,
@@ -640,7 +640,7 @@ def _parse_merged_compile_context(
         cancellation.check_cancelled()
         detected = detect_simulator(path)
         parse_simulator = (
-            detected if detected in {"vcs", "xcelium"} else context_simulator
+            detected if detected in {"vcs", "xcelium", "verilator"} else context_simulator
         )
         supplementary_results.append(parse_compile_log(path, parse_simulator))
     return (
@@ -5722,7 +5722,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto (default: auto)",
+                        "description": "vcs / xcelium / verilator / auto (default: auto)",
                         "default": "auto",
                     },
                 },
@@ -5749,7 +5749,7 @@ async def list_tools():
                     },
                     "simulator": {
                         "type": "string",
-                        "description": "vcs / xcelium / auto (default: auto)",
+                        "description": "vcs / xcelium / verilator / auto (default: auto)",
                         "default": "auto",
                     },
                     "scan_scope": {

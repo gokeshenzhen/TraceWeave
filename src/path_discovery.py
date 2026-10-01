@@ -682,6 +682,9 @@ def _scan_log_phase(log_path: Path) -> str:
     except OSError:
         return "unknown"
 
+    from .verilator_compile import invocation
+    if any(invocation(sample.decode("utf-8", errors="replace"), str(log_path.parent))[0] for sample in samples):
+        return "elaborate"
     lowered_samples = [sample.lower() for sample in samples]
     if any(
         keyword.encode("ascii") in sample

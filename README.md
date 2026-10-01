@@ -44,7 +44,7 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 | A deep SoC hierarchy with many modules and interfaces | Browse hierarchy on demand, locate instances and source files, and follow drivers, consumers, and connectivity paths |
 | A debugging hypothesis needs evidence | Sample by cycle and check timing conditions, handshake stability, and transaction completion |
 
-Supports VCS / Xcelium simulation logs and VCD / FSDB waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
+Supports VCS / Xcelium / Verilator simulation logs and VCD / FSDB / FST waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
 Optional FST support on Linux provides discovery, basic reads, fixed bit selections, expressions, cycle sampling, protocol and transaction analysis, cross-format comparison and X history. The summary lists the currently accepted tools.
 
@@ -215,6 +215,25 @@ transaction. Detection source locations are checker locations, not root causes.
 Use the same verified unit setting in analysis and snapshot/log diff calls;
 snapshots with different settings cannot be compared. Unknown-time analysis
 returns log context without querying 0ps.
+
+Verilator discovery reads bounded head/tail log samples, including delayed cocotb
+banners. Hierarchy and structural analysis require a real HDL invocation
+(`verilator --cc/--xml-only ...`) with an explicit `--top-module`, the execution
+cwd (for example Make's entering-directory line), and available ordered
+`-f`/`-F` inputs. Include paths, macros, and top parameter overrides are replayed
+into the existing Source Graph frontend; C++ files and `.vlt` controls are not
+HDL. Waiver/trace/optimizer controls are fingerprinted support inputs; unmodeled
+controls stay explicit coverage exclusions. Missing HDL commands, filelists,
+or tops remain gaps. A C++ build log alone does not provide HDL context; there
+is no automatic unrelated-sidecar or vendor-tree recovery.
+
+Run `get_sim_paths`, then `build_tb_hierarchy` and `scan_structural_risks` in
+parallel on that same compile log before parsing/analyzing the run. Failed runs
+with waveforms require `sweep_handshakes`; zero/partial coverage does not exclude
+OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
+synthetic waveform `TOP.` prefix is not an HDL instance (remove it only after
+confirming the following segment is the compiled top). Static/Source Graph
+coverage remains bounded; no Verilator NPI/KDB backend is introduced.
 
 `parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
 

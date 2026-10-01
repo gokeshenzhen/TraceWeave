@@ -172,17 +172,19 @@ def _categorize(path: str) -> str:
 
 
 def detect_simulator(log_path: str) -> str:
+    # A bounded head/tail byte sample also sees late cocotb runtime banners.
+    from .verilator_compile import bounded_sample, is_verilator_sample
     try:
-        with open(log_path, "r", errors="replace") as f:
-            for _, line in zip(range(_SIMULATOR_DETECT_MAX_LINES), f):
-                lower = line.lower()
-                if any(marker in lower for marker in _VCS_MARKERS):
-                    return "vcs"
-                if any(marker in lower for marker in _XCE_MARKERS):
-                    return "xcelium"
+        sample = bounded_sample(log_path)
     except OSError:
         return "unknown"
-    return "unknown"
+    for line in sample.splitlines()[:_SIMULATOR_DETECT_MAX_LINES]:
+        lower = line.lower()
+        if any(marker in lower for marker in _VCS_MARKERS):
+            return "vcs"
+        if any(marker in lower for marker in _XCE_MARKERS):
+            return "xcelium"
+    return "verilator" if is_verilator_sample(sample) else "unknown"
 
 
 def _collect_user_files(
@@ -1520,4 +1522,7 @@ def parse_compile_log(log_path: str, simulator: str = "auto") -> dict:
         return parse_vcs_compile_log(log_path)
     if sim_type == "xcelium":
         return parse_xcelium_compile_log(log_path)
+    if sim_type == "verilator":
+        from .verilator_compile import parse
+        return parse(log_path)
     raise ValueError(f"Unable to determine simulator type from compile log: {log_path}")
