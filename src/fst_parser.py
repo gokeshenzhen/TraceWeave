@@ -6,9 +6,11 @@ bounded private spools; public analyses are enabled individually after validatio
 from collections import deque
 from contextlib import contextmanager
 import threading
+import time
 
 from .cancellation import check_cancelled
-from .fst_runtime import FstError, FstProcess, FST_SUPPORTED_TOOLS
+from .fst_runtime import (FstError, FstProcess, FST_SUPPORTED_TOOLS,
+                          metadata_owner, request_deadline)
 from .scope_metadata import ScopeCursor, ScopeIdentityChanged, file_identity, normalize_scope, page_limits
 
 MAX_RESULT_EVENTS = 65536
@@ -113,6 +115,7 @@ class FSTParser:
         self._clock_cache_token = None  # no cross-request FST observation cache
         self._lock = threading.RLock()
         self._active_batch = None
+        self._native_sessions = set()
 
     def _supports_event_pages(self):
         return True
@@ -136,26 +139,68 @@ class FSTParser:
             reader.close()
 
     @contextmanager
-    def _session(self):
+    def _session(self, *, consume=False, deadline=None):
+        owner = metadata_owner()
+        if owner is not None:
+            owner.prepare(self)  # release old parser before acquiring this one
+        deadline = request_deadline(deadline if deadline is not None else time.monotonic() + 30)
         while not self._lock.acquire(timeout=0.05):
             check_cancelled()
+            if time.monotonic() >= deadline:
+                raise FstError('fst_timeout: waiting for parser owner')
         try:
             check_cancelled()
+            if time.monotonic() >= deadline:
+                raise FstError('fst_timeout: metadata request deadline exceeded')
             identity = file_identity(self.file_path)
             if self._file_identity is not None and self._file_identity != identity:
                 raise ScopeIdentityChanged("FST changed; close or obtain a new parser")
             self._file_identity = identity
-            with FstProcess(self.file_path) as session:
+            session = owner.worker if owner is not None else None
+            if session is not None:
+                if owner.epoch is not self._scope_epoch or session not in self._native_sessions:
+                    raise ScopeIdentityChanged('FST metadata owner changed or closed')
+                session.deadline = min(session.deadline, deadline)
+            else:
+                remaining = min(30, deadline - time.monotonic())
+                if remaining <= 0:
+                    raise FstError('fst_timeout: metadata request deadline exceeded')
+                session = FstProcess(self.file_path, timeout_sec=remaining)
+                self._native_sessions.add(session)
+                if owner is not None:
+                    owner.parser, owner.epoch, owner.worker = self, self._scope_epoch, session
+            failed = True
+            try:
+                session.check()
                 yield session
                 session.check()
+                failed = False
+            finally:
+                # Stream/batch consumes the native worker. Batch may transfer
+                # its directory, but child reaping still precedes page access.
+                if failed or consume or owner is None:
+                    if owner is not None:
+                        owner.close()
+                    else:
+                        self._release_session(session)
         except (FileNotFoundError, PermissionError) as exc:
             code = "fst_file_not_found" if isinstance(exc, FileNotFoundError) else "fst_permission_denied"
             raise FstError(f"{code}: {self.file_path}") from exc
         finally:
             self._lock.release()
 
-    def close(self):
+    def _release_session(self, session):
         with self._lock:
+            session.close()
+            self._native_sessions.discard(session)
+
+    def close(self):
+        owner = metadata_owner()
+        if owner is not None and owner.parser is self:
+            owner.close()
+        with self._lock:
+            for session in tuple(self._native_sessions):
+                self._release_session(session)
             self._scope_epoch = object()
             self._file_identity = None
             self._clock_cache_token = None
@@ -254,7 +299,7 @@ class FSTParser:
         return start, end
 
     def _read(self, path, start, end, *, center=None, history=0, budget=None):
-        with self._session() as session:
+        with self._session(consume=True) as session:
             header = session.header
             declaration = self._declaration(session, path)
             if not declaration["supported"]:

@@ -11,7 +11,7 @@ import time
 
 from .cancellation import check_cancelled
 from .event_pages import Event, EventPage, RecordingGap, limits
-from .fst_runtime import FstError, FstProcess, request_deadline
+from .fst_runtime import FstError, metadata_owner, request_deadline
 from .scope_metadata import ScopeIdentityChanged, file_identity
 
 RECORD = struct.Struct('>qBI')
@@ -31,17 +31,17 @@ class FstBatch:
         self.readers = set()
         self.start_fs, self.end_fs = start * 1000, end * 1000 if end >= 0 else -1
         self.check()
-        with FstProcess(parser.file_path, timeout_sec=min(30, self.deadline - time.monotonic())) as worker:
-            self.header = worker.header
-            result = worker.ask({'op': 'batch', 'paths': paths, 'start_fs': self.start_fs,
-                                 'end_fs': self.end_fs, 'spool_bytes': spool_bytes})
-            self.declarations, self.errors, self.streams = result['declarations'], result['errors'], result['streams']
-            self.metrics = {**worker.metrics, **result['batch_metrics']}
-            # Transfer only the private directory; the with statement still
-            # terminates/reaps the child and releases native admission.
-            self.directory, worker.directory = worker.directory, None
-        self.metrics.update(worker.metrics)
         try:
+            with parser._session(consume=True, deadline=self.deadline) as worker:
+                self.header = worker.header
+                result = worker.ask({'op': 'batch', 'paths': paths, 'start_fs': self.start_fs,
+                                     'end_fs': self.end_fs, 'spool_bytes': spool_bytes})
+                self.declarations, self.errors, self.streams = result['declarations'], result['errors'], result['streams']
+                self.metrics = {**worker.metrics, **result['batch_metrics']}
+                # Transfer only the directory. Also cover errors in session
+                # exit: ownership has already moved when its final check runs.
+                self.directory, worker.directory = worker.directory, None
+            self.metrics.update(worker.metrics)
             self.check()
         except BaseException:
             self.close()
@@ -201,6 +201,9 @@ class FstEventReader:
 @contextmanager
 def fst_batch(parser, paths, start, end, *, deadline=None, spool_bytes=MAX_SPOOL_BYTES):
     deadline = request_deadline(deadline if deadline is not None else time.monotonic() + 30)
+    owner = metadata_owner()
+    if owner is not None:
+        owner.prepare(parser)
     while not parser._lock.acquire(timeout=0.05):
         check_cancelled()
         if time.monotonic() >= deadline:

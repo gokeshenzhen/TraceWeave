@@ -34,6 +34,7 @@ FST_SUPPORTED_TOOLS = (*FST_BASIC_TOOLS, "get_signals_by_cycle", "period", "veri
     "recommend_failure_debug_next_steps", "explain_signal_driver", "resolve_packed_fields")
 REQUEST_TIMEOUT_SEC = 30.0
 _request_deadline = ContextVar('fst_request_deadline', default=None)
+_metadata_request = ContextVar('fst_metadata_request', default=None)
 FRAME_BYTES = 1024 * 1024
 MAX_WORKERS = 4
 _slots = threading.BoundedSemaphore(MAX_WORKERS)
@@ -55,14 +56,66 @@ def request_deadline(default):
     return min(active, default) if active is not None else default
 
 
+class _MetadataRequest:
+    """One thread-owned idle reader, never a process-wide reader cache.
+
+    Evict before acquiring a different parser's lock or native admission.
+    This prevents multi-file calls from retaining slots while waiting for
+    another slot, and avoids acquiring two parser locks in opposite orders.
+    """
+    def __init__(self):
+        self.thread = threading.get_ident()
+        self.parser = self.epoch = self.worker = None
+
+    def close(self):
+        parser, worker = self.parser, self.worker
+        self.parser = self.epoch = self.worker = None
+        if worker is not None:
+            parser._release_session(worker)
+
+    def prepare(self, parser):
+        if self.parser is not parser:
+            self.close()
+
+
+def metadata_owner():
+    owner = _metadata_request.get()
+    # ContextVars propagate into AnyIO threads; a native pipe must not.
+    return owner if owner is not None and owner.thread == threading.get_ident() else None
+
+
+class _MetadataScope:
+    def __enter__(self):
+        self.owner = self.token = None
+        if metadata_owner() is None:
+            self.owner = _MetadataRequest()
+            self.token = _metadata_request.set(self.owner)
+        return self
+
+    def __exit__(self, *exc):
+        if self.owner is not None:
+            try:
+                self.owner.close()
+            finally:
+                _metadata_request.reset(self.token)
+        return False
+
+
+def metadata_request():
+    # A class context manager passes exception objects through unchanged;
+    # generator context managers may assign __traceback__ on frozen errors.
+    return _MetadataScope()
+
+
 @contextmanager
 def request_budget():
     deadline = request_deadline(time.monotonic() + REQUEST_TIMEOUT_SEC)
     token = _request_deadline.set(deadline)
     try:
-        yield deadline
-        if time.monotonic() >= deadline:
-            raise FstError('fst_timeout: total FST request deadline exceeded')
+        with metadata_request():
+            yield deadline
+            if time.monotonic() >= deadline:
+                raise FstError('fst_timeout: total FST request deadline exceeded')
     finally:
         _request_deadline.reset(token)
 

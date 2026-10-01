@@ -899,6 +899,21 @@ File realpath/device/inode/size/mtime/ctime changes invalidate reads and cursors
 close/cache replacement rotates parser identity. There is no persistent FST
 index or result cache.
 
+Within one synchronous request, metadata pages, searches and exact declaration
+queries reuse one thread-owned worker/index. Nested consumers share that lease;
+AnyIO context propagation into another thread creates a separate owner, never
+a shared IPC pipe. Switching parsers releases the old worker before acquiring
+the next parser lock or admission slot. Stream/batch reads consume the lease;
+a batch transfers only its private spool directory and reaps the worker before
+exposing pages. Later reads may build a new index, so this is not a persistent
+native reader or a promise of one build for an entire multi-batch analysis.
+Parser close also reaps idle leases, invalidates epochs and rejects stale
+owners. The synchronous request's finally block reaps remaining metadata work
+on completion, error or cancellation. Lock/admission/IPC waits retain the
+cumulative public deadline. Direct Python consumers can use
+`fst_runtime.request_budget()` to obtain the same bounded request lifecycle;
+individual calls outside that context continue to close their own workers.
+
 | Resource | Bound |
 |---|---|
 | Native children | 4 process-wide; 512 MiB address space each; 30 s per child including admission/open/read |

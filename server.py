@@ -1581,6 +1581,21 @@ def _clear_active_fsdb(event: threading.Event) -> None:
             _FSDB_ACTIVE = None
 
 
+def _fst_metadata_call(fn):
+    from src.fst_runtime import metadata_request
+    with metadata_request():
+        return fn()
+
+
+async def _run_in_wave_request(wave_paths, fn, **kwargs):
+    """Add FST request ownership inside the unchanged waveform worker/locks."""
+    paths = [wave_paths] if isinstance(wave_paths, str) else wave_paths
+    if any(str(path).lower().endswith('.fst') for path in paths):
+        original = fn
+        fn = lambda: _fst_metadata_call(original)
+    return await _run_in_wave_thread(wave_paths, fn, **kwargs)
+
+
 async def _run_in_wave_thread(
     wave_paths: str | Sequence[str],
     fn: Callable,
@@ -4056,7 +4071,7 @@ async def _run_trace_x_attempt(
         def _work():
             return _get_parser(wave_path).get_value_at_time(path, at_ps)
 
-        return await _run_in_wave_thread(wave_path, _work)
+        return await _run_in_wave_request(wave_path, _work)
 
     async def _upstream_lookup(
         upstream_names: list[str],
@@ -4071,7 +4086,7 @@ async def _run_trace_x_attempt(
                 at_ps,
             )
 
-        return await _run_in_wave_thread(wave_path, _work)
+        return await _run_in_wave_request(wave_path, _work)
 
     async def _driver_lookup(path: str) -> dict:
         nonlocal kdb_status
@@ -5153,7 +5168,7 @@ async def _resolve_packed_fields(args):
             raise ValueError("dump_and_type_range_mismatch")
         prepare_selections(parser, result["fields"])
     try:
-        await _run_in_wave_thread(args["wave_path"], validate_dump)
+        await _run_in_wave_request(args["wave_path"], validate_dump)
     except (KeyError, ValueError) as exc:
         return blocked(str(exc))
     return schemas.PackedFieldsResult.model_validate(result)
@@ -7419,7 +7434,7 @@ async def _dispatch(name: str, args: dict):
             )
             return schemas.SearchSignalsResult.model_validate(result)
 
-        return await _run_in_wave_thread(wave_path, _work)
+        return await _run_in_wave_request(wave_path, _work)
 
     elif name == "get_signal_at_time":
 
@@ -7445,7 +7460,7 @@ async def _dispatch(name: str, args: dict):
                 result["resolved_from"] = raw_path
             return schemas.SignalAtTimeResult.model_validate(attach_selections(result, parser))
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "get_signal_transitions":
 
@@ -7462,7 +7477,7 @@ async def _dispatch(name: str, args: dict):
             max_transitions = int(args.get("max_transitions", TRANSITIONS_MAX_RETURNED))
             return _prepare_signal_transitions_result(attach_selections(result, parser), max_transitions)
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "get_signals_around_time":
 
@@ -7509,7 +7524,7 @@ async def _dispatch(name: str, args: dict):
             result["signal_suggestions"] = suggestions
             return schemas.SignalsAroundTimeResult.model_validate(attach_selections(result, parser))
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "get_signals_by_cycle":
 
@@ -7577,7 +7592,7 @@ async def _dispatch(name: str, args: dict):
             }
             return schemas.GetSignalsByCycleResult.model_validate(attach_selections(result, parser))
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "get_waveform_summary":
 
@@ -7585,7 +7600,7 @@ async def _dispatch(name: str, args: dict):
             result = _get_parser(args["wave_path"]).get_summary()
             return schemas.WaveformSummaryResult.model_validate(result)
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
@@ -8043,7 +8058,7 @@ async def _dispatch(name: str, args: dict):
                 window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
                 extra_transitions=args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
             )
-        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
+        result = await _run_in_cancellable_thread(lambda: _fst_metadata_call(analyze)) if fst_paths else analyze()
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
             result["analysis_guide"] = {
@@ -8072,7 +8087,7 @@ async def _dispatch(name: str, args: dict):
                 compile_log=args.get("compile_log"),
                 top_hint=args.get("top_hint"),
             )
-        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
+        result = await _run_in_cancellable_thread(lambda: _fst_metadata_call(analyze)) if fst_paths else analyze()
         return schemas.AnalyzeFailureEventResult.model_validate(result)
 
     elif name == "recommend_failure_debug_next_steps":
@@ -8101,7 +8116,7 @@ async def _dispatch(name: str, args: dict):
                 if sweep_cache is not None
                 else None,
             )
-        result = await _run_in_cancellable_thread(analyze) if fst_paths else analyze()
+        result = await _run_in_cancellable_thread(lambda: _fst_metadata_call(analyze)) if fst_paths else analyze()
         has_failure_context = False
         if parse_cache is not None:
             has_failure_context = parse_cache.runtime_total_errors > 0
@@ -8291,7 +8306,7 @@ async def _dispatch(name: str, args: dict):
             )
             return result
 
-        result = await _run_in_wave_thread(
+        result = await _run_in_wave_request(
             [args["wave_path_a"], args["wave_path_b"]], _work
         )
         if result["diverged"]:
@@ -8333,7 +8348,7 @@ async def _dispatch(name: str, args: dict):
             )
             return schemas.PeriodResult.model_validate(result)
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "suggest_handshakes":
 
@@ -8346,7 +8361,7 @@ async def _dispatch(name: str, args: dict):
             )
             return schemas.SuggestHandshakesResult.model_validate(result)
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "suggest_protocol_bundles":
 
@@ -8360,7 +8375,7 @@ async def _dispatch(name: str, args: dict):
             )
             return schemas.SuggestProtocolBundlesResult.model_validate(result)
 
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _run_in_wave_request(args["wave_path"], _work)
 
     elif name == "sweep_handshakes":
 
@@ -8389,7 +8404,7 @@ async def _dispatch(name: str, args: dict):
         # Result-cache/provenance writes stay on the event-loop thread: the
         # worker thread computes, the loop remains the single writer of
         # dispatch-level session state.
-        validated = await _run_in_wave_thread(
+        validated = await _run_in_wave_request(
             args["wave_path"], _work, priority=_WAVE_PRIORITY_BACKGROUND
         )
         _result_cache["sweep_handshakes"] = validated
@@ -8415,7 +8430,7 @@ async def _dispatch(name: str, args: dict):
                 end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
                 max_cycles=args.get("max_cycles", 65536), max_transactions=args.get("max_transactions", 256),
                 max_wait_cycles=args.get("max_wait_cycles", 16))
-        result = await _run_in_wave_thread(args["wave_path"], _work)
+        result = await _run_in_wave_request(args["wave_path"], _work)
         return schemas.TlulInspectResult.model_validate(result)
 
     elif name == "inspect_handshake":
@@ -8444,7 +8459,7 @@ async def _dispatch(name: str, args: dict):
                 cursor_note=args.get("cursor_note"),
             )
 
-        result = await _run_in_wave_thread(args["wave_path"], _work)
+        result = await _run_in_wave_request(args["wave_path"], _work)
         return schemas.HandshakeInspectResult.model_validate(result)
 
     elif name == "verify_window":
@@ -8469,7 +8484,7 @@ async def _dispatch(name: str, args: dict):
                 cursor_note=args.get("cursor_note"),
             )
 
-        result = await _run_in_wave_thread(args["wave_path"], _work)
+        result = await _run_in_wave_request(args["wave_path"], _work)
         return schemas.WindowVerifyResult.model_validate(result)
 
     elif name == "reconstruct_transactions":
@@ -8511,7 +8526,7 @@ async def _dispatch(name: str, args: dict):
                 cursor_note=args.get("cursor_note"),
             )
 
-        result = await _run_in_wave_thread(args["wave_path"], _work)
+        result = await _run_in_wave_request(args["wave_path"], _work)
         return schemas.TxnReconstructResult.model_validate(result)
 
     elif name in {
