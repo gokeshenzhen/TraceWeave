@@ -207,10 +207,10 @@ def main():
                 row = resolve(index, message["path"])
                 if not row.supported:
                     raise ValueError("fst_signal_type_unsupported")
-                stream_events(pylibfst, reader, row, header, message, check)
+                stream_events(pylibfst, reader, row, header, message, check, path)
                 return
             elif op == "batch":
-                spool_events(pylibfst, reader, index, header, message, check)
+                spool_events(pylibfst, reader, index, header, message, check, path)
                 return
             else:
                 raise ValueError("fst_request_invalid")
@@ -359,8 +359,81 @@ def build_index(lib, ffi, reader):
     return index
 
 
-def spool_events(api, reader, index, header, message, check):
-    """One masked traversal into bounded, private, per-storage window streams.
+def window_scan_start(api, reader, path, header, start, handles, check):
+    """Skip older blocks only after witnessing an actual pre-window event.
+
+    A time-filtered libfst traversal emits a snapshot at the first loaded
+    block's begin tick. That snapshot proves no change time. A callback
+    strictly AFTER that tick and BEFORE the query is a genuine event; every
+    selected storage handle must have one before we use the filtered scan.
+    The final scan will overwrite its synthetic prefix with those actual
+    events before emitting anything. Otherwise preserve the original scan.
+    No event/window cache or retained block index is introduced.
+    """
+    METRICS.update(native_prefix_probe_iterations=0, native_prefix_probe_callbacks=0,
+                   native_prefix_blocks_skipped=0)
+    if not handles or start <= header['start_tick'] * header['scale_fs']:
+        return 0
+    # Recording interruptions need history beyond event timestamps. Keep
+    # their established full-prefix treatment, even outside this window.
+    if any(not active for _, active in header['activity']):
+        return 0
+    tick = start // header['scale_fs']
+    if tick > header['end_tick']:
+        return 0
+    skipped = 0
+    first_begin = None
+    with open(path, 'rb') as stream:
+        # preflight already validated these envelopes under the same file
+        # identity. Seek over compressed payloads, retaining only two ticks.
+        pos, size = 0, os.stat(path).st_size
+        while pos < size:
+            stream.seek(pos)
+            raw = stream.read(9)
+            if len(raw) != 9:
+                raise ValueError('fst_corrupt: incomplete block header')
+            kind, length = raw[0], struct.unpack('>Q', raw[1:])[0]
+            if length < 8 or pos + length + 1 > size:
+                raise ValueError('fst_corrupt: invalid block envelope')
+            if kind in (1, 5, 8):
+                begin, end = struct.unpack('>QQ', stream.read(16))
+                if end >= tick:
+                    first_begin = begin
+                    break
+                skipped += 1
+            pos += length + 1
+    if not skipped or first_begin is None or first_begin * header['scale_fs'] >= start:
+        return 0
+    witnessed, callbacks = set(), 0
+
+    def probe(_, at, handle, pointer):
+        nonlocal callbacks
+        try:
+            callbacks += 1
+            if first_begin < at and at * header['scale_fs'] < start and handle in handles:
+                witnessed.add(handle)
+        except BaseException:
+            # CFFI cannot propagate callback failures. Never continue with
+            # potentially incomplete proof of the prefix.
+            try:
+                emit({'kind': 'error', 'reason': 'fst_callback_failed'})
+            finally:
+                os._exit(2)
+
+    api.lib.fstReaderSetLimitTimeRange(reader, tick, tick)
+    rc = api.fstReaderIterBlocks(reader, probe)
+    check()
+    if rc != 1 or api.lib.fstReaderGetFseekFailed(reader):
+        raise ValueError('fst_decode_failed')
+    METRICS.update(native_prefix_probe_iterations=1, native_prefix_probe_callbacks=callbacks)
+    if witnessed != set(handles):
+        return 0
+    METRICS['native_prefix_blocks_skipped'] = skipped
+    return tick
+
+
+def spool_events(api, reader, index, header, message, check, wave_path):
+    """One output traversal, optionally preceded by a bounded prefix probe.
 
     Spooling decouples native callback order from independent consumer cursors.
     Only the selected window and two prefix records are stored, never a VCD or
@@ -440,7 +513,8 @@ def spool_events(api, reader, index, header, message, check):
             if start < begin:
                 write(state, start, 3, json.dumps([min(end, begin), 'outside_recorded_range', end < begin]))
             lib.fstReaderSetFacProcessMask(reader, handle)
-        lib.fstReaderSetLimitTimeRange(reader, 0, min(header['end_tick'], end // scale))
+        scan_start = window_scan_start(api, reader, wave_path, header, start, states, check)
+        lib.fstReaderSetLimitTimeRange(reader, scan_start, min(header['end_tick'], end // scale))
 
         def callback(_, tick, handle, pointer):
             nonlocal callbacks
@@ -495,7 +569,8 @@ def spool_events(api, reader, index, header, message, check):
             state['file'].close()
         check()
         emit({'kind': 'batch', 'declarations': declarations, 'errors': errors, 'streams': streams,
-              'batch_metrics': {'native_iterations': int(bool(states)), 'native_callbacks': callbacks,
+              'batch_metrics': {'native_iterations': int(bool(states)) + METRICS['native_prefix_probe_iterations'],
+                  'native_callbacks': callbacks + METRICS['native_prefix_probe_callbacks'],
                   'window_transitions': selected_events, 'spool_bytes': total_bytes,
                   'storage_streams': len(states), 'logical_signals': len(paths),
                   'scan_and_spool_ms': (time.perf_counter() - started) * 1000}})
@@ -504,7 +579,7 @@ def spool_events(api, reader, index, header, message, check):
             state['file'].close()
 
 
-def stream_events(api, reader, row, header, message, check):
+def stream_events(api, reader, row, header, message, check, path):
     lib, ffi = api.lib, api.ffi
     cap, byte_cap = message["max_events"], message["max_bytes"]
     if not 1 <= cap <= 4096 or not 128 <= byte_cap <= 1048576:
@@ -513,13 +588,13 @@ def stream_events(api, reader, row, header, message, check):
     rows, used, previous, initial = [], 0, None, None
     first_page, first_event, finished = True, True, False
     last_tick = -1
-    METRICS.update(native_iterations=1, native_callbacks=0)
     lib.fstReaderClrFacProcessMaskAll(reader)
     lib.fstReaderSetFacProcessMask(reader, row.handle)
-    # Scan from the recorded beginning to retain a genuine predecessor time.
-    # Starting at the requested window could invent a transition from a block
-    # snapshot. Range filtering is only a block-load hint, never clipping.
-    lib.fstReaderSetLimitTimeRange(reader, 0, min(header["end_tick"], end // header["scale_fs"]))
+    scan_start = window_scan_start(api, reader, path, header, start, {row.handle}, check)
+    METRICS.update(native_iterations=1 + METRICS['native_prefix_probe_iterations'],
+                   native_callbacks=METRICS['native_prefix_probe_callbacks'])
+    lib.fstReaderSetLimitTimeRange(reader, scan_start, min(header["end_tick"], end // header["scale_fs"]))
+
 
     def prefixes():
         predecessor = previous if first_page else None

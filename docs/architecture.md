@@ -823,8 +823,9 @@ folds an initial observation at its physical time (or exposes a pre-window state
 anchor), preserving complete same-time groups across pages. Selection projection
 preserves those fields. Existing FSDB/VCD pages keep their previous defaults.
 
-FST event sessions now perform one masked native traversal per file into private
-per-storage spools, then reap the child before exposing logical readers. Aliases
+FST event sessions perform a masked native traversal per batch into private
+per-storage spools, then reap the child before exposing logical readers. The
+optional prefix probe described below may add one traversal. Aliases
 reuse immutable storage with independent positions. Across a batch, at most 128
 backing declarations and 64 MiB of temporary event records are admitted; a shared
 30-second deadline includes preparation, admission and consumption. Requests
@@ -876,9 +877,17 @@ uses private identity-bound cursors; no public event cursor is introduced.
 Raw times are integer fs; public `time_ps` labels use ceiling and `time_fs`
 preserves exact event order. The first value at the file start is an
 `initial_state`, separate from true changes and the strictly pre-window
-`predecessor`. Selected signals are scanned from the recorded beginning to
-establish an actual predecessor time, rather than mislabelling a block
-snapshot. Libfst's block time filter is not a strict event filter; the adapter
+`predecessor`. A late window can skip older blocks only after a separate bounded
+probe witnesses a callback strictly after the first loaded block's begin tick
+and strictly before the window, for every selected storage handle. The block's
+initial snapshot cannot satisfy this test. The final filtered traversal must
+therefore replace that snapshot with a genuine predecessor before returning
+events. Without this evidence, reads scan from the recorded beginning; files
+with dump-inactive intervals always retain that original path. No block/event
+index or prefix cache survives the request. The probe adds a traversal and may
+cost extra on sparse or mixed selections that need the fallback; private native
+callback/iteration totals include both passes. Libfst's block time filter is
+not a strict event filter; the adapter
 clips by physical time and consumes every admitted page before reporting a
 complete result. Same-tick callback order does not prove delta/NBA order.
 Actual X/Z, missing signals, times outside the recorded range, dump inactivity,
@@ -927,8 +936,8 @@ individual calls outside that context continue to close their own workers.
 | Local window | 128 signals, 128 history changes each, existing fixed fallback window limit; no clock/transient inference |
 
 Native buffers can exceed a page's size inside the worker; page limits are not
-represented as total-memory bounds. Reading a late narrow window may scan a
-large selected-signal prefix and hit the deadline. Large metadata can require
+represented as total-memory bounds. A late narrow window without confirmed
+prefix evidence may still scan a large history and hit the deadline. Large metadata can require
 a smaller dump rather than just a narrower time window. Nonzero `timezero`,
 precision below 1 fs, times beyond signed-64-bit fs, external `.hier`, whole-file
 gzip containers, and real/string/special value types are explicitly unsupported.
