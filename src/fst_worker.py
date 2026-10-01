@@ -4,6 +4,8 @@ All native allocation and decompression happens after process resource limits
 are applied. Callback output is bounded and waits for a next-page request, so a
 slow or stopped consumer cannot accumulate an unbounded Python event queue.
 """
+from collections import namedtuple
+
 import hashlib
 import importlib.metadata
 import json
@@ -17,7 +19,7 @@ import sys
 import time
 
 MAX_DECLARATIONS = 32768
-MAX_INDEX_BYTES = 8 * 1024 * 1024
+MAX_INDEX_BYTES = 32 * 1024 * 1024
 MAX_WIDTH = 65536
 MAX_ACTIVITY = 4096
 MAX_NAME_BYTES = 4096
@@ -25,6 +27,21 @@ MAX_SCOPE_DEPTH = 256
 MAX_BLOCKS = 1048576
 FRAME_BYTES = 1024 * 1024
 METRICS = {}
+
+# Only the worker owns these records. Scope strings and ancestor references
+# are shared by all declarations in that parsed scope; public dictionaries
+# (including range coordinates) are materialized only at the IPC boundary.
+Scope = namedtuple("Scope", "path ancestors top")
+Declaration = namedtuple("Declaration", (
+    "path base name scope width handle is_alias direction var_type declared_range supported"))
+
+
+def declaration(row):
+    result = row._asdict()
+    result.update(scope=row.scope.path, ancestors=row.scope.ancestors, top=row.scope.top,
+                  declared_range=(dict(zip(("left", "right"), row.declared_range))
+                                  if row.declared_range is not None else None))
+    return result
 
 
 def rss(field='VmRSS'):
@@ -168,10 +185,10 @@ def main():
             op = message["op"]
             if op == "metadata":
                 emit({"kind": "metadata", "count": len(index),
-                      "top_modules": sorted({row["top"] for row in index.values() if row["top"]}),
+                      "top_modules": sorted({row.scope.top for row in index.values() if row.scope.top}),
                       "sample_signals": sorted(index)[:20]})
             elif op == "declaration":
-                emit({"kind": "declaration", "declaration": resolve(index, message["path"])})
+                emit({"kind": "declaration", "declaration": declaration(resolve(index, message["path"]))})
             elif op == "search":
                 keyword = message["keyword"].lower()
                 paths = [p for p in sorted(index) if keyword in p.lower()]
@@ -184,13 +201,13 @@ def main():
                     if after is not None and p < after:
                         continue
                     row = index[p]
-                    if scope and scope not in row["ancestors"]:
+                    if scope and scope not in row.scope.ancestors:
                         continue
                     if len(rows) >= message["max_items"] or visited >= message["max_visited"]:
                         next_path, reason = p, "page_items" if len(rows) >= message["max_items"] else "page_scan"
                         break
                     visited += 1
-                    if direct and row["scope"] != scope:
+                    if direct and row.scope.path != scope:
                         continue
                     item = public(row)
                     size = len(json.dumps(item, ensure_ascii=True).encode())
@@ -203,7 +220,7 @@ def main():
                       "visited": visited, "next_path": next_path, "stop_reason": reason})
             elif op == "stream":
                 row = resolve(index, message["path"])
-                if not row["supported"]:
+                if not row.supported:
                     raise ValueError("fst_signal_type_unsupported")
                 stream_events(pylibfst, reader, row, header, message, check)
                 return
@@ -217,13 +234,14 @@ def main():
 
 
 def public(row):
-    return {k: row[k] for k in ("path", "name", "scope", "width", "direction", "var_type", "supported", "is_alias")}
+    return {**{k: getattr(row, k) for k in ("path", "name", "width", "direction", "var_type", "supported", "is_alias")},
+            "scope": row.scope.path}
 
 
 def resolve(index, path):
     if path in index:
         return index[path]
-    matches = [r for p, r in index.items() if r["base"] == path]
+    matches = [r for p, r in index.items() if r.base == path]
     if len(matches) == 1:
         return matches[0]
     raise ValueError("fst_signal_not_found" if not matches else "fst_signal_ambiguous")
@@ -232,7 +250,23 @@ def resolve(index, path):
 def build_index(lib, ffi, reader):
     if lib.fstReaderGetVarCount(reader) > MAX_DECLARATIONS:
         raise ValueError("fst_metadata_entry_limit")
-    scopes, index, nbytes = [], {}, 0
+    scopes, index = [], {}
+    root = Scope("", (), None)
+    # Owned object sizes, not JSON expansion. Shared immutable enum/small-int
+    # objects are deliberately overcharged. Reserve small build tables;
+    # dict/list backing allocations are charged separately. One bounded
+    # in-construction record and container resize can temporarily exceed this
+    # accounting cap; the separate process address limit covers that peak.
+    nbytes = 64 * 1024
+    scope_count = 0
+
+    def account(extra):
+        nonlocal nbytes
+        nbytes += extra
+        used = nbytes + sys.getsizeof(index) + sys.getsizeof(scopes)
+        if used > MAX_INDEX_BYTES:
+            raise ValueError("fst_metadata_memory_limit")
+        return used
     types = {int(getattr(lib, name)): name.removeprefix("FST_VT_").lower().removeprefix("vcd_")
              for name in dir(lib) if name.startswith("FST_VT_") and name not in {"FST_VT_MIN", "FST_VT_MAX"}}
     unsupported = {0, 3, 4, 18, 19, 20, 21, 29}
@@ -244,7 +278,13 @@ def build_index(lib, ffi, reader):
         if node.htyp == lib.FST_HT_SCOPE:
             if node.u.scope.name_length > MAX_NAME_BYTES or len(scopes) >= MAX_SCOPE_DEPTH:
                 raise ValueError("fst_scope_limit")
-            scopes.append(ffi.string(node.u.scope.name).decode("utf-8", "strict"))
+            name = ffi.string(node.u.scope.name).decode("utf-8", "strict")
+            parent = scopes[-1] if scopes else root
+            path = parent.path + "." + name if scopes else name
+            scope = Scope(path, parent.ancestors + (path,), parent.top if scopes else path)
+            account(sys.getsizeof(scope) + sys.getsizeof(path) + sys.getsizeof(scope.ancestors))
+            scopes.append(scope)
+            scope_count += 1
         elif node.htyp == lib.FST_HT_UPSCOPE:
             if not scopes:
                 raise ValueError("fst_corrupt: unbalanced scopes")
@@ -257,8 +297,8 @@ def build_index(lib, ffi, reader):
             match = re.search(r"\s+(\[-?\d+(?::-?\d+)?\])$", name)
             if match and not name.startswith("\\"):
                 name = name[:match.start()] + match[1]
-            scope = ".".join(scopes)
-            path = scope + "." + name if scope else name
+            scope = scopes[-1] if scopes else root
+            path = scope.path + "." + name if scope.path else name
             explicit = re.search(r"\[(-?\d+)(?::(-?\d+))?\]$", name)
             # An attached single index can name a dumped array element. Only
             # a separated range token (or an explicit colon range) supplies
@@ -273,27 +313,32 @@ def build_index(lib, ffi, reader):
                 left, right = int(explicit[1]), int(explicit[2] or explicit[1])
                 if abs(left - right) + 1 != var.length:
                     raise ValueError("fst_declaration_range_unsupported")
-                coords = {"left": left, "right": right}
+                coords = (left, right)
                 base = path[:len(path) - len(explicit[0])].rstrip()
             elif var.length == 1:
-                coords = {"left": 0, "right": 0}
-            ancestors = [".".join(scopes[:i]) for i in range(1, len(scopes) + 1)]
-            row = {"path": path, "base": base, "name": name, "scope": scope, "ancestors": ancestors,
-                   "top": scopes[0] if scopes else None, "width": int(var.length), "handle": int(var.handle),
-                   "is_alias": bool(var.is_alias), "direction": directions.get(int(var.direction), "unknown"),
-                   "var_type": types.get(int(var.typ), "unknown"), "declared_range": coords,
-                   "supported": int(var.typ) in types and int(var.typ) not in unsupported and var.length > 0}
+                coords = (0, 0)
+            row = Declaration(path, base, name, scope, int(var.length), int(var.handle),
+                bool(var.is_alias), directions.get(int(var.direction), "unknown"),
+                types.get(int(var.typ), "unknown"), coords,
+                int(var.typ) in types and int(var.typ) not in unsupported and var.length > 0)
             if path in index:
                 raise ValueError("fst_declaration_conflict")
-            # Conservative accounting includes Python dictionaries and strings,
-            # in addition to the separate hard native process address limit.
-            nbytes += 1024 + 4 * len(json.dumps(row, ensure_ascii=True).encode())
-            if nbytes > MAX_INDEX_BYTES or len(index) >= MAX_DECLARATIONS:
-                raise ValueError("fst_metadata_memory_limit")
+            if len(index) >= MAX_DECLARATIONS:
+                raise ValueError("fst_metadata_entry_limit")
+            owned = sys.getsizeof(row) + sys.getsizeof(path)
+            owned += sys.getsizeof(name) if name is not path else 0
+            owned += sys.getsizeof(base) if base is not path else 0
+            owned += sum(sys.getsizeof(v) for v in (row.width, row.handle, row.is_alias,
+                                                   row.direction, row.var_type, row.supported))
+            if coords is not None:
+                owned += sys.getsizeof(coords) + sum(sys.getsizeof(v) for v in coords)
+            account(owned)
             index[path] = row
+            account(0)
     if scopes or len(index) != lib.fstReaderGetVarCount(reader):
         raise ValueError("fst_corrupt: incomplete hierarchy")
-    METRICS.update(index_declarations=len(index), index_accounted_bytes=nbytes)
+    METRICS.update(index_declarations=len(index), index_scopes=scope_count,
+                   index_accounted_bytes=account(0))
     return index
 
 
@@ -362,16 +407,16 @@ def spool_events(api, reader, index, header, message, check):
         for path in paths:
             try:
                 row = resolve(index, path)
-                if not row['supported']:
+                if not row.supported:
                     raise ValueError('fst_signal_type_unsupported')
             except ValueError as exc:
                 errors[path] = str(exc)
                 continue
-            declarations[path] = row
-            handle = row['handle']
+            declarations[path] = declaration(row)
+            handle = row.handle
             if handle in states:
                 continue
-            state = dict(file=open(f'{handle}.events', 'wb'), width=row['width'],
+            state = dict(file=open(f'{handle}.events', 'wb'), width=row.width,
                          first=True, last=-1, initial=None, previous=None,
                          activity=0, active=True, gap=(begin, 'unrecorded'))
             states[handle] = state
@@ -453,7 +498,7 @@ def stream_events(api, reader, row, header, message, check):
     last_tick = -1
     METRICS.update(native_iterations=1, native_callbacks=0)
     lib.fstReaderClrFacProcessMaskAll(reader)
-    lib.fstReaderSetFacProcessMask(reader, row["handle"])
+    lib.fstReaderSetFacProcessMask(reader, row.handle)
     # Scan from the recorded beginning to retain a genuine predecessor time.
     # Starting at the requested window could invent a transition from a block
     # snapshot. Range filtering is only a block-load hint, never clipping.
@@ -495,7 +540,7 @@ def stream_events(api, reader, row, header, message, check):
                 page(complete=True)
                 finished = True
                 return
-            value = bytes(ffi.buffer(pointer, row["width"])).decode("ascii").lower()
+            value = bytes(ffi.buffer(pointer, row.width)).decode("ascii").lower()
             if any(c not in "01xz" for c in value):
                 raise ValueError("fst_digital_value_unsupported")
             event = [int(tick), value]

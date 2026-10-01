@@ -905,7 +905,7 @@ index or result cache.
 | Public FST request | 30 s cumulative across metadata, readers and analysis, including nested comparison inputs; cancellation reaps active native work |
 | Native work | Validated block envelopes; advertised value-block working set above 256 MiB rejected before decode; hard process limit also covers hierarchy/decompression |
 | Private temporary files | 64 MiB per file; selected event spools share a 64 MiB batch/session cap; directory removed on cleanup |
-| Metadata | 32,768 declarations and 8 MiB conservative index accounting, whichever comes first; depth 256, name 4,096 bytes |
+| Metadata | 32,768 declarations and 32 MiB owned-object index accounting, whichever comes first; depth 256, name 4,096 bytes |
 | Signal / activity | 65,536 bits per declaration; 4,096 dump activity changes |
 | Event page | Default 1,024 records / 256 KiB; hard 4,096 / 1 MiB, including initial/predecessor records |
 | Public read result | 65,536 changes / 8 MiB conservative value accounting; aliases also debit output memory |
@@ -919,6 +919,20 @@ precision below 1 fs, times beyond signed-64-bit fs, external `.hier`, whole-fil
 gzip containers, and real/string/special value types are explicitly unsupported.
 Truncated reads carry partial coverage; display caps alone preserve the read
 coverage and total count. `full` and `compact` project the same validated facts.
+
+Metadata declarations use compact immutable records and share parsed scope
+paths/ancestor references. Public rows and range dictionaries are built only
+for IPC output. Accounting includes object/string sizes and container backing
+allocations; shared enum/small scalar objects are conservatively overcharged.
+It replaces the former per-declaration JSON multiplier, not the native memory
+limit. The 32 MiB budget admits the measured 32,189-declaration NIC workload
+(about 24.1 MiB accounted); it is not a general SoC capacity guarantee. A
+bounded in-construction record, container resize, sorting and IPC projection
+need additional transient space covered by the 512 MiB process address cap.
+Four admitted workers can each consume that cap; it is not a combined RSS
+guarantee. Index accounting, worker RSS and sampled parent/child RSS must be
+reported separately when comparing capacity or performance.
+
 Log correlation and recommendation tools also accept FST; their read work runs
 in a cancellable worker. Packed-field resolution validates the same semantic
 source layout against exact FST declarations. Structural work holds no FST wave

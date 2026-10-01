@@ -123,7 +123,8 @@ def test_wide_signal_pages_stop_explicitly_when_one_record_will_not_fit(tmp_path
 def test_metadata_work_is_bounded_before_returning_partial_names(tmp_path, count, code):
     path = write_fst(tmp_path / "index.fst", [(0, "a", "1")], declarations=[
         ("a", 1, "wire", "input", None),
-        *[(f"alias{i}", 1, "wire", "output", "a") for i in range(count - 1)]])
+        *[(f"alias{i}" + ("n" * 4000 if code == "metadata_memory_limit" else ""),
+           1, "wire", "output", "a") for i in range(count - 1)]])
     with pytest.raises(FstError, match=code):
         FSTParser(path).get_summary()
 
