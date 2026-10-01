@@ -948,6 +948,15 @@ Four admitted workers can each consume that cap; it is not a combined RSS
 guarantee. Index accounting, worker RSS and sampled parent/child RSS must be
 reported separately when comparing capacity or performance.
 
+Each worker sorts declaration paths once and charges the retained pointer
+table to the same metadata budget. Scope pages binary-search both the inclusive
+cursor and the lexical candidate interval. Parsed ancestry still determines
+membership: dots inside escaped scope/signal names cannot establish a subtree.
+Direct pages retain descendant visit counting and the original item/byte/scan
+stop order, including empty or non-progressing pages. Substring search uses the
+same sorted table but still checks every declaration; scope indexing does not
+turn substring matching into a prefix query.
+
 Log correlation and recommendation tools also accept FST; their read work runs
 in a cancellable worker. Packed-field resolution validates the same semantic
 source layout against exact FST declarations. Structural work holds no FST wave

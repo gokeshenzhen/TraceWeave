@@ -4,6 +4,7 @@ All native allocation and decompression happens after process resource limits
 are applied. Callback output is bounded and waits for a next-page request, so a
 slow or stopped consumer cannot accumulate an unbounded Python event queue.
 """
+from bisect import bisect_left
 from collections import namedtuple
 
 import hashlib
@@ -180,44 +181,28 @@ def main():
                 started = time.perf_counter()
                 METRICS['index_rss_before_kib'] = rss()
                 index = build_index(lib, ffi, reader)
+                ordered_paths = sorted(index)
+                accounted = METRICS['index_accounted_bytes'] + sys.getsizeof(ordered_paths)
+                if accounted > MAX_INDEX_BYTES:
+                    raise ValueError('fst_metadata_memory_limit')
+                METRICS.update(index_accounted_bytes=accounted,
+                               index_sorted_path_bytes=sys.getsizeof(ordered_paths))
                 METRICS.update(index_build_ms=(time.perf_counter() - started) * 1000,
                                index_rss_after_kib=rss())
             op = message["op"]
             if op == "metadata":
                 emit({"kind": "metadata", "count": len(index),
                       "top_modules": sorted({row.scope.top for row in index.values() if row.scope.top}),
-                      "sample_signals": sorted(index)[:20]})
+                      "sample_signals": ordered_paths[:20]})
             elif op == "declaration":
                 emit({"kind": "declaration", "declaration": declaration(resolve(index, message["path"]))})
             elif op == "search":
                 keyword = message["keyword"].lower()
-                paths = [p for p in sorted(index) if keyword in p.lower()]
+                paths = [p for p in ordered_paths if keyword in p.lower()]
                 emit({"kind": "search", "total_matched": len(paths),
                       "results": [public(index[p]) for p in paths[:message["limit"]]]})
             elif op == "scope":
-                scope, direct, after = message["scope"], message["direct"], message.get("after")
-                rows, nbytes, visited, next_path, reason = [], 0, 0, None, None
-                for p in sorted(index):
-                    if after is not None and p < after:
-                        continue
-                    row = index[p]
-                    if scope and scope not in row.scope.ancestors:
-                        continue
-                    if len(rows) >= message["max_items"] or visited >= message["max_visited"]:
-                        next_path, reason = p, "page_items" if len(rows) >= message["max_items"] else "page_scan"
-                        break
-                    visited += 1
-                    if direct and row.scope.path != scope:
-                        continue
-                    item = public(row)
-                    size = len(json.dumps(item, ensure_ascii=True).encode())
-                    if size > message["max_bytes"] - nbytes:
-                        next_path, reason = p, "page_bytes"
-                        break
-                    rows.append(item)
-                    nbytes += size
-                emit({"kind": "scope", "results": rows, "bytes_returned": nbytes,
-                      "visited": visited, "next_path": next_path, "stop_reason": reason})
+                emit(scope_page(index, ordered_paths, message))
             elif op == "stream":
                 row = resolve(index, message["path"])
                 if not row.supported:
@@ -236,6 +221,38 @@ def main():
 def public(row):
     return {**{k: getattr(row, k) for k in ("path", "name", "width", "direction", "var_type", "supported", "is_alias")},
             "scope": row.scope.path}
+
+
+def scope_page(index, ordered_paths, message):
+    scope, direct, after = message["scope"], message["direct"], message.get("after")
+    # A real descendant must sort within [scope + '.', scope + '/'). This
+    # narrows candidates only: escaped identifiers may contain dots, so parsed
+    # ancestry still decides membership, exactly as in the original scan.
+    lo = bisect_left(ordered_paths, scope + ".") if scope else 0
+    hi = bisect_left(ordered_paths, scope + "/") if scope else len(ordered_paths)
+    if after is not None:
+        lo = bisect_left(ordered_paths, after, lo, hi)  # inclusive next_path
+    rows, nbytes, visited, next_path, reason = [], 0, 0, None, None
+    for i in range(lo, hi):
+        p = ordered_paths[i]
+        row = index[p]
+        if scope and scope not in row.scope.ancestors:
+            continue
+        if len(rows) >= message["max_items"] or visited >= message["max_visited"]:
+            next_path, reason = p, "page_items" if len(rows) >= message["max_items"] else "page_scan"
+            break
+        visited += 1
+        if direct and row.scope.path != scope:
+            continue
+        item = public(row)
+        size = len(json.dumps(item, ensure_ascii=True).encode())
+        if size > message["max_bytes"] - nbytes:
+            next_path, reason = p, "page_bytes"
+            break
+        rows.append(item)
+        nbytes += size
+    return {"kind": "scope", "results": rows, "bytes_returned": nbytes,
+            "visited": visited, "next_path": next_path, "stop_reason": reason}
 
 
 def resolve(index, path):
