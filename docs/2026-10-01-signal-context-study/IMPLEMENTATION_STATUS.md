@@ -21,7 +21,7 @@
 
 正在执行：
 
-- E1 已启动独立模型/MCP 顺序评测，原始结果持续写入 `evaluation/e1-20261002/runs/`；未改冻结产品、任务、预算或 runner。
+- E1 首批因独立 MCP 缺少 EDA 环境、C1 NPI 加载失败而中断；[原始失败与报告](evaluation/e1-20261002/REPORT.md) 保留。临时 CLI 补充环境转发后，[真实 NPI 模型预检](evaluation/runner-npi-preflight/REPORT.md) 正常退出并确认 `actual_backend=verdi_npi`。产品、任务和正式预算不变，将重新冻结完整配对。
 - `evaluation/collect_ab.py` 从原始事件提取真实 usage、调用、依赖后续查询和版本/schema 审计；模型完成与进程退出状态分开记录。此离线计量辅助不参与被测输入，也不替代人工证据评分。
 
 目前未完成：

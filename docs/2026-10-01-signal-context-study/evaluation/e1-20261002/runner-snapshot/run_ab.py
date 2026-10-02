@@ -12,8 +12,6 @@ import time
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parents[2]
 STUDY=HERE.parent
-EDA_ENV = ('VERDI_HOME', 'NOVAS_HOME', 'LD_LIBRARY_PATH',
-           'SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE')
 
 
 def prompts():
@@ -66,7 +64,6 @@ def freeze(destination):
             simple='S1 must not automatically expand dependencies'),
         cache='fresh model and MCP process every run; Source Graph disk/session cache disabled; OS cache uncontrolled; AB/BA/AB',
         source_limitations='Original RTL includes mutant comments; identical visibility, not strictly blind. Historical compile-to-wave identity unproven.',
-        forwarded_environment={key:key in os.environ for key in EDA_ENV},
         scripts={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (HERE/'eval_server.py',Path(__file__))})
     artifacts=json.loads((STUDY/'cases.json').read_text())['artifacts']
     manifest['artifacts']={}
@@ -86,20 +83,10 @@ def freeze(destination):
 def run_one(out, row, *, pilot=False):
     name=f"{row['case']}-{row['repeat']}-{row['arm']}"
     run=out/'runs'/name;run.mkdir(parents=True,exist_ok=False)
-    if pilot:
-        artifact=json.loads((STUDY/'cases.json').read_text())['artifacts']['ot']
-        prompt=('Read-only infrastructure preflight, not a behavior analysis. Use TraceWeave MCP: '
-                'diagnostic/discovery, then hierarchy and structural scan in parallel, then parse log. '
-                'Finally explain_signal_driver for tb.dut.uart_core.uart_tx.tx_q with '
-                'include_dependencies=true. Report only actual_backend and dependency availability. '
-                'Do not use shell, inspect timing, read study files, or build a KDB. Inputs: '+
-                json.dumps({k:artifact[k] for k in ('compile_log','log_path','wave_path','simulator')}))
-    else:
-        prompt=(out/f"{row['case']}.prompt.txt").read_text()
+    prompt=(out/f"{row['case']}.prompt.txt").read_text() if not pilot else 'Call TraceWeave get_diagnostic_snapshot exactly once, then report availability briefly. Do not use other tools or read files.'
     workspace=Path(tempfile.mkdtemp(prefix='traceweave-e1-'))
     config='{command='+json.dumps(str(ROOT/'.venv/bin/python'))+',args='+json.dumps(
-        [str(HERE/'eval_server.py'),str(ROOT),str(run),row['arm']])+',env_vars='+json.dumps(
-        [key for key in EDA_ENV if key in os.environ])+',tool_timeout_sec=180,startup_timeout_sec=30,default_tools_approval_mode="approve"}'
+        [str(HERE/'eval_server.py'),str(ROOT),str(run),row['arm']])+',tool_timeout_sec=180,startup_timeout_sec=30,default_tools_approval_mode="approve"}'
     command=['codex','exec','--ignore-user-config','--ephemeral','--json','--skip-git-repo-check',
         '-C',str(workspace),'-s','read-only','-m','gpt-6-astra','-c','model_reasoning_effort="max"',
         '-c','project_doc_max_bytes=0','-c','mcp_servers.TraceWeave='+config,'-']
@@ -110,7 +97,7 @@ def run_one(out, row, *, pilot=False):
         process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=stdout,stderr=stderr,
             text=True,start_new_session=True)
         process.stdin.write(prompt);process.stdin.close()
-        try: process.wait(timeout=180 if pilot else 300)
+        try: process.wait(timeout=90 if pilot else 300)
         except subprocess.TimeoutExpired:
             timed_out=True;os.killpg(process.pid,signal.SIGTERM)
             try: process.wait(timeout=10)
