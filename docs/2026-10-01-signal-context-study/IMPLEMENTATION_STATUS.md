@@ -24,6 +24,7 @@
 - E1 首批因独立 MCP 缺少 EDA 环境、C1 NPI 加载失败而中断；[原始失败与报告](evaluation/e1-20261002/REPORT.md) 保留。临时 CLI 补充环境转发后，[真实 NPI 模型预检](evaluation/runner-npi-preflight/REPORT.md) 正常退出并确认 `actual_backend=verdi_npi`。产品、任务和正式预算不变，将重新冻结完整配对。
 - `evaluation/collect_ab.py` 从原始事件提取真实 usage、调用、依赖后续查询和版本/schema 审计；模型完成与进程退出状态分开记录。此离线计量辅助不参与被测输入，也不替代人工证据评分。
 - 环境修复后的[第一轮 10 / 32 run 检查点](evaluation/e1-20261002-env/FIRST_REPETITION.md) 已保存：C1 两组完整交付，其余 8 个预算超时；五个 B 均未采用依赖包。尚无增强收益证据，继续原定 BA/AB 重复，不变更预算或判据。
+- [第二轮 20 / 32 run 检查点](evaluation/e1-20261002-env/SECOND_REPETITION.md)：本轮 10 个均超时；C1-B 实际调用两次 NPI 依赖，C4-B 的递归路径回退 Static 并诚实返回不可用依赖。第三轮与 S1 继续进行，仍无可验收收益。
 
 目前未完成：
 
