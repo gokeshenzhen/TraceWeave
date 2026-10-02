@@ -5612,6 +5612,7 @@ async def list_tools():
                 "Sample signals or SV expressions each cycle; dynamic indices are re-evaluated at every sample. "
                 "Useful for state machines, pipelines, and round-by-round algorithm checks. "
                 "Choose start_cycle OR start_time_ps. With end_time_ps, num_cycles limits the window's returned cycles. "
+                "Use cycle_index_origin=window with start_time_ps for bounded local cycles; inspect local_coverage. "
                 f"At most {MAX_CYCLES_PER_QUERY} cycles; check capped and continue with the next start_cycle. "
                 "sample_phase=before reads strictly before each edge; omit sample_offset_ps or set 0. "
                 "Default after samples edge+1ps; sample_offset_ps must be >=0. "
@@ -5645,6 +5646,11 @@ async def list_tools():
                         "description": "Starting cycle index (0-based). Default: 0. Mutually exclusive with start_time_ps.",
                         "default": 0,
                         "minimum": 0,
+                    },
+                    "cycle_index_origin": {
+                        "type": "string",
+                        "enum": ["global", "window"],
+                        "description": "Default global preserves simulation-wide numbering. window requires start_time_ps, numbers from zero locally, and stops at the first clock gap or read budget.",
                     },
                     "num_cycles": {
                         "type": "integer",
@@ -7587,6 +7593,7 @@ async def _dispatch(name: str, args: dict):
                     start_cycle=args.get("start_cycle", 0),
                     sample_offset_ps=args.get("sample_offset_ps"),
                     sample_phase=args.get("sample_phase", "after"),
+                    cycle_index_origin=args.get("cycle_index_origin", "global"),
                     start_time_ps=start_time_ps,
                     end_time_ps=end_time_ps,
                     max_cycles=min(args.get("num_cycles", MAX_CYCLES_PER_QUERY), MAX_CYCLES_PER_QUERY),
@@ -7603,6 +7610,7 @@ async def _dispatch(name: str, args: dict):
                     num_cycles=effective_num_cycles,
                     sample_offset_ps=args.get("sample_offset_ps"),
                     sample_phase=args.get("sample_phase", "after"),
+                    cycle_index_origin=args.get("cycle_index_origin", "global"),
                     requested_num_cycles=requested_num_cycles,
                     capped=requested_num_cycles > MAX_CYCLES_PER_QUERY,
                     start_time_ps=start_time_ps,

@@ -29,14 +29,16 @@ EXPR = dict(expr='a[i] + e + f + g', typing='wave_bits', bindings={
     'a':'top.data', 'i':'top.idx', 'e':'top.e', 'f':'top.f', 'g':'top.g'})
 
 
+@pytest.mark.parametrize('origin',['global','window'])
 @pytest.mark.parametrize('phase,expected', [('before',[6,6,5,None]), ('after',[5,6,5,None])])
-def test_cycle_expression_uses_physical_edge_phase_and_all_dependencies(tmp_path, phase, expected):
+def test_cycle_expression_uses_physical_edge_phase_and_all_dependencies(tmp_path, phase, expected, origin):
     for cls, path in zip((FSTParser,VCDParser),expression_wave(tmp_path)):
         adapter = ExpressionParser(cls(str(path)))
         key = adapter.bind(EXPR)
         result = get_signals_by_cycle(adapter,'top.clk',[key],num_cycles=4,
-                                     sample_phase=phase,sample_offset_ps=0)
-        assert result['clock_edges_complete']
+                                     sample_phase=phase,sample_offset_ps=0,
+                                     cycle_index_origin=origin,start_time_ps=0)
+        assert result['clock_edges_complete'] == (origin=='global')
         assert [row['signals'][key]['dec'] for row in result['cycles']] == expected
         assert [row['time_ps'] for row in result['cycles']] == [5,15,25,35]
 
@@ -87,6 +89,22 @@ def test_unknown_clock_prefix_and_recording_gap_cannot_establish_cycles(tmp_path
     sampled=sample_signals_on_edges(FSTParser(path),'top.a',['top.a'],sample_phase='before',sample_offset_ps=0)
     assert sampled['transition_data_truncated'] and sampled['total_edges_found']==1
     assert 'dump_inactive' in sampled['sampling_gaps']
+
+
+@pytest.mark.parametrize('phase',['before','after'])
+def test_local_fst_mode_stops_at_dump_gap_and_allows_fresh_known_window(tmp_path,phase):
+    path=write_fst(tmp_path/'local-off.fst',[(0,'a','0'),(5,'a','1'),(10,'a','0'),(25,'a','1'),(30,'a','0'),(35,'a','1')],
+                   end=40,activity=[(12,0),(20,1)])
+    p=FSTParser(path)
+    try:
+        result=get_signals_by_cycle(p,'top.a',['top.a'],start_time_ps=0,num_cycles=3,cycle_index_origin='window',sample_phase=phase)
+        assert [row['time_ps'] for row in result['cycles']]==[5]
+        assert result['local_coverage']['stop_reason']=='dump_inactive'
+        assert result['local_coverage']['status']=='partial'
+        recovered=get_signals_by_cycle(p,'top.a',['top.a'],start_time_ps=31,num_cycles=1,cycle_index_origin='window',sample_phase=phase)
+        assert [row['time_ps'] for row in recovered['cycles']]==[35]
+        assert recovered['local_coverage']['status']=='complete'
+    finally:p.close()
 
 
 def test_types_arrays_templates_missing_elements_and_fixed_selection_through_mcp(tmp_path):

@@ -911,10 +911,14 @@ class CycleEntry(SchemaModel):
     time_ps: int
     time_ns: float
     time_fs: int | None = None
+    sample_time_fs: int | None = None
     signals: dict[str, SignalValue] = Field(default_factory=dict)
 
 
 class GetSignalsByCycleResult(SchemaModel):
+    cycle_index_origin: Literal["global", "window"] = "global"
+    local_coverage: dict[str, Any] | None = None
+    reading: dict[str, Any] | None = None
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     transition_data_truncated: bool = False

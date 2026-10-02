@@ -1,0 +1,431 @@
+{
+  "project": "ot",
+  "origin": "window",
+  "phase": "before",
+  "runs": [
+    {
+      "temperature": "first",
+      "elapsed": 0.21292876700044872,
+      "cpu_seconds": 0.212665604,
+      "peak_rss_kib": 60332,
+      "memory_start_kib": {
+        "VmHWM": 20464,
+        "VmRSS": 20464
+      },
+      "memory_end_kib": {
+        "VmHWM": 60332,
+        "VmRSS": 60332
+      },
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 7074050,
+            "end": 8074050
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tx_q",
+            "start": 7074050,
+            "end": 7216906
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tx_d",
+            "start": 7074050,
+            "end": 7216906
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tick_baud_q",
+            "start": 7074050,
+            "end": 7216906
+          }
+        ],
+        "pages": 4,
+        "events": 19,
+        "estimated_decoded_bytes": 9804
+      },
+      "result": {
+        "clock_path": "tb.dut.uart_core.uart_tx.clk_i",
+        "edge": "posedge",
+        "cycle_index_origin": "window",
+        "sample_phase": "before",
+        "sample_offset_ps": 0,
+        "clock_period_ps": 35714,
+        "clock_period_fs": 35714000,
+        "total_edges_found": 5,
+        "clock_edges_complete": false,
+        "start_cycle": 0,
+        "num_cycles_requested": 5,
+        "effective_num_cycles": 5,
+        "num_cycles_returned": 5,
+        "capped": false,
+        "truncated": false,
+        "resolved_from_time": true,
+        "requested_start_time_ps": 7074050,
+        "requested_end_time_ps": null,
+        "cycles": [
+          {
+            "cycle": 0,
+            "time_ps": 7074050,
+            "time_ns": 7074.05,
+            "time_fs": 7074050000,
+            "sample_time_fs": 7074050000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 1,
+            "time_ps": 7109764,
+            "time_ns": 7109.764,
+            "time_fs": 7109764000,
+            "sample_time_fs": 7109764000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 2,
+            "time_ps": 7145478,
+            "time_ns": 7145.478,
+            "time_fs": 7145478000,
+            "sample_time_fs": 7145478000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              }
+            }
+          },
+          {
+            "cycle": 3,
+            "time_ps": 7181192,
+            "time_ns": 7181.192,
+            "time_fs": 7181192000,
+            "sample_time_fs": 7181192000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 4,
+            "time_ps": 7216906,
+            "time_ns": 7216.906,
+            "time_fs": 7216906000,
+            "sample_time_fs": 7216906000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          }
+        ],
+        "signal_errors": {},
+        "transition_data_truncated": false,
+        "transition_signals_truncated": [],
+        "local_coverage": {
+          "status": "complete",
+          "stop_reason": null,
+          "stop_time_fs": null,
+          "window_complete": false,
+          "edge_count_is_lower_bound": true,
+          "confirmed_edges": 5,
+          "requested_start_fs": 7074050000,
+          "last_confirmed_edge_fs": 7216906000
+        },
+        "reading": {
+          "events": 19,
+          "admitted_events": 19,
+          "estimated_decoded_bytes": 9804,
+          "decoded_byte_limit": 67108864,
+          "event_limit": 1000000,
+          "pages": 4,
+          "read_calls": 4,
+          "modes": [
+            "native_event_pages_v1"
+          ],
+          "legacy_reads": 0
+        }
+      },
+      "error": null,
+      "result_bytes": 2760
+    },
+    {
+      "temperature": "warm",
+      "elapsed": 0.003749578000679321,
+      "cpu_seconds": 0.00391988900000001,
+      "peak_rss_kib": 60332,
+      "memory_start_kib": {
+        "VmHWM": 60332,
+        "VmRSS": 60332
+      },
+      "memory_end_kib": {
+        "VmHWM": 60332,
+        "VmRSS": 60332
+      },
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 7074050,
+            "end": 8074050
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tx_q",
+            "start": 7074050,
+            "end": 7216906
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tx_d",
+            "start": 7074050,
+            "end": 7216906
+          },
+          {
+            "path": "tb.dut.uart_core.uart_tx.tick_baud_q",
+            "start": 7074050,
+            "end": 7216906
+          }
+        ],
+        "pages": 4,
+        "events": 19,
+        "estimated_decoded_bytes": 9804
+      },
+      "result": {
+        "clock_path": "tb.dut.uart_core.uart_tx.clk_i",
+        "edge": "posedge",
+        "cycle_index_origin": "window",
+        "sample_phase": "before",
+        "sample_offset_ps": 0,
+        "clock_period_ps": 35714,
+        "clock_period_fs": 35714000,
+        "total_edges_found": 5,
+        "clock_edges_complete": false,
+        "start_cycle": 0,
+        "num_cycles_requested": 5,
+        "effective_num_cycles": 5,
+        "num_cycles_returned": 5,
+        "capped": false,
+        "truncated": false,
+        "resolved_from_time": true,
+        "requested_start_time_ps": 7074050,
+        "requested_end_time_ps": null,
+        "cycles": [
+          {
+            "cycle": 0,
+            "time_ps": 7074050,
+            "time_ns": 7074.05,
+            "time_fs": 7074050000,
+            "sample_time_fs": 7074050000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 1,
+            "time_ps": 7109764,
+            "time_ns": 7109.764,
+            "time_fs": 7109764000,
+            "sample_time_fs": 7109764000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 2,
+            "time_ps": 7145478,
+            "time_ns": 7145.478,
+            "time_fs": 7145478000,
+            "sample_time_fs": 7145478000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "1",
+                "hex": "0x1",
+                "dec": 1
+              }
+            }
+          },
+          {
+            "cycle": 3,
+            "time_ps": 7181192,
+            "time_ns": 7181.192,
+            "time_fs": 7181192000,
+            "sample_time_fs": 7181192000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          },
+          {
+            "cycle": 4,
+            "time_ps": 7216906,
+            "time_ns": 7216.906,
+            "time_fs": 7216906000,
+            "sample_time_fs": 7216906000,
+            "signals": {
+              "tb.dut.uart_core.uart_tx.tx_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tx_d": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              },
+              "tb.dut.uart_core.uart_tx.tick_baud_q": {
+                "bin": "0",
+                "hex": "0x0",
+                "dec": 0
+              }
+            }
+          }
+        ],
+        "signal_errors": {},
+        "transition_data_truncated": false,
+        "transition_signals_truncated": [],
+        "local_coverage": {
+          "status": "complete",
+          "stop_reason": null,
+          "stop_time_fs": null,
+          "window_complete": false,
+          "edge_count_is_lower_bound": true,
+          "confirmed_edges": 5,
+          "requested_start_fs": 7074050000,
+          "last_confirmed_edge_fs": 7216906000
+        },
+        "reading": {
+          "events": 19,
+          "admitted_events": 19,
+          "estimated_decoded_bytes": 9804,
+          "decoded_byte_limit": 67108864,
+          "event_limit": 1000000,
+          "pages": 4,
+          "read_calls": 4,
+          "modes": [
+            "native_event_pages_v1"
+          ],
+          "legacy_reads": 0
+        }
+      },
+      "error": null,
+      "result_bytes": 2760
+    }
+  ],
+  "source_sha256": "62c785fb3eef9e42fc94ed0ad1bcc6369875edac9d7136fcddf3511848e0c894",
+  "conditions": "fresh process; first/warm parser; OS cache uncontrolled; RSS is process high-water KiB"
+}

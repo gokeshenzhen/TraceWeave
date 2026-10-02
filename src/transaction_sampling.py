@@ -193,20 +193,23 @@ class _ReadAdapter:
     _sampling_transitions = get_transitions
 
 
-def bounded_parser(parser, budget):
+def bounded_parser(parser, budget, *, exact=False):
     from .expression_observe import ExpressionParser
+    owner = _ReadAdapter(parser.parser if isinstance(parser, SelectionParser) else parser, budget)
+    if exact:
+        owner._exact_sampling = True
     if isinstance(parser,ExpressionParser):
-        adapter = ExpressionParser(_ReadAdapter(parser.parser,budget))
+        adapter = ExpressionParser(owner)
         adapter.projections,adapter._declarations = dict(parser.projections),dict(parser._declarations)
         adapter.expressions,adapter.observations = parser.expressions,parser.observations
         adapter._budget_check = budget.check
         return adapter
     if isinstance(parser, SelectionParser):
-        adapter = SelectionParser(_ReadAdapter(parser.parser, budget))
+        adapter = SelectionParser(owner)
         adapter.projections = dict(parser.projections)
         adapter._declarations = dict(parser._declarations)
         return adapter
-    return _ReadAdapter(parser, budget)
+    return owner
 
 
 def sample_limit(parser, paths, budget, requested=None):

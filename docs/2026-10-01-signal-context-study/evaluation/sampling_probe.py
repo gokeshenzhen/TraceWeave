@@ -16,6 +16,11 @@ from src.fsdb_parser import FSDBParser
 from src.fst_parser import FSTParser
 
 
+def memory():
+    return {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/self/status').read_text().splitlines()
+            if line.startswith(('VmRSS:', 'VmHWM:'))}
+
+
 def main(args):
     cases = json.loads((Path(__file__).resolve().parents[1] / 'cases.json').read_text())
     a = cases['artifacts'][args.project]
@@ -47,6 +52,7 @@ def main(args):
     try:
         for temperature in ('first', 'warm'):
             metrics.clear()
+            memory_start = memory()
             start = time.perf_counter()
             cpu = time.process_time()
             result = None
@@ -62,6 +68,7 @@ def main(args):
                 error = str(exc)
             report['runs'].append(dict(temperature=temperature, elapsed=time.perf_counter()-start,
                 cpu_seconds=time.process_time()-cpu, peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                memory_start_kib=memory_start, memory_end_kib=memory(),
                 reading=dict(metrics), result=result, error=error,
                 result_bytes=len(json.dumps(result).encode()) if result else 0))
     finally:

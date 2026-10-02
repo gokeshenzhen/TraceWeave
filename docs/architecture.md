@@ -2224,6 +2224,29 @@ bit patterns. See [expression usage and bounds](expressions.md).
 
 ## Packed waveform selections and TL-UL
 
+`get_signals_by_cycle` retains global numbering by default. Explicit
+`cycle_index_origin="window"` requires `start_time_ps` and numbers confirmed
+local edges from zero. `src/local_cycles.py` discovers edges in bounded time
+pages, sharing the existing raw-fs event cursors, polarity rules and column
+sampler. It never reads a full clock history to establish a local index.
+The cumulative budget is one million records / 64 MiB estimated decoded data
+over clock and signal reads, 64 expanding time windows and a 30-second deadline;
+native calls remain cancellable at the existing return/checkpoint boundaries.
+The first time window is at most 1 microsecond. FST spool and native decompression
+costs remain format dependent; the budget does not describe total process RSS.
+
+An earlier X does not block a known local predecessor. The first unknown clock,
+recording gap or same-time clock ambiguity ends the contiguous prefix. Data X
+remains a sampled value. `local_coverage` reports the stop reason and whether the
+entire explicit window was inspected; reaching an output cap does not prove its
+total edge count. `clock_edges_complete=false` makes no global count claim.
+`reading` reports admitted/read records and estimated decoded bytes. A missing
+or budget-limited signal remains unknown/partial. `before` excludes all events
+at the edge; `after` uses the stated ps offset, with `time_fs` and
+`sample_time_fs` preserving exact physical times. It is not delta-cycle settling.
+Integer ps labels can repeat; raw timestamps distinguish returned rows, but an
+integer-ps continuation cannot address the middle of such a timestamp group.
+
 `WaveformSelection` is an additive input to point, transition, around-time,
 cycle, handshake, and transaction queries. The original string branch retains
 its existing behavior. Structured inputs use one exact dump declaration and

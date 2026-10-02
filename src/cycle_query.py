@@ -367,6 +367,7 @@ def get_signals_by_cycle(
     end_time_ps: int | None = None,
     max_cycles: int | None = None,
     sample_phase: str = "after",
+    cycle_index_origin: str = "global",
 ) -> dict[str, Any]:
     """Sample ``signal_paths`` on ``num_cycles`` clock edges from ``start_cycle``.
 
@@ -404,6 +405,20 @@ def get_signals_by_cycle(
         raise ValueError("start_time_ps must be >= 0")
     if end_time_ps is not None and end_time_ps < 0:
         raise ValueError("end_time_ps must be >= 0")
+
+    if cycle_index_origin not in {"global", "window"}:
+        raise ValueError("cycle_index_origin must be global or window")
+    if cycle_index_origin == "window":
+        if start_time_ps is None or start_cycle:
+            raise ValueError("window origin requires start_time_ps and no start_cycle")
+        if end_time_ps is not None and end_time_ps < start_time_ps:
+            raise ValueError("end_time_ps must be >= start_time_ps")
+        from .local_cycles import sample_local_cycles
+        return sample_local_cycles(parser, clock_path, signal_paths,
+            start=start_time_ps, end=end_time_ps, edge=edge,
+            count=(max_cycles if max_cycles is not None else num_cycles) if end_time_ps is not None else num_cycles,
+            requested=num_cycles if requested_num_cycles is None else requested_num_cycles,
+            capped=capped, phase=sample_phase, offset=sample_offset_ps)
 
     edge_times, clock_period, safe_before_fs, clock_complete = _full_clock_edges(
         parser, clock_path, edge, sample_phase=sample_phase)

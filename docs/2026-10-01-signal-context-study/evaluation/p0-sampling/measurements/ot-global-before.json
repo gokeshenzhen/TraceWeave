@@ -1,0 +1,67 @@
+{
+  "project": "ot",
+  "origin": "global",
+  "phase": "before",
+  "runs": [
+    {
+      "temperature": "first",
+      "elapsed": 0.09573000300042622,
+      "cpu_seconds": 0.09555533,
+      "peak_rss_kib": 55172,
+      "memory_start_kib": {
+        "VmHWM": 20452,
+        "VmRSS": 20452
+      },
+      "memory_end_kib": {
+        "VmHWM": 55172,
+        "VmRSS": 46088
+      },
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 0,
+            "end": -1
+          }
+        ],
+        "pages": 24,
+        "events": 24015,
+        "estimated_decoded_bytes": 12391740
+      },
+      "result": null,
+      "error": "requested cycles reach incomplete or ambiguous clock transitions; reduce num_cycles",
+      "result_bytes": 0
+    },
+    {
+      "temperature": "warm",
+      "elapsed": 0.06217954400017334,
+      "cpu_seconds": 0.06177682499999998,
+      "peak_rss_kib": 55852,
+      "memory_start_kib": {
+        "VmHWM": 55172,
+        "VmRSS": 46088
+      },
+      "memory_end_kib": {
+        "VmHWM": 55852,
+        "VmRSS": 46864
+      },
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 0,
+            "end": -1
+          }
+        ],
+        "pages": 24,
+        "events": 24015,
+        "estimated_decoded_bytes": 12391740
+      },
+      "result": null,
+      "error": "requested cycles reach incomplete or ambiguous clock transitions; reduce num_cycles",
+      "result_bytes": 0
+    }
+  ],
+  "source_sha256": "62c785fb3eef9e42fc94ed0ad1bcc6369875edac9d7136fcddf3511848e0c894",
+  "conditions": "fresh process; first/warm parser; OS cache uncontrolled; RSS is process high-water KiB"
+}
