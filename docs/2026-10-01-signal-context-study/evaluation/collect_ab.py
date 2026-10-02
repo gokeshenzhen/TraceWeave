@@ -87,6 +87,7 @@ def collect(out):
         skill_reads = [c for c in commands if '/.codex/skills/' in c.get('command', '')]
         source_commands = [c for c in commands if c not in skill_reads]
         errors, dependency_calls, receipts = [], [], []
+        signal_errors, nested_errors = [], []
         dep_bytes = 0
         dep_rows = []
         metrics = []
@@ -95,6 +96,12 @@ def collect(out):
                 if isinstance(data, dict) and data.get('error'):
                     errors.append(dict(index=call['index'], tool=call['tool'], error=data['error']))
                 for obj in walk(data):
+                    if obj.get('signal_errors'):
+                        signal_errors.append(dict(index=call['index'], tool=call['tool'],
+                                                  errors=obj['signal_errors']))
+                    if obj is not data and obj.get('error'):
+                        nested_errors.append(dict(index=call['index'], tool=call['tool'],
+                                                  error=obj['error']))
                     if 'actual_backend' in obj:
                         receipts.append(dict(index=call['index'], tool=call['tool'],
                                              actual_backend=obj['actual_backend']))
@@ -125,6 +132,9 @@ def collect(out):
             mcp_calls=len(calls), mcp_attempted=len(attempted),
             mcp_unfinished=max(0, len(attempted)-len(calls)),
             tool_counts=dict(count), mcp_errors=errors,
+            signal_error_payloads=signal_errors, nested_error_facts=nested_errors,
+            completed_event_item_types=dict(Counter(e['item']['type'] for e in events
+                if e.get('type') == 'item.completed' and e.get('item', {}).get('type'))),
             shell_commands=len(commands), skill_reads=len(skill_reads),
             source_read_commands=len(source_commands),
             shell_errors=[dict(command=c['command'], exit_code=c.get('exit_code'))
