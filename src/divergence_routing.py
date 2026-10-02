@@ -53,8 +53,17 @@ class DynamicRoute:
         self.source_receipt = None
         self.selected_backend = "source_graph"
         self.retain_async_controls = False
+        self.root_binding = None
 
     async def initialize(self):
+        if str(self.side['signal_path']).startswith('TOP.'):
+            from .wave_design_binding import bind_root
+            self.root_binding = await self.budget.run(lambda: self.s._run_in_wave_thread(
+                self.side['wave_path'], lambda: bind_root(
+                    self.s._get_parser(self.side['wave_path']), self.side['signal_path'],
+                    self.bound.compile_result, top_hint=self.side.get('top_hint'))))
+            if self.root_binding:
+                self.targets = [self.root_binding.to_design(p) for p in self.targets]
         self.probe = await self.budget.run(
             lambda: self.s._run_in_cancellable_thread(
                 lambda: self.s.probe_verdi_backend(
@@ -183,6 +192,9 @@ class DynamicRoute:
         self.budget.check()
         if self.stage is None:
             await self.initialize()
+        wave_signal = signal
+        if self.root_binding:
+            signal = self.root_binding.to_design(signal)
         if self.stage == "source_graph" and self.guard is None:
             await self._prepare_source()
         self.budget.queries += 1
@@ -312,9 +324,22 @@ class DynamicRoute:
             **self.execution,
         }
 
+        if self.root_binding:
+            from .x_history_observe import bind_step_wave
+            entry = getattr(self.backend, '_entry', None)
+            result = await self.budget.run(lambda: self.s._run_in_wave_thread(
+                self.side['wave_path'], lambda: bind_step_wave(result,
+                    self.s._get_parser(self.side['wave_path']), binding=self.root_binding,
+                    engine=entry.query_engine if entry else None)))
+            result['signal'] = wave_signal
+            result['wave_design_binding'] = self.root_binding.receipt(wave_signal)
         return result
 
     def current(self):
+        if self.root_binding:
+            from .scope_metadata import file_identity
+            if self.root_binding.wave_identity != file_identity(self.side['wave_path']):
+                return False
         if self.stage == "verdi_npi" and self.kdb_identity is not None:
             return kdb_identity(self.probe["kdb_path"]) == self.kdb_identity
         return True

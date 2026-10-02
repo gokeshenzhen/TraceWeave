@@ -218,15 +218,15 @@ def select_step(step, bits):
     return result
 
 
-def bind_step_wave(step, parser):
+def bind_step_wave(step, parser, *, binding=None, engine=None):
     """Bind typed source references to exact dump declarations, including FSDB ranges."""
     def bind(raw):
         expr = Expr.from_dict(raw)
         def visit(node):
             if node.op == 'signal':
                 try:
-                    bound = signal_expression(parser, node.signal, node.bits, node.declared_bits,
-                                              array_indices=node.array_indices)
+                    from .wave_design_binding import bind_source_expression
+                    bound = bind_source_expression(parser, node, binding, engine=engine)
                     return replace(node, signal=bound.signal, bits=bound.bits,
                                    declared_bits=bound.declared_bits)
                 except (KeyError, ValueError):
@@ -239,4 +239,7 @@ def bind_step_wave(step, parser):
         result['state'] = bind(step['state'])
     if step.get('clock'):
         result['clock'] = {**step['clock'], 'expression': bind(step['clock']['expression'])}
+    if step.get('async_controls'):
+        result['async_controls'] = [{**c, 'expression': bind(c['expression'])}
+                                    for c in step['async_controls']]
     return result

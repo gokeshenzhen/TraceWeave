@@ -1,0 +1,713 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 314 items
+
+tests/test_wave_design_binding.py ....                                   [  1%]
+tests/test_dynamic_evidence.py .................                         [  6%]
+tests/test_dynamic_binding.py ......                                     [  8%]
+tests/test_trace_divergence.py ......................                    [ 15%]
+tests/test_packed_layout.py .....                                        [ 17%]
+tests/test_source_graph_trace_public_routing.py FFFFFFFFFFFFF.F....F     [ 23%]
+tests/test_server.py ................................................... [ 39%]
+...............................FFFF..................................... [ 62%]
+................                                                         [ 67%]
+tests/test_server_concurrency.py ......................                  [ 74%]
+tests/test_source_graph_public_routing.py .F....FFF..FF..F.FF.....FF.... [ 84%]
+.......F..............FF.FFFFFFFFFFFFFF.FFFFFFFF.                        [100%]
+
+=================================== FAILURES ===================================
+_ test_source_graph_multi_node_trace_builds_once_and_repeats_exact_warm[asyncio] _
+tests/test_source_graph_trace_public_routing.py:291: in test_source_graph_multi_node_trace_builds_once_and_repeats_exact_warm
+    first = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_trusted_npi_terminal_result_skips_source_graph_and_static[asyncio] ____
+tests/test_source_graph_trace_public_routing.py:352: in test_trusted_npi_terminal_result_skips_source_graph_and_static
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4385: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb[asyncio] _
+tests/test_source_graph_trace_public_routing.py:395: in test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_npi_internal_fallback_discards_partial_chain_and_restarts_source_graph[asyncio] _
+tests/test_source_graph_trace_public_routing.py:463: in test_npi_internal_fallback_discards_partial_chain_and_restarts_source_graph
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_degraded_npi_incomplete_driver_discards_chain_and_restarts[asyncio] ___
+tests/test_source_graph_trace_public_routing.py:539: in test_degraded_npi_incomplete_driver_discards_chain_and_restarts
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_scope_expansion_restarts_source_graph_with_one_final_artifact[asyncio] __
+tests/test_source_graph_trace_public_routing.py:573: in test_scope_expansion_restarts_source_graph_with_one_final_artifact
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_trace_scope_expansion_respects_frontier_instance_cap[asyncio] ______
+tests/test_source_graph_trace_public_routing.py:627: in test_trace_scope_expansion_respects_frontier_instance_cap
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts[asyncio] _
+tests/test_source_graph_trace_public_routing.py:673: in test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts
+    cold = await server._dispatch("trace_x_source", args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_inconclusive_negative_discards_source_chain_and_restarts_static[asyncio] _
+tests/test_source_graph_trace_public_routing.py:728: in test_inconclusive_negative_discards_source_chain_and_restarts_static
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_source_graph_build_failure_restarts_static_and_retry_is_safe[asyncio] __
+tests/test_source_graph_trace_public_routing.py:761: in test_source_graph_build_failure_restarts_static_and_retry_is_safe
+    failed = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_source_graph_query_runs_outside_wave_lock_and_wave_reads_hold_it[asyncio] _
+tests/test_source_graph_trace_public_routing.py:809: in test_source_graph_query_runs_outside_wave_lock_and_wave_reads_hold_it
+    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_cold_trace_build_is_single_flight_and_does_not_block_light_calls[asyncio] _
+tests/test_source_graph_trace_public_routing.py:844: in test_cold_trace_build_is_single_flight_and_does_not_block_light_calls
+    results = await asyncio.gather(*tasks)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_one_cancelled_trace_waiter_does_not_cancel_survivor[asyncio] _______
+tests/test_source_graph_trace_public_routing.py:888: in test_one_cancelled_trace_waiter_does_not_cancel_survivor
+    survivor = await second
+               ^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_cached_query_cancellation_does_not_fallback_or_pollute_artifact[asyncio] _
+tests/test_source_graph_trace_public_routing.py:939: in test_cached_query_cancellation_does_not_fallback_or_pollute_artifact
+    ready = await server._dispatch("trace_x_source", args)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+____ test_trace_metrics_are_identity_free_numeric_or_fixed_labels[asyncio] _____
+tests/test_source_graph_trace_public_routing.py:1076: in test_trace_metrics_are_identity_free_numeric_or_fixed_labels
+    await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4810: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______________ TestNewAnalyzerTools.test_trace_x_source[asyncio] _______________
+tests/test_server.py:2684: in test_trace_x_source
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ TestNewAnalyzerTools.test_trace_x_source_signal_not_in_waveform[asyncio] ___
+tests/test_server.py:2740: in test_trace_x_source_signal_not_in_waveform
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ TestNewAnalyzerTools.test_trace_x_source_uses_selected_backend_outside_wave_lock[asyncio] _
+tests/test_server.py:2826: in test_trace_x_source_uses_selected_backend_outside_wave_lock
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4385: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ TestNewAnalyzerTools.test_trace_x_source_restarts_whole_trace_after_npi_fallback[asyncio] _
+tests/test_server.py:2961: in test_trace_x_source_restarts_whole_trace_after_npi_fallback
+    result = await server._dispatch(
+server.py:8371: in _dispatch
+    return await _handle_trace_x_source(args, simulator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:4861: in _handle_trace_x_source
+    return _finalize_trace(
+server.py:4323: in _finalize_trace
+    return schemas.TraceXSourceResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceXSourceResult` is not fully defined; you should define `Optional`, then call `TraceXSourceResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_bounded_bootstrap_returns_positive_load_without_full_hierarchy[asyncio] _
+tests/test_source_graph_public_routing.py:655: in test_bounded_bootstrap_returns_positive_load_without_full_hierarchy
+    result = await server._dispatch("find_signal_loads", args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_________ test_npi_load_success_skips_source_graph_and_static[asyncio] _________
+tests/test_source_graph_public_routing.py:853: in test_npi_load_success_skips_source_graph_and_static
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_degraded_npi_positive_loads_are_used_with_partial_receipt[asyncio] ____
+tests/test_source_graph_public_routing.py:901: in test_degraded_npi_positive_loads_are_used_with_partial_receipt
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_degraded_npi_empty_loads_are_inconclusive_and_route_onward[asyncio] ___
+tests/test_source_graph_public_routing.py:944: in test_degraded_npi_empty_loads_are_inconclusive_and_route_onward
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_explicit_source_graph_route_skips_npi_with_usable_kdb[asyncio-loads] ___
+tests/test_source_graph_public_routing.py:1025: in test_explicit_source_graph_route_skips_npi_with_usable_kdb
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_explicit_source_graph_route_skips_npi_with_usable_kdb[asyncio-path] ___
+tests/test_source_graph_public_routing.py:1027: in test_explicit_source_graph_route_skips_npi_with_usable_kdb
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_npi_unavailable_routes_public_driver_and_loads_to_source_graph[asyncio-loads] _
+tests/test_source_graph_public_routing.py:1108: in test_npi_unavailable_routes_public_driver_and_loads_to_source_graph
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_split_compile_elaboration_context_routes_to_source_graph[asyncio-loads] _
+tests/test_source_graph_public_routing.py:1178: in test_split_compile_elaboration_context_routes_to_source_graph
+    result = await server._dispatch("find_signal_loads", query_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_split_compile_elaboration_context_routes_to_source_graph[asyncio-path] __
+tests/test_source_graph_public_routing.py:1183: in test_split_compile_elaboration_context_routes_to_source_graph
+    result = await server._dispatch("trace_signal_path", query_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+________ test_single_endpoint_load_expands_to_sibling_consumer[asyncio] ________
+tests/test_source_graph_public_routing.py:1430: in test_single_endpoint_load_expands_to_sibling_consumer
+    result = await server._dispatch("find_signal_loads", args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact[asyncio] _
+tests/test_source_graph_public_routing.py:1477: in test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact
+    loads = await server._dispatch("find_signal_loads", load_args)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+____ test_opaque_vhdl_gap_keeps_positive_source_graph_facts[asyncio-loads] _____
+tests/test_source_graph_public_routing.py:1764: in test_opaque_vhdl_gap_keeps_positive_source_graph_facts
+    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact[asyncio] _
+tests/test_source_graph_public_routing.py:2278: in test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact
+    loads = await server._dispatch("find_signal_loads", load_args)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_incomplete_driver_then_load_uses_one_session_handoff[asyncio] ______
+tests/test_source_graph_public_routing.py:2356: in test_incomplete_driver_then_load_uses_one_session_handoff
+    loads = await server._dispatch("find_signal_loads", load_args)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8308: in _dispatch
+    return schemas.FindSignalLoadsResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `FindSignalLoadsResult` is not fully defined; you should define `Optional`, then call `FindSignalLoadsResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold[asyncio] ___
+tests/test_source_graph_public_routing.py:2428: in test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold
+    path = await server._dispatch("trace_signal_path", cross_scope_path)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_npi_authoritative_results_skip_source_graph_and_static[asyncio-npi_result0] _
+tests/test_source_graph_public_routing.py:2508: in test_path_npi_authoritative_results_skip_source_graph_and_static
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_npi_authoritative_results_skip_source_graph_and_static[asyncio-npi_result1] _
+tests/test_source_graph_public_routing.py:2508: in test_path_npi_authoritative_results_skip_source_graph_and_static
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_degraded_npi_found_path_is_positive_partial_evidence[asyncio] ______
+tests/test_source_graph_public_routing.py:2558: in test_degraded_npi_found_path_is_positive_partial_evidence
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_______ test_degraded_npi_negative_path_routes_to_source_graph[asyncio] ________
+tests/test_source_graph_public_routing.py:2593: in test_degraded_npi_negative_path_routes_to_source_graph
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_______ test_path_npi_unavailable_routes_to_source_graph_found[asyncio] ________
+tests/test_source_graph_public_routing.py:2612: in test_path_npi_unavailable_routes_to_source_graph_found
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_internal_npi_fallback_defers_static_until_after_source_graph[asyncio] _
+tests/test_source_graph_public_routing.py:2663: in test_path_internal_npi_fallback_defers_static_until_after_source_graph
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_path_source_graph_complete_negative_is_authoritative[asyncio] ______
+tests/test_source_graph_public_routing.py:2685: in test_path_source_graph_complete_negative_is_authoritative
+    result = await server._dispatch(
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_______ test_path_source_graph_partial_positive_remains_usable[asyncio] ________
+tests/test_source_graph_public_routing.py:2727: in test_path_source_graph_partial_positive_remains_usable
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_path_source_graph_inconclusive_negative_falls_back_to_static[asyncio] __
+tests/test_source_graph_public_routing.py:2769: in test_path_source_graph_inconclusive_negative_falls_back_to_static
+    result = await server._dispatch(
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-dependency_blocked-source_graph_dependency_blocked-failed] _
+tests/test_source_graph_public_routing.py:2815: in test_path_source_graph_prepare_failures_use_static_whole_result
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-build_failed-source_graph_build_failed-failed] _
+tests/test_source_graph_public_routing.py:2815: in test_path_source_graph_prepare_failures_use_static_whole_result
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-worker_crash-source_graph_worker_crash-failed] _
+tests/test_source_graph_public_routing.py:2815: in test_path_source_graph_prepare_failures_use_static_whole_result
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_ test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-timed_out-source_graph_timed_out-timed_out] _
+tests/test_source_graph_public_routing.py:2815: in test_path_source_graph_prepare_failures_use_static_whole_result
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+____ test_path_mixed_source_graph_provenance_is_rejected_as_whole[asyncio] _____
+tests/test_source_graph_public_routing.py:2904: in test_path_mixed_source_graph_provenance_is_rejected_as_whole
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+_____ test_concurrent_exact_path_requests_single_flight_one_build[asyncio] _____
+tests/test_source_graph_public_routing.py:2938: in test_concurrent_exact_path_requests_single_flight_one_build
+    results = await asyncio.gather(*tasks)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+___ test_path_waiter_cancellation_does_not_cancel_surviving_waiter[asyncio] ____
+tests/test_source_graph_public_routing.py:2976: in test_path_waiter_cancellation_does_not_cancel_surviving_waiter
+    result = await surviving
+             ^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_cold_path_build_does_not_block_light_call_or_hold_wave_lock[asyncio] ___
+tests/test_source_graph_public_routing.py:3005: in test_cold_path_build_does_not_block_light_call_or_hold_wave_lock
+    result = await task
+             ^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+____ test_path_operation_metrics_exclude_endpoint_and_path_content[asyncio] ____
+tests/test_source_graph_public_routing.py:3024: in test_path_operation_metrics_exclude_endpoint_and_path_content
+    await server._dispatch("trace_signal_path", _path_args(compile_log))
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+______ test_raised_npi_path_failure_still_routes_to_source_graph[asyncio] ______
+tests/test_source_graph_public_routing.py:3074: in test_raised_npi_path_failure_still_routes_to_source_graph
+    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+__ test_dotted_path_suffix_is_rejected_by_exact_query_before_static[asyncio] ___
+tests/test_source_graph_public_routing.py:3090: in test_dotted_path_suffix_is_rejected_by_exact_query_before_static
+    result = await server._dispatch(
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+____________ test_path_build_failure_does_not_poison_retry[asyncio] ____________
+tests/test_source_graph_public_routing.py:3118: in test_path_build_failure_does_not_poison_retry
+    failed = await server._dispatch("trace_signal_path", _path_args(compile_log))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+server.py:8330: in _dispatch
+    return schemas.TraceSignalPathResult.model_validate(result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic.errors.PydanticUserError: `TraceSignalPathResult` is not fully defined; you should define `Optional`, then call `TraceSignalPathResult.model_rebuild()`.
+E   
+E   For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+=========================== short test summary info ============================
+FAILED tests/test_source_graph_trace_public_routing.py::test_source_graph_multi_node_trace_builds_once_and_repeats_exact_warm[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_trusted_npi_terminal_result_skips_source_graph_and_static[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_npi_internal_fallback_discards_partial_chain_and_restarts_source_graph[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_degraded_npi_incomplete_driver_discards_chain_and_restarts[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_scope_expansion_restarts_source_graph_with_one_final_artifact[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_trace_scope_expansion_respects_frontier_instance_cap[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_inconclusive_negative_discards_source_chain_and_restarts_static[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_source_graph_build_failure_restarts_static_and_retry_is_safe[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_source_graph_query_runs_outside_wave_lock_and_wave_reads_hold_it[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_cold_trace_build_is_single_flight_and_does_not_block_light_calls[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_one_cancelled_trace_waiter_does_not_cancel_survivor[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_cached_query_cancellation_does_not_fallback_or_pollute_artifact[asyncio]
+FAILED tests/test_source_graph_trace_public_routing.py::test_trace_metrics_are_identity_free_numeric_or_fixed_labels[asyncio]
+FAILED tests/test_server.py::TestNewAnalyzerTools::test_trace_x_source[asyncio]
+FAILED tests/test_server.py::TestNewAnalyzerTools::test_trace_x_source_signal_not_in_waveform[asyncio]
+FAILED tests/test_server.py::TestNewAnalyzerTools::test_trace_x_source_uses_selected_backend_outside_wave_lock[asyncio]
+FAILED tests/test_server.py::TestNewAnalyzerTools::test_trace_x_source_restarts_whole_trace_after_npi_fallback[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_bounded_bootstrap_returns_positive_load_without_full_hierarchy[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_npi_load_success_skips_source_graph_and_static[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_degraded_npi_positive_loads_are_used_with_partial_receipt[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_degraded_npi_empty_loads_are_inconclusive_and_route_onward[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_explicit_source_graph_route_skips_npi_with_usable_kdb[asyncio-loads]
+FAILED tests/test_source_graph_public_routing.py::test_explicit_source_graph_route_skips_npi_with_usable_kdb[asyncio-path]
+FAILED tests/test_source_graph_public_routing.py::test_npi_unavailable_routes_public_driver_and_loads_to_source_graph[asyncio-loads]
+FAILED tests/test_source_graph_public_routing.py::test_split_compile_elaboration_context_routes_to_source_graph[asyncio-loads]
+FAILED tests/test_source_graph_public_routing.py::test_split_compile_elaboration_context_routes_to_source_graph[asyncio-path]
+FAILED tests/test_source_graph_public_routing.py::test_single_endpoint_load_expands_to_sibling_consumer[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_opaque_vhdl_gap_keeps_positive_source_graph_facts[asyncio-loads]
+FAILED tests/test_source_graph_public_routing.py::test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_incomplete_driver_then_load_uses_one_session_handoff[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_npi_authoritative_results_skip_source_graph_and_static[asyncio-npi_result0]
+FAILED tests/test_source_graph_public_routing.py::test_path_npi_authoritative_results_skip_source_graph_and_static[asyncio-npi_result1]
+FAILED tests/test_source_graph_public_routing.py::test_degraded_npi_found_path_is_positive_partial_evidence[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_degraded_npi_negative_path_routes_to_source_graph[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_npi_unavailable_routes_to_source_graph_found[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_internal_npi_fallback_defers_static_until_after_source_graph[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_complete_negative_is_authoritative[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_partial_positive_remains_usable[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_inconclusive_negative_falls_back_to_static[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-dependency_blocked-source_graph_dependency_blocked-failed]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-build_failed-source_graph_build_failed-failed]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-worker_crash-source_graph_worker_crash-failed]
+FAILED tests/test_source_graph_public_routing.py::test_path_source_graph_prepare_failures_use_static_whole_result[asyncio-timed_out-source_graph_timed_out-timed_out]
+FAILED tests/test_source_graph_public_routing.py::test_path_mixed_source_graph_provenance_is_rejected_as_whole[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_concurrent_exact_path_requests_single_flight_one_build[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_waiter_cancellation_does_not_cancel_surviving_waiter[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_cold_path_build_does_not_block_light_call_or_hold_wave_lock[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_operation_metrics_exclude_endpoint_and_path_content[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_raised_npi_path_failure_still_routes_to_source_graph[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_dotted_path_suffix_is_rejected_by_exact_query_before_static[asyncio]
+FAILED tests/test_source_graph_public_routing.py::test_path_build_failure_does_not_poison_retry[asyncio]
+======================= 55 failed, 259 passed in 16.63s ========================
+logDir = /tmp/

@@ -31,7 +31,8 @@ FST_SUPPORTED_TOOLS = (*FST_BASIC_TOOLS, "get_signals_by_cycle", "period", "veri
     "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes",
     "inspect_handshake", "inspect_tlul", "reconstruct_transactions", "diff_first_divergence",
     "trace_divergence", "trace_x_source", "analyze_failures", "analyze_failure_event",
-    "recommend_failure_debug_next_steps", "explain_signal_driver", "resolve_packed_fields")
+    "recommend_failure_debug_next_steps", "explain_signal_driver", "find_signal_loads",
+    "trace_signal_path", "resolve_packed_fields")
 REQUEST_TIMEOUT_SEC = 30.0
 _request_deadline = ContextVar('fst_request_deadline', default=None)
 _metadata_request = ContextVar('fst_metadata_request', default=None)

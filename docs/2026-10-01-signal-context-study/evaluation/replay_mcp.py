@@ -96,6 +96,13 @@ async def run(args):
                     for path in paths:
                         await call('explain_signal_driver', signal_path=path, compile_log=a['compile_log'],
                                    simulator=a['simulator'], wave_path=a['wave_path'])
+                    if args.project in ('x1', 'x2', 'x3'):
+                        bus = CASES['scope_aliases']['system_bus']
+                        common = dict(wave_path=a['wave_path'], compile_log=a['compile_log'], simulator=a['simulator'])
+                        await call('find_signal_loads', signal_path=bus + '.dma_write_req_i[0].wdata[31:0]', **common)
+                        await call('trace_signal_path', from_signal=bus + '.dma_write_req_i[0].wdata[31:0]',
+                                   to_signal=bus + '.int_master_req[4].wdata[31:0]', expand_assigns=True, **common)
+                        await call('trace_x_source', signal_path=paths[-1], time_ps=944175000, **common)
     print('saved', out, flush=True)
 
 

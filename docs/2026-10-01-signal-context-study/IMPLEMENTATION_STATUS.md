@@ -7,7 +7,7 @@
 | 项目 | 实现 | 功能 / 真实案例验证 | 模型 A/B | 是否收敛 |
 | --- | --- | --- | --- | --- |
 | P0-SAMPLING：局部周期、预算与相位/缺口 | 已实现 | 297 项回归 + 最终 15 项局部回归；C1/C3 真实新 MCP 与逐行点读核对 | 不要求 | 已收敛；[证据](evaluation/p0-sampling/REPORT.md) |
-| P0-BINDING：身份 / generate / 数组成员解析 | 实现中；driver 根绑定与 packed 数组字段已落地，generate 已落地，共享绑定/选位证据待收尾 | 根绑定回归及 X1 新 MCP；已越过 top blocker，数组字段三运行查询通过，generate 三运行也通过；[generate 证据](evaluation/p0-binding-generate/REPORT.md)；[根绑定](evaluation/p0-binding-root/REPORT.md)、[数组](evaluation/p0-binding-packed/REPORT.md) | 不要求 | 否 |
+| P0-BINDING：身份 / generate / 数组成员解析 | 已实现（当前案例范围） | 361 项最终回归 + C2/C4/C5 双侧值、源码与选位表达式；[验收](evaluation/p0-binding-shared/REPORT.md) | 不要求 | 已收敛；保留真实语义/历史身份缺口 |
 | E1 / P1-CONTEXT：NPI 返回可用性增强 | 未开始 | 未开始 | 必须；C1 真实 NPI 未开始 | 否 |
 | E1 / P1-CONTEXT：explain_signal_driver 按需依赖包 | 未开始 | 未开始 | 必须；未开始 | 否 |
 | E2：薄组合工具（可选） | 未决定实施 | 未开始 | 一旦实施就必须；未开始 | 不适用，尚未实施 |
@@ -21,7 +21,7 @@
 
 目前未完成：
 
-- P0-BINDING 与 P1-CONTEXT 的产品变更、回归及真实案例验收。
+- P1-CONTEXT 的产品变更、回归及真实案例验收。
 - 实际模型 A/B；没有任何“效率提高”或“增强已收敛”的测量结论。
 
 状态使用：

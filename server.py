@@ -4080,6 +4080,7 @@ async def _run_trace_x_attempt(
     simulator: str,
     abort_on_backend_fallback: bool,
     upstream_scope_guard: Callable[[list[str]], object] | None = None,
+    root_binding=None,
 ) -> tuple[dict, dict]:
     """Run one backend-consistent X-trace attempt.
 
@@ -4093,7 +4094,8 @@ async def _run_trace_x_attempt(
 
     async def _value_lookup(path: str, at_ps: int) -> dict:
         def _work():
-            return _get_parser(wave_path).get_value_at_time(path, at_ps)
+            return _get_parser(wave_path).get_value_at_time(
+                root_binding.to_wave(path) if root_binding else path, at_ps)
 
         return await _run_in_wave_request(wave_path, _work)
 
@@ -4103,12 +4105,18 @@ async def _run_trace_x_attempt(
         at_ps: int,
     ) -> list[dict]:
         def _work():
-            return inspect_upstream_values(
+            observations = inspect_upstream_values(
                 _get_parser(wave_path),
-                upstream_names,
-                current_signal_path,
+                [root_binding.to_wave(p) for p in upstream_names] if root_binding else upstream_names,
+                root_binding.to_wave(current_signal_path) if root_binding else current_signal_path,
                 at_ps,
             )
+            if root_binding:
+                for row in observations:
+                    row['name'] = root_binding.to_design(row['name'])
+                    if row.get('path'):
+                        row['path'] = root_binding.to_design(row['path'])
+            return observations
 
         return await _run_in_wave_request(wave_path, _work)
 
@@ -4230,6 +4238,10 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         raise ValueError("trace_x_source mode must be snapshot or history")
     if any(k in args for k in ("history_start_ps", "signal_bits", "phase", "max_nodes", "max_events", "max_read_bytes", "timeout_sec", "compile_context")):
         raise ValueError("history parameters require mode=history")
+    original_signal = args['signal_path']
+    root_binding = await _bind_wave_design_root(args, simulator)
+    if root_binding:
+        args = {**args, 'signal_path': root_binding.to_design(original_signal)}
 
     from src.connectivity_backend import (  # noqa: PLC0415
         DeferredConnectivityFallbackBackend,
@@ -4302,6 +4314,12 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         finalized["single_backend_provenance"] = True
         result["backend_status"] = finalized
         result["trace_restarted"] = bool(restart_reasons)
+        if root_binding:
+            from src.scope_metadata import file_identity
+            if root_binding.wave_identity != file_identity(wave_path):
+                raise ValueError('wave_design_binding_changed')
+            result['start_signal'] = original_signal
+            result['wave_design_binding'] = root_binding.receipt(original_signal)
         return schemas.TraceXSourceResult.model_validate(result)
 
     if npi_selected:
@@ -4309,6 +4327,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             result, execution_status = await _run_trace_x_attempt(
                 backend=npi_backend,
                 wave_path=wave_path,
+            **({"root_binding": root_binding} if root_binding else {}),
                 signal_path=signal_path,
                 time_ps=time_ps,
                 compile_log=compile_log,
@@ -4611,6 +4630,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         source_result, _ = await _run_trace_x_attempt(
                             backend=trace_backend,
                             wave_path=wave_path,
+                            **({"root_binding": root_binding} if root_binding else {}),
                             signal_path=signal_path,
                             time_ps=time_ps,
                             compile_log=compile_log,
@@ -4821,6 +4841,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         static_result, _ = await _run_trace_x_attempt(
             backend=StaticConnectivityBackend(),
             wave_path=wave_path,
+            **({"root_binding": root_binding} if root_binding else {}),
             signal_path=signal_path,
             time_ps=time_ps,
             compile_log=compile_log,
@@ -5150,6 +5171,9 @@ async def _resolve_packed_fields(args):
     if not isinstance(fields, list) or not 1 <= len(fields) <= 128 or not all(isinstance(f, str) and f for f in fields):
         raise ValueError("fields must contain 1..128 names")
     simulator = _resolve_session_simulator(args)
+    root_binding = await _bind_wave_design_root(args, simulator)
+    if root_binding:
+        args = {**args, 'source_signal': root_binding.to_design(args['source_signal'])}
     hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
     if hierarchy is None:
         return blocked("current_hierarchy_required")
@@ -5186,6 +5210,10 @@ async def _resolve_packed_fields(args):
     except (ValueError, KeyError) as exc:
         return blocked(str(exc))
     def validate_dump():
+        if root_binding:
+            from src.scope_metadata import file_identity
+            if root_binding.wave_identity != file_identity(args['wave_path']):
+                raise ValueError('wave_design_binding_changed')
         parser = _get_parser(args["wave_path"])
         declaration = parser.get_signal_declaration(args["signal_path"])
         if declaration["declared_range"] != result["evidence"]["declared_range"]:
@@ -6032,6 +6060,7 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "signal_path": {"type": "string"},
+                    "wave_path": {"type": "string", "description": "Optional waveform for an evidence-checked wave/design root binding."},
                     "compile_log": {"type": "string"},
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
@@ -6084,6 +6113,7 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "from_signal": {"type": "string"},
+                    "wave_path": {"type": "string", "description": "Optional waveform for an evidence-checked wave/design root binding."},
                     "to_signal": {"type": "string"},
                     "compile_log": {"type": "string"},
                     "simulator": {
@@ -8259,21 +8289,44 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "find_signal_loads":
         simulator = _resolve_session_simulator(args)
+        original_path = args["signal_path"]
+        root_binding = await _bind_wave_design_root(args, simulator)
+        if root_binding:
+            args = {**args, "signal_path": root_binding.to_design(original_path)}
         result, backend_status = await _route_public_connectivity(
             operation="loads",
             args=args,
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if root_binding:
+            from src.scope_metadata import file_identity
+            if root_binding.wave_identity != file_identity(args["wave_path"]):
+                raise ValueError("wave_design_binding_changed")
+            result["wave_design_binding"] = root_binding.receipt(original_path)
+            result["signal_path"] = original_path
         return schemas.FindSignalLoadsResult.model_validate(result)
 
     elif name == "trace_signal_path":
         simulator = _resolve_session_simulator(args)
+        original_paths = {k: args[k] for k in ("from_signal", "to_signal")}
+        bindings = {}
+        for key, path in original_paths.items():
+            binding = await _bind_wave_design_root(args, simulator, key)
+            if binding:
+                bindings[key] = binding
+                args = {**args, key: binding.to_design(path)}
         result, backend_status = await _route_public_signal_path(
             args=args,
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if bindings:
+            from src.scope_metadata import file_identity
+            if any(b.wave_identity != file_identity(args["wave_path"]) for b in bindings.values()):
+                raise ValueError("wave_design_binding_changed")
+            result["wave_design_binding"] = {k: b.receipt(original_paths[k]) for k, b in bindings.items()}
+            result.update(original_paths)
         return schemas.TraceSignalPathResult.model_validate(result)
 
     elif name == "build_kdb":

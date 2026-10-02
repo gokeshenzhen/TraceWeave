@@ -1604,6 +1604,7 @@ class LoadEnumerationReceipt(SchemaModel):
 
 
 class FindSignalLoadsResult(SchemaModel):
+    wave_design_binding: dict[str, Any] | None = None
     signal_path: str
     resolved_rtl_name: str
     resolved_module: str | None = None
@@ -1650,6 +1651,7 @@ _TRACE_SIGNAL_PATH_DIRECTION_NOTE = (
 
 
 class TraceSignalPathResult(SchemaModel):
+    wave_design_binding: dict[str, Any] | None = None
     from_signal: str
     to_signal: str
     found: bool
@@ -1729,6 +1731,7 @@ class XHistoryEvidence(SchemaModel):
 
 
 class TraceXSourceResult(SchemaModel):
+    wave_design_binding: dict[str, Any] | None = None
     start_signal: str
     start_time_ps: int
     trace_status: str

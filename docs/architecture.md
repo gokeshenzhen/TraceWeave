@@ -2574,3 +2574,11 @@ The focused Slang projector admits only actual Instance objects, retains missing
 candidate gaps, and never enumerates siblings. Trace scope checks require exact
 candidate coverage before a fact enters the chain. Old artifact identities are
 invalidated by the versioned build/worker contract.
+
+The shared `wave_design_binding` maps only a verified unique Verilator top and
+exact dump declaration. Driver/load/path, X-trace and dynamic observation routes
+reuse that mapping without changing source coordinates in the semantic artifact.
+Packed aggregate selections can bind to a typed field alias only when its exact
+dump declaration has the expected range and storage identity. Missing/ambiguous
+aliases remain observation gaps. Constant field selection is projected from the
+same typed assignment RHS; it does not imply complete driver coverage.

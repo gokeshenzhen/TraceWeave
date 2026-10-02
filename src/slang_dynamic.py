@@ -80,6 +80,13 @@ def expression(projector,node,record,aliases,*,budget=None,depth=0):
     def fail(reason='dynamic_evidence_unavailable'):
         refs = projector._template_expression_selections(node,record,aliases)
         return Expr('unsupported',width,tuple(Expr('signal',s.width,signal=s.symbol,bits=s.bits) for s in refs[:64]),reason=reason)
+    if kind in {'MemberAccess', 'ElementSelect', 'RangeSelect'}:
+        # A constant typed selection is already an exact IR bit map. Preserve
+        # it instead of observing an entire aggregate that may not be dumped.
+        selected = projector._template_selection(node, record, aliases)
+        if selected is not None and selected.width == width:
+            return Expr('signal', width, signal=selected.symbol, bits=selected.bits,
+                        signed=signed, two_state=two_state)
     if kind=='Conversion':
         operand = visit(node.operand)
         if getattr(node.conversionKind, 'name', '') == 'Propagated':

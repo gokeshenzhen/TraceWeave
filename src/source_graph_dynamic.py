@@ -158,6 +158,16 @@ def query_step(backend, signal):
             result["gaps"].append("dynamic_evidence_unavailable")
             continue
         dynamic = fact.dynamic
+        value = dynamic.value
+        local_selection = (
+            not match.traversal and query.signal.instance_path == match.instance_path
+            and query.signal.symbol == fact.target.symbol
+            and set(query.signal.bits).issubset(fact.target.bits)
+            and value.width == fact.target.width
+        )
+        if local_selection:
+            from .dynamic_selection import select_expression
+            value = select_expression(value, tuple(fact.target.bits.index(b) for b in query.signal.bits))
 
         def bind(expr):
             declared = (
@@ -173,11 +183,11 @@ def query_step(backend, signal):
         processes.add((match.instance_path, dynamic.process))
         result["gaps"].extend(dynamic.gaps)
         result["gaps"].extend(
-            expression_gaps(dynamic.guard) + expression_gaps(dynamic.value)
+            expression_gaps(dynamic.guard) + expression_gaps(value)
         )
         if (
             set(match.covered_signal.bits) != set(query.signal.bits)
-            or match.target.bits != fact.target.bits
+            or (not local_selection and (match.target.bits != fact.target.bits or value.width != query.signal.width))
         ):
             result["gaps"].append("dynamic_bit_mapping_unavailable")
         if dynamic.edge:
@@ -189,7 +199,7 @@ def query_step(backend, signal):
             dict(
                 id=match.fact_id,
                 guard=asdict(bind(dynamic.guard)),
-                value=asdict(bind(dynamic.value)),
+                value=asdict(bind(value)),
                 order=dynamic.order,
                 nonblocking=dynamic.nonblocking,
                 source=source,
