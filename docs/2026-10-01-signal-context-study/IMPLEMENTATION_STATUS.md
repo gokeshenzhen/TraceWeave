@@ -28,6 +28,8 @@
 
 - [第三轮 30 / 32 run 检查点](evaluation/e1-20261002-env/THIRD_REPETITION.md)：核心运行已全部完成，累计 2 次完整交付、28 次预算超时；本轮 C1-B 实际采用 NPI、C2-B 实际采用 Source Graph 依赖，但均未完成任务。另记录了 hierarchy/scan 串行的共同流程偏差。S1 与最终审计继续。
 
+- S1-A 正确完成，S1-B 在 driver 查询前遭遇模型容量错误；[失败记录](evaluation/e1-20261002-env/S1_INFRASTRUCTURE.md) 保留，并按预登记规则用相同条件重跑完整 S1 配对。
+
 目前未完成：
 
 - P1-CONTEXT 的实际模型收益验收。
