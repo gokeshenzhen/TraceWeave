@@ -1,0 +1,38 @@
+{
+  "runs": [
+    {
+      "run": "C1-1-A",
+      "pid": 44793,
+      "head": "48fbda7882121b26ac9bd01d392f259e653e7936",
+      "product_mismatches": [],
+      "prompt_matches": true,
+      "tool_schema_sha256": "5ebbf52df8135c4b7a6e0ce0430dabf6c183c4f533f93e71fe594107cfbdc96f",
+      "common_tool_schema_sha256": "5ebbf52df8135c4b7a6e0ce0430dabf6c183c4f533f93e71fe594107cfbdc96f",
+      "arm_A_dependency_requests": false
+    },
+    {
+      "run": "C1-1-B",
+      "pid": 46034,
+      "head": "48fbda7882121b26ac9bd01d392f259e653e7936",
+      "product_mismatches": [],
+      "prompt_matches": true,
+      "tool_schema_sha256": "65e30ff023ece3b3a99938038407352b72aab90d0ef827dde9124bf804a2dadc",
+      "common_tool_schema_sha256": "5ebbf52df8135c4b7a6e0ce0430dabf6c183c4f533f93e71fe594107cfbdc96f",
+      "arm_A_dependency_requests": false
+    },
+    {
+      "run": "C2-1-A",
+      "pid": 47288,
+      "head": "48fbda7882121b26ac9bd01d392f259e653e7936",
+      "product_mismatches": [],
+      "prompt_matches": true,
+      "tool_schema_sha256": "5ebbf52df8135c4b7a6e0ce0430dabf6c183c4f533f93e71fe594107cfbdc96f",
+      "common_tool_schema_sha256": "5ebbf52df8135c4b7a6e0ce0430dabf6c183c4f533f93e71fe594107cfbdc96f",
+      "arm_A_dependency_requests": false
+    }
+  ],
+  "common_tool_schemas_equal": true,
+  "independent_mcp_pids": true,
+  "product_hashes_match": true,
+  "prompts_match": true
+}

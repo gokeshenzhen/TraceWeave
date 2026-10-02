@@ -1,0 +1,359 @@
+{
+  "pid": 47288,
+  "executable": "/home/robin/Projects/mcp/TraceWeave/.venv/bin/python",
+  "head": "48fbda7882121b26ac9bd01d392f259e653e7936",
+  "modules": {
+    "config": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/config.py",
+      "sha256": "cd5ce886061f5e7eb2180b18936226a47ccdd219473cc05301a92c28d6863735"
+    },
+    "src.operation_metrics": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/operation_metrics.py",
+      "sha256": "7eca10076e093e9b5395939f1230fa8d289196b83a56e2c5fb73b9e660b0dc77"
+    },
+    "src.cancellation": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/cancellation.py",
+      "sha256": "86d13cc41305754bfddf85c173acbca9311f4fc1b3e939427fecb40b73f56255"
+    },
+    "src.clock_edge_cache": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/clock_edge_cache.py",
+      "sha256": "2edcb2e38d8d273f8f9518b8a31cfcb7c19cfcbdf947fb5168457816eadef1b5"
+    },
+    "src.schemas": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/schemas.py",
+      "sha256": "65d35ae2a734710cef60f20f6bb51771a5e38285852e5c20f8d0cd27aa63fefe"
+    },
+    "src.problem_hints": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/problem_hints.py",
+      "sha256": "29803cdbcd906f087945d83053525019ced94f7086076df457e8a0674f684c1d"
+    },
+    "src.log_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/log_parser.py",
+      "sha256": "598416159eef67c98d14cd3177a83665b3bda6e86aa4b185a0b90515430fe0a0"
+    },
+    "src.scope_metadata": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/scope_metadata.py",
+      "sha256": "953fdba88692de67818c89715a2ffe018a91375fc390ad8152678b66a2075f10"
+    },
+    "src.waveform_hints": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/waveform_hints.py",
+      "sha256": "acecd9142ae1c0107ef2583acf7b8afc31f6dec7b7162c7f8e58c7ac1ff2ef4a"
+    },
+    "src.vcd_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/vcd_parser.py",
+      "sha256": "792ae5949a87b0e1b727c672e6343ce62c4d0490b2089be2768fea16341adc6a"
+    },
+    "src.fsdb_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/fsdb_parser.py",
+      "sha256": "256c1a379ba6637bc093e7c9d19fa29739018608b69044ccf86255a9d86725cd"
+    },
+    "src.fst_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/fst_runtime.py",
+      "sha256": "8641da1c2d7a5ecdde261a94c385a856500c3325a3fc9f2656deff93ab3c83d3"
+    },
+    "src.fsdb_signal_index": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/fsdb_signal_index.py",
+      "sha256": "b284eebd259be79026e9b0cd3d8edace052b1a2465b3be19479c944293644702"
+    },
+    "src.filelist_tokenizer": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/filelist_tokenizer.py",
+      "sha256": "88076884a09d66f1fc7199ee7afb7a4ed566d4e45a8c85748a515ba61f3f26a6"
+    },
+    "src.hdl_suffixes": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/hdl_suffixes.py",
+      "sha256": "04fbe24a568e71f125db3eb5a3ee995f6f3e14991100c56014d05889456a7556"
+    },
+    "src.compile_log_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/compile_log_parser.py",
+      "sha256": "35541f50418b81c23e1d8ce9a1235e337711d079aa84bec71c2448a3f61ab529"
+    },
+    "src.compile_session_snapshot": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/compile_session_snapshot.py",
+      "sha256": "0a09cca61f731ed9995bd24719009c9b4be7361e0f3a9bd91885a7f15b7d5f74"
+    },
+    "src.compile_source_index": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/compile_source_index.py",
+      "sha256": "a184ea500cd84615a6f13243aa2886a96dab70b2b123f65d86c79a8f64730de9"
+    },
+    "src.compile_environment": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/compile_environment.py",
+      "sha256": "bceba4c7023f0ad7d138db25efa03690994bba1a337231898befc6afae881b99"
+    },
+    "src.sv_preprocessor": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/sv_preprocessor.py",
+      "sha256": "4cf7459ad90d10feaeb258cfb23d322c2cb46cfdcee270a4426cc30c3d411fe8"
+    },
+    "src.tb_hierarchy_builder": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/tb_hierarchy_builder.py",
+      "sha256": "8913de9516a4022905e87e50cefd9c5efcbc3077ac1a6c63a4e17b81096f0d00"
+    },
+    "src.analyzer": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/analyzer.py",
+      "sha256": "2b95801e8791abd97e9862f75db3574ebfb8be98485006addf068d808c8a87ee"
+    },
+    "src.bounded_hierarchy_bootstrap": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/bounded_hierarchy_bootstrap.py",
+      "sha256": "9746cc7468b1d68b156d6bd3723710e11dd31a475710f308c39a7412309823db"
+    },
+    "src.compile_source_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/compile_source_runtime.py",
+      "sha256": "0278efba467f1a34dfa8d370c9b680e0c180b981e00b71991b37bd95513ee3bc"
+    },
+    "src.cursor_store": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/cursor_store.py",
+      "sha256": "cc34f1df38d57f07adc76eda6885f5dad7db58473e408a38633b3400a7827922"
+    },
+    "src.hierarchy_handles": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/hierarchy_handles.py",
+      "sha256": "49c2446c92b76df44f8f664c6e37495971074ec4021dd1d72e3f0e6803493f3a"
+    },
+    "src.divergence_compare": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/divergence_compare.py",
+      "sha256": "c33a742a7ab48f25bfd7e1e0cb8abcf9a39d450848c6ff73016d289f44de3ad8"
+    },
+    "src.divergence_context": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/divergence_context.py",
+      "sha256": "b9b260b1ab8b8c23dee37a2f7f48a7e915d2049b63753ded1e1398caca4905f3"
+    },
+    "src.telemetry_context": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/telemetry_context.py",
+      "sha256": "9e186a03e07261bc7587c0624689400487b66e93d991689349b0c4c5925298c7"
+    },
+    "src.usage_telemetry": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/usage_telemetry.py",
+      "sha256": "1bfaf31c62131a28cded263f4914e456d72019f1dffda146918ca28d7dfc8c9f"
+    },
+    "src.expression_values": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_values.py",
+      "sha256": "0f0254960f73191d4c0ae570bb1d2d0307ad2dbd3b45ba63224877169709af2b"
+    },
+    "src.dynamic_evidence": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/dynamic_evidence.py",
+      "sha256": "15bcdefe5a333c5ad7c45ea3da783d6179a4fe79db289b75ad182003f85bd39b"
+    },
+    "src.connectivity_ir": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/connectivity_ir.py",
+      "sha256": "57a38ebb2f58ebc647c444bb93f64391c336ee46645ca87c240ce4e8a076323a"
+    },
+    "src.hierarchy_provider": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/hierarchy_provider.py",
+      "sha256": "07e13aeaf1c97491a1144f22b0ec1796a484ecd0d96fd552c6ce3495ca12a616"
+    },
+    "src.dynamic_selection": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/dynamic_selection.py",
+      "sha256": "4f97523e8ae32d6d103f6d082bf667653cc42a54f416532b4ae9cca927886cc0"
+    },
+    "src.slang_dynamic": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/slang_dynamic.py",
+      "sha256": "d1b3fae6a0a16be2eeb84369007b94ecc6798349f518a3bb4c094b89759ccea8"
+    },
+    "src.slang_connectivity_projector": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/slang_connectivity_projector.py",
+      "sha256": "e9b5de4474fc6740cc65e3640bc54eea9cbb5af0fb97811efe4e71eabc9c9dec"
+    },
+    "src.connectivity_limits": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/connectivity_limits.py",
+      "sha256": "d1ba52457ba61ec3fd942de8216c10404105db66aaefb36379b9ed648b228d51"
+    },
+    "src.source_graph_contract": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_contract.py",
+      "sha256": "ade48aa8cc0619c6af2d35a76017c168e3d950a3920490ef9e11b7cebf313bd7"
+    },
+    "src.source_graph_compile_projection": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_compile_projection.py",
+      "sha256": "d8231c13e6cc8cd975034cee38a955e7d64dd1176f248e95dfe4fdc5f9c2fd69"
+    },
+    "src.source_graph_adapter": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_adapter.py",
+      "sha256": "3b25e9a879f762f71701ed85a6fa3af76e9a60d3ce5df943c4254919d289399a"
+    },
+    "src.connectivity_query": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/connectivity_query.py",
+      "sha256": "933651c80f6871f5c73f73584c4d47b0402a6fb604663ae8082c830f7f5408f3"
+    },
+    "src.source_graph_disk_cache": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_disk_cache.py",
+      "sha256": "7ef6676e446e74afaa8986fa3a39b646fd1dfb2e87da555f86d2694cc9ecca5c"
+    },
+    "src.source_graph_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_runtime.py",
+      "sha256": "0410fab8bb9afb46eb7ca4930fd63108803b2f820b8f6bc544fdc422287b8a4e"
+    },
+    "src.source_graph_backend": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_backend.py",
+      "sha256": "a47fd81bfb1f0f434b2f07cba2c9550b3e650c087a2e92edbd9ac9658b9491f4"
+    },
+    "src.source_graph_session_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_session_runtime.py",
+      "sha256": "fa5681a01b67e8693f01cb7cbe5d013a6d198f8ebac7877b17b70febd64135ed"
+    },
+    "src.source_graph_production": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_production.py",
+      "sha256": "4158a5a6d000041b087bd8a344fa407c4cd839e467e628986022f31d3291ebf3"
+    },
+    "src.source_graph_x_trace": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/source_graph_x_trace.py",
+      "sha256": "b6686888cda886c093307eb48f286cbaa25b1439bd091d03c5275e623d763654"
+    },
+    "src.timespec": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/timespec.py",
+      "sha256": "af84f5f496705d4babfc105c7d41eadc66cbe11b2bfefa5a6c9a1778acbcc604"
+    },
+    "src.event_pages": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/event_pages.py",
+      "sha256": "523a3866c3f62bc785622127fe7586bc516646880cc83f031e069e36be9d39e1"
+    },
+    "src.cycle_query": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/cycle_query.py",
+      "sha256": "62c785fb3eef9e42fc94ed0ad1bcc6369875edac9d7136fcddf3511848e0c894"
+    },
+    "src.waveform_selection": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/waveform_selection.py",
+      "sha256": "bd2f44d1a333cd90fd3f863b27d8318198054a72a1ae02cde27cc6d7c02ae08f"
+    },
+    "src.verify_condition": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/verify_condition.py",
+      "sha256": "23a5ea83ba9906fc0fa7c09d8ea87ce6cc10924620673ea5f5d41f58210d24a0"
+    },
+    "src.handshake_suggest": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/handshake_suggest.py",
+      "sha256": "f9cc5fd0e0728664ebff96afa09b735ef3b91a4ca270480374836eeb045c8205"
+    },
+    "src.handshake_sweep": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/handshake_sweep.py",
+      "sha256": "0b798b20a3715961b7ead50b29044a052d1974eb0d3c61dbc77014eadf41b5ca"
+    },
+    "src.window_verify": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/window_verify.py",
+      "sha256": "02ebb2f235944e1ca9b45efa0f3957b5d75a32163754eff6c15f53b71a474745"
+    },
+    "src.waveform_batch": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/waveform_batch.py",
+      "sha256": "21300180d25d230431e1b88be1de75017fcfd1881b6df041eee9479a486caa4d"
+    },
+    "src.transaction_sampling": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/transaction_sampling.py",
+      "sha256": "a39d042e001bf2e84dc02b93478da499eefb24374fd9d2fbb794e19ab8a0f0c4"
+    },
+    "src.txn_reconstruct": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/txn_reconstruct.py",
+      "sha256": "cbaaed46f0f61017f9b06efe40f35ce27d103fad221f5d0ef13f9e33a174233b"
+    },
+    "src.tlul": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/tlul.py",
+      "sha256": "968abb41831389b757fb967bb4a898d68eeff08b7c7bf04859b1266b273afa6f"
+    },
+    "src.packed_layout": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/packed_layout.py",
+      "sha256": "51de4b6e750aca5312fed9ed2812dbd9682c920a0f1b07463b8de4df8ebd7719"
+    },
+    "src.formal_path_discovery": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/formal_path_discovery.py",
+      "sha256": "fe1b23bf44b36c3eda3eee847e7b2916d0e77f43df29201ac6773c9d968383bc"
+    },
+    "src.path_discovery": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/path_discovery.py",
+      "sha256": "ef8dddc994ef1554518b59bf51efd2833073abd02bacf1bace024ea1166fc5e2"
+    },
+    "src.verdi_backend": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/verdi_backend.py",
+      "sha256": "3e59be7a00760968a2f09775e191938ef82a946e0c9683027ab377a514302fa2"
+    },
+    "src.structural_scanner": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/structural_scanner.py",
+      "sha256": "ad3fa9c79be5e4af948a48728d6a8a1fcd54f806e8cc0258a82fd6863ec6edf2"
+    },
+    "src.design_identity": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/design_identity.py",
+      "sha256": "7c07bd20de293e27225f28d6d9e9743d197cab514ed2299f7ffa9c4b36d3e674"
+    },
+    "src.structural_scan_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/structural_scan_runtime.py",
+      "sha256": "a3e45b29733bc6e77af88ff62e14eb5e8e1de6e71e15e44601d03156e1ca9c72"
+    },
+    "src.structural_semantics": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/structural_semantics.py",
+      "sha256": "da0670bca3b8ae82ee80303d9d6a144cbb37e18dcad8471e5fa1336c82203a39"
+    },
+    "src.structural_semantic_runtime": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/structural_semantic_runtime.py",
+      "sha256": "f606800873d3c662d5eda816b0b566d8f693cf8530875b272a233d20351b4e2a"
+    },
+    "src.x_trace": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/x_trace.py",
+      "sha256": "093b3020c336a3aa889d0077911291584dd0a0c3f4fad734aa5c585ddc49c958"
+    },
+    "src.evidence_output": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/evidence_output.py",
+      "sha256": "77bf68bd18322bc6ee64073cb0f147511b89a1d33f4a255321967940bc878780"
+    },
+    "src.expression_errors": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_errors.py",
+      "sha256": "7ecddd348b6b5af75d3cde04bebca0b6aaccb77862e6617762b6557082e627c5"
+    },
+    "src.mcp_validation": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/mcp_validation.py",
+      "sha256": "c7121aabbda39040c2300ede29f0e2ae5f20e75026f1e0d2c7c91c8aa5c269f1"
+    },
+    "server": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/server.py",
+      "sha256": "18da7d4e70f48d65a7f6a44c58391dfa57db75e74beb8fe8d8acd648ec0166da"
+    },
+    "src.expression_examples": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_examples.py",
+      "sha256": "c6c1e56dbd79ea0deb66c77226d527b0d66134f07b72986a63f0d58bdceefcd4"
+    },
+    "src.verilator_compile": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/verilator_compile.py",
+      "sha256": "1c16f7ef33d3bbf14ac73114a3b0837f5d8c15f92485af0c0507912462c48dab"
+    },
+    "src.signal_driver": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/signal_driver.py",
+      "sha256": "56dbe3dc259c514be0979e57084f32c5b747344c302b9f6fabe7df13d4df01ff"
+    },
+    "src.signal_load": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/signal_load.py",
+      "sha256": "cc6639e436c961d22f78cdcc9b627fdcabbb2bcaf4fa98439d63a22c0f07ca9a"
+    },
+    "src.connectivity_backend": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/connectivity_backend.py",
+      "sha256": "bf621d311d0ffa698768d4f40a663315546d8e84e8a5db6f0e56578f64451ac4"
+    },
+    "src.kdb_builder": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/kdb_builder.py",
+      "sha256": "13a0c17d387c3abe7cbe6f936bc25c5458c5be3cf1b645f90e1b2d1a3eaab9ed"
+    },
+    "src.verilator_log_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/verilator_log_parser.py",
+      "sha256": "865d6bd5bf9a441670dd7ba252d5256f5484917561fd3831ca60edb611daff5b"
+    },
+    "src.fst_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/fst_parser.py",
+      "sha256": "ac8280662d80bf210c561303e507c3eff0e0ed81a48a45c4b490ec01ecc93b3d"
+    },
+    "src.fst_event_pages": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/fst_event_pages.py",
+      "sha256": "bf75b5be67caf8b32ec1ba6b29e69e498ee557f30f1a8c0b150368e04629e1d9"
+    },
+    "src.handle_tools": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/handle_tools.py",
+      "sha256": "0a2d033d9d30881a5b1fa61a1c9095eb9aceae477b70c17e0a12466ae45df1c4"
+    },
+    "src.local_cycles": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/local_cycles.py",
+      "sha256": "479b24cf6e356fb3d05808930882154456cdb94fed7b37d92b59d1e51e0cf077"
+    },
+    "src.expression_parser": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_parser.py",
+      "sha256": "f2b9a3ad5f6a6e1560b53999253f35b3c4a972c93998a39968dd11431839d5a0"
+    },
+    "src.expression_binding": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_binding.py",
+      "sha256": "df3140963c1ffb78b7c758cc7882e1a3ac5b138da173cc5152a2cbd9aaa09239"
+    },
+    "src.expression_observe": {
+      "path": "/home/robin/Projects/mcp/TraceWeave/src/expression_observe.py",
+      "sha256": "d7d1d4cb7cd35441bafdc3165921f9e5e6615321e677ebbf73e8fc4e760deb1f"
+    }
+  }
+}
