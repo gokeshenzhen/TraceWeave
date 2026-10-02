@@ -1,0 +1,51 @@
+{
+  "project": "ot",
+  "origin": "global",
+  "phase": "before",
+  "runs": [
+    {
+      "temperature": "first",
+      "elapsed": 0.09748380400014867,
+      "cpu_seconds": 0.09738234899999999,
+      "peak_rss_kib": 799848,
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 0,
+            "end": -1
+          }
+        ],
+        "pages": 24,
+        "events": 24015,
+        "estimated_decoded_bytes": 12391740
+      },
+      "result": null,
+      "error": "requested cycles reach incomplete or ambiguous clock transitions; reduce num_cycles",
+      "result_bytes": 0
+    },
+    {
+      "temperature": "warm",
+      "elapsed": 0.06471561900025335,
+      "cpu_seconds": 0.06456952199999999,
+      "peak_rss_kib": 799848,
+      "reading": {
+        "reads": [
+          {
+            "path": "tb.dut.uart_core.uart_tx.clk_i",
+            "start": 0,
+            "end": -1
+          }
+        ],
+        "pages": 24,
+        "events": 24015,
+        "estimated_decoded_bytes": 12391740
+      },
+      "result": null,
+      "error": "requested cycles reach incomplete or ambiguous clock transitions; reduce num_cycles",
+      "result_bytes": 0
+    }
+  ],
+  "source_sha256": "5036f51967b4183c04976670c0593bf042dd1335c6ce1238c7794a900accaead",
+  "conditions": "fresh process; first/warm parser; OS cache uncontrolled; RSS is process high-water KiB"
+}

@@ -1,0 +1,335 @@
+{
+  "schema_version": "1.0",
+  "study_date": "2026-10-01",
+  "traceweave_head": "58075728654fc850a56b8909ac6d1bb3ace8a46e",
+  "artifacts": {
+    "ot": {
+      "compile_log": "/cache/Projects/opentitan/out/dvsim/master/uart-sim-vcs/default/build.log",
+      "wave_path": "/cache/Projects/opentitan/out/dvsim/master/uart-sim-vcs/0.uart_smoke/latest/waves.fsdb",
+      "log_path": "/cache/Projects/opentitan/out/dvsim/master/uart-sim-vcs/0.uart_smoke/latest/run.log",
+      "simulator": "vcs",
+      "handle": "tbh_44804a7b"
+    },
+    "x1": {
+      "compile_log": "/cache/Projects/traceweave-verilator-acceptance/X1/hdl-compile.log",
+      "wave_path": "/cache/Projects/traceweave-verilator-acceptance/X1/run/waveform.fst",
+      "log_path": "/cache/Projects/traceweave-verilator-acceptance/X1/run/sim.log",
+      "simulator": "verilator",
+      "handle": "tbh_c9b074f7"
+    },
+    "x2": {
+      "compile_log": "/cache/Projects/traceweave-verilator-acceptance/X2/hdl-compile.log",
+      "wave_path": "/cache/Projects/traceweave-verilator-acceptance/X2/run/waveform.fst",
+      "log_path": "/cache/Projects/traceweave-verilator-acceptance/X2/run/sim.log",
+      "simulator": "verilator",
+      "handle": "tbh_1ff7a012"
+    },
+    "x3": {
+      "compile_log": "/cache/Projects/traceweave-verilator-acceptance/X3/hdl-compile.log",
+      "wave_path": "/cache/Projects/traceweave-verilator-acceptance/X3/run/waveform.fst",
+      "log_path": "/cache/Projects/traceweave-verilator-acceptance/X3/run/sim.log",
+      "simulator": "verilator",
+      "handle": "tbh_d8f04d55"
+    }
+  },
+  "scope_aliases": {
+    "uart_tx": "tb.dut.uart_core.uart_tx",
+    "dma": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i",
+    "system_bus": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i"
+  },
+  "methodology": {
+    "case_count": 5,
+    "independent_runs": 4,
+    "production_code_changed": false,
+    "new_simulations": false,
+    "blind_model_benchmark": false,
+    "source_wave_historical_identity": "not_independently_proven",
+    "operator_invalid_calls": [
+      "ot_tx_driver",
+      "x2_req_history"
+    ]
+  },
+  "cases": [
+    {
+      "id": "C1",
+      "project": "ot",
+      "kind": "normal_sequential_update",
+      "question": "tx_q changes while tick_baud_q is already 0 after the edge: illegal shift or correct registered use of the previous value?",
+      "hypotheses": [
+        "unexpected UART shift",
+        "correct previous-cycle baud pulse capture"
+      ],
+      "clock": "tb.dut.uart_core.uart_tx.clk_i",
+      "anchor_edge_ps": 7145478,
+      "window_ps": [
+        7074050,
+        7216906
+      ],
+      "key_receipts": [
+        "ot_txq_driver",
+        "ot_txd_driver",
+        "ot_txd_recursive",
+        "ot_tx_cycles_before",
+        "ot_tx_cycles_after",
+        "ot_clock_initial",
+        "ot_clock_local",
+        "ot_tx_before_point"
+      ],
+      "expected_points": [
+        {
+          "call_id": "ot_tx_before_point",
+          "expected_dec": {
+            "tb.dut.uart_core.uart_tx.tx_q": 1,
+            "tb.dut.uart_core.uart_tx.tx_d": 0,
+            "tb.dut.uart_core.uart_tx.tick_baud_q": 1,
+            "tb.dut.uart_core.uart_tx.bit_cnt_q[3:0]": 10
+          }
+        }
+      ],
+      "expected_cycle_rows": [
+        {
+          "call_id": "ot_tx_cycles_after",
+          "edge_time_ps": 7145478,
+          "expected_dec": {
+            "tb.dut.uart_core.uart_tx.tx_q": 0,
+            "tb.dut.uart_core.uart_tx.tick_baud_q": 0,
+            "tb.dut.uart_core.uart_tx.bit_cnt_q[3:0]": 9
+          }
+        }
+      ],
+      "finding": "The selected update is consistent with RTL. NPI resolves driver source but its public upstream list is empty; global before-cycle query rejects the initial X clock.",
+      "not_established": [
+        "Whole UART correctness",
+        "NPI dynamic-step availability for all local dependencies"
+      ],
+      "suggested_work": [
+        "P0-SAMPLING",
+        "P1-CONTEXT"
+      ]
+    },
+    {
+      "id": "C2",
+      "project": "x1",
+      "kind": "cross_boundary_data_corruption",
+      "question": "DMA byte mismatch originates in the DMA producer or the request mapping?",
+      "hypotheses": [
+        "DMA buffer/alignment emitted bad data",
+        "system-bus request mapping altered good data"
+      ],
+      "clock": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.clk_cg",
+      "anchor_edge_ps": 944175000,
+      "window_ps": [
+        944095000,
+        944275000
+      ],
+      "key_receipts": [
+        "x1_log_full",
+        "x1_req_history",
+        "x1_buffer_history",
+        "x1_write_boundary",
+        "x1_system_boundary",
+        "x1_mapping_fact",
+        "x1_output_driver",
+        "x1_output_driver_design_path",
+        "x1_mapping_driver"
+      ],
+      "expected_points": [
+        {
+          "call_id": "x1_mapping_fact",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.dma_write_req_i[0].wdata[31:0]": 16,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].wdata[31:0]": 17,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].be[3:0]": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].req": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].we": 1
+          }
+        }
+      ],
+      "finding": "Observed 0x10 -> 0x11 at the system-bus mapping during the first accepted write, matching the retained RTL xor. Earlier DMA and boundary data remain 0x10.",
+      "not_established": [
+        "Complete memory-to-CPU-readback chain",
+        "Historical compile/source identity",
+        "Exclusive defect over the whole run"
+      ],
+      "suggested_work": [
+        "P0-BINDING",
+        "P1-CONTEXT"
+      ]
+    },
+    {
+      "id": "C3",
+      "project": "x1",
+      "kind": "fsm_phase_and_late_window",
+      "question": "FSM exits RUNNING while after-edge dma_done=0: invalid transition or correct pre-edge condition?",
+      "hypotheses": [
+        "next-state equation transitioned without its condition",
+        "dma_done was high before the edge then cleared"
+      ],
+      "clock": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.clk_cg",
+      "anchor_edge_ps": 944515000,
+      "window_ps": [
+        944475000,
+        944535000
+      ],
+      "key_receipts": [
+        "x1_state_history",
+        "x1_done_before",
+        "x1_done_after",
+        "x1_transfer_before",
+        "x1_transfer_after",
+        "x1_clock_local",
+        "x1_clock_initial"
+      ],
+      "expected_points": [
+        {
+          "call_id": "x1_done_before",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_q[31:0]": 2,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_d[31:0]": 0,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_done": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.circular_mode": 0
+          }
+        },
+        {
+          "call_id": "x1_done_after",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_q[31:0]": 0,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_d[31:0]": 0,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_done": 0
+          }
+        }
+      ],
+      "diagnostic_probe_ids": [
+        "x1_full_clock_internal",
+        "x1_local_window_internal"
+      ],
+      "finding": "Normal completion. Separately, the public nine-cycle query near DMA start fails because its full-clock prefix is capped before the requested window; the existing local helper reads all nine before/after rows.",
+      "not_established": [
+        "An optimized production API or performance improvement"
+      ],
+      "suggested_work": [
+        "P0-SAMPLING"
+      ]
+    },
+    {
+      "id": "C4",
+      "project": "x2",
+      "kind": "fsm_stuck_due_to_external_condition",
+      "question": "DMA remains RUNNING until timeout: broken state equation, absent bus grant, or lost grant at the return mapping?",
+      "hypotheses": [
+        "DMA next-state logic ignores completion",
+        "consumer never grants",
+        "grant exists but is not forwarded"
+      ],
+      "clock": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.clk_cg",
+      "anchor_edge_ps": 944175000,
+      "window_ps": [
+        944180000,
+        944300000
+      ],
+      "key_receipts": [
+        "x2_log",
+        "x2_state_history",
+        "x2_req_history_corrected",
+        "x2_grant_history",
+        "x2_grant_mapping",
+        "x2_late_state",
+        "x2_window_control",
+        "x2_sweep_tail"
+      ],
+      "expected_points": [
+        {
+          "call_id": "x2_grant_mapping",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_resp[4].gnt": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.dma_write_resp_o[0].gnt": 0
+          }
+        },
+        {
+          "call_id": "x2_grant_mapping",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_q[31:0]": 2,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_d[31:0]": 2,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_done": 0,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.data_out_req": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.data_out_gnt": 0
+          }
+        },
+        {
+          "call_id": "x2_late_state",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_state_q[31:0]": 2,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.dma_done": 0,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.data_out_req": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.data_out_gnt": 0
+          }
+        }
+      ],
+      "expected_window_checks": [
+        {
+          "call_id": "x2_window_control",
+          "holds": true,
+          "vacuous": false,
+          "cycles_evaluated": 12,
+          "unknown_cycles": 0,
+          "coverage_status": "complete"
+        }
+      ],
+      "finding": "The observed return mapping discards an asserted grant. The FSM sees no completion; current verify_window already verifies the selected local conditions.",
+      "not_established": [
+        "All OBI protocol semantics",
+        "All internal FIFO update paths",
+        "Whole-run protocol cleanliness"
+      ],
+      "suggested_work": [
+        "P0-BINDING",
+        "P1-CONTEXT"
+      ]
+    },
+    {
+      "id": "C5",
+      "project": "x3",
+      "kind": "normal_control_and_existing_dynamic_trace",
+      "question": "Do the same boundary checks pass in another retained run, and how far does the existing A/B trace reach?",
+      "hypotheses": [
+        "candidate mapping signature is generic normal behavior",
+        "bad mapping signature is confined to failing runs"
+      ],
+      "clock": "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.clk_cg",
+      "anchor_edge_ps": 944175000,
+      "window_ps": [
+        944160000,
+        944180000
+      ],
+      "key_receipts": [
+        "x3_log",
+        "x3_mapping_fact",
+        "x3_state_history",
+        "x1_x3_trace_divergence",
+        "x1_rebuild_hierarchy",
+        "x1_rescan",
+        "x1_x3_trace_after_prereq"
+      ],
+      "expected_points": [
+        {
+          "call_id": "x3_mapping_fact",
+          "expected_dec": {
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.dma_write_req_i[0].wdata[31:0]": 16,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].wdata[31:0]": 16,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_resp[4].gnt": 1,
+            "TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.dma_write_resp_o[0].gnt": 1
+          }
+        }
+      ],
+      "finding": "Selected control transfer preserves data and grant; state returns to READY. trace_divergence confirms a mapped clock-sample difference within the requested window, then stops at source_graph_target_top_unresolved.",
+      "not_established": [
+        "X3 is a proven universal golden reference",
+        "The reported local-window first difference is the run-global first divergence"
+      ],
+      "suggested_work": [
+        "P0-BINDING",
+        "REUSE-DYNAMIC"
+      ]
+    }
+  ]
+}

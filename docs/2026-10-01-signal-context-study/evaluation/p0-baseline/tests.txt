@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 214 items
+
+tests/test_cycle_query.py ............................                   [ 13%]
+tests/test_fst_sampling.py .............                                 [ 19%]
+tests/test_fsdb_timescale.py ............                                [ 24%]
+tests/test_server.py ................................................... [ 48%]
+........................................................................ [ 82%]
+................                                                         [ 89%]
+tests/test_server_concurrency.py ......................                  [100%]
+
+============================= 214 passed in 5.92s ==============================
+logDir = /tmp/
