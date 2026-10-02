@@ -2783,6 +2783,21 @@ def build_source_graph_plan(**kwargs):
     return build_source_graph_initial_plan(**kwargs)
 
 
+async def _bind_wave_design_root(args, simulator, signal_key="signal_path"):
+    """Metadata under the wave lock; current compile identity outside it."""
+    from src.wave_design_binding import bind_root
+    if not args.get("wave_path") or not str(args.get(signal_key, "")).startswith("TOP."):
+        return None
+    bound = args.get("_bound_context")
+    hierarchy, _ = ((bound.hierarchy, bound.snapshot) if bound is not None
+                    else _resolve_hierarchy_context(args["compile_log"], simulator))
+    if hierarchy is None:
+        return None
+    return await _run_in_wave_thread(args["wave_path"], lambda: bind_root(
+        _get_parser(args["wave_path"]), args[signal_key], hierarchy["compile_result"],
+        top_hint=args.get("top_hint")))
+
+
 async def _route_public_connectivity(
     *,
     operation: str,
@@ -8222,12 +8237,22 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "explain_signal_driver":
         simulator = _resolve_session_simulator(args)
+        root_binding = await _bind_wave_design_root(args, simulator)
+        original_path = args["signal_path"]
+        if root_binding:
+            args = {**args, "signal_path": root_binding.to_design(original_path)}
         result, backend_status = await _route_public_connectivity(
             operation="driver",
             args=args,
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if root_binding:
+            from src.scope_metadata import file_identity
+            if root_binding.wave_identity != file_identity(args["wave_path"]):
+                raise ValueError("wave_design_binding_changed")
+            result["wave_design_binding"] = root_binding.receipt(original_path)
+            result["signal_path"] = original_path
         if bound is not None and not await _run_in_cancellable_thread(bound.current):
             raise ValueError("compile_context_changed")
         return schemas.ExplainDriverResult.model_validate(result)

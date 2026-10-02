@@ -1339,6 +1339,14 @@ would defeat the bootstrap's resource bound.
 
 ## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
+Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
+current design root through `wave_design_binding`. The binding requires exactly
+one compiled top, an exact dump declaration, an unchanged wave identity, and a
+matching optional top hint. A real compiled `TOP` or a multi-top context is
+never stripped. `wave_design_binding` retains both names and explicitly does
+not prove historical source/wave identity. Root binding does not resolve
+generate scopes, arrays or fields; semantic query gaps remain separate.
+
 NPI is the deepest path, Source Graph is the bounded semantic fallback, and
 Static is the normal final source-regex fallback. A clean KDB can support both
 positive and negative NPI conclusions. A degraded KDB supports positive facts

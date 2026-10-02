@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 109 items
+
+tests/test_wave_design_binding.py ..                                     [  1%]
+tests/test_source_graph_public_routing.py .............................. [ 29%]
+.................................................                        [ 74%]
+tests/test_server_concurrency.py ......................                  [ 94%]
+tests/test_dynamic_binding.py ......                                     [100%]
+
+============================= 109 passed in 2.87s ==============================
+logDir = /tmp/
