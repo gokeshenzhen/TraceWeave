@@ -1,0 +1,1 @@
+Call TraceWeave get_diagnostic_snapshot exactly once, then report availability briefly. Do not use other tools or read files.

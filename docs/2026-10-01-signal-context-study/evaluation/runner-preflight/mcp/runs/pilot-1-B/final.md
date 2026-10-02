@@ -1,0 +1,1 @@
+The single `get_diagnostic_snapshot` call was blocked: it requires approval, but this session’s approval policy is `never`. Diagnostic availability could not be checked.
