@@ -2563,3 +2563,14 @@ and A/B mappings retain source identities. X history shares this declaration
 resolver. Missing declarations, invalid coordinates and cancellation retain
 their existing distinct outcomes. Binding does not prove delta-cycle order,
 asynchronous behavior or completeness of the driver inventory.
+
+### Bounded elaboration candidates
+
+When the compile hierarchy records a generate/instance-array gap, a deeply dotted
+target may add its exact parent as an `elaboration_candidates` lookup request.
+These paths are separately serialized and fingerprinted; they never enter the
+lexically proved ancestor chains. At most 64 candidates of depth 64 are admitted.
+The focused Slang projector admits only actual Instance objects, retains missing
+candidate gaps, and never enumerates siblings. Trace scope checks require exact
+candidate coverage before a fact enters the chain. Old artifact identities are
+invalidated by the versioned build/worker contract.

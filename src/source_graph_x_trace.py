@@ -18,6 +18,8 @@ from .cancellation import check_cancelled
 from .source_graph_adapter import (
     resolve_source_graph_direct_children,
     resolve_source_graph_hierarchy_ancestors,
+    resolve_source_graph_hierarchy_scope,
+    signal_projection_paths,
 )
 from .source_graph_contract import (
     BoundaryMode,
@@ -85,6 +87,7 @@ class SourceGraphTraceFallbackRequired(RuntimeError):
 def _requested_driver_scope(
     available: SourceGraphArtifactScope,
     ancestors: tuple[str, ...],
+    projection_paths: tuple[str, ...] | None = None,
 ) -> SourceGraphArtifactScope:
     return SourceGraphArtifactScope(
         design=available.design,
@@ -92,10 +95,11 @@ def _requested_driver_scope(
         hierarchy_snapshot_sha256=available.hierarchy_snapshot_sha256,
         proved_ancestor_chains=(ancestors,),
         proved_lcas=(ancestors[-1],),
-        projection_instance_paths=ancestors,
+        projection_instance_paths=projection_paths or ancestors,
+        elaboration_candidates=tuple(p for p in (projection_paths or ()) if p not in ancestors),
         coverage_boundary=CoverageBoundary(
             mode=BoundaryMode.EXPLICIT,
-            instance_paths=ancestors,
+            instance_paths=projection_paths or ancestors,
             objective_exclusions=(available.coverage_boundary.objective_exclusions),
         ),
         capabilities=(QueryOperation.DRIVER,),
@@ -128,16 +132,18 @@ class SourceGraphTraceArtifactGuard:
                 raise SourceGraphTraceFallbackRequired(
                     "source_graph_trace_target_top_mismatch"
                 )
-            ancestors = resolve_source_graph_hierarchy_ancestors(
+            resolution = resolve_source_graph_hierarchy_scope(
                 hierarchy_result=self._hierarchy_result,
                 top=self._scope.top,
                 signal_path=signal_path,
             )
-            if ancestors is None:
+            if resolution is None:
                 raise SourceGraphTraceFallbackRequired(
                     "source_graph_trace_hierarchy_scope_unresolved"
                 )
-            requested = _requested_driver_scope(self._scope, ancestors)
+            requested = _requested_driver_scope(
+                self._scope, resolution.ancestors,
+                signal_projection_paths(resolution, signal_path))
             relation = compare_source_graph_artifact_scopes(
                 self._scope,
                 requested,

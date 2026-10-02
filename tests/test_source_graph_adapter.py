@@ -2254,6 +2254,53 @@ def test_unresolved_generate_candidate_is_deferred_not_proved_missing(
     )
 
 
+def test_generated_target_is_an_exact_candidate_not_a_lexical_proof(tmp_path):
+    slang = pytest.importorskip("pyslang")
+    from src.slang_connectivity_projector import SlangConnectivityProjector, ProjectionOptions
+    from src.connectivity_query import ConnectivityQueryEngine, QueryStatus
+    from src.source_graph_x_trace import SourceGraphTraceArtifactGuard, SourceGraphTraceScopeExpansion
+    source = tmp_path / "top.sv"
+    _write(source, """
+      module leaf(output logic q); assign q = 1'b1; endmodule
+      module tb;
+        for (genvar i=0; i<3; i++) begin: lanes
+          leaf u(.q());
+        end
+      endmodule
+    """)
+    compile_result = _compile_result(tmp_path, command="xrun top.sv -top tb", sources=(source,))
+    hierarchy = {"component_tree": {"tb": {}}, "_scan_results": [{
+        "modules": ["tb"],
+        "hierarchy_module_gap_map": {"tb": ["hierarchy_generate_scope_unmodeled"]}}]}
+    plan = _plan(tmp_path, compile_result, signal_path="tb.lanes[1].u.q", hierarchy=hierarchy)
+    scope = plan.request.scope
+    assert scope.hierarchy_ancestors == ("tb",)
+    assert scope.requested_cone.instance_paths == ("tb", "tb.lanes[1].u")
+    assert "hierarchy_generate_scope_unmodeled" in plan.receipt.gap_codes
+    tree = slang.syntax.SyntaxTree.fromFile(str(source))
+    compilation = slang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+    ir = SlangConnectivityProjector(source_manager=tree.sourceManager, options=ProjectionOptions(
+        focus_instance_paths=scope.coverage_boundary.instance_paths,
+        assignment_instance_paths=scope.requested_cone.instance_paths,
+    )).project(compilation.getRoot()).ir
+    assert {i.path for i in ir.instances} == {"tb", "tb.lanes[1].u"}
+    query = ConnectivityQueryEngine(ir).query_driver("tb.lanes[1].u.q")
+    assert query.status is QueryStatus.FOUND
+    guard = SourceGraphTraceArtifactGuard(artifact_scope=plan.request.artifact_identity.scope,
+                                         hierarchy_result=hierarchy)
+    from src.source_graph_contract import SourceGraphArtifactScope
+    artifact = plan.request.artifact_identity.scope
+    assert SourceGraphArtifactScope.from_dict(artifact.to_dict()) == artifact
+    with pytest.raises(ValueError, match="proved ancestor"):
+        replace(artifact, elaboration_candidates=())
+    with pytest.raises(ValueError, match="bounded elaboration"):
+        replace(artifact, elaboration_candidates=("another_top.u",))
+    guard.require(["tb.lanes[1].u.q"])
+    with pytest.raises(SourceGraphTraceScopeExpansion):
+        guard.require(["tb.lanes[2].u.q"])
+
+
 def test_proved_missing_child_blocks_as_instance_outside_projected_scope(
     tmp_path,
 ):

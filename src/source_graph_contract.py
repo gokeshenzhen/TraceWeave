@@ -26,11 +26,11 @@ from .connectivity_limits import DEFAULT_LOAD_OUTPUT_LIMIT
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 
 
-SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.2"
-SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.2"
+SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.3"
+SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.3"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
 SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.9"
-SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.1"
+SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_MAPPING_VERSION = "1.5"
@@ -634,6 +634,7 @@ class SourceGraphBuildScope:
     requested_cone: RequestedCone
     coverage_boundary: CoverageBoundary
     path_hierarchy: PathHierarchyScope | None = None
+    elaboration_candidates: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "design", _required_text(self.design, "design"))
@@ -692,6 +693,7 @@ class SourceGraphBuildScope:
             "top": self.top,
             "target": self.target.to_dict(),
             "hierarchy_ancestors": list(self.hierarchy_ancestors),
+            "elaboration_candidates": list(self.elaboration_candidates),
             "requested_cone": self.requested_cone.to_dict(),
             "coverage_boundary": self.coverage_boundary.to_dict(),
             "path_hierarchy": (
@@ -716,6 +718,7 @@ class SourceGraphBuildScope:
             top=value["top"],
             target=_target_from_dict(target),
             hierarchy_ancestors=tuple(value.get("hierarchy_ancestors", ())),
+            elaboration_candidates=tuple(value.get("elaboration_candidates", ())),
             requested_cone=RequestedCone.from_dict(cone),
             coverage_boundary=CoverageBoundary.from_dict(boundary),
             path_hierarchy=(
@@ -883,6 +886,9 @@ class SourceGraphArtifactScope:
         QueryOperation.LOADS,
         QueryOperation.PATH,
     )
+    # Exact, bounded lookup requests, not hierarchy proof. A worker may admit
+    # only actual elaborated Instance objects. No candidate-prefix cache reuse.
+    elaboration_candidates: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "design", _required_text(self.design, "design"))
@@ -935,7 +941,14 @@ class SourceGraphArtifactScope:
         )
         if not projection_paths:
             raise ValueError("artifact scope requires a bounded projection path")
-        if not set(projection_paths).issubset(chain_atoms):
+        candidates = _path_set(self.elaboration_candidates, "elaboration candidate")
+        if (len(candidates) > 64 or any(
+                len(p.split(".")) > 64 or not p.startswith(top + ".")
+                or not re.fullmatch(r"[a-zA-Z_$][\w$]*(?:\[-?\d+\])*(?:\.[a-zA-Z_$][\w$]*(?:\[-?\d+\])*)*", p)
+                for p in candidates) or not set(candidates).issubset(projection_paths)):
+            raise ValueError("invalid bounded elaboration candidates")
+        object.__setattr__(self, "elaboration_candidates", candidates)
+        if not set(projection_paths).issubset(chain_atoms | set(candidates)):
             raise ValueError(
                 "artifact projection paths must occur in proved ancestor chains"
             )
@@ -992,6 +1005,7 @@ class SourceGraphArtifactScope:
             projection_instance_paths=scope.requested_cone.instance_paths,
             coverage_boundary=scope.coverage_boundary,
             capabilities=tuple(QueryOperation(item) for item in capabilities),
+            elaboration_candidates=scope.elaboration_candidates,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1004,6 +1018,7 @@ class SourceGraphArtifactScope:
             ],
             "proved_lcas": list(self.proved_lcas),
             "projection_instance_paths": list(self.projection_instance_paths),
+            "elaboration_candidates": list(self.elaboration_candidates),
             "coverage_boundary": self.coverage_boundary.to_dict(),
             "capabilities": [item.value for item in self.capabilities],
         }
@@ -1022,6 +1037,7 @@ class SourceGraphArtifactScope:
             ),
             proved_lcas=tuple(value.get("proved_lcas", ())),
             projection_instance_paths=tuple(value.get("projection_instance_paths", ())),
+            elaboration_candidates=tuple(value.get("elaboration_candidates", ())),
             coverage_boundary=CoverageBoundary.from_dict(boundary),
             capabilities=tuple(
                 QueryOperation(item) for item in value.get("capabilities", ())
@@ -1253,7 +1269,7 @@ def _legacy_exact_artifact_identity(
         ]
     chain_atoms = set().union(*(set(chain) for chain in chains))
     for path in scope.requested_cone.instance_paths:
-        if path in chain_atoms:
+        if path in chain_atoms or path in scope.elaboration_candidates:
             continue
         chains.append((scope.top,) if path == scope.top else (scope.top, path))
         chain_atoms.add(path)
@@ -1294,6 +1310,7 @@ def _legacy_exact_artifact_identity(
         projection_instance_paths=scope.requested_cone.instance_paths,
         coverage_boundary=scope.coverage_boundary,
         capabilities=(scope.target.operation,),
+        elaboration_candidates=scope.elaboration_candidates,
     )
     return SourceGraphArtifactIdentity(
         source=source,

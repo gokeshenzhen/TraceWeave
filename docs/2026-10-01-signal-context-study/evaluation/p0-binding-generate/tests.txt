@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 231 items
+
+tests/test_source_graph_adapter.py ..................................... [ 16%]
+...............F....                                                     [ 24%]
+tests/test_source_graph_public_routing.py .............................. [ 37%]
+.................................................                        [ 58%]
+tests/test_source_graph_trace_public_routing.py ....................     [ 67%]
+tests/test_source_graph_x_trace.py ..............                        [ 73%]
+tests/test_source_graph_runtime.py ..................................... [ 89%]
+...........                                                              [ 94%]
+tests/test_source_graph_production.py .............                      [100%]
+
+=================================== FAILURES ===================================
+_______ test_generated_target_is_an_exact_candidate_not_a_lexical_proof ________
+tests/test_source_graph_adapter.py:2275: in test_generated_target_is_an_exact_candidate_not_a_lexical_proof
+    plan = _plan(tmp_path, compile_result, signal_path="tb.lanes[1].u.q", hierarchy=hierarchy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_graph_adapter.py:94: in _plan
+    return build_source_graph_plan(
+src/source_graph_adapter.py:2370: in build_source_graph_plan
+    artifact_scope = SourceGraphArtifactScope.from_build_scope(
+src/source_graph_contract.py:986: in from_build_scope
+    return cls(
+<string>:11: in __init__
+    ???
+src/source_graph_contract.py:939: in __post_init__
+    raise ValueError(
+E   ValueError: artifact projection paths must occur in proved ancestor chains
+=========================== short test summary info ============================
+FAILED tests/test_source_graph_adapter.py::test_generated_target_is_an_exact_candidate_not_a_lexical_proof
+======================== 1 failed, 230 passed in 5.80s =========================
