@@ -239,4 +239,6 @@ Before making non-trivial changes, build a quick mental model from the files abo
 
 When a behavior change requires doc updates, **only touch documents tracked in git**. Run `git ls-files | grep -E '\.md$'` to see the canonical doc set (currently `README.md`, `README.zh.md`, `AGENTS.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/workflow.md`). Untracked files under `docs/` are local drafts, RFCs, and session notes — do not edit them as part of code changes and do not create new ones unless the user explicitly asks. This applies to every agent working in this repository (Claude, Codex, others).
 
+Commit only necessary product docs. Keep development plans, session notes and evaluation evidence local and ignored; never force-add them when committing code.
+
 `CLAUDE.md` links to `AGENTS.md`; after changing either, resolve the target and require `wc -m` to be at most 40,000 characters.

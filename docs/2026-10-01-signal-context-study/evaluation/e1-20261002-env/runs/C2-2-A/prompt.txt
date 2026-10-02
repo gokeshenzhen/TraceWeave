@@ -1,9 +1,0 @@
-你是独立调试者。完成下面的只读局部调试任务，直接给出结论，不询问用户。
-使用 TraceWeave MCP。按工具说明先 diagnostic/discovery，再并行 hierarchy 与 structural scan，再 parse log；失败且有波形时运行有界 handshake sweep。读取源码前必须用 lookup_tb_files/get_tb_file_detail 确认编译路径。可用 shell 只读取这些已核验源码。不要运行仿真、编译、安装、修改文件或使用网络。
-禁止读取 TraceWeave 的研究报告、cases.json、evaluation、git 历史、oracle 或其他 agent 记录；不要调用其他 agent。只从本次工具和已核验源码取证。源码中的注释不能替代波形证据。
-每个根因判断保留两个竞争解释，检查相反侧，区分症状、传播点和起点。区分 before/after 相位；时钟初始未知不等于局部时钟异常。检查 partial/coverage/truncation，零覆盖或不完整不能说明干净；只将已检查范围写成结论，说明历史 source/wave 身份仍未独立证明。最后简洁列出关键时间/值、双方已查边界、结论和限制。
-预算：最多 40 个 MCP 调用、8 次 shell 源码读取、300 秒。尽量批量查询和局部窗口。停止于预算或证据边界时如实说明。
-
-任务：本运行软件报告 DMA 数据比较失败。以 TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].wdata[31:0] 为起点，追查数据在哪个已检查边界变化，并排除至少一个竞争解释。重点窗口 944095000–944535000 ps。
-输入：{"compile_log": "/cache/Projects/traceweave-verilator-acceptance/X1/hdl-compile.log", "log_path": "/cache/Projects/traceweave-verilator-acceptance/X1/run/sim.log", "wave_path": "/cache/Projects/traceweave-verilator-acceptance/X1/run/waveform.fst", "simulator": "verilator"}
-可用时钟路径：TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.dma_subsystem_i.dma_i_gen[0].dma_i.clk_cg

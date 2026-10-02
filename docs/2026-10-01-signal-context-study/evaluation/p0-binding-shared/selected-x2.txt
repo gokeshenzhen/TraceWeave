@@ -1,1 +1,0 @@
-[('TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.int_master_req[4].wdata[31:0]', '00000000000000000000000000010000', ['driver_set_incomplete']), ('TOP.testharness.x_heep_system_i.core_v_mini_mcu_i.system_bus_i.dma_write_resp_o[0].gnt', '0', ['driver_set_incomplete'])]

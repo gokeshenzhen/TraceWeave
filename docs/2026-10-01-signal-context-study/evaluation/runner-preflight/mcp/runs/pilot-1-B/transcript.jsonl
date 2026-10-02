@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"01a0fc6f-2d46-7493-b794-b1f7b677f8ff"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call TraceWeave’s `get_diagnostic_snapshot` once and briefly report its availability."}}
-{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"TraceWeave","tool":"get_diagnostic_snapshot","arguments":{},"result":null,"error":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"TraceWeave","tool":"get_diagnostic_snapshot","arguments":{},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The single `get_diagnostic_snapshot` call was blocked: it requires approval, but this session’s approval policy is `never`. Diagnostic availability could not be checked."}}
-{"type":"turn.completed","usage":{"input_tokens":31364,"cached_input_tokens":24576,"cache_write_input_tokens":0,"output_tokens":332,"reasoning_output_tokens":187}}

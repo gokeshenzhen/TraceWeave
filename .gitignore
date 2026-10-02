@@ -13,6 +13,9 @@ novasLog/
 verdiLog/
 novas.conf
 novas.rc
+# Only necessary product documentation is tracked.
+# Development plans, handoffs, logs, and evaluation evidence stay local.
+# Do not force-add ignored documentation or evidence.
 docs/*
 !docs/architecture.md
 !docs/expressions.md

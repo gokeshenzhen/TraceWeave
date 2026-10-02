@@ -1,1 +1,0 @@
-Called `get_diagnostic_snapshot` exactly once successfully. Simulation paths, hierarchy, log analysis, and next-step recommendations are unavailable; path discovery has not run yet.

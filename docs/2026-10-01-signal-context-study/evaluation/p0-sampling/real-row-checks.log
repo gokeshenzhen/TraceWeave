@@ -1,9 +1,0 @@
-FSDB Reader, Release Verdi_V-2023.12-SP2, RH Linux x86_64/64bit, 10/02/2026
-(C) 1996 - 2026 by Synopsys, Inc.
-{'project': 'ot', 'phase': 'before', 'start': 7074050, 'rows': 5, 'point_comparisons': 20, 'helper_equal': True, 'points_equal': True}
-{'project': 'ot', 'phase': 'after', 'start': 7074050, 'rows': 5, 'point_comparisons': 20, 'helper_equal': True, 'points_equal': True}
-{'project': 'x1', 'phase': 'before', 'start': 944095000, 'rows': 9, 'point_comparisons': 45, 'helper_equal': True, 'points_equal': True}
-{'project': 'x1', 'phase': 'before', 'start': 944475000, 'rows': 7, 'point_comparisons': 21, 'helper_equal': True, 'points_equal': True}
-{'project': 'x1', 'phase': 'after', 'start': 944095000, 'rows': 9, 'point_comparisons': 45, 'helper_equal': True, 'points_equal': True}
-{'project': 'x1', 'phase': 'after', 'start': 944475000, 'rows': 7, 'point_comparisons': 21, 'helper_equal': True, 'points_equal': True}
-logDir = /tmp/

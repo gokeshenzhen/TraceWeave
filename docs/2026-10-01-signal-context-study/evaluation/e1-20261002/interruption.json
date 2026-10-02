@@ -1,8 +1,0 @@
-{
-  "time": 1790942521.115356,
-  "reason": "C1 NPI precondition unavailable: Codex MCP omitted configured EDA environment; stop for infrastructure repair, preserve partial C2-1-A",
-  "runner_pid": 39706,
-  "terminated_model_groups": [
-    42488
-  ]
-}
