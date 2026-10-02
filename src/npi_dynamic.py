@@ -173,6 +173,9 @@ def query_step(backend, signal: str) -> dict:
                     # assigned value (including RTL X). Retain observation
                     # targets, never infer a reset-to-zero/set-to-one value.
                     result['async_controls'] = facts
+                    # The data pin remains a real observation candidate even
+                    # though NPI does not prove the async assigned value.
+                    result['data_inputs'] = [asdict(linked(data[0]))]
                     result['gaps'].append('temporal_context_unavailable')
                     return Expr('unsupported', width, reason='async_control_value_unmodeled')
                 return linked(data[0])
@@ -217,7 +220,11 @@ def query_step(backend, signal: str) -> dict:
             # original operation and packed dimensions. Let the route restart
             # on Source Graph; pin count and generated names cannot prove it.
             if cell_type in {'npiNlEqCompCell','npiNlNotEqCompCell','npiNlOpCell','npiNlUnsignedCell'}:
-                raise ProjectionGap('npi_operator_semantics_unresolved')
+                # Input pins still prove candidate dependencies. Retain them
+                # without evaluating the lost operator semantics; dynamic
+                # tracing keeps the same gap/fallback behavior.
+                return Expr('unsupported', width, operands,
+                            reason='npi_operator_semantics_unresolved')
             op = logical.get(cell_type) or bitwise.get(cell_type) or unary.get(cell_type) or arithmetic.get(cell_type)
             if cell_type in logical or cell_type in bitwise:
                 operands = tuple(Expr('not' if cell_type in logical else '~',

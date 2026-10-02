@@ -95,7 +95,8 @@ async def run(args):
                         + [CASES['scope_aliases']['dma'] + '.dma_state_q[31:0]'])
                     for path in paths:
                         await call('explain_signal_driver', signal_path=path, compile_log=a['compile_log'],
-                                   simulator=a['simulator'], wave_path=a['wave_path'])
+                                   simulator=a['simulator'], wave_path=a['wave_path'],
+                                   **(dict(include_dependencies=True) if args.dependencies else {}))
                     if args.project in ('x1', 'x2', 'x3'):
                         bus = CASES['scope_aliases']['system_bus']
                         common = dict(wave_path=a['wave_path'], compile_log=a['compile_log'], simulator=a['simulator'])
@@ -112,4 +113,5 @@ if __name__ == '__main__':
     cli.add_argument('--output', required=True)
     cli.add_argument('--origins', default='global')
     cli.add_argument('--drivers', action='store_true')
+    cli.add_argument('--dependencies', action='store_true')
     asyncio.run(run(cli.parse_args()))

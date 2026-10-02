@@ -2798,6 +2798,50 @@ async def _bind_wave_design_root(args, simulator, signal_key="signal_path"):
         top_hint=args.get("top_hint")))
 
 
+async def _attach_driver_dependencies(result, backend, args, simulator):
+    """Extra one-hop evidence must come from the already selected backend.
+
+    Semantic work stays outside the wave lock. Failure of this optional query
+    never changes the selected driver backend or overwrites its positive facts.
+    """
+    if not args.get('include_dependencies', False):
+        return
+    from src.driver_dependencies import inventory, unavailable, LIMITS
+    reason = ('testbench_driven' if result.get('driver_status') == 'testbench_driven'
+              else 'dynamic_evidence_unavailable')
+    context = unavailable(backend.name, reason)
+    if backend.name not in {'source_graph', 'verdi_npi'} or reason == 'testbench_driven':
+        result['dependency_context'] = context
+        return
+    deadline = time.monotonic() + LIMITS['timeout_sec']
+    def query():
+        return backend.get_dynamic_step(signal_path=args['signal_path'],
+            compile_log=args['compile_log'], top_hint=args.get('top_hint'), simulator=simulator)
+    try:
+        async with asyncio.timeout(LIMITS['timeout_sec']):
+            step = (await _run_in_cancellable_thread(query) if backend.name == 'source_graph'
+                    else await _call_connectivity_backend(backend, query))
+            if step.get('backend') != backend.name:
+                context = unavailable(backend.name, 'dependency_backend_mismatch')
+            elif time.monotonic() >= deadline:
+                context = unavailable(backend.name, 'dependency_timeout')
+            else:
+                entry = getattr(backend, '_entry', None)
+                context = await _run_in_wave_thread(args['wave_path'], lambda: inventory(
+                    step, _get_parser(args['wave_path']), binding=args.get('_wave_design_binding'),
+                    engine=entry.query_engine if entry else None, deadline=deadline))
+    except OperationCancelled:
+        raise
+    except TimeoutError:
+        context = unavailable(backend.name, 'dependency_timeout')
+    except Exception:
+        context = unavailable(backend.name, 'dependency_query_failed')
+    if result.get('traversal', {}).get('search_exhaustive') is False:
+        context['complete'] = False
+        context['gaps'] = sorted(set(context['gaps']) | {'driver_set_incomplete'})
+    result['dependency_context'] = context
+
+
 async def _route_public_connectivity(
     *,
     operation: str,
@@ -2883,6 +2927,8 @@ async def _route_public_connectivity(
                 )
                 clean = _strip_connectivity_internal_receipts(npi_result)
                 clean["backend"] = "verdi_npi"
+                if operation == 'driver':
+                    await _attach_driver_dependencies(clean, npi_backend, args, simulator)
                 status = _finalize_public_connectivity_status(
                     backend_status=backend_status,
                     selected_backend=selected_backend,
@@ -3377,6 +3423,9 @@ async def _route_public_connectivity(
                             )
                             clean = _strip_connectivity_internal_receipts(source_result)
                             clean["backend"] = "source_graph"
+                            if operation == 'driver':
+                                await _attach_driver_dependencies(clean,
+                                    _source_graph_backend_for_plan(outcome.entry, current_plan), args, simulator)
                             operation_metrics.set_value(
                                 "source_graph_phase", "complete"
                             )
@@ -6014,6 +6063,10 @@ async def list_tools():
                         "description": "vcs / xcelium / verilator / auto; session default.",
                     },
                     "top_hint": {"type": "string"},
+                    "include_dependencies": {
+                        "type": "boolean", "default": False,
+                        "description": "Opt in to one-hop data/control/clock/reset candidates with exact wave selections and gaps (max 32). source is omitted when identical to wave. No values or active-branch verdict. Choose a window/phase, then sample with get_signals_by_cycle; query a direct data input separately for another hop.",
+                    },
                     "recursive": {
                         "type": "boolean",
                         "default": False,
@@ -8270,13 +8323,17 @@ async def _dispatch(name: str, args: dict):
         root_binding = await _bind_wave_design_root(args, simulator)
         original_path = args["signal_path"]
         if root_binding:
-            args = {**args, "signal_path": root_binding.to_design(original_path)}
+            args = {**args, "signal_path": root_binding.to_design(original_path),
+                    '_wave_design_binding': root_binding}
         result, backend_status = await _route_public_connectivity(
             operation="driver",
             args=args,
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if args.get('include_dependencies') and 'dependency_context' not in result:
+            from src.driver_dependencies import unavailable
+            result['dependency_context'] = unavailable(result.get('backend', 'static'), 'dynamic_evidence_unavailable')
         if root_binding:
             from src.scope_metadata import file_identity
             if root_binding.wave_identity != file_identity(args["wave_path"]):

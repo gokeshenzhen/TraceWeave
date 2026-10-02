@@ -1158,6 +1158,7 @@ class SourceGraphClaimSemanticsReceipt(SchemaModel):
 
 
 class ExplainDriverResult(SchemaModel):
+    dependency_context: dict[str, Any] | None = None
     wave_design_binding: dict[str, Any] | None = None
     signal_path: str
     wave_path: str

@@ -2582,3 +2582,17 @@ Packed aggregate selections can bind to a typed field alias only when its exact
 dump declaration has the expected range and storage identity. Missing/ambiguous
 aliases remain observation gaps. Constant field selection is projected from the
 same typed assignment RHS; it does not imply complete driver coverage.
+
+### Optional driver dependency inventory
+
+`explain_signal_driver(include_dependencies=true)` attaches a one-hop inventory
+from the selected backend and the same Source Graph artifact, where applicable.
+It reuses typed dynamic expressions and NPI pins; unavailable semantics remain
+gaps. Candidate roles and exact wave selections do not prove an active branch.
+Source coordinates are included when different from the dump selection. The
+default performs no extra query. Limits are 32 selections, 256 expression nodes,
+32 KiB output and a 10-second cooperative deadline; native NPI cancellation still
+waits for its bounded native call to return. Metadata binding runs under the
+wave lock after semantic work finishes. A dependency failure cannot change the
+original backend or erase its driver facts. Choose a time window and phase in
+a separate cycle query; query a direct data input for another explicit hop.

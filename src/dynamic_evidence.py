@@ -485,6 +485,11 @@ def validate_step(raw: dict) -> dict:
         Expr.from_dict(raw["clock"]["expression"])
         if raw["clock"]["edge"] not in {"posedge", "negedge"}:
             raise ValueError("dynamic_step_clock_invalid")
+    data_inputs = raw.get('data_inputs', [])
+    if not isinstance(data_inputs, list) or len(data_inputs) > 1:
+        raise ValueError('dynamic_data_inputs_invalid')
+    for data in data_inputs:
+        Expr.from_dict(data)
     controls = raw.get('async_controls', [])
     if not isinstance(controls, list) or len(controls) > 2:
         raise ValueError('dynamic_async_controls_invalid')

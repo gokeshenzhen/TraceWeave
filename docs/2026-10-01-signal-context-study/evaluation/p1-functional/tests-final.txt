@@ -1,0 +1,49 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 436 items
+
+tests/test_driver_dependencies.py .....                                  [  1%]
+tests/test_npi_dynamic.py ..ssssss                                       [  2%]
+tests/test_dynamic_evidence.py .................                         [  6%]
+tests/test_dynamic_binding.py ......                                     [  8%]
+tests/test_wave_design_binding.py .....                                  [  9%]
+tests/test_source_graph_public_routing.py .............................. [ 16%]
+.................................................                        [ 27%]
+tests/test_server.py ................................................... [ 39%]
+........................................................................ [ 55%]
+................                                                         [ 59%]
+tests/test_server_concurrency.py ......................                  [ 64%]
+tests/test_verdi_npi_backend.py ........................................ [ 73%]
+..........................................................               [ 86%]
+tests/test_x_history.py ...................................              [ 94%]
+tests/test_trace_divergence.py ......................                    [100%]
+
+======================= 430 passed, 6 skipped in 14.55s ========================
+
+                     NPI - Native Programming Interface (R)
+
+               Version V-2023.12-SP2 for linux64 - May 26, 2024 
+
+                    Copyright (c) 1999 - 2024 Synopsys, Inc.
+   This software and the associated documentation are proprietary to Synopsys,
+ Inc. This software may only be used in accordance with the terms and conditions
+ of a written license agreement with Synopsys, Inc. All other use, reproduction,
+   or distribution of this software is strictly prohibited.  Licensed Products
+     communicate with Synopsys servers for the purpose of providing software
+    updates, detecting software piracy and verifying that customers are using
+    Licensed Products in conformity with the applicable License Key for such
+  Licensed Products. Synopsys will use information gathered in connection with
+    this process to deliver software updates and pursue software pirates and
+                                   infringers.
+
+ Inclusivity & Diversity - Visit SolvNetPlus to read the "Synopsys Statement on
+            Inclusivity and Diversity" (Refer to article 000036315 at
+                        https://solvnetplus.synopsys.com)
+Total	0 error(s),   0 warning(s)
+Total	0 error(s),   0 warning(s)
+Total	0 error(s),   0 warning(s)
+Total	0 error(s),   0 warning(s)
+Total	0 error(s),   0 warning(s)
