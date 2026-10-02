@@ -8,8 +8,8 @@
 | --- | --- | --- | --- | --- |
 | P0-SAMPLING：局部周期、预算与相位/缺口 | 已实现 | 297 项回归 + 最终 15 项局部回归；C1/C3 真实新 MCP 与逐行点读核对 | 不要求 | 已收敛；[证据](evaluation/p0-sampling/REPORT.md) |
 | P0-BINDING：身份 / generate / 数组成员解析 | 已实现（当前案例范围） | 361 项最终回归 + C2/C4/C5 双侧值、源码与选位表达式；[验收](evaluation/p0-binding-shared/REPORT.md) | 不要求 | 已收敛；保留真实语义/历史身份缺口 |
-| E1 / P1-CONTEXT：NPI 返回可用性增强 | 已实现 | 430 passed / 6 skipped；C1 真实 NPI 候选已验证；[功能证据](evaluation/p1-functional/REPORT.md) | 已冻结 30 个任务 run + 2 个简单定位 run，开始执行；[manifest](evaluation/e1-20261002/manifest.json) | 已实现待 A/B |
-| E1 / P1-CONTEXT：explain_signal_driver 按需依赖包 | 已实现 | 默认关闭、预算、单 backend、C1/C4 功能通过；[证据](evaluation/p1-functional/REPORT.md) | 已冻结 30 个任务 run + 2 个简单定位 run，开始执行；[manifest](evaluation/e1-20261002/manifest.json) | 已实现待 A/B |
+| E1 / P1-CONTEXT：NPI 返回可用性增强 | 已实现 | 430 passed / 6 skipped；C1 真实 NPI 候选已验证；[功能证据](evaluation/p1-functional/REPORT.md) | 修复评测环境后重新冻结 30 + 2 run；[manifest](evaluation/e1-20261002-env/manifest.json) | 已实现待 A/B |
+| E1 / P1-CONTEXT：explain_signal_driver 按需依赖包 | 已实现 | 默认关闭、预算、单 backend、C1/C4 功能通过；[证据](evaluation/p1-functional/REPORT.md) | 修复评测环境后重新冻结 30 + 2 run；[manifest](evaluation/e1-20261002-env/manifest.json) | 已实现待 A/B |
 | E2：薄组合工具（可选） | 未决定实施 | 未开始 | 一旦实施就必须；未开始 | 不适用，尚未实施 |
 
 目前已完成：
