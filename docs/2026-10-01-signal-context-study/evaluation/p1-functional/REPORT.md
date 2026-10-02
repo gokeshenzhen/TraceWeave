@@ -1,4 +1,4 @@
-# P1 功能验收，尚待实际模型 A/B
+# P1 功能验收（模型收益另行验收）
 
 2026-10-02，共同 P0 基线 `651a91c`。按需 `include_dependencies=true` 返回同一已选 backend/artifact 的一跳候选；默认不查询、不返回依赖包。包保留 data/control/clock/reset/set/feedback 角色、精确波形 selection、不同的源选位及 binding gap。相同 source/wave selection 只保留 wave，避免重复。没有自动采值、active branch 或根因判定。
 
@@ -12,4 +12,4 @@ NPI：异步 pin 可证明 clock、set/reset 的类型及有效电平，不能�
 - ot-retry/calls.jsonl：actual_backend=verdi_npi。tx_q 有 clk_i、rst_ni（native set pin，不能按名称猜赋值）、tx_d；tx_d 有 tx_enable、wr、tx_q、tick_baud_q、bit_cnt_q[3:0]、sreg_q[0]，全部 exact dump binding。未知 NPI 运算仍有 gap。初次 ot/ 的 tx_d 因未知运算整体提前停止，保留失败记录；修改后保留了安全的输入 pin 候选。
 - x2/calls.jsonl：actual_backend=source_graph。wdata 绑定单个 dma_write_req_i[0].wdata 字段；gnt 为 literal 0，无伪造数据依赖；state_q 返回 rst_ni 控制候选和 state_d。Source Graph 的 coverage/temporal 缺口保留。
 
-这些是功能证据。尚无模型效率/质量收益结论；NPI 与通用 driver 增强都保持“已实现待 A/B”。
+以上是功能阶段证据，不能替代收益验收。后续[实际模型 A/B](../e1-20261002-env/REPORT.md) 已完成，未达到质量/效率收益门槛；NPI 与通用 driver 增强均为“待优化”，默认关闭额外依赖。

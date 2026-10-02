@@ -1,50 +1,49 @@
 # 实施与验收状态
 
-更新时间：2026-10-02。此文件是新 session 的状态入口，所有“通过”必须附实际证据链接。
+更新时间：2026-10-02。本轮独立评估、分阶段实现、功能复测和实际模型 A/B 已完成；**P0 在当前案例范围已收敛，NPI 返回增强与 driver 依赖包均待优化，默认关闭额外依赖。** 没有将共享 P0 的收益归给新增返回。
 
-接续实施已完成独立评估与基线（提交 `8acc369`），见 [ASSESSMENT.md](evaluation/p0-baseline/ASSESSMENT.md)。起点产品为 `5807572`；当时 214 项回归通过，C1/C3 采样缺陷与 X1 top 绑定失败用新 MCP 复现，C1 真实 NPI 可用。随后完成 P0-SAMPLING，见下表与功能报告。用户最新要求逐阶段验证并 commit 后再进行下一阶段。历史研究不作为新增增强收益证据。
-
-| 项目 | 实现 | 功能 / 真实案例验证 | 模型 A/B | 是否收敛 |
+| 项目 | 实现 | 功能 / 真实案例验证 | 模型 A/B | 验收状态 |
 | --- | --- | --- | --- | --- |
-| P0-SAMPLING：局部周期、预算与相位/缺口 | 已实现 | 297 项回归 + 最终 15 项局部回归；C1/C3 真实新 MCP 与逐行点读核对 | 不要求 | 已收敛；[证据](evaluation/p0-sampling/REPORT.md) |
-| P0-BINDING：身份 / generate / 数组成员解析 | 已实现（当前案例范围） | 361 项最终回归 + C2/C4/C5 双侧值、源码与选位表达式；[验收](evaluation/p0-binding-shared/REPORT.md) | 不要求 | 已收敛；保留真实语义/历史身份缺口 |
-| E1 / P1-CONTEXT：NPI 返回可用性增强 | 已实现 | 430 passed / 6 skipped；C1 真实 NPI 候选已验证；[功能证据](evaluation/p1-functional/REPORT.md) | 修复评测环境后重新冻结 30 + 2 run；[manifest](evaluation/e1-20261002-env/manifest.json) | 已实现待 A/B |
-| E1 / P1-CONTEXT：explain_signal_driver 按需依赖包 | 已实现 | 默认关闭、预算、单 backend、C1/C4 功能通过；[证据](evaluation/p1-functional/REPORT.md) | 修复评测环境后重新冻结 30 + 2 run；[manifest](evaluation/e1-20261002-env/manifest.json) | 已实现待 A/B |
-| E2：薄组合工具（可选） | 未决定实施 | 未开始 | 一旦实施就必须；未开始 | 不适用，尚未实施 |
+| P0-SAMPLING：局部周期、预算与相位/缺口 | 已实现；默认 global 不变，显式 window | 297 项回归 + 最终 15 项局部回归；C1/C3 新 MCP、42 行 / 172 值独立点读、资源实测；[证据](evaluation/p0-sampling/REPORT.md) | 不要求 | 已收敛（已测试语义与资源边界） |
+| P0-BINDING：身份 / generate / 数组成员解析 | 已实现（当前有界案例范围） | 361 项最终回归；C2/C4/C5 双侧波形、源码与精确选位；[证据](evaluation/p0-binding-shared/REPORT.md) | 不要求 | 已收敛；保留真实语义/历史身份缺口 |
+| P1 / E1：NPI 返回增强 | 已实现 | 430 passed / 6 skipped；C1 真实 NPI clock/set/data/control 候选；[功能证据](evaluation/p1-functional/REPORT.md) | 实际 C1 三对；两次 B 运行采用增强但超时；[最终报告](evaluation/e1-20261002-env/REPORT.md) | **待优化**，无可重复收益证据 |
+| P1 / E1：explain_signal_driver 按需依赖包 | 已实现；默认关闭，一跳与硬预算 | 单 backend、绑定、缺口、预算、取消/并发和只读 NPI 回归通过；[证据](evaluation/p1-functional/REPORT.md) | 实际五案例各三对 + S1；未达到质量或效率门槛 | **待优化**，不能称已收敛 |
+| E2：薄组合工具（可选） | 未实施 | 不适用 | 未执行；若实施须另做增量 A/B | 非本轮交付前提 |
 
-目前已完成：
+## 独立评估与确定性修复
 
-- 四份保留运行、五个案例的调研。
-- 保存 100 次研究 MCP 调用、artifact manifest 和采样诊断。
-- 局部 helper 的 9-edge before/after 复现成功；这是基线诊断，不是产品修复或 A/B。
-- [实施计划](PLAN.md)、[A/B 规则](AB_ACCEPTANCE.md)、[新 session 提示词](SESSION_PROMPT.md)。
+起点产品为 `5807572`，评估与基线提交 `8acc369`，见 [ASSESSMENT.md](evaluation/p0-baseline/ASSESSMENT.md)。当时 214 项回归通过，并用新 MCP 复现 C1/C3 采样缺陷和 X1 top 绑定失败；真实 NPI 可用。实施沿用已有采样、动态证据和连接后端模块，没有无条件删除 TOP、猜位选、删 coverage gap 或改 backend 优先级。
 
-正在执行：
+用户要求按阶段验证、commit 后再进入下一实现；主要产品提交为：
 
-- E1 首批因独立 MCP 缺少 EDA 环境、C1 NPI 加载失败而中断；[原始失败与报告](evaluation/e1-20261002/REPORT.md) 保留。临时 CLI 补充环境转发后，[真实 NPI 模型预检](evaluation/runner-npi-preflight/REPORT.md) 正常退出并确认 `actual_backend=verdi_npi`。产品、任务和正式预算不变，将重新冻结完整配对。
-- `evaluation/collect_ab.py` 从原始事件提取真实 usage、调用、依赖后续查询和版本/schema 审计；模型完成与进程退出状态分开记录。此离线计量辅助不参与被测输入，也不替代人工证据评分。
-- 环境修复后的[第一轮 10 / 32 run 检查点](evaluation/e1-20261002-env/FIRST_REPETITION.md) 已保存：C1 两组完整交付，其余 8 个预算超时；五个 B 均未采用依赖包。尚无增强收益证据，继续原定 BA/AB 重复，不变更预算或判据。
-- [第二轮 20 / 32 run 检查点](evaluation/e1-20261002-env/SECOND_REPETITION.md)：本轮 10 个均超时；C1-B 实际调用两次 NPI 依赖，C4-B 的递归路径回退 Static 并诚实返回不可用依赖。第三轮与 S1 继续进行，仍无可验收收益。
+- `5b62a34`：有界局部周期。
+- `f6d8da4`：验证 Verilator root 绑定。
+- `e51af86`：类型化 packed array/member 绑定。
+- `5be9bd6`：精确 generated target。
+- `651a91c`：共享类型/波形 selection，作为双方共同 P0 底座。
+- `010e6df`：默认关闭的一跳 driver 依赖包及 NPI 适配。
 
-- [第三轮 30 / 32 run 检查点](evaluation/e1-20261002-env/THIRD_REPETITION.md)：核心运行已全部完成，累计 2 次完整交付、28 次预算超时；本轮 C1-B 实际采用 NPI、C2-B 实际采用 Source Graph 依赖，但均未完成任务。另记录了 hierarchy/scan 串行的共同流程偏差。S1 与最终审计继续。
+后续提交分别保存 runner、环境修正、计量/评分与完整原始证据。没有在正式模型批次中修改产品或被测 runner。6 个跳过测试依赖新建 VCS/KDB fixture，本任务没有启用；既有 cc20 KDB 的只读回归实际通过。
 
-- S1-A 正确完成，S1-B 在 driver 查询前遭遇模型容量错误；[失败记录](evaluation/e1-20261002-env/S1_INFRASTRUCTURE.md) 保留，并按预登记规则用相同条件重跑完整 S1 配对。
+## 实际模型实验结论
 
-目前未完成：
+正式核心 30 个 run 使用相同 `gpt-6-astra / max`、提示、P0、只读产物、300 秒预算与工具权限。每次独立模型/MCP 会话，顺序 AB/BA/AB。A 隐藏并拒绝增强参数，B 仅暴露按需参数，没有额外采用提示。
 
-- P1-CONTEXT 的实际模型收益验收。
-- 实际模型 A/B 的全部运行与评分；目前没有“效率提高”或“增强已收敛”的测量结论。
+- 核心行为任务两组各成功 1/15（均首轮 C1），各有 14 次预算超时。28 个超时任务缺失真实 usage，不以 JSON 字节代替 token。
+- 首轮 C1-B 行为解释正确，但没有使用 NPI/依赖；不能归为增强收益。它的总 token 为 509,443，A 为 499,584，仅这一成功配对也没有省 token。
+- 15 个 B 中 4 个实际请求依赖，共 5 包：NPI 3 次、Source Graph 1 次、Static 不可用 1 次；采用增强的任务均未完整交付。
+- C4 的 generated DMA 响应递归查询存在 `source_graph_frontier_expansion_stalled` 限制；没有扩张 P0 的已验收支持范围。各轮 C4 的推荐工具还出现 FST deadline 错误，保留为实际结果。
+- 记录到共同流程偏差：hierarchy/scan 串行而非提示要求的并行。compile_log 相同，源码读取有此前 compile-set lookup；schema/提示/产品指纹一致。不能声称完整流程合规或把时间差全归因于增强。
+- S1 初始 B 遇到模型容量错误，保留 [失败记录](evaluation/e1-20261002-env/S1_INFRASTRUCTURE.md) 后重跑完整配对。[重试两组](evaluation/e1-s1-retry-20261002/REPORT.md) 都以真实 NPI 完成源码定位，没有额外依赖或波形值调查；简单任务的默认关闭行为通过。
 
-状态使用：
+本次环境修正后的实验共实际启动 34 个 run：30 核心 + S1 初始 2 个 + S1 重试 2 个。核心没有因超时重跑；S1 初始配对单列，不与重试拼接。更早独立 MCP 缺 EDA 环境的 [失败批次](evaluation/e1-20261002/REPORT.md) 同样保留，经 [真实 NPI 模型预检](evaluation/runner-npi-preflight/REPORT.md) 才重新冻结正式批次。
 
-- P0：未开始 → 实现中 → 已实现待功能验收 → 已收敛；模型 A/B 不阻塞其验收。
-- E1/E2：未开始 → 实现中 → 已实现待功能验收 → 已实现待 A/B → 已收敛 / 待优化。
-- 缺运行入口、额度、artifact 或有效指标时保留未完成，不以计划/脚本存在代替执行结果。
-- 记录每次版本、测试、评测报告与未解决问题；不要覆盖或删除失败实验。
+[最终 REPORT](evaluation/e1-20261002-env/REPORT.md) 汇总逐案例结果、正常反例、成本、采用情况、流程偏差与归因限制；其目录含 manifest、raw transcript/calls、loaded/schema、grading、metrics、summary 与最终哈希审计。[第一轮](evaluation/e1-20261002-env/FIRST_REPETITION.md)、[第二轮](evaluation/e1-20261002-env/SECOND_REPETITION.md)、[第三轮](evaluation/e1-20261002-env/THIRD_REPETITION.md) 检查点保留，不覆盖失败历史。
 
-交接注意：
+## 保留限制与后续边界
 
-- 历史代码基线是 `58075728654fc850a56b8909ac6d1bb3ace8a46e`；新 session 先核对当前 HEAD 和工作区，不 reset 用户修改。
-- 案例路径/事实见 cases.json，历史 handle/cursor 不可假设仍有效。
-- 本目录沿用 `docs/*` 的 Git 忽略规则；文件存在本地，但普通 git status 可能不显示它们。
-- AGENTS.md / CLAUDE.md 未修改。本轮没有安装、生成新 KDB 或重新仿真；产品修复与证据按阶段提交。
+P0 支持当前已测试案例和有界结构，不承诺全部 SystemVerilog 或所有递归路径。局部 64 MiB 是累计估算解码预算，不是进程 RSS 上限；C1 首次局部查询并非普遍更快，完整资源条件见采样报告。P1 的 native 取消仍在有界调用返回后响应，不改变 FSDB 全局锁与现有调度语义。
+
+原始 RTL 的 mutant 注释使实验不是严格盲测；当前源码与历史波形的精确编译身份仍未独立证明。大量超时限制了模型收益评估，但不允许因此改变原门槛或用功能测试宣布增强收敛。按验收规则，本轮保留负结果、增强默认关闭；没有必要无限追加运行以证明原方案正确。若后续优化，另冻结版本、预算、流程和配对，不能复用本轮 P0 成功作为新增字段收益。
+
+AGENTS.md / CLAUDE.md 未修改；没有安装依赖、创建新 KDB、重仿真、修改外部 RTL、推送或修改用户 MCP 客户端配置。研究目录受 Git 忽略规则影响，证据已按用户授权强制加入并分阶段提交；后续接手先核对 HEAD 与工作区，不 reset 用户改动。

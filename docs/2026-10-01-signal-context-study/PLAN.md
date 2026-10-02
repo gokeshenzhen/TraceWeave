@@ -1,6 +1,6 @@
 # 改动计划：有界单信号调试上下文
 
-状态：实施与验收计划已整理，产品改动尚未实施。创建：2026-10-01；用户验收要求确认：2026-10-02。
+状态：本计划已按阶段执行。P0 当前案例已验收，P1 实际 A/B 未见可验收收益、待优化；详见 [最终状态](IMPLEMENTATION_STATUS.md)。以下保留原设计与验收边界。创建：2026-10-01；用户验收要求确认：2026-10-02。
 依据：[五个案例与结论](README.md)、[机器可读案例](cases.json)、[原始工具结果](evidence/mcp-calls.jsonl)。
 基线：`58075728654fc850a56b8909ac6d1bb3ace8a46e`。
 
@@ -19,7 +19,7 @@ P0-BINDING 虽然会改善 driver 查询的解析结果，验收的是客观解�
 
 - A/B 分组、案例、重复次数、指标和收敛条件：[AB_ACCEPTANCE.md](AB_ACCEPTANCE.md)。
 - 新 session 提示词、模型建议和执行交接：[SESSION_PROMPT.md](SESSION_PROMPT.md)。
-- 状态记录：[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。目前所有实现/评测均为未开始，历史 100 次调研调用不是 A/B 结果。
+- 状态记录：[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。功能与实际模型评测证据已保存；历史 100 次调研调用仍不算 A/B 结果。
 
 “无需模型 A/B”不等于无需测试；确定性修复若声称提速，仍遵守仓库的 before/after workload、资源及兼容性验证要求。不能因 E1/E2 没有测出收益，否定或回滚已经独立通过验收的 P0 修复。
 

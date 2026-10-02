@@ -1,0 +1,70 @@
+{
+  "total_runs": 2,
+  "cases": [
+    {
+      "case": "S1",
+      "arm": "A",
+      "runs": 1,
+      "paired_eligible_runs": 1,
+      "task_success": 1,
+      "strict_rubric_accepted": 1,
+      "statuses": {
+        "complete": 1
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 1,
+      "all_task_tokens": 280247
+    },
+    {
+      "case": "S1",
+      "arm": "B",
+      "runs": 1,
+      "paired_eligible_runs": 1,
+      "task_success": 1,
+      "strict_rubric_accepted": 1,
+      "statuses": {
+        "complete": 1
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 1,
+      "all_task_tokens": 282900
+    }
+  ],
+  "core_arms": [],
+  "dependency_packets": [],
+  "workflow_serial_runs": [
+    "S1-2-A",
+    "S1-2-B"
+  ],
+  "source_lookup_mismatches": [],
+  "product_hashes_match": true,
+  "frozen_scripts_match": true,
+  "artifacts_match": true,
+  "known_usage": [
+    {
+      "run": "S1-2-A",
+      "usage": {
+        "input_tokens": 278319,
+        "cached_input_tokens": 250368,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1928,
+        "reasoning_output_tokens": 614
+      },
+      "total_tokens": 280247,
+      "elapsed": 127.94302227499793
+    },
+    {
+      "run": "S1-2-B",
+      "usage": {
+        "input_tokens": 280979,
+        "cached_input_tokens": 251776,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1921,
+        "reasoning_output_tokens": 640
+      },
+      "total_tokens": 282900,
+      "elapsed": 193.68058982900038
+    }
+  ],
+  "interpretation": "Raw observations only. Missing task usage remains null; no benefit inferred."
+}
