@@ -1,6 +1,6 @@
 # 实施与验收状态
 
-更新时间：2026-10-02。本轮独立评估、分阶段实现、功能复测和实际模型 A/B 已完成；**P0 在当前案例范围已收敛，NPI 返回增强与 driver 依赖包均待优化，默认关闭额外依赖。** 没有将共享 P0 的收益归给新增返回。
+更新时间：2026-10-02。首轮独立评估、分阶段实现、功能复测和实际模型 A/B 已完成；**P0 在当前案例范围已收敛，NPI 返回增强与 driver 依赖包均待优化，默认关闭额外依赖。** 没有将共享 P0 的收益归给新增返回。
 
 | 项目 | 实现 | 功能 / 真实案例验证 | 模型 A/B | 验收状态 |
 | --- | --- | --- | --- | --- |
@@ -39,6 +39,14 @@
 本次环境修正后的实验共实际启动 34 个 run：30 核心 + S1 初始 2 个 + S1 重试 2 个。核心没有因超时重跑；S1 初始配对单列，不与重试拼接。更早独立 MCP 缺 EDA 环境的 [失败批次](evaluation/e1-20261002/REPORT.md) 同样保留，经 [真实 NPI 模型预检](evaluation/runner-npi-preflight/REPORT.md) 才重新冻结正式批次。
 
 [最终 REPORT](evaluation/e1-20261002-env/REPORT.md) 汇总逐案例结果、正常反例、成本、采用情况、流程偏差与归因限制；其目录含 manifest、raw transcript/calls、loaded/schema、grading、metrics、summary 与最终哈希审计。[第一轮](evaluation/e1-20261002-env/FIRST_REPETITION.md)、[第二轮](evaluation/e1-20261002-env/SECOND_REPETITION.md)、[第三轮](evaluation/e1-20261002-env/THIRD_REPETITION.md) 检查点保留，不覆盖失败历史。
+
+## 下一轮交接（计划已记录，尚未执行）
+
+用户计划在新 session 继续验证及决定是否回滚。当前不整体回滚 P1；保持默认关闭，按 [NEXT_ROUND.md](NEXT_ROUND.md) 依次执行真正 P0 vs P1-off 兼容对照、流程校准、C1/C2 定点实际模型 A/B，有可重复信号后再进入完整五案例自然采用验收。P1 状态仍为待优化，不因计划文件存在改变。
+
+本次代码复核确认依赖入口默认直接返回，但共享 `npi_dynamic.query_step` 的修改并不由该参数隔离；上一轮两组都加载新产品，需补真正旧基线差分。可测实验无收益时按最小产品范围撤回，证据不足时记未验证；无论哪种结果都保留 P0 与全部旧实验记录。
+
+[新 session 提示词](SESSION_PROMPT.md) 已重写为下一轮入口，主实施建议 GPT-6-Astra / high，被测 A/B 暂时维持 gpt-6-astra / max。模型深度选择不代表收益实测。本次仅整理和提交交接文档，未启动新的实验或修改产品。
 
 ## 保留限制与后续边界
 
