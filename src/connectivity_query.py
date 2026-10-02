@@ -990,6 +990,16 @@ class ConnectivityQueryEngine:
                 f"signal path does not resolve to an IR instance: {signal_path}",
             )
         symbol = base[len(instance_path) + 1 :]
+        # An elaborated packed-array alias such as req[4] is an element,
+        # whereas req.data[4] is a bit select. Exact typed aliases win before
+        # interpreting the last bracket as a flat packed selection.
+        full_symbol = signal_path.strip()[len(instance_path) + 1:]
+        definition = self._definitions[self._instances[instance_path].definition_id]
+        exact_member = definition.packed_member(full_symbol)
+        if exact_member is not None:
+            return SignalSelection(instance_path=instance_path,
+                                   symbol=exact_member.aggregate,
+                                   bits=exact_member.aggregate_bits)
         resolved = self._resolve_symbol(instance_path, symbol)
         if resolved is None:
             root, separator, _ = symbol.partition(".")

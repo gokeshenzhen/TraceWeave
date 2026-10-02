@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/robin/Projects/mcp/TraceWeave
+configfile: pytest.ini
+plugins: anyio-4.14.2
+collected 246 items
+
+tests/test_packed_array_binding.py .....                                 [  2%]
+tests/test_slang_connectivity_projector.py ......................        [ 10%]
+tests/test_connectivity_ir.py ......                                     [ 13%]
+tests/test_connectivity_query.py ....................................... [ 29%]
+...............                                                          [ 35%]
+tests/test_source_graph_backend.py .................                     [ 42%]
+tests/test_source_graph_contract.py .................................... [ 56%]
+...........................                                              [ 67%]
+tests/test_source_graph_public_routing.py .............................. [ 80%]
+.................................................                        [100%]
+
+============================= 246 passed in 2.31s ==============================

@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import hashlib
 import json
+import re
 from typing import Any, Iterable, Mapping
 from .dynamic_evidence import Assignment as DynamicAssignment
 
@@ -194,7 +195,8 @@ class PackedMemberDecl:
     def __post_init__(self) -> None:
         if not self.name or not self.aggregate:
             raise ValueError("packed member name and aggregate must not be empty")
-        if not self.name.startswith(f"{self.aggregate}."):
+        suffix = self.name[len(self.aggregate):] if self.name.startswith(self.aggregate) else ""
+        if not (suffix.startswith(".") or re.match(r"^(\[-?\d+\])+(?:\.|$)", suffix)):
             raise ValueError("packed member name must be rooted at its aggregate")
         if len(self.aggregate_bits) != self.packed_range.width:
             raise ValueError("packed member and aggregate bit widths must match")

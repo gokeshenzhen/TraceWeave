@@ -58,6 +58,8 @@ from .connectivity_ir import (
 SLANG_FRONTEND_NAME = "Slang/pyslang"
 SLANG_FRONTEND_VERSION = "11.0.0"
 MAX_RECORDED_PROJECTION_GAPS = 256
+MAX_PACKED_ALIASES = 1024
+MAX_PACKED_ALIAS_BITS = 65536
 
 
 class SlangProjectionError(RuntimeError):
@@ -834,12 +836,61 @@ class SlangConnectivityProjector:
         fallback_location: SourceLocation,
         scope: str,
     ) -> list[PackedMemberDecl]:
-        """Flatten packed struct/union fields onto one root aggregate."""
+        """Map bounded, typed packed members and constant array elements.
+
+        Array indices are storage coordinates from the elaborated type, never
+        guessed from a dump spelling. Unpacked and dynamic arrays stay gaps.
+        """
 
         projected: list[PackedMemberDecl] = []
+        alias_bits = 0
+
+        def admit(name, packed_range, bits, location):
+            nonlocal alias_bits
+            if (len(projected) >= MAX_PACKED_ALIASES or
+                    alias_bits + len(bits) > MAX_PACKED_ALIAS_BITS):
+                self._gaps.add(
+                    code="packed_members_budget_exceeded",
+                    message="bounded packed member projection stopped",
+                    impact=CoverageStatus.PARTIAL,
+                    constructs=("packed_aggregate",),
+                    scopes=(f"{scope}.{aggregate}",),
+                    location=fallback_location,
+                )
+                return False
+            projected.append(PackedMemberDecl(
+                name=name, aggregate=aggregate, packed_range=packed_range,
+                aggregate_bits=bits, location=location))
+            alias_bits += len(bits)
+            return True
 
         def walk(value_type: Any, prefix: str, container_bits: tuple[int, ...]) -> None:
             canonical = getattr(value_type, "canonicalType", value_type)
+            if _kind_name(canonical) == "PackedArrayType":
+                element = canonical.elementType.canonicalType
+                # Plain vectors already have exact packed bit selection. Only
+                # aggregate arrays need named aliases (including nested arrays).
+                leaf = element
+                while _kind_name(leaf) == "PackedArrayType":
+                    leaf = leaf.elementType.canonicalType
+                if not (bool(getattr(leaf, "isStruct", False)) or
+                        bool(getattr(leaf, "isPackedUnion", False))):
+                    return
+                bounds = canonical.fixedRange
+                indices = range(int(bounds.left), int(bounds.right) +
+                                (-1 if bounds.left > bounds.right else 1),
+                                -1 if bounds.left > bounds.right else 1)
+                width = int(element.bitWidth)
+                if width < 1 or width * len(indices) != len(container_bits):
+                    return
+                element_range = _packed_range(SimpleNamespace(type=element))
+                for offset, index in enumerate(indices):
+                    bits = container_bits[offset * width:(offset + 1) * width]
+                    name = f"{prefix}[{index}]"
+                    if not admit(name, element_range, bits, fallback_location):
+                        return
+                    walk(element, name, bits)
+                return
             if not (
                 bool(getattr(canonical, "isStruct", False))
                 or bool(getattr(canonical, "isPackedUnion", False))
@@ -883,15 +934,8 @@ class SlangConnectivityProjector:
                         location=location,
                     )
                     continue
-                projected.append(
-                    PackedMemberDecl(
-                        name=name,
-                        aggregate=aggregate,
-                        packed_range=field_range,
-                        aggregate_bits=field_bits,
-                        location=location,
-                    )
-                )
+                if not admit(name, field_range, field_bits, location):
+                    return
                 walk(field.type, name, field_bits)
 
         walk(getattr(symbol, "type", None), aggregate, aggregate_bits)

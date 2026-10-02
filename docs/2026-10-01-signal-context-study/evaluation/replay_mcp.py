@@ -57,6 +57,17 @@ async def run(args):
                     await call('sweep_handshakes', wave_path=a['wave_path'],
                         start_time_ps=944095000, end_time_ps=944535000, max_interfaces=256)
                 await call('get_waveform_summary', wave_path=a['wave_path'])
+                if args.project in ('x1', 'x2', 'x3') and 'window' in args.origins.split(','):
+                    bus = CASES['scope_aliases']['system_bus']
+                    dma = CASES['scope_aliases']['dma']
+                    signals = [bus + '.' + leaf for leaf in (
+                        'dma_write_req_i[0].wdata[31:0]', 'int_master_req[4].wdata[31:0]',
+                        'int_master_resp[4].gnt', 'dma_write_resp_o[0].gnt')]
+                    for phase in ('before', 'after'):
+                        await call('get_signals_by_cycle', wave_path=a['wave_path'],
+                            clock_path=dma + '.clk_cg', signal_paths=signals,
+                            start_time_ps=944175000, num_cycles=1, sample_phase=phase,
+                            cycle_index_origin='window')
                 if args.project in ('ot', 'x1'):
                     scope = CASES['scope_aliases']['uart_tx' if args.project == 'ot' else 'dma']
                     clock = scope + ('.clk_i' if args.project == 'ot' else '.clk_cg')

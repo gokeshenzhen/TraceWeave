@@ -7,7 +7,7 @@
 | 项目 | 实现 | 功能 / 真实案例验证 | 模型 A/B | 是否收敛 |
 | --- | --- | --- | --- | --- |
 | P0-SAMPLING：局部周期、预算与相位/缺口 | 已实现 | 297 项回归 + 最终 15 项局部回归；C1/C3 真实新 MCP 与逐行点读核对 | 不要求 | 已收敛；[证据](evaluation/p0-sampling/REPORT.md) |
-| P0-BINDING：身份 / generate / 数组成员解析 | 实现中；driver 根绑定已落地，语义补足待实施 | 根绑定回归及 X1 新 MCP；已越过 top blocker，仍在 instance/array frontier；[证据](evaluation/p0-binding-root/REPORT.md) | 不要求 | 否 |
+| P0-BINDING：身份 / generate / 数组成员解析 | 实现中；driver 根绑定与 packed 数组字段已落地，generate 与共享绑定待实施 | 根绑定回归及 X1 新 MCP；已越过 top blocker，数组字段三运行查询通过，仍在 generate frontier；[根绑定](evaluation/p0-binding-root/REPORT.md)、[数组](evaluation/p0-binding-packed/REPORT.md) | 不要求 | 否 |
 | E1 / P1-CONTEXT：NPI 返回可用性增强 | 未开始 | 未开始 | 必须；C1 真实 NPI 未开始 | 否 |
 | E1 / P1-CONTEXT：explain_signal_driver 按需依赖包 | 未开始 | 未开始 | 必须；未开始 | 否 |
 | E2：薄组合工具（可选） | 未决定实施 | 未开始 | 一旦实施就必须；未开始 | 不适用，尚未实施 |
@@ -36,4 +36,4 @@
 - 历史代码基线是 `58075728654fc850a56b8909ac6d1bb3ace8a46e`；新 session 先核对当前 HEAD 和工作区，不 reset 用户修改。
 - 案例路径/事实见 cases.json，历史 handle/cursor 不可假设仍有效。
 - 本目录沿用 `docs/*` 的 Git 忽略规则；文件存在本地，但普通 git status 可能不显示它们。
-- AGENTS.md / CLAUDE.md 未修改，产品代码未修改。本轮没有安装、生成新 KDB、重新仿真或提交。
+- AGENTS.md / CLAUDE.md 未修改。本轮没有安装、生成新 KDB 或重新仿真；产品修复与证据按阶段提交。
