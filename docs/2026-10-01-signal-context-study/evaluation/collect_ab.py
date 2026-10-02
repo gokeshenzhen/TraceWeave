@@ -80,6 +80,8 @@ def collect(out):
         calls = sorted(records(run / 'calls.jsonl'), key=lambda c: c['index'])
         events = records(run / 'transcript.jsonl')
         completed = [e for e in events if e.get('type') == 'turn.completed']
+        attempted = [e['item'] for e in events if e.get('type') == 'item.started'
+                     and e.get('item', {}).get('type') == 'mcp_tool_call']
         commands = [e['item'] for e in events if e.get('type') == 'item.completed'
                     and e.get('item', {}).get('type') == 'command_execution']
         skill_reads = [c for c in commands if '/.codex/skills/' in c.get('command', '')]
@@ -120,7 +122,9 @@ def collect(out):
         final = (run / 'final.md').read_text()
         row = dict(receipt, model_turn_completed=bool(completed),
             final_present=bool(final), total_tokens=tokens,
-            mcp_calls=len(calls), tool_counts=dict(count), mcp_errors=errors,
+            mcp_calls=len(calls), mcp_attempted=len(attempted),
+            mcp_unfinished=max(0, len(attempted)-len(calls)),
+            tool_counts=dict(count), mcp_errors=errors,
             shell_commands=len(commands), skill_reads=len(skill_reads),
             source_read_commands=len(source_commands),
             shell_errors=[dict(command=c['command'], exit_code=c.get('exit_code'))
@@ -133,8 +137,8 @@ def collect(out):
             dependency_calls=dependency_calls, dependency_response_bytes=dep_bytes,
             dependency_rows=dep_rows, backend_receipts=receipts,
             operation_metrics=metrics,
-            input_budget_exceeded=bool(usage and usage.get('input_tokens', 0) > manifest['budgets']['input_tokens']),
-            output_budget_exceeded=bool(usage and usage.get('output_tokens', 0) > manifest['budgets']['output_tokens']),
+            input_budget_exceeded=(usage.get('input_tokens', 0) > manifest['budgets']['input_tokens']) if usage else None,
+            output_budget_exceeded=(usage.get('output_tokens', 0) > manifest['budgets']['output_tokens']) if usage else None,
             source_read_budget_exceeded=len(source_commands) > manifest['budgets']['shell_reads'])
         rows.append(row)
         loaded = json.loads((run / 'loaded.json').read_text())
