@@ -2585,6 +2585,13 @@ same typed assignment RHS; it does not imply complete driver coverage.
 
 ### Optional driver dependency inventory
 
+NPI candidate extraction is isolated by the internal
+`include_dependency_candidates` flag, including its LSF worker transport.
+Only an explicit driver dependency request enables it. Ordinary history and
+divergence queries retain their original async observation boundary, opaque
+operator gaps, and traversal cost; they never expand an async data pin solely
+for the optional inventory.
+
 `explain_signal_driver(include_dependencies=true)` attaches a one-hop inventory
 from the selected backend and the same Source Graph artifact, where applicable.
 It reuses typed dynamic expressions and NPI pins; unavailable semantics remain

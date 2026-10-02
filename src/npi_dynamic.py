@@ -22,7 +22,7 @@ class ProjectionGap(Exception):
     pass
 
 
-def query_step(backend, signal: str) -> dict:
+def query_step(backend, signal: str, *, include_dependency_candidates: bool = False) -> dict:
     _, netlist = backend._npi_modules
     root = backend._resolve_net(netlist, signal)
     if root is None:
@@ -175,7 +175,8 @@ def query_step(backend, signal: str) -> dict:
                     result['async_controls'] = facts
                     # The data pin remains a real observation candidate even
                     # though NPI does not prove the async assigned value.
-                    result['data_inputs'] = [asdict(linked(data[0]))]
+                    if include_dependency_candidates:
+                        result['data_inputs'] = [asdict(linked(data[0]))]
                     result['gaps'].append('temporal_context_unavailable')
                     return Expr('unsupported', width, reason='async_control_value_unmodeled')
                 return linked(data[0])
@@ -220,6 +221,8 @@ def query_step(backend, signal: str) -> dict:
             # original operation and packed dimensions. Let the route restart
             # on Source Graph; pin count and generated names cannot prove it.
             if cell_type in {'npiNlEqCompCell','npiNlNotEqCompCell','npiNlOpCell','npiNlUnsignedCell'}:
+                if not include_dependency_candidates:
+                    raise ProjectionGap('npi_operator_semantics_unresolved')
                 # Input pins still prove candidate dependencies. Retain them
                 # without evaluating the lost operator semantics; dynamic
                 # tracing keeps the same gap/fallback behavior.

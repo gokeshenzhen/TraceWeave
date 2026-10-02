@@ -72,6 +72,7 @@ class FindDriverWorkerRequest(_ConnectivityWorkerRequestBase):
 class DynamicStepWorkerRequest(_ConnectivityWorkerRequestBase):
     operation: Literal["dynamic_step"] = "dynamic_step"
     signal_path: str = Field(min_length=1, max_length=16_384)
+    include_dependency_candidates: bool = False
 
 
 class FindLoadsWorkerRequest(_ConnectivityWorkerRequestBase):
@@ -464,13 +465,15 @@ class LsfConnectivityBackend:
         self._bound_compile_result = compile_result
 
     def get_dynamic_step(self, signal_path: str, compile_log: str, *,
-                         top_hint: str | None = None, simulator: str = "auto", **_kwargs) -> dict:
+                         top_hint: str | None = None, simulator: str = "auto",
+                         include_dependency_candidates: bool = False, **_kwargs) -> dict:
         from .dynamic_evidence import unsupported_step
         target, reason = self._resolve_target(compile_log, simulator, top_hint)
         if target is None:
             return unsupported_step(signal_path, self.name, reason)
         outcome = self._transport.execute(DynamicStepWorkerRequest(
-            kdb_path=target[0], top=target[1], signal_path=signal_path))
+            kdb_path=target[0], top=target[1], signal_path=signal_path,
+            include_dependency_candidates=include_dependency_candidates))
         result = dict(outcome.result) if outcome.result is not None else unsupported_step(
             signal_path, self.name, outcome.fallback_reason or "npi_lsf_worker_failed")
         self._last_kdb_status = _attach_execution_receipt(result, self.execution_mode, outcome,
@@ -789,7 +792,8 @@ def execute_worker_request(
             return WorkerUnavailable()
         if isinstance(request, DynamicStepWorkerRequest):
             from .npi_dynamic import query_step
-            result = query_step(backend, request.signal_path)
+            result = query_step(backend, request.signal_path,
+                                include_dependency_candidates=request.include_dependency_candidates)
         elif isinstance(request, FindDriverWorkerRequest):
             result = backend._npi_find_driver(
                 request.signal_path,

@@ -2816,7 +2816,8 @@ async def _attach_driver_dependencies(result, backend, args, simulator):
     deadline = time.monotonic() + LIMITS['timeout_sec']
     def query():
         return backend.get_dynamic_step(signal_path=args['signal_path'],
-            compile_log=args['compile_log'], top_hint=args.get('top_hint'), simulator=simulator)
+            compile_log=args['compile_log'], top_hint=args.get('top_hint'), simulator=simulator,
+            **({'include_dependency_candidates': True} if backend.name == 'verdi_npi' else {}))
     try:
         async with asyncio.timeout(LIMITS['timeout_sec']):
             step = (await _run_in_cancellable_thread(query) if backend.name == 'source_graph'

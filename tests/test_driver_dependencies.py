@@ -68,6 +68,7 @@ async def test_public_attachment_defaults_off_and_cannot_change_backend(tmp_path
     assert calls==[] and 'dependency_context' not in result
     monkeypatch.setattr(server,'_get_parser',lambda _:p)
     await server._attach_driver_dependencies(result,backend,{**args,'include_dependencies':True},'vcs')
+    assert calls[-1]['include_dependency_candidates'] is True
     assert len(calls)==1 and result['dependency_context']['dependencies']
     step['backend']='source_graph'
     await server._attach_driver_dependencies(result,backend,{**args,'include_dependencies':True},'vcs')

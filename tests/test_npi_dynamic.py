@@ -40,6 +40,62 @@ def test_dynamic_lsf_request_and_result_validation():
     assert _validate_operation_result(request, malformed) is None
 
 
+@pytest.mark.parametrize('cell_type', ['npiNlFlipFlopCell', 'npiNlEqCompCell'])
+def test_candidate_mode_preserves_legacy_native_step(cell_type):
+    """An async data fault cannot affect an ordinary history query."""
+    data_reads = []
+    def net(name):
+        return SimpleNamespace(size=lambda: 1, left=lambda: 0, right=lambda: 0,
+            full_name=lambda: name, is_signed=lambda: False, is_literal=lambda: False,
+            is_generated=lambda: False, type=lambda: 'npiNlWire', load_list=lambda: [])
+    nets = {name: net(name) for name in ('t.q', 't.clk', 't.rst', 't.d')}
+    def pin(name, direction, kind, linked, order=0):
+        def connected():
+            if name == 'data':
+                data_reads.append(name)
+            return linked
+        return SimpleNamespace(full_name=lambda: 'cell.'+name, direction=lambda: direction,
+            port_type=lambda: kind, port_state=lambda: 'npiNlHighActive',
+            port_order=lambda: order, connected_net=connected)
+    output=pin('out', 'npiNlOutput', '', nets['t.q'])
+    if cell_type == 'npiNlFlipFlopCell':
+        # Data is deliberately unavailable. Legacy async observation requires
+        # only the typed clock/control, not the optional data candidate.
+        inputs=[pin('clk', 'npiNlInput', 'npiNlClockPort', nets['t.clk']),
+                pin('rst', 'npiNlInput', 'npiNlAsyncResetPort', nets['t.rst']),
+                pin('data', 'npiNlInput', 'npiNlDataPort', None)]
+        inputs[0].port_state=lambda: 'npiNlRisingActive'
+    else:
+        inputs=[pin('data', 'npiNlInput', '', nets['t.d'],0),
+                pin('other', 'npiNlInput', '', nets['t.rst'],1)]
+    cell=SimpleNamespace(inst_type=lambda: 'npiNlRTLInst', cell_type=lambda: cell_type,
+        instport_list=lambda: [output,*inputs],full_name=lambda:'cell',src_info=lambda:'source.sv:1')
+    output.scope_inst=lambda:cell
+    nets['t.q'].driver_list=lambda:[output]
+    native=SimpleNamespace(get_net=lambda n:nets.get(n))
+    backend=SimpleNamespace(_npi_modules=(None,native),_resolve_net=lambda _,name:nets[name],
+        _format_driver=lambda p:{'_npi_raw':p.full_name(),'driver_kind':'continuous'},
+        _loadcheck_head=lambda *_:None,kdb_load_quality='clean')
+    old=query_step(backend,'t.q')
+    assert not old['complete'] and not old['traversal']['search_exhaustive']
+    assert 'data_inputs' not in old
+    if cell_type == 'npiNlFlipFlopCell':
+        assert data_reads == []
+        assert old['gaps'] == ['temporal_context_unavailable','async_control_value_unmodeled']
+        assert old['async_controls'][0]['expression']['signal'] == 't.rst'
+    else:
+        assert old['branches'] == []
+        assert old['gaps'] == ['npi_operator_semantics_unresolved']
+    new=query_step(backend,'t.q',include_dependency_candidates=True)
+    if cell_type == 'npiNlFlipFlopCell':
+        assert data_reads == ['data']
+        assert 'dynamic_bit_mapping_unavailable' in new['gaps']
+    else:
+        assert len(new['branches']) == 1
+        assert new['branches'][0]['value']['op'] == 'unsupported'
+        assert {a['signal'] for a in new['branches'][0]['value']['args']} == {'t.d','t.rst'}
+
+
 def test_dynamic_lsf_receipt_and_parent_only_fallback(tmp_path, monkeypatch):
     received = []
     result = {
@@ -68,6 +124,10 @@ def test_dynamic_lsf_receipt_and_parent_only_fallback(tmp_path, monkeypatch):
     )
     r = backend.get_dynamic_step("top.q", "/shared/compile.log")
     assert isinstance(received[0], DynamicStepWorkerRequest)
+    assert received[0].include_dependency_candidates is False
+    backend.get_dynamic_step("top.q", "/shared/compile.log", include_dependency_candidates=True)
+    assert received[-1].include_dependency_candidates is True
+    assert parse_worker_request_bytes(received[-1].model_dump_json().encode()).include_dependency_candidates
     assert r["_npi_execution_status"]["execution_mode"] == "lsf"
     assert r["_npi_execution_status"]["scheduler_status"] == "completed"
 
