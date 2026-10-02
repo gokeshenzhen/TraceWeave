@@ -26,6 +26,8 @@
 - 环境修复后的[第一轮 10 / 32 run 检查点](evaluation/e1-20261002-env/FIRST_REPETITION.md) 已保存：C1 两组完整交付，其余 8 个预算超时；五个 B 均未采用依赖包。尚无增强收益证据，继续原定 BA/AB 重复，不变更预算或判据。
 - [第二轮 20 / 32 run 检查点](evaluation/e1-20261002-env/SECOND_REPETITION.md)：本轮 10 个均超时；C1-B 实际调用两次 NPI 依赖，C4-B 的递归路径回退 Static 并诚实返回不可用依赖。第三轮与 S1 继续进行，仍无可验收收益。
 
+- [第三轮 30 / 32 run 检查点](evaluation/e1-20261002-env/THIRD_REPETITION.md)：核心运行已全部完成，累计 2 次完整交付、28 次预算超时；本轮 C1-B 实际采用 NPI、C2-B 实际采用 Source Graph 依赖，但均未完成任务。另记录了 hierarchy/scan 串行的共同流程偏差。S1 与最终审计继续。
+
 目前未完成：
 
 - P1-CONTEXT 的实际模型收益验收。
