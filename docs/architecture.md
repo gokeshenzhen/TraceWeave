@@ -879,14 +879,18 @@ preserves exact event order. The first value at the file start is an
 `initial_state`, separate from true changes and the strictly pre-window
 `predecessor`. A late window can skip older blocks only after a separate bounded
 probe witnesses a callback strictly after the first loaded block's begin tick
-and strictly before the window, for every selected storage handle. The block's
-initial snapshot cannot satisfy this test. The final filtered traversal must
-therefore replace that snapshot with a genuine predecessor before returning
-events. Without this evidence, reads scan from the recorded beginning; files
-with dump-inactive intervals always retain that original path. No block/event
+and strictly before the window for that storage handle. The block's initial
+snapshot cannot satisfy this test. The final filtered traversal must therefore
+replace that snapshot with a genuine predecessor before returning events.
+Batch reads partition handles by this evidence: at most one masked full-prefix
+traversal serves unwitnessed handles and one filtered traversal serves witnessed
+handles, after the common probe. A constant or sparse field no longer forces
+unrelated dense clocks to replay their full history. Without evidence, that
+handle still scans from the recorded beginning; files with dump-inactive
+intervals always retain the original full-prefix path. No block/event
 index or prefix cache survives the request. The probe adds a traversal and may
 cost extra on sparse or mixed selections that need the fallback; private native
-callback/iteration totals include both passes. Libfst's block time filter is
+callback/iteration totals include all passes. Libfst's block time filter is
 not a strict event filter; the adapter
 clips by physical time and consumes every admitted page before reporting a
 complete result. Same-tick callback order does not prove delta/NBA order.

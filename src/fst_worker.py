@@ -371,15 +371,18 @@ def build_index(lib, ffi, reader, hierarchy_records):
     return index
 
 
-def window_scan_start(api, reader, path, header, start, handles, check):
+def window_scan_start(api, reader, path, header, start, handles, check, filtered_handles=None):
     """Skip older blocks only after witnessing an actual pre-window event.
 
     A time-filtered libfst traversal emits a snapshot at the first loaded
     block's begin tick. That snapshot proves no change time. A callback
-    strictly AFTER that tick and BEFORE the query is a genuine event; every
-    selected storage handle must have one before we use the filtered scan.
+    strictly AFTER that tick and BEFORE the query is a genuine event; each
+    storage handle needs its own witness before its filtered scan is safe.
     The final scan will overwrite its synthetic prefix with those actual
-    events before emitting anything. Otherwise preserve the original scan.
+    events before emitting anything. A batch may collect the individually
+    witnessed handles and scan its other handles from the original beginning;
+    one sparse signal must not force unrelated clocks through their full prefix.
+    Single-signal reads retain the all-handles requirement.
     No event/window cache or retained block index is introduced.
     """
     METRICS.update(native_prefix_probe_iterations=0, native_prefix_probe_callbacks=0,
@@ -438,14 +441,19 @@ def window_scan_start(api, reader, path, header, start, handles, check):
     if rc != 1 or api.lib.fstReaderGetFseekFailed(reader):
         raise ValueError('fst_decode_failed')
     METRICS.update(native_prefix_probe_iterations=1, native_prefix_probe_callbacks=callbacks)
-    if witnessed != set(handles):
-        return 0
+    if filtered_handles is None:
+        if witnessed != set(handles):
+            return 0
+    else:
+        filtered_handles.update(witnessed)
+        if not witnessed:
+            return 0
     METRICS['native_prefix_blocks_skipped'] = skipped
     return tick
 
 
 def spool_events(api, reader, index, header, message, check, wave_path):
-    """One output traversal, optionally preceded by a bounded prefix probe.
+    """At most two masked output traversals after a bounded prefix probe.
 
     Spooling decouples native callback order from independent consumer cursors.
     Only the selected window and two prefix records are stored, never a VCD or
@@ -525,8 +533,14 @@ def spool_events(api, reader, index, header, message, check, wave_path):
             if start < begin:
                 write(state, start, 3, json.dumps([min(end, begin), 'outside_recorded_range', end < begin]))
             lib.fstReaderSetFacProcessMask(reader, handle)
-        scan_start = window_scan_start(api, reader, wave_path, header, start, states, check)
-        lib.fstReaderSetLimitTimeRange(reader, scan_start, min(header['end_tick'], end // scale))
+        filtered_handles = set()
+        scan_start = window_scan_start(api, reader, wave_path, header, start, states, check,
+                                      filtered_handles)
+        if not scan_start:
+            filtered_handles.clear()
+        fallback_handles = set(states) - filtered_handles
+        METRICS.update(native_prefix_filtered_handles=len(filtered_handles),
+                       native_prefix_fallback_handles=len(fallback_handles))
 
         def callback(_, tick, handle, pointer):
             nonlocal callbacks
@@ -560,8 +574,19 @@ def spool_events(api, reader, index, header, message, check, wave_path):
                 finally:
                     os._exit(2)
 
-        if states:
+        output_iterations = 0
+        for selected, first_tick in ((fallback_handles, 0), (filtered_handles, scan_start)):
+            if not selected:
+                continue
+            check()
+            lib.fstReaderClrFacProcessMaskAll(reader)
+            for handle in selected:
+                lib.fstReaderSetFacProcessMask(reader, handle)
+            lib.fstReaderSetLimitTimeRange(reader, first_tick,
+                                          min(header['end_tick'], end // scale))
             rc = api.fstReaderIterBlocks(reader, callback)
+            output_iterations += 1
+            check()
             if rc != 1 or lib.fstReaderGetFseekFailed(reader):
                 raise ValueError('fst_decode_failed')
         streams = {}
@@ -581,7 +606,7 @@ def spool_events(api, reader, index, header, message, check, wave_path):
             state['file'].close()
         check()
         emit({'kind': 'batch', 'declarations': declarations, 'errors': errors, 'streams': streams,
-              'batch_metrics': {'native_iterations': int(bool(states)) + METRICS['native_prefix_probe_iterations'],
+              'batch_metrics': {'native_iterations': output_iterations + METRICS['native_prefix_probe_iterations'],
                   'native_callbacks': callbacks + METRICS['native_prefix_probe_callbacks'],
                   'window_transitions': selected_events, 'spool_bytes': total_bytes,
                   'storage_streams': len(states), 'logical_signals': len(paths),

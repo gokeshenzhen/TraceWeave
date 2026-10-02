@@ -51,15 +51,17 @@ def test_filtered_windows_match_original_scan_at_physical_boundaries(tmp_path, m
         assert actual['initial_state'] is None
 
 
-def test_fast_path_requires_every_backing_handle_to_have_a_real_prefix(tmp_path):
+def test_batch_filters_only_handles_with_a_real_prefix(tmp_path):
     path = fixture(tmp_path)
     p = fst_parser.FSTParser(path)
-    for names, fast in [(['top.a', 'top.alias'], True),
-                        (['top.a', 'top.constant'], False), (['top.a', 'top.slow'], False)]:
+    for names, fallback in [(['top.a', 'top.alias'], 0),
+                            (['top.a', 'top.constant'], 1), (['top.a', 'top.slow'], 1)]:
         with p._event_batch(names, 250, 310) as batch:
-            assert bool(batch.metrics['native_prefix_blocks_skipped']) == fast
+            assert batch.metrics['native_prefix_blocks_skipped'] > 0
+            assert batch.metrics['native_prefix_filtered_handles'] == 1
+            assert batch.metrics['native_prefix_fallback_handles'] == fallback
             assert batch.metrics['native_prefix_probe_iterations'] == 1
-            assert batch.metrics['native_iterations'] == 2
+            assert batch.metrics['native_iterations'] == 2 + bool(fallback)
             with p._event_pages(names[-1], 250, 310) as reader:
                 page = reader.read_page()
                 if names[-1] == 'top.constant':
@@ -70,6 +72,51 @@ def test_fast_path_requires_every_backing_handle_to_have_a_real_prefix(tmp_path)
                 else:
                     assert page.predecessor.time_fs == 249000
                     assert [e.value for e in page.events[:4]] == ['0', 'x', 'z', '1']
+
+
+@pytest.mark.parametrize('scale', [-12, -13, -15])
+def test_sparse_batch_preserves_facts_without_replaying_dense_clock(tmp_path, monkeypatch, scale):
+    rows = [(i, 'clk', str(i % 2)) for i in range(40001)]
+    rows += [(0, 'constant', '1'), (0, 'slow', '0'), (20, 'slow', '1'), (400, 'slow', '0')]
+    path = write_fst(tmp_path / 'mixed.fst', rows, end=40000, scale=scale,
+        flush=list(range(3999, 40000, 4000)), declarations=[
+            ('clk', 1, 'wire', 'input', None), ('alias', 1, 'wire', 'output', 'clk'),
+            ('constant', 1, 'wire', 'input', None), ('slow', 1, 'wire', 'input', None)])
+    names = ['top.clk', 'top.alias', 'top.constant', 'top.slow']
+    scale_fs = 10 ** (scale + 15)
+    start_ps = 35000 * scale_fs // 1000
+    end_ps = (35010 * scale_fs + 999) // 1000
+    first_tick = start_ps * 1000 // scale_fs
+    last_tick = end_ps * 1000 // scale_fs
+
+    def read():
+        parser = fst_parser.FSTParser(path)
+        with parser._event_batch(names, start_ps, end_ps) as batch:
+            pages = {}
+            for name in names:
+                with parser._event_pages(name, start_ps, end_ps) as reader:
+                    pages[name] = reader.read_page()
+            return pages, batch.metrics
+
+    actual, metrics = read()
+    # An independent event oracle also verifies true prefix times and aliases.
+    clock = actual['top.clk']
+    assert clock.predecessor.time_fs == (first_tick - 1) * scale_fs
+    assert [(e.time_fs, e.value) for e in clock.events] == [
+        (i * scale_fs, str(i % 2)) for i in range(first_tick, last_tick + 1)]
+    assert actual['top.alias'] == clock
+    assert actual['top.constant'].initial_state.time_fs == 0
+    assert actual['top.constant'].predecessor is None
+    assert not actual['top.constant'].events
+    assert actual['top.slow'].predecessor.time_fs == 400 * scale_fs
+    assert not actual['top.slow'].events
+    assert metrics['native_prefix_filtered_handles'] == 1
+    assert metrics['native_prefix_fallback_handles'] == 2
+
+    monkeypatch.setattr(fst_parser, 'FstProcess', FullPrefix)
+    original, original_metrics = read()
+    assert actual == original
+    assert metrics['native_callbacks'] < original_metrics['native_callbacks'] // 3
 
 
 @pytest.mark.parametrize('window', [(0, 5), (99, 101), (100, 100), (199, 201), (200, 200),
@@ -91,6 +138,8 @@ def test_dump_gaps_keep_full_history_and_never_use_a_resume_snapshot(tmp_path, m
     with p._event_batch(['top.a', 'top.slow'], 250, 310) as batch:
         assert batch.metrics['native_prefix_probe_iterations'] == 0
         assert batch.metrics['native_prefix_blocks_skipped'] == 0
+        assert batch.metrics['native_prefix_filtered_handles'] == 0
+        assert batch.metrics['native_prefix_fallback_handles'] == 2
         with p._event_pages('top.slow', 250, 310) as reader:
             assert reader.read_page().recording_gaps
     monkeypatch.setattr(fst_parser, 'FstProcess', FullPrefix)
