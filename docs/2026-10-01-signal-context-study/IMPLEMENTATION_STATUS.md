@@ -19,10 +19,15 @@
 - 局部 helper 的 9-edge before/after 复现成功；这是基线诊断，不是产品修复或 A/B。
 - [实施计划](PLAN.md)、[A/B 规则](AB_ACCEPTANCE.md)、[新 session 提示词](SESSION_PROMPT.md)。
 
+正在执行：
+
+- E1 已启动独立模型/MCP 顺序评测，原始结果持续写入 `evaluation/e1-20261002/runs/`；未改冻结产品、任务、预算或 runner。
+- `evaluation/collect_ab.py` 从原始事件提取真实 usage、调用、依赖后续查询和版本/schema 审计；模型完成与进程退出状态分开记录。此离线计量辅助不参与被测输入，也不替代人工证据评分。
+
 目前未完成：
 
 - P1-CONTEXT 的实际模型收益验收。
-- 实际模型 A/B；没有任何“效率提高”或“增强已收敛”的测量结论。
+- 实际模型 A/B 的全部运行与评分；目前没有“效率提高”或“增强已收敛”的测量结论。
 
 状态使用：
 
