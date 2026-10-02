@@ -1,0 +1,350 @@
+{
+  "total_runs": 32,
+  "cases": [
+    {
+      "case": "C1",
+      "arm": "A",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 1,
+      "strict_rubric_accepted": 1,
+      "statuses": {
+        "complete": 1,
+        "timeout": 2
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 1,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C1",
+      "arm": "B",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 1,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "complete": 1,
+        "timeout": 2
+      },
+      "dependency_requests": 3,
+      "known_usage_runs": 1,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C2",
+      "arm": "A",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C2",
+      "arm": "B",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 1,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C3",
+      "arm": "A",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C3",
+      "arm": "B",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C4",
+      "arm": "A",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C4",
+      "arm": "B",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 1,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C5",
+      "arm": "A",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "C5",
+      "arm": "B",
+      "runs": 3,
+      "paired_eligible_runs": 3,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "timeout": 3
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    },
+    {
+      "case": "S1",
+      "arm": "A",
+      "runs": 1,
+      "paired_eligible_runs": 0,
+      "task_success": 1,
+      "strict_rubric_accepted": 1,
+      "statuses": {
+        "complete": 1
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 1,
+      "all_task_tokens": 272517
+    },
+    {
+      "case": "S1",
+      "arm": "B",
+      "runs": 1,
+      "paired_eligible_runs": 0,
+      "task_success": 0,
+      "strict_rubric_accepted": 0,
+      "statuses": {
+        "runner_error": 1
+      },
+      "dependency_requests": 0,
+      "known_usage_runs": 0,
+      "all_task_tokens": null
+    }
+  ],
+  "core_arms": [
+    {
+      "arm": "A",
+      "core_runs": 15,
+      "task_success": 1,
+      "statuses": {
+        "complete": 1,
+        "timeout": 14
+      },
+      "usage_missing": 14,
+      "mcp_completed": 290,
+      "mcp_attempted": 291,
+      "source_read_commands": 57,
+      "source_read_max": 7,
+      "search_calls": 45,
+      "top_level_tool_errors": 3,
+      "tool_response_bytes": 7860112,
+      "sum_tool_elapsed": 429.45880304599086,
+      "elapsed_sum": 4495.291109162996,
+      "elapsed_median": 300.01636371100176,
+      "all_task_tokens": null
+    },
+    {
+      "arm": "B",
+      "core_runs": 15,
+      "task_success": 1,
+      "statuses": {
+        "complete": 1,
+        "timeout": 14
+      },
+      "usage_missing": 14,
+      "mcp_completed": 290,
+      "mcp_attempted": 290,
+      "source_read_commands": 56,
+      "source_read_max": 8,
+      "search_calls": 48,
+      "top_level_tool_errors": 3,
+      "tool_response_bytes": 9050179,
+      "sum_tool_elapsed": 465.2059080050167,
+      "elapsed_sum": 4480.817881672005,
+      "elapsed_median": 300.0163946169996,
+      "all_task_tokens": null
+    }
+  ],
+  "dependency_packets": [
+    {
+      "run": "C1-2-B",
+      "index": 10,
+      "backend": "verdi_npi",
+      "rows": 3,
+      "bytes": 695,
+      "gaps": [
+        "async_control_value_unmodeled",
+        "temporal_context_unavailable"
+      ]
+    },
+    {
+      "run": "C1-2-B",
+      "index": 17,
+      "backend": "verdi_npi",
+      "rows": 6,
+      "bytes": 1220,
+      "gaps": [
+        "npi_operator_semantics_unresolved"
+      ]
+    },
+    {
+      "run": "C4-2-B",
+      "index": 14,
+      "backend": "static",
+      "rows": 0,
+      "bytes": 277,
+      "gaps": [
+        "dynamic_evidence_unavailable"
+      ]
+    },
+    {
+      "run": "C1-3-B",
+      "index": 19,
+      "backend": "verdi_npi",
+      "rows": 3,
+      "bytes": 695,
+      "gaps": [
+        "async_control_value_unmodeled",
+        "temporal_context_unavailable"
+      ]
+    },
+    {
+      "run": "C2-3-B",
+      "index": 11,
+      "backend": "source_graph",
+      "rows": 1,
+      "bytes": 895,
+      "gaps": [
+        "driver_set_incomplete"
+      ]
+    }
+  ],
+  "workflow_serial_runs": [
+    "C1-1-A",
+    "C1-1-B",
+    "C2-1-A",
+    "C2-1-B",
+    "C3-1-A",
+    "C3-1-B",
+    "C4-1-A",
+    "C4-1-B",
+    "C5-1-A",
+    "C5-1-B",
+    "C1-2-B",
+    "C1-2-A",
+    "C2-2-B",
+    "C2-2-A",
+    "C3-2-B",
+    "C3-2-A",
+    "C4-2-B",
+    "C4-2-A",
+    "C5-2-B",
+    "C5-2-A",
+    "C1-3-A",
+    "C1-3-B",
+    "C2-3-A",
+    "C2-3-B",
+    "C3-3-A",
+    "C3-3-B",
+    "C4-3-A",
+    "C4-3-B",
+    "C5-3-A",
+    "C5-3-B",
+    "S1-1-A",
+    "S1-1-B"
+  ],
+  "source_lookup_mismatches": [],
+  "product_hashes_match": true,
+  "frozen_scripts_match": true,
+  "artifacts_match": true,
+  "known_usage": [
+    {
+      "run": "C1-1-A",
+      "usage": {
+        "input_tokens": 493513,
+        "cached_input_tokens": 427776,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 6071,
+        "reasoning_output_tokens": 2593
+      },
+      "total_tokens": 499584,
+      "elapsed": 295.06308921599884
+    },
+    {
+      "run": "C1-1-B",
+      "usage": {
+        "input_tokens": 503515,
+        "cached_input_tokens": 445184,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5928,
+        "reasoning_output_tokens": 2392
+      },
+      "total_tokens": 509443,
+      "elapsed": 280.5887338720004
+    },
+    {
+      "run": "S1-1-A",
+      "usage": {
+        "input_tokens": 270565,
+        "cached_input_tokens": 232960,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1952,
+        "reasoning_output_tokens": 766
+      },
+      "total_tokens": 272517,
+      "elapsed": 116.13312279599995
+    }
+  ],
+  "interpretation": "Raw observations only. Missing task usage remains null; no benefit inferred."
+}
