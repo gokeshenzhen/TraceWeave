@@ -58,12 +58,14 @@ def requested_paths(call):
                            'inspect_handshake', 'verify_window'}:
         return set()
     args = call['arguments']
-    result = set(args.get('signal_paths', []))
+    result = list(args.get('signal_paths', []))
     for key in ('signal_path', 'clock_path', 'valid', 'ready', 'valid_htrans',
                 'hwrite', 'write_data'):
-        if isinstance(args.get(key), str):
-            result.add(args[key])
-    return {storage(p) for p in result}
+        if isinstance(args.get(key), (str, dict)):
+            result.append(args[key])
+    paths = [value if isinstance(value, str) else value.get('path')
+             for value in result if isinstance(value, (str, dict))]
+    return {storage(path) for path in paths if path}
 
 
 def digest(value):
