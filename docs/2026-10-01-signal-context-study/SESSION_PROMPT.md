@@ -6,14 +6,14 @@
 
 | 用途 | 建议模型 / 深度 | 理由 |
 | --- | --- | --- |
-| 新主 session：读代码、做差分、改 runner、审查评分与取舍 | **GPT-6-Astra / high** | 本轮主要是诊断、代码推理与实验控制；以 high 为工作起点，不假设 max 必然有更高收益 |
+| 新主 session：读代码、做差分、改 runner、审查评分与取舍 | **GPT-6.1-Sol / high** | 本轮主要是诊断、代码推理与实验控制；以 high 为工作起点，不假设 max 必然有更高收益 |
 | 实际 A/B 的被测独立 agent | **gpt-6-astra / max**，两组相同 | 延续上一轮实验控制；主 session 的 high 不应被 runner 自动继承成新的实验深度 |
 
-这是工程选择，不是模型优劣实测。2026-10-02 已检查本地 `models_cache.json`，gpt-6-astra 列有 high/max；该元数据不保证运行时额度或服务可用。官方 [模型文档](https://developers.openai.com/api/docs/models/gpt-6-astra) 确认这些 reasoning effort 受支持；[部署建议](https://developers.openai.com/api/docs/guides/deployment-checklist#set-up-reasoningeffort) 将 medium/high 用于诊断和代码推理，更高深度需要用质量、时间和成本证据权衡。
+这是工程选择，不是模型优劣实测。2026-10-02 已检查本地 `models_cache.json`，gpt-6.1-sol 与 gpt-6-astra 均列有 high/max；该元数据不保证运行时额度或服务可用。官方 [GPT-6.1-Sol 模型文档](https://developers.openai.com/api/docs/models/gpt-6.1-sol) 确认 high/max 受支持，并面向复杂代码等任务；[部署建议](https://developers.openai.com/api/docs/guides/deployment-checklist#set-up-reasoningeffort) 将 medium/high 用于诊断和代码推理，更高深度需要用质量、时间和成本证据权衡。
 
-此前模板把主 session 与评测统一建议为 max；本次明确区分二者。主 session 用 high 是建议，尚无本项目 high/max 对照证明其最优。评测保留 max 是控制变量，不是宣称 max 更好，也不把上轮超时直接归因于 max。若之后需要比较深度，另开独立实验，不能和 P1 收益同时改变。
+按用户本次模型偏好，主 session 改为 GPT-6.1-Sol / high；实际被测模型继续单独控制。主 session 用 high 是建议，尚无本项目 Sol/Astra 或 high/max 对照证明其最优。评测保留 max 是控制变量，不是宣称 max 更好，也不把上轮超时直接归因于 max。若之后需要比较深度，另开独立实验，不能和 P1 收益同时改变。
 
-请在新 session 的模型设置里选择主 session 的模型/深度；提示词本身不保证改变实际配置。正式评测核对 runner 命令、manifest 和实际模型记录，不静默换模型或深度。
+请在新 session 的模型设置里选择主 session 的模型/深度；提示词本身不保证改变实际配置。正式评测核对 runner 命令、manifest 和实际模型记录，不静默换模型或深度。如果之后也将被测模型换成 Sol，须另冻结实验、两组一起更换；不能用旧 Astra 的 A 组与新 Sol 的 B 组比较工具收益。
 
 ## 可直接复制的完整提示词
 
@@ -38,7 +38,7 @@
 
 双方始终共用相同 P0；C4 等确定性修复若实施，也必须先验收再进入双方底座，收益不得归给 P1。保留原质量/效率门槛，NPI 必须有真实 C1 NPI 受益证据，功能通过、字段被用或定点成功不能单独宣布整个工作流收敛。
 
-主实施 session 建议 GPT-6-Astra / high；实际被测 A/B 暂时固定 gpt-6-astra / max，不从主 session 继承 high，不因容量错误静默换模型。评测 agent 必须是独立新上下文、新 MCP，不给研究答案/oracle/历史模型思路，不在本会话扮演 A/B。
+主实施 session 建议 GPT-6.1-Sol / high；实际被测 A/B 暂时固定 gpt-6-astra / max，不从主 session 继承 high，不因容量错误静默换模型。评测 agent 必须是独立新上下文、新 MCP，不给研究答案/oracle/历史模型思路，不在本会话扮演 A/B。
 
 保持 P1 默认关闭，冻结无关功能扩展，不做 E2。继续复用只读产物与已有 KDB，不重仿真、不修改被分析 RTL、不新建 KDB、不安装依赖、不修改用户 MCP 配置、不推送。禁止 reset 用户改动；如撤回 P1，只撤产品中的无收益或退化部分，保留 P0、证据和必要回归，不机械 revert 含证据的整个提交。
 
