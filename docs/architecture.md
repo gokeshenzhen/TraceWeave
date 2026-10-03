@@ -90,6 +90,14 @@ Verification
 
 ## Notes
 
+- Optional driver dependency inventories bind bounded typed references before
+  applying the 32-selection limit. Compatible references to the same source
+  and dump declaration combine exact ordered bit sets only when declaration
+  shape, roles and active level agree. Distinct source aliases and nonidentity
+  packed-member mappings remain separate; sparse bits never become a range.
+  Feedback is limited to intersecting state bits. Expression-node, deadline,
+  output and cancellation limits still apply, and removing a selection gap
+  does not establish complete driver coverage.
 - Project-owned C/C++ code lives in `native/<module>/`; external dependencies
   live in `third_party/<dependency>/`. FSDB runtime symlinks remain under
   `third_party/verdi_runtime/linux64/`. `scripts/build_wrapper.sh` builds the

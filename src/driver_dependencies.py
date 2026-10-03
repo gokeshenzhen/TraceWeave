@@ -5,7 +5,7 @@ import json
 import time
 
 from .cancellation import check_cancelled
-from .dynamic_evidence import Expr
+from .dynamic_evidence import Expr, MAX_EXPR_WIDTH
 from .scope_metadata import file_identity
 from .wave_design_binding import bind_source_expression
 
@@ -24,13 +24,18 @@ def inventory(step, parser, *, binding=None, engine=None, deadline=None):
     result = unavailable(step['backend'], 'dependency_inventory_incomplete')
     result.update(boundary=step.get('boundary', 'unsupported'), gaps=list(step.get('gaps', ())))
     refs = {}
-    polarities = {}
     constants = []
     visited = 0
     root = step.get('state') or {}
     stopped = False
 
-    def walk(raw, role):
+    def source_key(raw, active):
+        return (raw['signal'], tuple(raw.get('bits', ())),
+                tuple(raw.get('declared_bits', ())),
+                tuple(tuple(d) for d in raw.get('dimensions', ())),
+                tuple(raw.get('array_indices', ())), active)
+
+    def walk(raw, role, active=None):
         nonlocal visited, stopped
         check_cancelled()
         if stopped:
@@ -42,17 +47,20 @@ def inventory(step, parser, *, binding=None, engine=None, deadline=None):
             result['gaps'].append('dependency_budget_exhausted')
             return
         if raw.get('op') == 'signal':
-            key = raw['signal'], tuple(raw.get('bits', ()))
-            if key not in refs:
-                if len(refs) >= LIMITS['selections']:
-                    stopped = True
-                    result['truncated'] = True
-                    result['gaps'].append('dependency_selection_limit')
-                    return
-                refs[key] = [raw, set()]
-            refs[key][1].add(role)
-            if raw['signal'] == root.get('signal') and set(key[1]) & set(root.get('bits', ())):
-                refs[key][1].add('feedback')
+            # Collect at most expression_nodes references before normalization.
+            # Feedback belongs only to the exact intersecting bits.
+            feedback = set(root.get('bits', ())) if raw['signal'] == root.get('signal') else set()
+            for is_feedback in (False, True):
+                bits = [b for b in raw.get('bits', ()) if (b in feedback) == is_feedback]
+                if not bits:
+                    continue
+                selected = {**raw, 'bits': bits, 'width': len(bits)}
+                key = source_key(selected, active)
+                if key not in refs:
+                    refs[key] = [selected, set(), active]
+                refs[key][1].add(role)
+                if is_feedback:
+                    refs[key][1].add('feedback')
             return
         if raw.get('op') == 'const':
             fact = dict(width=raw['width'], value=raw['value'])
@@ -70,9 +78,7 @@ def inventory(step, parser, *, binding=None, engine=None, deadline=None):
         walk(step['clock']['expression'], 'clock')
         result['edge'] = step['clock']['edge']
     for control in step.get('async_controls', ()):
-        walk(control['expression'], control['kind'])
-        raw = control['expression']
-        polarities[(raw.get('signal'), tuple(raw.get('bits', ())))] = control.get('active_value')
+        walk(control['expression'], control['kind'], control.get('active_value'))
     for expr in step.get('data_inputs', ()):
         walk(expr, 'data')
     for branch in step.get('branches', ()):
@@ -82,7 +88,8 @@ def inventory(step, parser, *, binding=None, engine=None, deadline=None):
     if not step.get('branches') and not step.get('data_inputs'):
         result['gaps'].append('dynamic_evidence_unavailable')
 
-    for raw, roles in refs.values():
+    groups = {}
+    for raw, roles, active in refs.values():
         check_cancelled()
         if time.monotonic() >= deadline:
             result['truncated'] = True
@@ -90,26 +97,59 @@ def inventory(step, parser, *, binding=None, engine=None, deadline=None):
             break
         expr = Expr.from_dict(raw)
         row = dict(roles=sorted(roles), source=dict(path=expr.signal, bits=list(expr.bits)))
-        active = polarities.get((expr.signal, expr.bits))
         if active is not None:
             row['active_value'] = active
         try:
             bound = bind_source_expression(parser, expr, binding, engine=engine)
             row.update(binding='bound', wave=dict(path=bound.signal, bits=list(bound.bits)))
-            if row['source'] == row['wave']:
-                del row['source']  # Same coordinates; keep one directly usable selection.
         except KeyError:
             row.update(binding='not_dumped')
             result['gaps'].append('dependency_not_dumped')
         except ValueError:
             row.update(binding='unresolved')
             result['gaps'].append('dependency_binding_unresolved')
-        result['dependencies'].append(row)
+        # Bind before grouping: different source aliases, dump declarations,
+        # shapes, roles and polarities cannot consume each other's coverage.
+        # Non-identity packed-member mappings stay separate, preserving their
+        # ordered source-to-wave pairing without assuming a linear mapping.
+        key = (expr.signal, expr.declared_bits, expr.dimensions, expr.array_indices,
+               tuple(row['roles']), active, row['binding'])
+        if row['binding'] == 'bound':
+            key += (bound.signal, bound.declared_bits)
+        if row['binding'] != 'bound' or expr.bits != bound.bits:
+            key += (expr.bits,)
+        existing = groups.get(key)
+        added = [b for b in expr.bits if existing is None or b not in existing[1]]
+        if existing is not None and len(existing[1]) + len(added) > MAX_EXPR_WIDTH:
+            key += (expr.bits,)
+            existing = groups.get(key)
+            added = [b for b in expr.bits if existing is None or b not in existing[1]]
+        if existing is None:
+            if len(result['dependencies']) >= LIMITS['selections']:
+                result['truncated'] = True
+                result['gaps'].append('dependency_selection_limit')
+                break
+            result['dependencies'].append(row)
+            groups[key] = (row, set(expr.bits))
+        else:
+            row, seen = existing
+            previous_width = len(row['source']['bits'])
+            row['source']['bits'].extend(added)
+            row['wave']['bits'].extend(added)
+            seen.update(added)
         if len(json.dumps(result).encode()) > LIMITS['output_bytes'] - 2048:
-            result['dependencies'].pop()
+            if existing is None:
+                result['dependencies'].pop()
+            else:
+                del row['source']['bits'][previous_width:]
+                del row['wave']['bits'][previous_width:]
             result['truncated'] = True
             result['gaps'].append('dependency_output_limit')
             break
+    for row in result['dependencies']:
+        check_cancelled()
+        if row.get('wave') == row['source']:
+            del row['source']  # Same coordinates; one directly usable selection.
     if constants:
         # Literal operands are structural facts, not observed active values.
         result['literal_operands'] = constants
