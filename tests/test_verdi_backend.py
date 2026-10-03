@@ -30,6 +30,9 @@ def test_vcs_two_step_kdb_detected(tmp_path):
     assert status["kdb_path"] == str(kdb)
     assert status["simulator"] == "vcs"
     assert status["kdb_validation_status"] == "usable"
+    assert "available for an NPI attempt" in status["kdb_hint"]
+    assert "active" not in status["kdb_hint"]
+    assert "actual_backend and attempted_backends" in status["kdb_hint"]
 
 
 def test_vcs_kdb_with_elaboration_error_marker_is_selected_degraded(tmp_path):
@@ -52,6 +55,8 @@ def test_vcs_kdb_with_elaboration_error_marker_is_selected_degraded(tmp_path):
     assert status["kdb_error_count"] == 8
     assert status["kdb_error_log"] == str(error_log)
     assert "degraded partial-netlist" in status["kdb_hint"]
+    assert "if selected by routing policy" in status["kdb_hint"]
+    assert "will attempt" not in status["kdb_hint"]
 
 
 def test_vcs_degraded_kdb_escape_hatch_restores_rejection(
@@ -76,6 +81,7 @@ def test_vcs_degraded_kdb_escape_hatch_restores_rejection(
     assert status["kdb_flow"] == "none"
     assert status["kdb_validation_status"] == "elaboration_error"
     assert status["_npi_selection_reason"] == "npi_degraded_kdb_disabled"
+    assert "will use" not in status["kdb_hint"]
 
 
 def test_vcs_clean_three_step_kdb_is_preferred_over_degraded_two_step(tmp_path):
@@ -215,3 +221,34 @@ def test_real_cc20_case_when_available():
     assert status["simulator"] == "vcs"
     # KDB may or may not exist; just sanity-check the shape.
     assert status["kdb_flow"] in ("vcs_two_step", "vcs_three_step", "none")
+
+
+@pytest.mark.parametrize('actual,route,npi_status,reason,execution', [
+    ('source_graph', 'source_graph', 'skipped', 'npi_skipped_by_policy', None),
+    ('verdi_npi', 'auto', 'found', None, {'execution_mode': 'local'}),
+    ('source_graph', 'auto', 'failed', 'npi_worker_failed', None),
+    ('static', 'auto', 'failed', 'npi_worker_failed', None),
+    ('source_graph', 'auto', 'failed', 'npi_scheduler_timeout',
+     {'execution_mode': 'lsf', 'scheduler_status': 'timeout', 'worker_status': 'not_started'}),
+])
+def test_resource_hint_cannot_claim_execution(tmp_path, actual, route, npi_status, reason, execution):
+    import server
+    kdb = tmp_path / 'simv.daidir' / 'kdb.elab++'
+    kdb.mkdir(parents=True)
+    log = tmp_path / 'comp.log'
+    log.write_text('vcs -kdb top.sv\n')
+    probe = probe_verdi_backend(_make_compile_result('vcs'), str(log))
+    probe['connectivity_route'] = route
+    attempts = [dict(backend='verdi_npi', status=npi_status, reason=reason)]
+    status = server._finalize_public_connectivity_status(
+        backend_status=probe, selected_backend='verdi_npi', actual_backend=actual,
+        attempts=attempts, fallback_reason=reason, npi_backend=None,
+        npi_execution=execution, source_graph_receipt=None)
+    assert status['kdb_hint'] == probe['kdb_hint']
+    assert 'active' not in status['kdb_hint'] and 'will attempt' not in status['kdb_hint']
+    assert status['actual_backend'] == actual
+    assert status['attempted_backends'] == attempts
+    if reason:
+        assert status['fallback_reason'] == reason
+    if execution:
+        assert all(status[k] == v for k, v in execution.items())

@@ -136,22 +136,24 @@ def probe_verdi_backend(
             else ""
         )
         kdb_hint = (
-            f"Verdi KDB found at {kdb_path}{count_note}; NPI will attempt a "
-            "degraded partial-netlist load. Positive driver/load/path facts remain "
+            f"Verdi KDB found at {kdb_path}{count_note}; available for a "
+            "degraded partial-netlist NPI attempt if selected by routing policy. "
+            "See actual_backend and attempted_backends for execution status. "
+            "Positive driver/load/path facts remain "
             "usable, while incomplete or negative queries fall through to Source "
             "Graph and Legacy Static."
         )
     elif kdb_path is not None:
         kdb_hint = (
-            f"Verdi KDB found at {kdb_path}; NPI backend active — preferred for "
-            f"cross-hierarchy driver/load tracing (uses fan-in on the elaborated "
-            f"netlist). Static source-trace serves as fallback when NPI cannot load."
+            f"Verdi KDB found at {kdb_path}; available for an NPI attempt if "
+            "selected by routing policy. See actual_backend and attempted_backends "
+            "for execution status."
         )
     elif kdb_validation_status == "elaboration_error":
         kdb_hint = (
             "Verdi KDB has an elaboration-error marker, but degraded-KDB NPI use "
-            "is disabled by TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB. TraceWeave will "
-            "use Source Graph meanwhile."
+            "is disabled by TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB. "
+            "See actual_backend and attempted_backends for execution status."
         )
     else:
         kdb_hint = _build_kdb_hint(simulator, compile_result, verdi_home, license_env)
