@@ -50,6 +50,11 @@ Optional FST support on Linux provides discovery, basic reads, fixed bit selecti
 
 Signal tracing (driver, load, and connectivity path queries) follows **Verdi NPI → Source Graph → basic static analysis (Legacy Static)** by default. It first queries the elaborated KDB; when NPI is unavailable or cannot provide a trustworthy result, it tries Source Graph without a commercial license, then falls back to basic static analysis where supported.
 
+Source Graph counts independent structural writers separately from assignment
+statements. All retained branch evidence remains available; `traversal` reports
+writer, assignment inspection, and evidence limits separately. Overlapping
+writers are structural evidence, not proof of an observed value conflict.
+
 Capabilities for large designs, with selected examples of validated scale:
 
 - **Hierarchy and source browsing on demand**: the server builds and retains hierarchy and file indexes, then returns local results by instance, subtree, or file to keep large SoC queries manageable in the assistant's context. Hierarchy construction and local queries have been verified on a synthetic design with **50,500 logical instances**; the initial build still scans compilation records and sources.

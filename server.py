@@ -1783,6 +1783,8 @@ _SOURCE_GRAPH_NON_EXPANDABLE_QUERY_GAPS = frozenset(
         "query_edge_limit",
         "query_match_limit",
         "query_frontier_limit",
+        "query_assignment_limit",
+        "query_evidence_limit",
     }
 )
 
@@ -2446,6 +2448,13 @@ def _merge_source_graph_query_receipt(
         "traversed_edge_count",
         "visited_state_count",
         "inspected_edge_count",
+        "structural_driver_count",
+        "inspected_assignment_count",
+        "retained_evidence_count",
+        "assignment_limit",
+        "evidence_limit",
+        "assignment_truncated",
+        "evidence_truncated",
         "state_limit",
         "edge_limit",
         "match_limit",

@@ -180,7 +180,7 @@ def query_step(backend, signal):
                 args=tuple(bind(a) for a in expr.args),
             )
 
-        processes.add((match.instance_path, dynamic.process))
+        processes.add((match.instance_path, fact.structural_driver_id or dynamic.process))
         result["gaps"].extend(dynamic.gaps)
         result["gaps"].extend(
             expression_gaps(dynamic.guard) + expression_gaps(value)

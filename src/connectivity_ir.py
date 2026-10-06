@@ -18,7 +18,7 @@ from typing import Any, Iterable, Mapping
 from .dynamic_evidence import Assignment as DynamicAssignment
 
 
-CONNECTIVITY_IR_VERSION = "1.4"
+CONNECTIVITY_IR_VERSION = "1.5"
 
 
 class DefinitionKind(str, Enum):
@@ -392,10 +392,15 @@ class AssignmentFact:
     guard: str | None = None
     generate_scope: str | None = None
     dynamic: DynamicAssignment | None = None
+    # Template-local writer identity; bind with the instance path at query time.
+    # None is unknown, never a shared anonymous process.
+    structural_driver_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.assignment_id:
             raise ValueError("assignment_id must not be empty")
+        if self.structural_driver_id is not None and not self.structural_driver_id:
+            raise ValueError("structural_driver_id must not be empty")
         if self.kind not in {
             EdgeKind.CONTINUOUS_ASSIGN,
             EdgeKind.PROCEDURAL_ASSIGN,
@@ -905,6 +910,7 @@ def _dependency_from_dict(payload: Mapping[str, Any]) -> DependencyFact:
 def _assignment_from_dict(payload: Mapping[str, Any]) -> AssignmentFact:
     return AssignmentFact(
         assignment_id=str(payload["assignment_id"]),
+        structural_driver_id=payload.get("structural_driver_id"),
         dynamic=(DynamicAssignment.from_dict(payload["dynamic"]) if payload.get("dynamic") else None),
         kind=EdgeKind(payload["kind"]),
         target=_selection_from_dict(payload["target"]),

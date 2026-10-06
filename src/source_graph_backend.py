@@ -145,9 +145,10 @@ def _driver_traversal_receipt(
 ) -> dict[str, Any]:
     gap_codes = set(_gap_codes(result))
     reasons: list[str] = []
-    if result.match_truncated:
+    if result.evidence_truncated or result.match_truncated:
         reasons.append("output_limit")
-    if result.state_truncated or result.edge_truncated or result.frontier_truncated:
+    if (result.state_truncated or result.edge_truncated or result.frontier_truncated
+            or result.assignment_truncated or result.match_truncated):
         reasons.append("work_limit")
     if "query_depth_limit" in gap_codes:
         reasons.append("depth_limit")
@@ -155,14 +156,25 @@ def _driver_traversal_receipt(
         reasons.append("coverage_incomplete")
     return {
         "returned_fact_count": len(result.matches),
-        "output_limit": result.match_limit,
-        "output_truncated": result.match_truncated,
+        "output_limit": result.evidence_limit,
+        "output_truncated": result.evidence_truncated or result.match_truncated,
+        "structural_driver_count": result.structural_driver_count,
+        "structural_driver_limit": result.match_limit,
+        "driver_limit_truncated": result.match_truncated,
+        "inspected_assignment_count": result.inspected_assignment_count,
+        "assignment_limit": result.assignment_limit,
+        "assignment_truncated": result.assignment_truncated,
+        "retained_evidence_count": len(result.matches),
+        "evidence_limit": result.evidence_limit,
+        "evidence_truncated": result.evidence_truncated,
         "visited_state_count": result.visited_state_count,
         "state_limit": result.state_limit,
         "state_truncated": bool(
             result.state_truncated
             or result.edge_truncated
             or result.frontier_truncated
+            or result.assignment_truncated
+            or result.match_truncated
         ),
         "search_exhaustive": bool(
             claim_semantics["exhaustive_search"] and not reasons
@@ -196,6 +208,13 @@ def _query_receipt(
         "match_truncated": result.match_truncated,
         "frontier_truncated": result.frontier_truncated,
         "query_truncated": result.truncated,
+        "structural_driver_count": result.structural_driver_count,
+        "inspected_assignment_count": result.inspected_assignment_count,
+        "retained_evidence_count": len(result.matches),
+        "assignment_limit": result.assignment_limit,
+        "evidence_limit": result.evidence_limit,
+        "assignment_truncated": result.assignment_truncated,
+        "evidence_truncated": result.evidence_truncated,
         "queried_bit_count": result.signal.width,
         "resolved_bit_count": len(result.resolved_bits),
         "unresolved_bit_count": len(result.unresolved_bits),

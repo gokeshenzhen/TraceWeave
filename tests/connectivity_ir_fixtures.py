@@ -194,6 +194,7 @@ def build_deep_ir() -> ConnectivityIR:
     )
     leaf_write = AssignmentFact(
         assignment_id="uart_x_storage_cell:always_ff:20:data_q",
+        structural_driver_id="uart_x_storage_cell:always_ff:20",
         kind=EdgeKind.PROCEDURAL_ASSIGN,
         target=SignalSelection.template("data_q", byte),
         dependencies=(
@@ -462,6 +463,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
 
     leaf_seq = AssignmentFact(
         assignment_id="sg_leaf:always_ff:19:seq_q",
+        structural_driver_id="sg_leaf:always_ff:19",
         kind=EdgeKind.PROCEDURAL_ASSIGN,
         target=SignalSelection.template("seq_q", byte),
         dependencies=(
@@ -493,6 +495,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
     leaf_comb_target = SignalSelection.template("comb_y", byte)
     leaf_comb = AssignmentFact(
         assignment_id="sg_leaf:always_comb:26:comb_y",
+        structural_driver_id="sg_leaf:always_comb:26",
         kind=EdgeKind.PROCEDURAL_ASSIGN,
         target=leaf_comb_target,
         dependencies=selections_for_concat(
@@ -600,6 +603,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
         assignments=(
             AssignmentFact(
                 assignment_id="sg_producer:always_ff:77:seed",
+                structural_driver_id="sg_producer:always_ff:77",
                 kind=EdgeKind.PROCEDURAL_ASSIGN,
                 target=SignalSelection.template("seed", word),
                 dependencies=(
@@ -631,6 +635,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
             ),
             AssignmentFact(
                 assignment_id="sg_producer:always_comb:84:bus.valid",
+                structural_driver_id="sg_producer:always_comb:84",
                 kind=EdgeKind.PROCEDURAL_ASSIGN,
                 target=SignalSelection.template("bus.valid", scalar),
                 dependencies=(
@@ -645,6 +650,7 @@ def _hand_definitions() -> tuple[DefinitionTemplate, ...]:
             ),
             AssignmentFact(
                 assignment_id="sg_producer:always_comb:84:bus.data",
+                structural_driver_id="sg_producer:always_comb:84",
                 kind=EdgeKind.PROCEDURAL_ASSIGN,
                 target=producer_data_target,
                 dependencies=selections_for_concat(

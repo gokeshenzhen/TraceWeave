@@ -2,6 +2,13 @@
 
 ## Overview
 
+For Source Graph driver queries, a process may contain many assignment
+statements but is one structural writer per target bit. Inspect `traversal` for
+separate writer, assignment-work and retained-evidence counts and limits. A
+positive bit fact does not establish an exhaustive driver set; overlapping
+writers do not establish an observed value conflict. Dynamic queries retain
+all bounded statement branches, including overrides in the same process.
+
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 
 ## Workflow

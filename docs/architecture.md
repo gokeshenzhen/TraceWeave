@@ -1347,6 +1347,22 @@ would defeat the bootstrap's resource bound.
 
 ## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
+Source Graph IR 1.5 / projector 1.11 records a template-local
+`structural_driver_id` independently of every statement's `assignment_id`,
+dependencies, guards, location and dynamic expression. The query binds writer
+identity to the instance; distinct generate blocks, processes and continuous
+assignments stay distinct. Missing procedural identity is an explicit gap and
+cannot prove independent or exclusive writers. Older IR artifacts are rejected.
+Driver collection admits up to 256 writer identities while retaining up to 4,096
+statement matches. Independent bounds remain for 4,096 states, 16,384 inspected
+edges, 16,384 assignment inspections and 4,096 frontiers. Evidence saturation
+continues structural inspection; work saturation stops with an explicit gap.
+Dynamic/dependency queries consume the statement view, never one representative
+per process. `traversal.structural_driver_count` counts known identities (a lower
+bound when identity is missing), `inspected_assignment_count` counts work, and
+`retained_evidence_count` counts retained statement mappings. Their individual
+limits and truncation flags must be read separately.
+
 Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
 current design root through `wave_design_binding`. The binding requires exactly
 one compiled top, an exact dump declaration, an unchanged wave identity, and a

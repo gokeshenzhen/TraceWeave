@@ -1138,6 +1138,15 @@ class DriverTraversalReceipt(SchemaModel):
         ]
     ] = Field(default_factory=list)
     continuation_supported: Literal[False] = False
+    structural_driver_count: int | None = Field(default=None, ge=0)
+    structural_driver_limit: int | None = Field(default=None, ge=1)
+    driver_limit_truncated: bool = False
+    inspected_assignment_count: int | None = Field(default=None, ge=0)
+    assignment_limit: int | None = Field(default=None, ge=1)
+    assignment_truncated: bool = False
+    retained_evidence_count: int | None = Field(default=None, ge=0)
+    evidence_limit: int | None = Field(default=None, ge=1)
+    evidence_truncated: bool = False
 
 
 class SourceGraphClaimSemanticsReceipt(SchemaModel):
@@ -1401,6 +1410,13 @@ class SourceGraphBackendReceipt(SchemaModel):
     traversed_binding_edges: int = 0
     max_depth: int | None = None
     inspected_edge_count: int = 0
+    structural_driver_count: int | None = None
+    inspected_assignment_count: int | None = None
+    retained_evidence_count: int | None = None
+    assignment_limit: int | None = None
+    evidence_limit: int | None = None
+    assignment_truncated: bool = False
+    evidence_truncated: bool = False
     state_limit: int | None = None
     edge_limit: int | None = None
     match_limit: int | None = None

@@ -220,8 +220,11 @@ def test_high_fanout_receipts_keep_positive_facts_without_claiming_exhaustive():
     assert driver["traversal"]["search_exhaustive"] is False
     assert driver["traversal"]["incomplete_reasons"] == [
         "output_limit",
+        "work_limit",
         "coverage_incomplete",
     ]
+    assert driver["traversal"]["driver_limit_truncated"] is True
+    assert driver["traversal"]["evidence_truncated"] is False
     for result in (loads, driver):
         receipt = result["_source_graph_query_receipt"]
         assert receipt["status"] == "found"

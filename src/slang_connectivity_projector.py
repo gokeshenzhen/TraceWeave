@@ -662,8 +662,22 @@ class SlangConnectivityProjector:
         modports: list[ModportDecl] = []
         assignments: list[AssignmentFact] = []
         assignment_keys: set[tuple[Any, ...]] = set()
-        for member, generate_scope in _template_members(instance.body, record.path):
+        for member_index, (member, generate_scope) in enumerate(
+            _template_members(instance.body, record.path)
+        ):
             kind = _kind_name(member)
+            # The member ordinal distinguishes blocks even at identical macro
+            # source locations. Generate scope distinguishes elaborated copies;
+            # definition identity distinguishes specializations. Instances bind
+            # this template-local identity later, without copying statements.
+            material = f"{record.definition_id}|{member_index}|{generate_scope}|{kind}"
+            driver_id = "driver_" + hashlib.sha256(material.encode()).hexdigest()[:20]
+
+            def identify(facts):
+                return [replace(fact, structural_driver_id=driver_id,
+                    assignment_id="assign_" + hashlib.sha256(
+                        f"{driver_id}|{fact.assignment_id}".encode()).hexdigest()[:20])
+                    for fact in facts]
             if kind in {"Variable", "Net"}:
                 absolute_path = str(member.hierarchicalPath)
                 # A net declaration initializer is a continuous assignment;
@@ -680,7 +694,7 @@ class SlangConnectivityProjector:
                                                  bits=packed_range.indices),),
                         dynamic=slang_dynamic.assignment(self,assignment,record,aliases,
                                                         process=str(member.location)))
-                    _extend_unique_assignments(assignments,facts,assignment_keys)
+                    _extend_unique_assignments(assignments,identify(facts),assignment_keys)
                 if absolute_path in port_internal_paths:
                     continue
                 location = self._location(member.location)
@@ -731,7 +745,7 @@ class SlangConnectivityProjector:
                     aliases,
                     generate_scope,
                 )
-                _extend_unique_assignments(assignments, facts, assignment_keys)
+                _extend_unique_assignments(assignments, identify(facts), assignment_keys)
             elif kind == "ProceduralBlock":
                 facts = self._project_procedural_block(
                     member,
@@ -739,7 +753,7 @@ class SlangConnectivityProjector:
                     aliases,
                     generate_scope,
                 )
-                _extend_unique_assignments(assignments, facts, assignment_keys)
+                _extend_unique_assignments(assignments, identify(facts), assignment_keys)
         return DefinitionTemplate(
             definition_id=record.definition_id,
             name=str(definition.name),
@@ -1480,6 +1494,7 @@ class SlangConnectivityProjector:
                 location,
                 target,
                 target_index,
+                generate_scope,
             )
             facts.append(
                 AssignmentFact(
@@ -2663,10 +2678,11 @@ def _assignment_id(
     location: SourceLocation,
     target: SignalSelection,
     target_index: int,
+    generate_scope: str | None = None,
 ) -> str:
     material = (
         f"{definition_id}|{kind.value}|{location.file}|{location.line}|"
-        f"{location.column}|{target.symbol}|{target.bits}|{target_index}"
+        f"{location.column}|{target.symbol}|{target.bits}|{target_index}|{generate_scope}"
     ).encode("utf-8")
     return f"assign_{hashlib.sha256(material).hexdigest()[:20]}"
 
