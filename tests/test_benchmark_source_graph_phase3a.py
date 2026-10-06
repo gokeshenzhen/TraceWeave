@@ -89,10 +89,12 @@ def test_frozen_phase3a_ast_probe_detects_later_route_changes_without_wave_lock_
     receipt = benchmark._route_isolation_receipt()
 
     assert receipt["accepted_head"] == benchmark.ACCEPTED_PHASE2_HEAD
-    # The later compile_context validation also changed the public driver
-    # branch. Keep the frozen Phase 2 evidence intact and report that change;
+    # Later compile_context validation and waveform/design root binding also
+    # changed the driver/load branches. Keep frozen Phase 2 evidence intact;
     # it must not be hidden just to satisfy the historical isolation gate.
-    assert receipt["production_route_changed_tools"] == ["explain_signal_driver", "trace_signal_path"]
+    assert receipt["production_route_changed_tools"] == [
+        "explain_signal_driver", "find_signal_loads", "trace_signal_path"
+    ]
     assert receipt["phase3a_isolated"] is False
     assert receipt["functions"]["_route_public_connectivity"]["changed"] is True
     assert receipt["dispatch_branches"]["trace_x_source"]["changed"] is False

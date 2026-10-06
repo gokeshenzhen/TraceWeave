@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip('pylibfst', reason='install the optional [fst] extra')
 import server
 from fst_fixture import write_fst
+from src.evidence_output import expand_compact_result
 from src.fst_parser import FSTParser
 from src import fst_runtime
 from src.fst_runtime import FstError, FstProcess, request_budget, has_fst_input
@@ -37,6 +38,8 @@ def test_log_wave_workflow_with_partial_protocol_coverage(tmp_path,monkeypatch):
     assert r['runtime_protocol_coverage']['coverage_status']=='zero_coverage'
     r=call('explain_signal_driver',**ctx,wave_path=str(fst),signal_path='top.q',time_ps=36)
     assert 'error' not in r,r
+    assert r['format']=='traceweave.driver.compact.v1'
+    r=expand_compact_result(r)
     assert r['backend_status']['actual_backend']=='source_graph'
 
 
