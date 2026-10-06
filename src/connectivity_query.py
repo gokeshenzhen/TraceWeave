@@ -143,6 +143,7 @@ class QueryMatch:
     # incomplete, preserve the source-evidence strength independently.
     positive_fact_confidence: QueryConfidence | None = None
     structural_driver_id: str | None = None
+    selected_target: SignalSelection | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,14 @@ class QueryFrontier:
 
     signal: SignalSelection
     query_target: SignalSelection
+
+
+@dataclass(frozen=True)
+class QueryBitResolution:
+    bit: int
+    resolution: str
+    reason_codes: tuple[str, ...]
+    driver_set_complete: bool
 
 
 @dataclass(frozen=True)
@@ -185,6 +194,7 @@ class ConnectivityQueryResult:
     evidence_limit: int = DEFAULT_QUERY_EVIDENCE_LIMIT
     assignment_truncated: bool = False
     evidence_truncated: bool = False
+    bit_resolutions: tuple[QueryBitResolution, ...] = ()
 
     @property
     def truncated(self) -> bool:
@@ -339,6 +349,7 @@ class _BoundedQueryCollector:
         self.drivers = drivers
         self._driver_keys: set[tuple[str, str]] = set()
         self.structural_matches: dict[tuple[Any, ...], QueryMatch] = {}
+        self.evidence_truncated_bits: set[int] = set()
         self._matches: dict[tuple[Any, ...], QueryMatch] = {}
         self._frontiers: dict[tuple[Any, ...], QueryFrontier] = {}
 
@@ -373,6 +384,7 @@ class _BoundedQueryCollector:
             self.structural_matches.setdefault(structural_key, match)
             if len(self._matches) >= self.budget.evidence_limit:
                 self.budget.evidence_truncated = True
+                self.evidence_truncated_bits.update(match.covered_signal.bits)
                 return True
         self._matches[key] = match
         return True
@@ -472,6 +484,8 @@ class ConnectivityQueryEngine:
         traversed = 0
         depth_limited = False
         touched_paths: set[str] = {signal.path()}
+        bit_paths: list[tuple[SignalSelection, SignalSelection]] = []
+        depth_limited_bits: set[int] = set()
 
         def visit(
             current: SignalSelection,
@@ -492,6 +506,7 @@ class ConnectivityQueryEngine:
                 return
             visited.add(state)
             touched_paths.add(current.path())
+            bit_paths.append((current, query_target))
             covered_positions: set[int] = set()
 
             for assignment in self._writes.get(_endpoint_key(current), ()):
@@ -585,6 +600,7 @@ class ConnectivityQueryEngine:
                 )
                 if depth >= max_depth:
                     depth_limited = True
+                    depth_limited_bits.update(covered.bits)
                     if not collector.add_frontier(
                         QueryFrontier(signal=upstream, query_target=covered)
                     ):
@@ -623,6 +639,9 @@ class ConnectivityQueryEngine:
             budget=budget,
             visited_state_count=len(visited),
             structural_matches=list(collector.structural_matches.values()),
+            bit_paths=bit_paths,
+            depth_limited_bits=depth_limited_bits,
+            evidence_truncated_bits=collector.evidence_truncated_bits,
         )
 
     def query_loads(
@@ -1281,6 +1300,7 @@ class ConnectivityQueryEngine:
             instance_path=instance_path,
             fact_id=assignment.assignment_id,
             structural_driver_id=assignment.structural_driver_id,
+            selected_target=selected_target,
             kind=assignment.kind,
             target=assignment.target.bind(instance_path),
             covered_signal=covered_signal,
@@ -1381,11 +1401,19 @@ class ConnectivityQueryEngine:
         budget: _QueryWorkBudget,
         visited_state_count: int,
         structural_matches: list[QueryMatch] | None = None,
+        bit_paths: list[tuple[SignalSelection, SignalSelection]] | None = None,
+        depth_limited_bits: set[int] | None = None,
+        evidence_truncated_bits: set[int] | None = None,
     ) -> ConnectivityQueryResult:
+        coverage_gaps = (
+            tuple(gap for gap in self.ir.coverage.gaps if
+                  any(_gap_affects_selection(gap, current) for current, _ in bit_paths))
+            if bit_paths is not None else _relevant_gaps(self.ir.coverage.gaps, touched_paths)
+        )
         gaps_by_key = {
             _gap_key(gap): gap
             for gap in (
-                *_relevant_gaps(self.ir.coverage.gaps, touched_paths),
+                *coverage_gaps,
                 *query_gaps,
             )
         }
@@ -1455,6 +1483,48 @@ class ConnectivityQueryEngine:
         unresolved_bits = tuple(
             bit for bit in signal.bits if bit not in resolved_bit_set
         )
+        bit_resolutions = ()
+        if operation == "driver":
+            reasons: dict[int, set[str]] = {bit: set() for bit in signal.bits}
+            # This is query evidence, computed before rendering. A missing bit
+            # inherits only gaps on the inspected paths that map to that bit.
+            for current, target in bit_paths or [(signal, signal)]:
+                check_cancelled()
+                for gap in gaps_by_key.values():
+                    if gap.code in {"query_evidence_limit", "query_depth_limit"}:
+                        continue
+                    for local_bit, query_bit in zip(current.bits, target.bits):
+                        selected = SignalSelection(current.symbol, (local_bit,), current.instance_path)
+                        if _gap_affects_selection(gap, selected):
+                            reasons[query_bit].add(gap.code)
+            # Query-local gaps use requested bit coordinates, including paths
+            # whose traversal was prevented by a work budget.
+            for bit in signal.bits:
+                check_cancelled()
+                selected = SignalSelection(signal.symbol, (bit,), signal.instance_path)
+                for gap in gaps_by_key.values():
+                    if gap.code not in {"query_evidence_limit", "query_depth_limit"} and _gap_affects_selection(gap, selected):
+                        reasons[bit].add(gap.code)
+                if _query_coverage(self.ir.coverage, ()) is not CoverageStatus.COMPLETE:
+                    # Missing files or unscoped global incompleteness cannot
+                    # turn into a negative merely because no local row exists.
+                    if not reasons[bit]:
+                        reasons[bit].add("projection_coverage_incomplete")
+                if bit in (depth_limited_bits or ()):
+                    reasons[bit].add("query_depth_limit")
+            resolutions = []
+            for bit in signal.bits:
+                complete = not reasons[bit]
+                if bit in (evidence_truncated_bits or ()):
+                    reasons[bit].add("query_evidence_limit")
+                resolutions.append(QueryBitResolution(
+                    bit=bit,
+                    resolution=("found" if bit in resolved_bit_set else
+                                "proved_no_driver" if complete else "unknown"),
+                    reason_codes=tuple(sorted(reasons[bit])),
+                    driver_set_complete=complete,
+                ))
+            bit_resolutions = tuple(resolutions)
         if operation == "driver" and deduped and unresolved_bits:
             base_gaps = tuple(gaps_by_key.values())
             base_coverage = _query_coverage(self.ir.coverage, base_gaps)
@@ -1522,6 +1592,7 @@ class ConnectivityQueryEngine:
             evidence_limit=budget.evidence_limit,
             assignment_truncated=budget.assignment_truncated,
             evidence_truncated=budget.evidence_truncated,
+            bit_resolutions=bit_resolutions,
         )
 
 
@@ -1839,6 +1910,29 @@ def _relevant_gaps(
     )
 
 
+def _gap_affects_selection(gap: CoverageGap, selected: SignalSelection) -> bool:
+    if gap.affects(selected.path()):
+        return True
+    for scope in gap.scopes:
+        prefix = selected.path() + "["
+        if scope.startswith(prefix) and scope.endswith("]"):
+            indices = scope[len(prefix):-1].split(",")
+            if len(indices) > 1:
+                if all(re.fullmatch(r"-?\d+", item) for item in indices):
+                    if set(map(int, indices)).intersection(selected.bits):
+                        return True
+                    continue
+                return True  # an unmodeled selection cannot exclude a writer
+        match = _TRAILING_SELECT_RE.fullmatch(scope)
+        if not match or match.group("base") != selected.path() or match.group("left") is None:
+            continue
+        left = int(match.group("left"))
+        right = int(match.group("right") or left)
+        if any(min(left, right) <= bit <= max(left, right) for bit in selected.bits):
+            return True
+    return False
+
+
 def _query_coverage(
     report: CoverageReport,
     gaps: tuple[CoverageGap, ...],
@@ -1928,6 +2022,7 @@ def _with_confidence(match: QueryMatch, confidence: QueryConfidence) -> QueryMat
         constant_bits=match.constant_bits,
         positive_fact_confidence=(match.positive_fact_confidence or match.confidence),
         structural_driver_id=match.structural_driver_id,
+        selected_target=match.selected_target,
     )
 
 

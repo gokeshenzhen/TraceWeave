@@ -1347,7 +1347,7 @@ would defeat the bootstrap's resource bound.
 
 ## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
-Source Graph IR 1.5 / projector 1.11 records a template-local
+Source Graph IR 1.5 / projector 1.12 records a template-local
 `structural_driver_id` independently of every statement's `assignment_id`,
 dependencies, guards, location and dynamic expression. The query binds writer
 identity to the instance; distinct generate blocks, processes and continuous
@@ -1362,6 +1362,20 @@ per process. `traversal.structural_driver_count` counts known identities (a lowe
 bound when identity is missing), `inspected_assignment_count` counts work, and
 `retained_evidence_count` counts retained statement mappings. Their individual
 limits and truncation flags must be read separately.
+
+The driver query records the relation between each visited bit and the requested
+bit. Provenance carries `resolution=found|proved_no_driver|unknown`, exact
+`target_bits`, relevant `reason_codes`, and `driver_set_complete`. A positive
+fact and a complete enumeration are different claims. Constants and local
+assignments can be found without a `source_path`. Scoped exclusions remain
+scoped; exclusions on shared definition statements are rebound to every instance.
+Global context gaps remain global. Budget stops conservatively affect the
+uncompleted query; display-only saturation adds `query_evidence_limit` while
+structural inspection continues. Sparse unresolved bits are never widened to a
+continuous range. If a driver query is inconclusive and Static also returns an
+unsupported result without facts, the router returns that one Source Graph
+artifact's partial result with every backend attempt. Supported Static facts
+still replace the entire payload. Bootstrap and NPI acceptance are unchanged.
 
 Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
 current design root through `wave_design_binding`. The binding requires exactly

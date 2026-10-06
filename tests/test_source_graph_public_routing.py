@@ -1875,6 +1875,32 @@ async def test_complete_not_connected_and_inconclusive_no_match_are_distinct(
 
 
 @pytest.mark.anyio
+async def test_inconclusive_driver_survives_unsupported_static_without_merging(monkeypatch, tmp_path):
+    compile_log, _ = _install_source_context(tmp_path)
+    signal = "sg_top.runtime_force"
+    gap = CoverageGap(code="runtime_force_not_modeled", message="force excluded",
+        impact=CoverageStatus.INCONCLUSIVE, scopes=(signal,))
+    runtime = SourceGraphRuntime(ReadyWorker(ir=_production_ir(coverage=CoverageReport(
+        status=CoverageStatus.PARTIAL, files_total=1, files_projected=1, gaps=(gap,)))))
+
+    class Unsupported(TrackingStaticBackend):
+        def find_driver(self, **kwargs):
+            return {**super().find_driver(**kwargs), "unsupported_reason": "dotted_signal_member_requires_source_graph"}
+
+    static = Unsupported()
+    _patch_common(monkeypatch, runtime=runtime, static=static)
+    r = await server._dispatch("explain_signal_driver", _driver_args(compile_log, signal))
+    assert r.backend == "source_graph" and r.driver_status == "partial"
+    assert r.bit_provenance[0].resolution == "unknown"
+    assert "runtime_force_not_modeled" in r.bit_provenance[0].reason_codes
+    assert r.claim_semantics.negative_claim_allowed is False
+    assert static.driver_calls == 1
+    assert [a.backend for a in r.backend_status.attempted_backends] == ["verdi_npi", "source_graph", "static"]
+    assert r.backend_status.attempted_backends[-1].status == "inconclusive"
+    assert r.resolved_module != "legacy_static_module"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("signal", "code"),
     [

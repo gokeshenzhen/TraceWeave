@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, Sequence
 from .dynamic_evidence import Expr, TRUE, Assignment as DynamicAssignment
 from . import slang_dynamic
+from .cancellation import check_cancelled
 
 from .connectivity_ir import (
     AssignmentFact,
@@ -329,10 +330,31 @@ class SlangConnectivityProjector:
     def project(self, root: Any) -> SlangProjection:
         self._seed_declared_gaps()
         self._collect_hierarchy(root)
-        definitions = tuple(
-            self._project_definition(record)
-            for _, record in sorted(self._definition_representatives.items())
-        )
+        definitions = []
+        aliases: dict[str, list[str]] = {}
+        for record in self._records:
+            aliases.setdefault(record.definition_id, []).append(record.path)
+        for _, record in sorted(self._definition_representatives.items()):
+            check_cancelled()
+            first_gap = len(self._gaps._items)
+            definitions.append(self._project_definition(record))
+            # Statements are shared by definition. Their objective exclusions
+            # must follow every instance too, or a sibling could falsely claim
+            # exhaustive coverage of exactly the same unsupported body.
+            template_gaps = tuple(self._gaps._items[first_gap:])
+            for path in aliases[record.definition_id]:
+                check_cancelled()
+                if path == record.path:
+                    continue
+                for gap in template_gaps:
+                    scopes = tuple(path + scope[len(record.path):]
+                        if scope == record.path or scope.startswith(record.path + ".") else scope
+                        for scope in gap.scopes)
+                    if scopes != gap.scopes:
+                        self._gaps.add(code=gap.code, message=gap.message,
+                            impact=gap.impact, constructs=gap.constructs,
+                            scopes=scopes, location=gap.location)
+        definitions = tuple(definitions)
         instances = tuple(self._project_instance(record) for record in self._records)
         bindings: list[PortBinding] = []
         for record in self._records:

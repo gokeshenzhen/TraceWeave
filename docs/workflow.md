@@ -8,6 +8,13 @@ separate writer, assignment-work and retained-evidence counts and limits. A
 positive bit fact does not establish an exhaustive driver set; overlapping
 writers do not establish an observed value conflict. Dynamic queries retain
 all bounded statement branches, including overrides in the same process.
+Read each provenance segment's `resolution`, `reason_codes` and
+`driver_set_complete`. `found` says a source was found, `proved_no_driver`
+requires complete writer enumeration, and `unknown` retains a coverage or work
+gap. Neither a null source path nor zero matches proves absence. A partial
+Source Graph result can remain the final result after unsupported Static;
+check `attempted_backends` and the scope blocker instead of repeating the same
+frontier expansion.
 
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 

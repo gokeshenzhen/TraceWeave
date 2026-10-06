@@ -54,6 +54,11 @@ Source Graph counts independent structural writers separately from assignment
 statements. All retained branch evidence remains available; `traversal` reports
 writer, assignment inspection, and evidence limits separately. Overlapping
 writers are structural evidence, not proof of an observed value conflict.
+Bit provenance explicitly distinguishes `found`, `proved_no_driver`, and
+`unknown`, with reason codes and `driver_set_complete`. A budget or unsupported
+write never proves absence. If Static also cannot handle an inconclusive
+Source Graph query, the bounded Source Graph evidence and both attempts remain
+visible.
 
 Capabilities for large designs, with selected examples of validated scale:
 

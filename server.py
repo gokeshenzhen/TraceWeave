@@ -2990,6 +2990,7 @@ async def _route_public_connectivity(
     source_graph_reason: str
     bootstrap_receipt: dict | None = None
     bootstrap_active = False
+    inconclusive_source: dict | None = None
     if args.get("allow_bounded_bootstrap") is True:
         existing_hierarchy, _ = _resolve_hierarchy_context(
             args["compile_log"], simulator
@@ -3236,6 +3237,11 @@ async def _route_public_connectivity(
                             if query_receipt is not None
                             else None
                         )
+                        inconclusive_source = (
+                            source_result if operation == "driver"
+                            and not bootstrap_active and source_provenance_ok
+                            and query_status == "inconclusive" else None
+                        )
                         needs_more_bits = bool(
                             query_receipt is not None
                             and query_status == "found"
@@ -3379,10 +3385,7 @@ async def _route_public_connectivity(
                             expanded_fingerprint = compute_source_graph_build_key(
                                 expanded.request
                             ).digest
-                            if expanded_fingerprint in {
-                                previous_artifact,
-                                artifact_fingerprint,
-                            }:
+                            if expanded_fingerprint in attempted_artifacts:
                                 source_graph_reason = (
                                     "source_graph_frontier_expansion_stalled"
                                 )
@@ -3493,6 +3496,14 @@ async def _route_public_connectivity(
                     )
                     source_graph_receipt["metrics"].update(aggregate_metrics)
                     _publish_source_graph_trace_metrics(aggregate_metrics)
+                    if inconclusive_source is not None:
+                        source_graph_receipt["final_artifact_fingerprint_sha256"] = artifact_fingerprint
+                        source_graph_receipt["single_artifact_provenance"] = True
+                        source_graph_receipt["final_artifact_scope_match"] = True
+                        if not attempts or attempts[-1].get("reason") != source_graph_reason:
+                            attempts.append(_backend_attempt("source_graph", "inconclusive",
+                                reason=source_graph_reason,
+                                coverage_status=query_receipt.get("coverage_status")))
 
     if bootstrap_active:
         # Bounded bootstrap negative/inconclusive results must not trigger the
@@ -3566,13 +3577,26 @@ async def _route_public_connectivity(
         expected="static",
     ):
         raise RuntimeError("Legacy Static result contains mixed provenance")
-    attempts.append(_backend_attempt("static", "success"))
-    clean = _strip_connectivity_internal_receipts(static_result)
-    clean["backend"] = "static"
+    static_unsupported = bool(
+        operation == "driver" and static_result.get("unsupported_reason")
+        and not static_result.get("source_file")
+        and not static_result.get("driver_chain")
+        and not static_result.get("upstream_signals")
+        and static_result.get("driver_status") not in {
+            "resolved", "not_connected", "primary_input", "testbench_driven"}
+    )
+    attempts.append(_backend_attempt("static", "inconclusive" if static_unsupported else "success",
+        reason=static_result.get("unsupported_reason") if static_unsupported else None))
+    # Keep one artifact's bounded check when Static has no supported fact.
+    # No Static payload fields are merged into that result.
+    actual_backend = "source_graph" if static_unsupported and inconclusive_source is not None else "static"
+    clean = _strip_connectivity_internal_receipts(
+        inconclusive_source if actual_backend == "source_graph" else static_result)
+    clean["backend"] = actual_backend
     status = _finalize_public_connectivity_status(
         backend_status=backend_status,
         selected_backend=selected_backend,
-        actual_backend="static",
+        actual_backend=actual_backend,
         attempts=attempts,
         fallback_reason=final_reason,
         npi_backend=npi_backend if npi_selected else None,

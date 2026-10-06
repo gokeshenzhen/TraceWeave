@@ -53,6 +53,9 @@ Linux 上可选启用 FST，支持文件发现、基础读取、固定 bit 选�
 Source Graph 分别统计独立结构驱动和赋值语句，保留限额内的全部分支证据；
 `traversal` 分别报告驱动、赋值检查和证据保留限额。结构驱动重叠不等于波形中
 已经发生值冲突。
+逐位来源明确区分 `found`、`proved_no_driver` 和 `unknown`，并给出原因及
+`driver_set_complete`。预算或未建模写入不能证明无驱动。Source Graph 尚无结论、
+Static 也不支持时，保留 Source Graph 的有限检查证据和完整后端尝试记录。
 
 面向大型设计的能力与已验证的部分规模：
 

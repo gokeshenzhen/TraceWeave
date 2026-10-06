@@ -1105,6 +1105,10 @@ class DriverBitProvenanceSegment(SchemaModel):
     """Per-bit-range source provenance for a segmented driver result."""
 
     target_path: str
+    target_bits: list[int] = Field(default_factory=list)
+    resolution: Literal["found", "proved_no_driver", "unknown"] | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    driver_set_complete: bool | None = None
     source_kind: Literal["signal", "constant", "unresolved"]
     source_path: str | None = None
     terminal_path: str | None = None

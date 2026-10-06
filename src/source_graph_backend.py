@@ -235,39 +235,69 @@ def _constant_text(bits: tuple[str, ...]) -> str:
 
 def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, Any]]:
     multiple = set(result.multi_driver_bits)
+    resolutions = {item.bit: item for item in result.bit_resolutions}
     segments: list[dict[str, Any]] = []
-    for match in result.matches:
+    evidence_keys = {(m.instance_path, m.structural_driver_id or m.fact_id,
+                      m.covered_signal.bits) for m in result.matches}
+    rows = [(m, True) for m in result.matches]
+    # Evidence display saturation cannot hide later structural positives. These
+    # rows intentionally carry no statement location or statement confidence.
+    rows.extend((m, False) for m in result.structural_matches
+                if (m.instance_path, m.structural_driver_id or m.fact_id,
+                    m.covered_signal.bits) not in evidence_keys)
+    for match, has_evidence in rows:
         is_constant = match.kind is EdgeKind.CONSTANT_DRIVER
         source_path = None
         if not is_constant and match.traversal:
             source_path = match.traversal[0].source.path(include_bits=True)
-        segments.append(
-            {
-                "target_path": match.covered_signal.path(include_bits=True),
+        groups: dict[tuple, list[int]] = {}
+        for bit in match.covered_signal.bits:
+            state = resolutions[bit]
+            key = (state.resolution, state.reason_codes, state.driver_set_complete, bit in multiple)
+            groups.setdefault(key, []).append(bit)
+        for (resolution, reasons, complete, overlap), bits in groups.items():
+            target = SignalSelection(result.signal.symbol, tuple(bits), result.signal.instance_path)
+            if not is_constant and match.traversal:
+                first = match.traversal[0]
+                mapping = dict(zip(first.target.bits, first.source.bits))
+                if all(bit in mapping for bit in bits):
+                    source_path = SignalSelection(first.source.symbol,
+                        tuple(mapping[bit] for bit in bits), first.source.instance_path).path(include_bits=True)
+            terminal = match.selected_target or match.target
+            if terminal.width == match.covered_signal.width:
+                mapping = dict(zip(match.covered_signal.bits, terminal.bits))
+                terminal = SignalSelection(terminal.symbol, tuple(mapping[b] for b in bits), terminal.instance_path)
+            segments.append({
+                "target_path": target.path(include_bits=True),
+                "target_bits": bits,
+                "resolution": resolution,
+                "reason_codes": list(reasons),
+                "driver_set_complete": complete,
                 "source_kind": "constant" if is_constant else "signal",
                 "source_path": source_path,
-                "terminal_path": match.target.path(include_bits=True),
+                "terminal_path": terminal.path(include_bits=True),
                 "constant_value": (
-                    _constant_text(match.constant_bits) if is_constant else None
+                    _constant_text(tuple(dict(zip(match.covered_signal.bits, match.constant_bits))[b] for b in bits)) if is_constant else None
                 ),
                 "driver_kind": match.kind.value,
-                "source_file": match.evidence.location.file,
-                "source_line": match.evidence.location.line,
-                "confidence": _public_confidence(match.confidence),
-                "multiple_driver": bool(
-                    multiple.intersection(match.covered_signal.bits)
-                ),
-            }
-        )
+                "source_file": match.evidence.location.file if has_evidence else None,
+                "source_line": match.evidence.location.line if has_evidence else None,
+                "confidence": _public_confidence(match.confidence) if has_evidence else "partial",
+                "multiple_driver": overlap,
+            })
     if result.unresolved_bits:
-        unresolved = SignalSelection(
-            instance_path=result.signal.instance_path,
-            symbol=result.signal.symbol,
-            bits=result.unresolved_bits,
-        )
-        segments.append(
-            {
+        groups = {}
+        for bit in result.unresolved_bits:
+            state = resolutions[bit]
+            groups.setdefault((state.resolution, state.reason_codes, state.driver_set_complete), []).append(bit)
+        for (resolution, reasons, complete), bits in groups.items():
+            unresolved = SignalSelection(result.signal.symbol, tuple(bits), result.signal.instance_path)
+            segments.append({
                 "target_path": unresolved.path(include_bits=True),
+                "target_bits": bits,
+                "resolution": resolution,
+                "reason_codes": list(reasons),
+                "driver_set_complete": complete,
                 "source_kind": "unresolved",
                 "source_path": None,
                 "terminal_path": None,
@@ -277,8 +307,7 @@ def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, An
                 "source_line": None,
                 "confidence": "partial",
                 "multiple_driver": False,
-            }
-        )
+            })
     return segments
 
 
@@ -647,7 +676,7 @@ class SourceGraphConnectivityBackend:
                 for dependency in match.dependencies
             }
         )
-        bit_provenance = _driver_bit_provenance(query) if matches else None
+        bit_provenance = _driver_bit_provenance(query)
         if driver_kind == "constant" and head is not None:
             expression_summary = f"constant {_constant_text(head.constant_bits)}"
         elif driver_kind == "composite_port_binding":
