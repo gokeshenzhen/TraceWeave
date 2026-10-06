@@ -21,6 +21,15 @@ when all semantic fields agree. Use `query_instance_path` for the requested
 signal and `resolved_instance_path` for the first driver. VCD has no port
 direction metadata, so a null direction must not be inferred from naming.
 
+If an explicit driver action's process-scoped hierarchy handle expired, the
+server first looks for the exact current hierarchy and may perform one bounded
+recovery. Read `hierarchy_recovery`: historical source tokens are checked again,
+and absence of such tokens means current-source context only. Changed or
+ambiguous identities, timeouts and source budgets return a prerequisite call.
+Recovery does not run or mark `scan_structural_risks` complete; the normal
+hierarchy/scan workflow still applies. Do not substitute the latest session's
+case or drop identity tokens to make a stale action appear valid.
+
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 
 ## Workflow

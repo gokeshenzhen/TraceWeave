@@ -145,14 +145,20 @@ class SourceContentRead:
     issue_codes: tuple[str, ...] = ()
 
 
-def read_source_content(path: str) -> SourceContentRead:
+class SourceContentLimitExceeded(ValueError):
+    """A caller's bounded source read cannot consume this entire file."""
+
+
+def read_source_content(path: str, *, max_bytes: int | None = None) -> SourceContentRead:
     """Read one source with before/after identity and exact-byte evidence."""
 
     canonical = os.path.realpath(path)
     check_cancelled()
     before = _stat_identity(canonical)
     with open(canonical, "rb") as stream:
-        data = stream.read()
+        data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+    if max_bytes is not None and len(data) > max_bytes:
+        raise SourceContentLimitExceeded("source content byte limit exceeded")
     check_cancelled()
     after = _stat_identity(canonical)
     issues: set[str] = set()

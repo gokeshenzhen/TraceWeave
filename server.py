@@ -94,6 +94,9 @@ from src.hierarchy_handles import (
     compute_handle,
     compute_snapshot_fingerprint,
 )
+from src.hierarchy_recovery import (
+    BoundedSourceReader, HierarchyRecoveryRuntime, RecoveryBlocked, RecoveryLimits,
+)
 from src.source_graph_adapter import (
     AdapterStatus,
     build_source_graph_frontier_plan,
@@ -203,6 +206,8 @@ _log_snapshot_history: dict[tuple[str, ...], list[str]] = {}
 # tools resolve through this store. Lifetime is tied to build_tb_hierarchy's
 # cache entry - see _invalidate_downstream / _clear_simulation_result_state.
 _handle_store = HandleStore()
+
+_hierarchy_recovery_runtime = HierarchyRecoveryRuntime()
 
 # Small process-session cache of parsed compile evidence.  It is populated
 # before the expensive source scan, so a timed-out/blocked full hierarchy can
@@ -1059,6 +1064,131 @@ def _resolve_hierarchy_context(
         recomputed_candidates[0][1] if recomputed_candidates else bare_snapshot
     )
     return None, fallback_snapshot
+
+
+def get_hierarchy_recovery_limits() -> RecoveryLimits:
+    config = get_hierarchy_execution_config()
+    if not config.valid:
+        raise RecoveryBlocked(config.error_code or "hierarchy_config_invalid")
+    defaults = RecoveryLimits()
+    return RecoveryLimits(
+        timeout_sec=min(defaults.timeout_sec, config.timeout_sec or defaults.timeout_sec),
+        max_source_bytes=min(defaults.max_source_bytes, config.max_source_bytes or defaults.max_source_bytes),
+        max_source_files=defaults.max_source_files,
+    )
+
+
+def _build_recovery_context(ctx: dict, limits: RecoveryLimits):
+    """Pure worker: build and revalidate; never publish shared session state."""
+    from src.divergence_compare import file_identity
+    paths = [ctx["compile_log"], *ctx["supplementary_compile_logs"]]
+    if any(file_identity(path) is None for path in paths):
+        raise RecoveryBlocked("hierarchy_recovery_log_unavailable")
+    logs_id = log_identity(ctx)
+    detected = detect_simulator(ctx["compile_log"])
+    if (detected in {"vcs", "xcelium", "verilator"}
+            and ctx["simulator"] not in {"auto", detected}):
+        raise RecoveryBlocked("compile_context_changed")
+    compile_result, simulator = _parse_merged_compile_context(
+        compile_log=ctx["compile_log"], simulator=ctx["simulator"],
+        supplementary_compile_logs=ctx["supplementary_compile_logs"])
+    if simulator not in {"vcs", "xcelium", "verilator"}:
+        raise RecoveryBlocked("compile_context_ambiguous")
+    if ctx["simulator"] not in {"auto", simulator}:
+        raise RecoveryBlocked("compile_context_changed")
+    evidence = compile_result.get("compile_evidence") or {}
+    if evidence.get("merge_conflicts") or evidence.get("merge_status") == "conflict":
+        raise RecoveryBlocked("compile_context_ambiguous")
+    tops = tuple(dict.fromkeys(compile_result.get("top_modules") or ()))
+    top = compile_result.get("primary_top") or (tops[0] if len(tops) == 1 else None)
+    if not top or (not ctx.get("top_hint") and len(tops) != 1):
+        raise RecoveryBlocked("compile_context_ambiguous")
+    if ctx.get("top_hint") not in (None, top):
+        raise RecoveryBlocked("compile_context_changed")
+    snapshot = compute_snapshot_fingerprint(ctx["compile_log"], simulator, ctx["supplementary_compile_logs"])
+    handle = compute_handle(ctx["compile_log"], simulator, ctx["supplementary_compile_logs"])
+    files = compile_result.get("files", {}).get("user", [])
+    if len(files) > limits.max_source_files:
+        raise RecoveryBlocked("hierarchy_recovery_source_file_limit")
+    _, within_limit = _hierarchy_source_preflight(compile_result, max_source_bytes=limits.max_source_bytes)
+    if not within_limit:
+        raise RecoveryBlocked("hierarchy_recovery_source_byte_limit")
+    reader = BoundedSourceReader(limits)
+    full = build_hierarchy(compile_result, compile_log_path=ctx["compile_log"],
+        apply_source_overlay=False, source_reader=reader.read)
+    full["_hierarchy_snapshot_sha256"] = snapshot
+    full["_compile_log_identity_sha256"] = logs_id
+    full["_hierarchy_recovery_reads"] = {
+        "source_files_read": len(reader.paths), "source_bytes_read": reader.bytes_read}
+    if log_identity(ctx) != logs_id:
+        raise RecoveryBlocked("compile_context_changed")
+    # Reuse the read-only resolver against this private candidate. Explicit old
+    # source/log/snapshot tokens are retained, never stripped to force a match.
+    candidate = HandleStore()
+    candidate.register(handle, full)
+    bound, reason = resolve_divergence_context(
+        {**ctx, "simulator": simulator, "top_hint": top}, candidate)
+    if bound is None:
+        raise RecoveryBlocked(reason)
+    return bound
+
+
+async def _resolve_explicit_driver_context(raw: dict):
+    """Recover only an unavailable explicit context, once, under hard bounds."""
+    started = time.perf_counter()
+    receipt = {"status": "blocked", "attempted": False, "structural_scan_performed": False}
+    ctx = schemas.DivergenceContext.model_validate(raw).model_dump(exclude_none=True)
+    ctx["compile_log"] = os.path.abspath(ctx["compile_log"])
+    ctx["supplementary_compile_logs"] = [os.path.abspath(p) for p in ctx["supplementary_compile_logs"]]
+    store = _handle_store
+    try:
+        limits = get_hierarchy_recovery_limits()
+        receipt.update(timeout_sec=limits.timeout_sec, max_source_files=limits.max_source_files,
+                       max_source_bytes=limits.max_source_bytes)
+        with anyio.fail_after(limits.timeout_sec):
+            bound, reason = await _run_in_cancellable_thread(
+                lambda: resolve_divergence_context(ctx, store))
+            if bound is None and reason != "hierarchy_unavailable":
+                raise RecoveryBlocked(reason)
+            if bound is not None:
+                receipt["status"] = "hit_existing"
+            else:
+                receipt["attempted"] = True
+                # All explicit tokens, ordered logs, top, current log identity
+                # and limits participate in live sharing. No recent-case state.
+                key = json.dumps([ctx, log_identity(ctx), limits.__dict__], sort_keys=True)
+
+                async def build():
+                    recovered = await _run_in_cancellable_thread(lambda: _build_recovery_context(ctx, limits))
+                    # No await between successful identity validation and this
+                    # event-loop-owned publication. Cancelled workers never land.
+                    store.register(recovered.context["hierarchy_handle"], recovered.hierarchy)
+                    return recovered
+
+                bound, coalesced = await _hierarchy_recovery_runtime.run(key, build, timeout_sec=limits.timeout_sec)
+                receipt.update(status="rebuilt", coalesced=coalesced,
+                    **bound.hierarchy.get("_hierarchy_recovery_reads", {}))
+            receipt.update(hierarchy_handle=bound.context["hierarchy_handle"],
+                compile_context=bound.context,
+                identity_basis="validated_historical_source" if ctx.get("source_snapshot_sha256") else "current_sources",
+                note=("Source identity matches the supplied historical fingerprint; this does not establish waveform/source correspondence."
+                      if ctx.get("source_snapshot_sha256") else
+                      "Established the current source context; historical simulation or session sources are not established."))
+            return bound, "ready", receipt
+    except TimeoutError:
+        reason = "hierarchy_recovery_timeout"
+    except RecoveryBlocked as exc:
+        reason = exc.code
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except (OSError, ValueError, MemoryError):
+        reason = "hierarchy_recovery_failed"
+    except Exception:  # Fixed receipt; do not expose tool/environment exception text.
+        reason = "hierarchy_recovery_failed"
+    finally:
+        receipt["wall_time_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    receipt["blocker"] = reason
+    return None, reason, receipt
 
 
 def _log_stat_info(log_path: str) -> dict:
@@ -3406,54 +3536,7 @@ async def _route_public_connectivity(
                             and query_status in {"found", "not_connected"}
                             and (not bootstrap_active or query_status == "found")
                         ):
-                            source_graph_receipt["artifact_attempt_count"] = (
-                                artifact_attempt_count
-                            )
-                            source_graph_receipt["scope_expansion_count"] = (
-                                scope_expansion_count
-                            )
-                            source_graph_receipt["attempted_query_count"] = (
-                                attempted_query_count
-                            )
-                            source_graph_receipt[
-                                "attempted_artifact_fingerprints_sha256"
-                            ] = attempted_artifacts
-                            source_graph_receipt[
-                                "final_artifact_fingerprint_sha256"
-                            ] = artifact_fingerprint
-                            source_graph_receipt["single_artifact_provenance"] = True
-                            source_graph_receipt["final_artifact_scope_match"] = True
-                            source_graph_receipt["metrics"].update(aggregate_metrics)
-                            _publish_source_graph_trace_metrics(aggregate_metrics)
-                            attempts.append(
-                                _backend_attempt(
-                                    "source_graph",
-                                    "success",
-                                    coverage_status=query_receipt.get(
-                                        "coverage_status"
-                                    ),
-                                )
-                            )
-                            clean = _strip_connectivity_internal_receipts(source_result)
-                            clean["backend"] = "source_graph"
-                            if operation == 'driver':
-                                await _attach_driver_dependencies(clean,
-                                    _source_graph_backend_for_plan(outcome.entry, current_plan), args, simulator)
-                            operation_metrics.set_value(
-                                "source_graph_phase", "complete"
-                            )
-                            status = _finalize_public_connectivity_status(
-                                backend_status=backend_status,
-                                selected_backend=selected_backend,
-                                actual_backend="source_graph",
-                                attempts=attempts,
-                                fallback_reason=fallback_reason,
-                                npi_backend=(npi_backend if npi_selected else None),
-                                npi_execution=npi_execution,
-                                source_graph_receipt=source_graph_receipt,
-                                npi_kdb_status=npi_kdb_status,
-                            )
-                            return clean, status
+                            break
 
                         if outcome is None:
                             attempt_status = "failed"
@@ -3496,6 +3579,51 @@ async def _route_public_connectivity(
                     )
                     source_graph_receipt["metrics"].update(aggregate_metrics)
                     _publish_source_graph_trace_metrics(aggregate_metrics)
+                    # A stalled or capped expansion does not invalidate facts
+                    # from the final artifact. Keep its gaps and blocker, and
+                    # never combine it with facts from an earlier attempt.
+                    if (
+                        source_result is not None
+                        and query_receipt is not None
+                        and source_provenance_ok
+                        and query_status in {"found", "not_connected"}
+                        and (not bootstrap_active or query_status == "found")
+                    ):
+                        source_graph_receipt[
+                            "final_artifact_fingerprint_sha256"
+                        ] = artifact_fingerprint
+                        source_graph_receipt["single_artifact_provenance"] = True
+                        source_graph_receipt["final_artifact_scope_match"] = True
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "success",
+                                coverage_status=query_receipt.get(
+                                    "coverage_status"
+                                ),
+                            )
+                        )
+                        clean = _strip_connectivity_internal_receipts(source_result)
+                        clean["backend"] = "source_graph"
+                        if operation == 'driver':
+                            await _attach_driver_dependencies(clean,
+                                _source_graph_backend_for_plan(outcome.entry, current_plan), args, simulator)
+                        operation_metrics.set_value(
+                            "source_graph_phase", "complete"
+                        )
+                        status = _finalize_public_connectivity_status(
+                            backend_status=backend_status,
+                            selected_backend=selected_backend,
+                            actual_backend="source_graph",
+                            attempts=attempts,
+                            fallback_reason=fallback_reason,
+                            npi_backend=(npi_backend if npi_selected else None),
+                            npi_execution=npi_execution,
+                            source_graph_receipt=source_graph_receipt,
+                            npi_kdb_status=npi_kdb_status,
+                        )
+                        return clean, status
+
                     if inconclusive_source is not None:
                         source_graph_receipt["final_artifact_fingerprint_sha256"] = artifact_fingerprint
                         source_graph_receipt["single_artifact_provenance"] = True
@@ -7439,14 +7567,25 @@ async def _dispatch(name: str, args: dict):
         )
     # An exact action is independent of the mutable most-recent session gate.
     bound = None
+    hierarchy_recovery = None
     if name == "explain_signal_driver" and args.get("compile_context") is not None:
-        bound, reason = await _run_in_cancellable_thread(
-            lambda: resolve_divergence_context(args["compile_context"], _handle_store)
-        )
+        raw_context = args["compile_context"]
+        if not _same_realpath(args["compile_log"], raw_context.get("compile_log")):
+            raise ValueError("compile_context does not match compile_log")
+        if args.get("top_hint") is not None and raw_context.get("top_hint") not in (None, args["top_hint"]):
+            raise ValueError("compile_context does not match top_hint")
+        if args.get("simulator") not in (None, "auto") and raw_context.get("simulator", "auto") not in ("auto", args["simulator"]):
+            raise ValueError("compile_context does not match simulator")
+        if args.get("top_hint") and not raw_context.get("top_hint"):
+            raw_context = {**raw_context, "top_hint": args["top_hint"]}
+        if args.get("simulator") not in (None, "auto") and raw_context.get("simulator", "auto") == "auto":
+            raw_context = {**raw_context, "simulator": args["simulator"]}
+        bound, reason, hierarchy_recovery = await _resolve_explicit_driver_context(raw_context)
         if bound is None:
             return schemas.PrerequisiteBlockResult.model_validate({
                 "ok": False, "error_code": reason, "missing_step": "build_tb_hierarchy",
                 "required_before": name, "reason": reason,
+                "hierarchy_recovery": hierarchy_recovery,
                 "suggested_call": {"tool": "build_tb_hierarchy", "arguments": {
                     k: v for k, v in args["compile_context"].items()
                     if k in {"compile_log", "simulator", "supplementary_compile_logs"}}},
@@ -8343,6 +8482,8 @@ async def _dispatch(name: str, args: dict):
             simulator=simulator,
         )
         result["backend_status"] = backend_status
+        if hierarchy_recovery is not None:
+            result["hierarchy_recovery"] = hierarchy_recovery
         if args.get('include_dependencies') and 'dependency_context' not in result:
             from src.driver_dependencies import unavailable
             result['dependency_context'] = unavailable(result.get('backend', 'static'), 'dynamic_evidence_unavailable')

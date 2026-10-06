@@ -65,6 +65,13 @@ Driver-chain and provenance rows share identical metadata within a writer;
 instance, while `resolved_instance_path` keeps its historical head-driver meaning.
 VCD searches explain that `direction=null` means unavailable metadata.
 
+Hierarchy handles live only in the server process. An explicit driver
+`compile_context` can recover a missing handle once under a 30-second,
+4,096-source-file, 128-MiB read budget (stricter hierarchy settings apply).
+`hierarchy_recovery` reports reuse, rebuilding or a blocker. Supplied identity
+tokens are revalidated; without a historical source fingerprint, recovery
+establishes current sources only. Structural scanning remains a separate step.
+
 Capabilities for large designs, with selected examples of validated scale:
 
 - **Hierarchy and source browsing on demand**: the server builds and retains hierarchy and file indexes, then returns local results by instance, subtree, or file to keep large SoC queries manageable in the assistant's context. Hierarchy construction and local queries have been verified on a synthetic design with **50,500 logical instances**; the initial build still scans compilation records and sources.

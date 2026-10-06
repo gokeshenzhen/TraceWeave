@@ -1376,6 +1376,8 @@ continuous range. If a driver query is inconclusive and Static also returns an
 unsupported result without facts, the router returns that one Source Graph
 artifact's partial result with every backend attempt. Supported Static facts
 still replace the entire payload. Bootstrap and NPI acceptance are unchanged.
+Positive facts from the final artifact also survive a stalled or capped frontier
+expansion; its coverage gaps and specific expansion blocker remain visible.
 
 Source Graph's default `driver_chain` and `bit_provenance` group only identical
 metadata belonging to the same known writer. `statement_semantics` retains the
@@ -1401,6 +1403,38 @@ It reports work/coverage, evidence counts, JSON characters/bytes, query/build an
 serialization time, frontend launches and process RSS. Scope is explicitly the
 fixture's nine instances. Run each revision/variant in a fresh process with the
 same Python and fixture; compare baseline correctness as well as response size.
+Response sizes use the validated driver schema and the server's default indented
+JSON; they exclude server routing/recovery receipts. Raw compact backend bytes
+are recorded separately. Schema validation and serialization are timed separately
+from the query, so these measurements are not end-to-end MCP latency.
+
+Explicit driver `compile_context` recovery is orchestrated by the server; the
+context resolver stays read-only. Only `hierarchy_unavailable` can trigger one
+lexical hierarchy rebuild. Changed or ambiguous identities return a prerequisite
+block with an executable build call. Primary log identity, supplementary log
+order, simulator, compile-selected top, supplied snapshots and historical source
+fingerprints are validated again on the private candidate before publication.
+Recovery without a historical source token establishes current source context,
+not the sources of a past simulation. A top that cannot be selected unambiguously
+from the compile evidence is a blocker; recent session state never fills it in.
+
+`HierarchyRecoveryRuntime` shares only exact live requests, with one admitted
+build, at most four live flights and an independent per-flight deadline. The
+default hard bounds are 30 seconds including admission, 4,096 source files and
+128 MiB of source reads, counting preprocessor includes; nonzero
+`TRACEWEAVE_HIERARCHY_TIMEOUT` and `TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES` can make
+these stricter. Bounded reads prevent a growing include from bypassing preflight.
+One waiter cancellation preserves other waiters; final-waiter cancellation arms
+the existing cooperative worker cancellation. No result is published on failure
+or cancellation before completion. Workers hold no waveform lock and invoke no
+NPI overlay, LSF job or Slang session. Only the event loop registers a validated
+handle; other handles, result caches and workflow/scan state remain intact.
+
+`build_tb_hierarchy.handle_lifetime="process"` is explicit. Driver results and
+prerequisite blockers carry an optional `hierarchy_recovery` receipt with status,
+budgets, coalescing, handle and validated context. `structural_scan_performed`
+remains false: recovering hierarchy does not satisfy the independent parallel
+structural-scan workflow. Ordinary matching no-handle hierarchy reuse is retained.
 
 Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
 current design root through `wave_design_binding`. The binding requires exactly

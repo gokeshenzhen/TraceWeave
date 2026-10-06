@@ -1130,6 +1130,7 @@ def build_hierarchy(
     source_index: CompileSourceIndex | None = None,
     source_index_disposition: str | None = None,
     share_hierarchy_templates: bool = True,
+    source_reader=None,
 ) -> dict:
     total_started = time.perf_counter()
     rss_start_kib = read_process_rss_kib()
@@ -1148,6 +1149,7 @@ def build_hierarchy(
         file_entries,
         compile_result,
         source_index=source_index,
+        source_reader=source_reader,
     )
     effective_compile_result = merge_resolved_include_evidence(
         compile_result,
@@ -1771,6 +1773,7 @@ def _scan_user_files(
     compile_result: dict,
     *,
     source_index: CompileSourceIndex | None = None,
+    source_reader=None,
 ) -> tuple[
     list[dict],
     dict[str, dict],
@@ -1802,7 +1805,7 @@ def _scan_user_files(
     largest_source_bytes = 0
     rss_peak_kib = read_process_rss_kib() or 0
     content_snapshot_builder = CompileSessionSnapshotBuilder(
-        indexed_reader=source_index.read if source_index is not None else None,
+        indexed_reader=source_reader or (source_index.read if source_index is not None else None),
     )
     preprocessor = SystemVerilogPreprocessor(
         compile_result,
@@ -2288,6 +2291,7 @@ def build_slim_payload(
 
     return {
         "hierarchy_handle": handle,
+        "handle_lifetime": "process",
         "project": dict(project),
         "compile_command": _trim_compile_command(
             compile_result.get("compile_command", "") or ""

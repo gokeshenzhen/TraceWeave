@@ -253,6 +253,7 @@ class BuildTbHierarchyResult(SchemaModel):
     """
 
     hierarchy_handle: str = ""
+    handle_lifetime: Literal["process"] = "process"
     build_status: Literal["completed", "blocked"] = "completed"
     blocker: dict[str, Any] | None = None
     project: dict[str, Any] = Field(default_factory=dict)
@@ -1185,7 +1186,27 @@ class SourceGraphClaimSemanticsReceipt(SchemaModel):
     negative_claim_allowed: bool
 
 
+class HierarchyRecoveryReceipt(SchemaModel):
+    status: Literal["hit_existing", "rebuilt", "blocked"]
+    attempted: bool = False
+    coalesced: bool = False
+    hierarchy_handle: str | None = None
+    handle_lifetime: Literal["process"] = "process"
+    identity_basis: Literal["validated_historical_source", "current_sources"] | None = None
+    compile_context: dict[str, Any] | None = None
+    blocker: str | None = None
+    timeout_sec: float | None = None
+    max_source_files: int | None = None
+    max_source_bytes: int | None = None
+    source_files_read: int | None = None
+    source_bytes_read: int | None = None
+    wall_time_ms: float = 0
+    structural_scan_performed: Literal[False] = False
+    note: str | None = None
+
+
 class ExplainDriverResult(SchemaModel):
+    hierarchy_recovery: HierarchyRecoveryReceipt | None = None
     dependency_context: dict[str, Any] | None = None
     wave_design_binding: dict[str, Any] | None = None
     signal_path: str
@@ -1790,6 +1811,7 @@ class PrerequisiteBlockResult(SchemaModel):
     required_before: str
     reason: str
     suggested_call: dict[str, Any] = Field(default_factory=dict)
+    hierarchy_recovery: HierarchyRecoveryReceipt | None = None
 
 
 class ToolErrorResult(SchemaModel):

@@ -32,6 +32,7 @@ from src.source_graph_contract import (
 from src.source_graph_runtime import IsolatedSourceGraphProcessRunner, SourceGraphRuntime
 from src.source_graph_backend import SourceGraphConnectivityBackend
 from src.slang_connectivity_projector import SLANG_FRONTEND_NAME
+from src.schemas import ExplainDriverResult
 
 
 async def measure(fixture: Path, corrected: bool, repeats: int) -> dict:
@@ -68,14 +69,22 @@ async def measure(fixture: Path, corrected: bool, repeats: int) -> dict:
                 result = SourceGraphConnectivityBackend(outcome.entry).find_driver(
                     "bank.S", "synthetic.vcd", "synthetic.log", recursive=True)
                 query_ms = (time.perf_counter() - start) * 1000
+                # Preserve the raw measurement too, but measure the public
+                # schema with the server's actual default JSON formatting.
+                raw_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
                 start = time.perf_counter()
-                serialized = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                model = ExplainDriverResult.model_validate({
+                    key: value for key, value in result.items() if not key.startswith("_")})
+                validate_ms = (time.perf_counter() - start) * 1000
+                start = time.perf_counter()
+                serialized = model.model_dump_json(indent=2, exclude_none=True)
                 serialize_ms = (time.perf_counter() - start) * 1000
                 receipt = result["_source_graph_query_receipt"]
                 rows.append(dict(repeat=repeat, temperature=temperature,
                     prepare=outcome.metrics.to_dict(), artifact_attempt_count=1,
-                    query_ms=query_ms, serialize_ms=serialize_ms,
+                    query_ms=query_ms, validate_ms=validate_ms, serialize_ms=serialize_ms,
                     response_characters=len(serialized), response_bytes=len(serialized.encode()),
+                    raw_backend_compact_bytes=len(raw_json.encode()),
                     statement_evidence_count=receipt["match_count"],
                     structural_driver_count=receipt.get("structural_driver_count"),
                     driver_chain_groups=len(result["driver_chain"] or []),
@@ -87,12 +96,14 @@ async def measure(fixture: Path, corrected: bool, repeats: int) -> dict:
         samples = [r for r in rows if r["temperature"] == temperature]
         summary[temperature] = {
             key: statistics.median(r[key] for r in samples)
-            for key in ("query_ms", "serialize_ms", "response_characters", "response_bytes")}
+            for key in ("query_ms", "validate_ms", "serialize_ms", "response_characters", "response_bytes", "raw_backend_compact_bytes")}
         summary[temperature].update(
             prepare_ms=statistics.median(r["prepare"]["total_wall_ms"] for r in samples),
             frontend_launch_count=sum(r["prepare"]["frontend_launch_count"] for r in samples),
-            worker_rss_peak_kib=max(r["prepare"].get("rss_peak_kib", 0) for r in samples))
-    return dict(benchmark="source_graph_driver_evidence_v1", corrected=corrected,
+            worker_rss_peak_kib=max(r["prepare"].get("rss_peak_kib", 0) for r in samples),
+            parent_rss_peak_kib=max(r["parent_rss_peak_kib"] for r in samples))
+    return dict(benchmark="source_graph_driver_evidence_v2", corrected=corrected,
+        response_format="ExplainDriverResult; indent=2, exclude_none=True; excludes server routing/recovery receipts",
         input_sha256=digest, repeats=repeats, cache="fresh memory per repeat; one exact warm hit",
         disk_cache=False, persistent_session=False, python=sys.version.split()[0],
         pyslang=importlib.metadata.version("pyslang"), summary=summary, samples=rows)

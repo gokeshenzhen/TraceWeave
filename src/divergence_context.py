@@ -61,9 +61,13 @@ def resolve_context(raw: dict, store) -> tuple[BoundContext | None, str]:
         os.path.abspath(p) for p in ctx["supplementary_compile_logs"]
     ]
     simulator = ctx["simulator"]
-    candidates = ("vcs", "xcelium", "auto") if simulator == "auto" else (simulator,)
+    candidates = ("vcs", "xcelium", "verilator", "auto") if simulator == "auto" else (simulator,)
     matches = []
     reason = "hierarchy_unavailable"
+    eligible = False
+    logs_id = log_identity(ctx)
+    if ctx.get("compile_log_identity_sha256") not in (None, logs_id):
+        return None, "compile_context_changed"
     for sim in candidates:
         snapshot = compute_snapshot_fingerprint(
             ctx["compile_log"], sim, ctx["supplementary_compile_logs"]
@@ -74,8 +78,8 @@ def resolve_context(raw: dict, store) -> tuple[BoundContext | None, str]:
         if ctx.get("snapshot_sha256") not in (None, snapshot) or ctx.get(
             "hierarchy_handle"
         ) not in (None, handle):
-            reason = "compile_context_changed"
             continue
+        eligible = True
         hierarchy = store.resolve(handle)
         if not isinstance(hierarchy, dict) or not isinstance(
             hierarchy.get("compile_result"), dict
@@ -89,7 +93,16 @@ def resolve_context(raw: dict, store) -> tuple[BoundContext | None, str]:
             reason = "compile_context_changed"
             continue
         source_id = source_snapshot.content_fingerprint_sha256
-        logs_id = log_identity(ctx)
+        actual_simulator = hierarchy["compile_result"].get("simulator")
+        if actual_simulator in {"vcs", "xcelium", "verilator"} and sim not in {"auto", actual_simulator}:
+            reason = "compile_context_changed"
+            continue
+        selected_top = (hierarchy.get("project", {}).get("top_module")
+                        or hierarchy["compile_result"].get("primary_top"))
+        if (ctx.get("top_hint") and ctx["top_hint"] != selected_top
+                and ctx["top_hint"] not in hierarchy.get("component_tree", {})):
+            reason = "compile_context_changed"
+            continue
         captured_logs = hierarchy.get("_compile_log_identity_sha256")
         if (
             ctx.get("source_snapshot_sha256") not in (None, source_id)
@@ -113,7 +126,7 @@ def resolve_context(raw: dict, store) -> tuple[BoundContext | None, str]:
         matches.append(bound)
     if len(matches) == 1:
         return matches[0], "ready"
-    return None, "compile_context_ambiguous" if matches else reason
+    return None, "compile_context_ambiguous" if matches else (reason if eligible else "compile_context_changed")
 
 
 def driver_action(
