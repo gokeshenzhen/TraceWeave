@@ -195,7 +195,10 @@ def encode_driver_result(result: ExplainDriverResult | dict, *, limits: EncodeLi
     payload = dict(public)
     for section in SECTIONS:
         if isinstance(public.get(section), list):
-            payload[section] = [dict(group) for group in public[section]]
+            payload[section] = []
+            for group in public[section]:
+                check_cancelled()
+                payload[section].append(dict(group))
     for candidate in selected:
         for section, index, name in candidate.uses:
             check_cancelled()
