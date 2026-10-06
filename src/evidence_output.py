@@ -64,6 +64,12 @@ def compact_evidence_result(tool: str, result: BaseModel | dict) -> CompactEvide
 
 
 def serialize_compact_result(tool: str, result: BaseModel | dict) -> str:
+    if tool == "explain_signal_driver":
+        from .driver_evidence_codec import encode_driver_result
+        text = json.dumps(encode_driver_result(result), ensure_ascii=False,
+                          separators=(",", ":"), allow_nan=False)
+        check_cancelled()
+        return text
     if isinstance(result, BaseModel):
         references, exclude = selection_projection(tool, result)
         # Encode validated facts directly. Do not allocate a second tree of
@@ -79,12 +85,17 @@ def serialize_compact_result(tool: str, result: BaseModel | dict) -> str:
     return text
 
 
-def expand_compact_result(payload: dict | CompactEvidenceResult) -> dict:
+def expand_compact_result(payload: dict | str | CompactEvidenceResult, *, limits=None) -> dict:
     """Restore the full JSON value without a server, file access or live handles.
 
     Invalid, duplicate or dangling references raise instead of returning an empty
     evidence list. Copies keep mutations of one expanded receipt local.
     """
+    from .driver_evidence_codec import FORMAT, expand_driver_result, parse_compact_json
+    if isinstance(payload, str):
+        payload = parse_compact_json(payload, limits=limits)
+    if isinstance(payload, dict) and payload.get("format") == FORMAT:
+        return expand_driver_result(payload, limits=limits)
     compact = CompactEvidenceResult.model_validate(payload)
     result = deepcopy(compact.result)
     for ref in compact.references:

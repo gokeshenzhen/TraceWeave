@@ -1243,6 +1243,100 @@ class ExplainDriverResult(SchemaModel):
 ExplainSignalDriverResult = ExplainDriverResult
 
 
+class DriverEvidenceReferences(SchemaModel):
+    """Only these two fields can reference response-local driver tables."""
+
+    statement_semantics_ref: StrictInt | None = Field(default=None, ge=0)
+    statement_evidence_ref: StrictInt | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def exclusive_references(self):
+        for field in ("statement_semantics", "statement_evidence"):
+            ref = field + "_ref"
+            if ref in self.model_fields_set:
+                if getattr(self, ref) is None or field in self.model_fields_set:
+                    raise ValueError("driver_compact_reference_invalid")
+        return self
+
+
+class CompactDriverChainHop(DriverEvidenceReferences, DriverChainHop):
+    pass
+
+
+class CompactDriverBitProvenanceSegment(DriverEvidenceReferences, DriverBitProvenanceSegment):
+    pass
+
+
+class CompactDriverPayload(ExplainDriverResult):
+    driver_chain: list[CompactDriverChainHop] | None = None
+    bit_provenance: list[CompactDriverBitProvenanceSegment] | None = None
+
+
+class DriverLocationTable(SchemaModel):
+    columns: list[Literal["source_line", "source_column"]]
+    rows: list[list[StrictInt | None]]
+
+    @model_validator(mode="after")
+    def typed_columns(self):
+        from .cancellation import check_cancelled
+        if self.columns != ["source_line", "source_column"]:
+            raise ValueError("driver_compact_columns_invalid")
+        for index, row in enumerate(self.rows):
+            if index % 256 == 0:
+                check_cancelled()
+            if (len(row) != 2 or type(row[0]) is not int or row[0] < 1
+                    or (row[1] is not None and (type(row[1]) is not int or row[1] < 0))):
+                raise ValueError("driver_compact_location_invalid")
+        return self
+
+
+class DriverStatementReference(SchemaModel):
+    locations_ref: StrictInt = Field(ge=0)
+    evidence_indices_ref: StrictInt = Field(ge=0)
+
+
+class DriverEvidenceTables(SchemaModel):
+    statement_semantics: list[dict[str, Any]]
+    statement_evidence: list[DriverStatementReference]
+    locations: list[DriverLocationTable]
+    evidence_indices: list[list[Annotated[StrictInt, Field(ge=0)]]]
+
+
+class DriverCompactEvidenceResult(SchemaModel):
+    """Wire-only; canonical analysis and direct dispatch keep ExplainDriverResult."""
+
+    format: Literal["traceweave.driver.compact.v1"]
+    tool: Literal["explain_signal_driver"]
+    result: CompactDriverPayload
+    evidence_tables: DriverEvidenceTables
+
+    @model_validator(mode="after")
+    def reference_closure(self):
+        from .cancellation import check_cancelled
+        tables = self.evidence_tables
+        for pair in tables.statement_evidence:
+            check_cancelled()
+            if (pair.locations_ref >= len(tables.locations)
+                    or pair.evidence_indices_ref >= len(tables.evidence_indices)):
+                raise ValueError("driver_compact_reference_out_of_range")
+            if len(tables.locations[pair.locations_ref].rows) != len(tables.evidence_indices[pair.evidence_indices_ref]):
+                raise ValueError("driver_compact_evidence_length_mismatch")
+        for section in (self.result.driver_chain, self.result.bit_provenance):
+            for group in section or ():
+                check_cancelled()
+                sem = group.statement_semantics_ref
+                evidence = group.statement_evidence_ref
+                if sem is not None and sem >= len(tables.statement_semantics):
+                    raise ValueError("driver_compact_reference_out_of_range")
+                if evidence is not None:
+                    if evidence >= len(tables.statement_evidence):
+                        raise ValueError("driver_compact_reference_out_of_range")
+                    pair = tables.statement_evidence[evidence]
+                    if group.statement_count != len(tables.locations[pair.locations_ref].rows):
+                        raise ValueError("driver_compact_statement_count_mismatch")
+        return self
+
+
 class BackendAttemptReceipt(SchemaModel):
     backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"]
     status: Literal[
