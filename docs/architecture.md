@@ -2440,6 +2440,14 @@ mapped interface does not override partial or flagged global sweep evidence.
 
 ## Compact evidence output
 
+`explain_signal_driver` alone defaults to the independent
+`traceweave.driver.compact.v1` typed-table envelope. Its complete retained
+evidence is self-contained; `output_format="full"` preserves the previous shape
+and indentation. `output_options_for_tool()` supplies both catalog and runtime
+defaults. `ExplainDriverResult` remains the internal/direct-dispatch model.
+Use `src.evidence_output.expand_compact_result(text_or_dict)` before reading
+its driver arrays. This default wire change requires migration of old parsers.
+
 The inspected waveform, discovery, comparison, X-trace, structural-scan and
 diagnostic tools accept `output_format="compact"`. The default `"full"` retains
 the original JSON shape and formatting. `src/schemas.py` owns the supported tool
@@ -2476,7 +2484,7 @@ means the omitted channel receipt is the complete list at the target JSON
 pointer. Only the two channel receipts and the nested transaction receipt can
 be factored; different paths, declared ranges, bit order or contents stay inline.
 There are at most three references, no chains, and no separate evidence table.
-All other result families keep their entire original JSON value within `result`.
+All other result families in the original v1 keep their entire JSON value within `result`.
 Whitespace is removed; nulls, empty evidence, unknown values, unexecuted checks,
 frontiers, identities and both sides of a comparison retain their original wire
 semantics. Tool errors and missing-prerequisite responses keep their original

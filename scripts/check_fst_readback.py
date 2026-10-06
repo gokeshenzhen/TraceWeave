@@ -99,8 +99,9 @@ async def run_check(work, installed, require_fsdb):
                     report["calls"].append({"tool": tool, "arguments": arguments, "result": body,
                         "mcp_round_trip_ms": (time.perf_counter() - started) * 1000,
                         "json_bytes": len(text.encode())})
-                    if body.get("format") == "traceweave.compact.v1":
-                        return body["result"]
+                    if str(body.get("format", "")).startswith("traceweave."):
+                        from src.evidence_output import expand_compact_result
+                        return expand_compact_result(text)
                     return body
 
                 paths = await call("get_sim_paths", {"verif_root": str(work), "wave_file": str(wave)})

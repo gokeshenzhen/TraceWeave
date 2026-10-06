@@ -1,8 +1,8 @@
 """Response-local, lossless presentation after analysis and its display limits.
 
-Only identical TL-UL selection receipts are factored. Their containing channel,
-transaction, coverage, identity and time facts remain inline. No waveform data
-is read and no object is retained between calls.
+TL-UL selections retain the original compact.v1 contract. Driver statement
+values use an independent typed-table version. No waveform data is read and
+no object is retained between calls.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import json
 from pydantic import BaseModel
 
 from .cancellation import check_cancelled
-from .schemas import COMPACT_OUTPUT_TOOLS, CompactEvidenceResult, SelectionEvidenceReference
+from .schemas import LEGACY_COMPACT_OUTPUT_TOOLS, CompactEvidenceResult, SelectionEvidenceReference
 
 
 def _field(value, key):
@@ -25,7 +25,7 @@ def _field(value, key):
 
 def selection_projection(tool: str, result: BaseModel | dict) -> tuple[list, dict]:
     check_cancelled()
-    if tool not in COMPACT_OUTPUT_TOOLS:
+    if tool not in LEGACY_COMPACT_OUTPUT_TOOLS:
         raise ValueError("compact_output_tool_unsupported")
     references = []
     exclude = {}

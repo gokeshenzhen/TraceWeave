@@ -116,6 +116,9 @@ def _parse_call_tool_result(content: Sequence[Any]) -> dict[str, Any]:
             except (AttributeError, json.JSONDecodeError) as exc:
                 raise SoakInputError("public tool returned invalid JSON") from exc
             if isinstance(payload, dict):
+                if str(payload.get("format", "")).startswith("traceweave."):
+                    from src.evidence_output import expand_compact_result
+                    return expand_compact_result(item.text)
                 return payload
     raise SoakInputError("public tool returned no JSON text payload")
 

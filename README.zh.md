@@ -61,6 +61,21 @@ Static 也不支持时，保留 Source Graph 的有限检查证据和完整后�
 `resolved_instance_path` 保持首个驱动所在实例的兼容含义。VCD 搜索会说明
 `direction=null` 表示元数据不可用。
 
+**驱动输出迁移：** `explain_signal_driver` 现在默认返回
+`traceweave.driver.compact.v1`。单次响应保留全部已保留证据，在响应内的
+typed `evidence_tables` 共享相同语义及有序位置、索引序列。旧脚本可以显式传
+`output_format="full"` 保留原 JSON 形状和缩进，或先解码：
+
+```python
+from src.evidence_output import expand_compact_result
+driver = expand_compact_result(text_content.text)
+print(driver["driver_chain"])
+```
+
+只读取 `response["result"]` 尚未展开引用。表项数、位置出现次数不是 writer 数。
+其他工具默认与 `traceweave.compact.v1` 保持不变。不同证据仍可能很大，不能据此
+保证任意客户端都不转储文件。
+
 层次 handle 仅在服务器进程内有效。驱动查询的显式 `compile_context` 可对丢失的
 handle 尝试一次恢复，受 30 秒、4,096 个源文件和 128 MiB 读取预算约束（已有更严格
 的层次配置优先）。`hierarchy_recovery` 报告复用、重建或阻塞原因。恢复重新校验
@@ -202,7 +217,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 结果会说明实际检查的项目和缺失信息。窗口内尚未完成的请求不直接判为死锁，这些检查也不替代完整的 TL-UL 协议验证。
 
-调试对话较长时，可以要求助手使用紧凑证据输出。重复的字段映射只展示一份，实际检查范围、缺失证据、时间边界和下一步仍会保留。已有客户端默认保持原有输出。示例及客户端接入方式见[紧凑证据输出](docs/architecture.md#compact-evidence-output)。
+调试对话较长时，可以要求助手使用紧凑证据输出。重复的字段映射只展示一份，实际检查范围、缺失证据、时间边界和下一步仍会保留。这些波形工具默认保持原有输出；驱动工具按上文迁移。示例及客户端接入方式见[紧凑证据输出](docs/architecture.md#compact-evidence-output)。
 
 字段配置与详细支持范围见[总线字段与 TL-UL 使用说明](docs/architecture.md#packed-waveform-selections-and-tl-ul)。
 

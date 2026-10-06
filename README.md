@@ -65,6 +65,23 @@ Driver-chain and provenance rows share identical metadata within a writer;
 instance, while `resolved_instance_path` keeps its historical head-driver meaning.
 VCD searches explain that `direction=null` means unavailable metadata.
 
+**Driver output migration:** `explain_signal_driver` now defaults to
+`traceweave.driver.compact.v1`. Each response contains all retained evidence,
+with identical statement semantics and ordered locations/indices shared in
+typed `evidence_tables`. Legacy scripts should request `output_format="full"`
+to retain the original JSON shape and indentation, or decode the response:
+
+```python
+from src.evidence_output import expand_compact_result
+driver = expand_compact_result(text_content.text)
+print(driver["driver_chain"])
+```
+
+Reading only `response["result"]` does not expand its references. Table entries
+and location occurrences are not writer counts. Other tools keep their defaults
+and `traceweave.compact.v1` contract. Distinct evidence can still produce large
+responses; this format does not guarantee inline delivery by every client.
+
 Hierarchy handles live only in the server process. An explicit driver
 `compile_context` can recover a missing handle once under a 30-second,
 4,096-source-file, 128-MiB read budget (stricter hierarchy settings apply).
@@ -211,7 +228,7 @@ For TL-UL interfaces, once the assistant confirms the field mapping and clock, i
 
 Results state which checks ran and what information is missing. A request still outstanding at the end of the window is not automatically a deadlock, and these checks do not replace full TL-UL protocol verification.
 
-For a long debugging conversation, ask for compact evidence output. Repeated field mappings are shown once, while checked scope, missing evidence, time boundaries and next steps remain available. Existing clients keep their usual output by default. See [compact evidence output](docs/architecture.md#compact-evidence-output) for examples and client integration.
+For a long debugging conversation, ask for compact evidence output. Repeated field mappings are shown once, while checked scope, missing evidence, time boundaries and next steps remain available. These waveform tools keep their usual output by default; driver output follows the migration above. See [compact evidence output](docs/architecture.md#compact-evidence-output) for examples and client integration.
 
 See [bus fields and TL-UL](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#packed-waveform-selections-and-tl-ul) for field configuration and detailed support limits.
 

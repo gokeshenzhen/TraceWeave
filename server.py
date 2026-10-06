@@ -6165,6 +6165,13 @@ async def list_tools():
         Tool(
             name="explain_signal_driver",
             description=(
+                "Default output is lossless traceweave.driver.compact.v1: all retained evidence "
+                "is in this response. In result.driver_chain and result.bit_provenance, "
+                "statement_semantics_ref indexes evidence_tables.statement_semantics; "
+                "statement_evidence_ref indexes pairs of locations_ref/evidence_indices_ref "
+                "in evidence_tables. Keep ordered rows and indices; location occurrences "
+                "and table entries are not writer counts. Use output_format='full' for "
+                "the original expanded JSON shape and indentation.\n\n"
                 "Trace a waveform signal to its RTL driver and source location. Supports direct "
                 "assignments, simple procedural blocks, and module output ports. Use recursive=true "
                 "for upstream traversal across instances. To explain an output change, verify a "
@@ -7422,7 +7429,13 @@ async def list_tools():
                 "limits displayed evidence only. An error field means failure: use error_code/recovery "
                 "and correct the arguments before retrying.")
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
-            properties.update(schemas.EvidenceOutputOptions.model_json_schema()["properties"])
+            properties.update(schemas.output_options_for_tool(tool.name).model_json_schema()["properties"])
+        if tool.name == "explain_signal_driver":
+            tool.inputSchema["examples"] = [{
+                "signal_path": "tb.dut.q", "wave_path": "/path/to/run.vcd",
+                "compile_log": "/path/to/compile.log", "recursive": True,
+                "output_format": "compact",
+            }]
         if tool.name in {"inspect_tlul", "reconstruct_transactions"}:
             model = (schemas.TlulAnalysisOptions if tool.name == "inspect_tlul"
                      else schemas.TransactionDisplayOptions)
@@ -7476,7 +7489,7 @@ async def call_tool(name: str, arguments: dict):
     result = None
     try:
         dispatch_args = dict(arguments)
-        output_options = schemas.EvidenceOutputOptions.model_validate(
+        output_options = schemas.output_options_for_tool(name).model_validate(
             {"output_format": dispatch_args.pop("output_format")}
             if "output_format" in dispatch_args else {}
         )
@@ -7492,9 +7505,10 @@ async def call_tool(name: str, arguments: dict):
         else:
             result = await _dispatch(name, dispatch_args)
         serialize_started = time.perf_counter()
-        if output_options.output_format == "compact" and not isinstance(
-            result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
-        ):
+        compact_success = (isinstance(result, schemas.ExplainDriverResult)
+            if name == "explain_signal_driver" else not isinstance(
+                result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)))
+        if output_options.output_format == "compact" and compact_success:
             text = await _run_in_cancellable_thread(lambda: serialize_compact_result(name, result))
         else:
             text = _serialize_result(result)

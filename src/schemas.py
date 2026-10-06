@@ -50,7 +50,7 @@ class EvidenceOutputOptions(SchemaModel):
 
 
 # Only inspected result families opt into the shared presentation contract.
-COMPACT_OUTPUT_TOOLS = frozenset({
+LEGACY_COMPACT_OUTPUT_TOOLS = frozenset({
     "get_waveform_summary", "get_signal_at_time", "get_signal_transitions",
     "get_signals_around_time", "get_signals_by_cycle", "inspect_handshake",
     "inspect_tlul", "reconstruct_transactions", "resolve_packed_fields",
@@ -58,6 +58,24 @@ COMPACT_OUTPUT_TOOLS = frozenset({
     "diff_first_divergence", "trace_divergence", "trace_x_source",
     "scan_structural_risks", "get_diagnostic_snapshot",
 })
+COMPACT_OUTPUT_TOOLS = LEGACY_COMPACT_OUTPUT_TOOLS | {"explain_signal_driver"}
+
+
+class DriverEvidenceOutputOptions(SchemaModel):
+    output_format: Literal["full", "compact"] = Field(
+        default="compact",
+        description=(
+            "compact (default) delivers all retained evidence in a self-contained "
+            "traceweave.driver.compact.v1 response with typed evidence_tables. "
+            "Refs are response-local table indices. full preserves the original "
+            "driver JSON shape and indentation for legacy consumers."
+        ),
+    )
+
+
+def output_options_for_tool(name: str) -> type[SchemaModel]:
+    """One source for catalog defaults and actual call_tool argument parsing."""
+    return DriverEvidenceOutputOptions if name == "explain_signal_driver" else EvidenceOutputOptions
 
 
 class SelectionEvidenceReference(SchemaModel):
@@ -78,7 +96,7 @@ class CompactEvidenceResult(SchemaModel):
 
     @model_validator(mode="after")
     def validate_references(self):
-        if self.tool not in COMPACT_OUTPUT_TOOLS:
+        if self.tool not in LEGACY_COMPACT_OUTPUT_TOOLS:
             raise ValueError("compact_output_tool_unsupported")
         seen = set()
         for ref in self.references:

@@ -253,8 +253,8 @@ def test_output_budget_counts_utf8_bytes(monkeypatch):
 @pytest.mark.anyio
 async def test_registration_defaults_and_public_validation_share_schema(monkeypatch):
     tools = {t.name: t for t in await server.list_tools()}
-    options = schemas.EvidenceOutputOptions.model_json_schema()["properties"]
     for name in schemas.COMPACT_OUTPUT_TOOLS:
+        options = schemas.output_options_for_tool(name).model_json_schema()["properties"]
         assert tools[name].inputSchema["properties"]["output_format"] == options["output_format"]
     for name, model in (("inspect_tlul", schemas.TlulAnalysisOptions),
                         ("reconstruct_transactions", schemas.TransactionDisplayOptions)):
