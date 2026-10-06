@@ -7,7 +7,7 @@ does not invoke NPI or Legacy Static, so a returned result has one provenance.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 import re
 from typing import Any
 
@@ -22,6 +22,7 @@ from .connectivity_query import (
     SignalResolutionError,
 )
 from .source_graph_runtime import SourceGraphCacheEntry
+from .driver_evidence import group_driver_evidence
 
 
 _DISPLAY_SIGNAL_RE = re.compile(r"^(?P<base>.+?)(?:\[-?\d+(?::-?\d+)?\])?$")
@@ -233,7 +234,26 @@ def _constant_text(bits: tuple[str, ...]) -> str:
     return f"{len(bits)}'b{''.join(bits)}"
 
 
-def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, Any]]:
+def _statement_metadata(match: QueryMatch, cache: dict) -> dict:
+    """Share semantic fields without hiding differences behind a process ID."""
+    from .connectivity_query import _structural_driver_key
+    writer = _structural_driver_key(match)
+    signature = replace(match, fact_id="" if writer else match.fact_id,
+        structural_driver_id=writer[1] if writer else None,
+        evidence=replace(match.evidence, location=replace(match.evidence.location, line=1, column=0)))
+    if signature not in cache:
+        semantics = asdict(signature)
+        del semantics["fact_id"], semantics["structural_driver_id"]
+        del semantics["evidence"]["location"]
+        cache[signature] = {
+            "structural_driver_id": ":".join(writer) if writer else None,
+            "statement_semantics": semantics,
+        }
+    return {**cache[signature], "source_column": match.evidence.location.column}
+
+
+def _driver_bit_provenance(result: ConnectivityQueryResult, metadata_cache=None) -> list[dict[str, Any]]:
+    metadata_cache = {} if metadata_cache is None else metadata_cache
     multiple = set(result.multi_driver_bits)
     resolutions = {item.bit: item for item in result.bit_resolutions}
     segments: list[dict[str, Any]] = []
@@ -268,6 +288,7 @@ def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, An
                 mapping = dict(zip(match.covered_signal.bits, terminal.bits))
                 terminal = SignalSelection(terminal.symbol, tuple(mapping[b] for b in bits), terminal.instance_path)
             segments.append({
+                **(_statement_metadata(match, metadata_cache) if has_evidence else {}),
                 "target_path": target.path(include_bits=True),
                 "target_bits": bits,
                 "resolution": resolution,
@@ -308,7 +329,7 @@ def _driver_bit_provenance(result: ConnectivityQueryResult) -> list[dict[str, An
                 "confidence": "partial",
                 "multiple_driver": False,
             })
-    return segments
+    return group_driver_evidence(segments)
 
 
 def _requested_symbol(signal_path: str, instance_path: str | None) -> str:
@@ -676,7 +697,8 @@ class SourceGraphConnectivityBackend:
                 for dependency in match.dependencies
             }
         )
-        bit_provenance = _driver_bit_provenance(query)
+        metadata_cache = {}
+        bit_provenance = _driver_bit_provenance(query, metadata_cache)
         if driver_kind == "constant" and head is not None:
             expression_summary = f"constant {_constant_text(head.constant_bits)}"
         elif driver_kind == "composite_port_binding":
@@ -695,6 +717,7 @@ class SourceGraphConnectivityBackend:
                 self._definition_name(instance_path) if instance_path else None
             ),
             "resolved_instance_path": instance_path,
+            "query_instance_path": query.signal.instance_path,
             "driver_status": driver_status,
             "driver_kind": driver_kind,
             "source_file": (head.evidence.location.file if head is not None else None),
@@ -725,6 +748,7 @@ class SourceGraphConnectivityBackend:
         if matches and (recursive or len(matches) > 1):
             result["driver_chain"] = [
                 {
+                    **_statement_metadata(match, metadata_cache),
                     "depth": len(match.traversal),
                     "signal_path": match.target.path(),
                     "resolved_module": self._definition_name(match.instance_path),
@@ -749,7 +773,13 @@ class SourceGraphConnectivityBackend:
                 }
                 for match in matches
             ]
-            result["chain_summary"] = f"{len(matches)} Source Graph assignment fact(s)"
+            result["driver_chain"] = group_driver_evidence(result["driver_chain"])
+            result["traversal"]["returned_fact_count"] = len(result["driver_chain"])
+            result["chain_summary"] = (
+                f"{len(result['driver_chain'])} Source Graph evidence group(s); "
+                f"{query.structural_driver_count} known structural writer(s); "
+                f"{len(matches)} retained statement mapping(s); see traversal for limits"
+            )
         return result
 
     def _map_loads(

@@ -1057,7 +1057,22 @@ class DiagnosticSnapshot(SchemaModel):
     missing_steps: list[dict[str, Any]] | None = None
 
 
-class DriverChainHop(SchemaModel):
+class DriverStatementEvidence(SchemaModel):
+    source_line: int = Field(ge=1)
+    source_column: int | None = Field(default=None, ge=0)
+    evidence_index: int = Field(ge=0)
+
+
+class DriverEvidenceGroup(SchemaModel):
+    structural_driver_id: str | None = None
+    statement_semantics: dict[str, Any] | None = None
+    source_column: int | None = None
+    statement_count: int | None = Field(default=None, ge=0)
+    statement_evidence: list[DriverStatementEvidence] | None = None
+    evidence_index: int | None = None
+
+
+class DriverChainHop(DriverEvidenceGroup):
     depth: int
     signal_path: str
     resolved_module: str | None = None
@@ -1101,7 +1116,7 @@ class DriverLoadCrossCheck(SchemaModel):
     note: str | None = None
 
 
-class DriverBitProvenanceSegment(SchemaModel):
+class DriverBitProvenanceSegment(DriverEvidenceGroup):
     """Per-bit-range source provenance for a segmented driver result."""
 
     target_path: str
@@ -1178,6 +1193,7 @@ class ExplainDriverResult(SchemaModel):
     resolved_rtl_name: str
     resolved_module: str | None = None
     resolved_instance_path: str | None = None
+    query_instance_path: str | None = None
     driver_status: str
     driver_kind: str | None = None
     source_file: str | None = None

@@ -59,6 +59,11 @@ Bit provenance explicitly distinguishes `found`, `proved_no_driver`, and
 write never proves absence. If Static also cannot handle an inconclusive
 Source Graph query, the bounded Source Graph evidence and both attempts remain
 visible.
+Driver-chain and provenance rows share identical metadata within a writer;
+`statement_evidence` retains every source line and column. The legacy
+`source_line` names the first entry. `query_instance_path` names the queried
+instance, while `resolved_instance_path` keeps its historical head-driver meaning.
+VCD searches explain that `direction=null` means unavailable metadata.
 
 Capabilities for large designs, with selected examples of validated scale:
 

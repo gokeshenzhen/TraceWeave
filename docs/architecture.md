@@ -1377,6 +1377,31 @@ unsupported result without facts, the router returns that one Source Graph
 artifact's partial result with every backend attempt. Supported Static facts
 still replace the entire payload. Bootstrap and NPI acceptance are unchanged.
 
+Source Graph's default `driver_chain` and `bit_provenance` group only identical
+metadata belonging to the same known writer. `statement_semantics` retains the
+common guard, dependencies, selection, traversal and evidence strength. Every
+distinct line/column remains in ordered `statement_evidence`; `evidence_index`
+allows `src.driver_evidence.expand_driver_evidence` to reconstruct the original
+row order. `statement_count=0` explicitly marks a structural row with no retained
+statement location. The legacy `source_line`/`source_column` are the first
+evidence location, not a representative replacing the rest. Different guards,
+dependencies, confidence or bit mappings stay separate. This is the default
+lossless representation, not a summary option; internal dynamic queries still
+consume all retained statements. NPI rows are not grouped this way.
+`traversal.returned_fact_count` counts returned chain groups;
+`retained_evidence_count` counts query statement mappings before provenance
+segments are split. `query_instance_path` identifies the requested instance;
+`resolved_instance_path` keeps the historical first driver's instance.
+
+`scripts/benchmark_source_graph_driver_evidence.py` measures the 8-instance,
+512-statement ascending-bus fixture with bad and corrected wiring. Each repeat
+uses a fresh isolated Slang worker and empty memory cache, then one exact warm
+hit, with private temporary staging and no disk cache or persistent session.
+It reports work/coverage, evidence counts, JSON characters/bytes, query/build and
+serialization time, frontend launches and process RSS. Scope is explicitly the
+fixture's nine instances. Run each revision/variant in a fresh process with the
+same Python and fixture; compare baseline correctness as well as response size.
+
 Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
 current design root through `wave_design_binding`. The binding requires exactly
 one compiled top, an exact dump declaration, an unchanged wave identity, and a

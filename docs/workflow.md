@@ -15,6 +15,11 @@ gap. Neither a null source path nor zero matches proves absence. A partial
 Source Graph result can remain the final result after unsupported Static;
 check `attempted_backends` and the scope blocker instead of repeating the same
 frontier expansion.
+Expand each group's `statement_evidence` when inspecting branches; the top
+`source_line` is only the first location. `statement_semantics` is shared only
+when all semantic fields agree. Use `query_instance_path` for the requested
+signal and `resolved_instance_path` for the first driver. VCD has no port
+direction metadata, so a null direction must not be inferred from naming.
 
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 

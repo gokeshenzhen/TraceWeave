@@ -56,6 +56,10 @@ Source Graph 分别统计独立结构驱动和赋值语句，保留限额内的�
 逐位来源明确区分 `found`、`proved_no_driver` 和 `unknown`，并给出原因及
 `driver_set_complete`。预算或未建模写入不能证明无驱动。Source Graph 尚无结论、
 Static 也不支持时，保留 Source Graph 的有限检查证据和完整后端尝试记录。
+驱动链和逐位来源按同一驱动的相同元信息分组，`statement_evidence` 保留全部源码行列；
+旧 `source_line` 对应首条证据。`query_instance_path` 指明查询实例，
+`resolved_instance_path` 保持首个驱动所在实例的兼容含义。VCD 搜索会说明
+`direction=null` 表示元数据不可用。
 
 面向大型设计的能力与已验证的部分规模：
 

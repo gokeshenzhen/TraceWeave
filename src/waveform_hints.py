@@ -28,7 +28,13 @@ def is_tool_pseudo_signal(path: str | None) -> bool:
     return tool_pseudo_signal_role(path) is not None
 
 
-def annotate_signal_search_result(result: dict) -> dict:
+VCD_DIRECTION_HINT = (
+    "VCD port direction metadata is unavailable; direction=null is unknown. "
+    "Use compiled source or an elaborated backend to establish direction."
+)
+
+
+def annotate_signal_search_result(result: dict, *, wave_format: str | None = None) -> dict:
     """Add role hints only to exact known pseudo-signals.
 
     Ordinary signal rows remain byte-for-byte compatible.
@@ -47,4 +53,7 @@ def annotate_signal_search_result(result: dict) -> dict:
                 "tool_pseudo_role": role,
             }
         )
-    return {**result, "results": annotated_rows}
+    annotated = {**result, "results": annotated_rows}
+    if wave_format == "vcd":
+        annotated["hint"] = " ".join(filter(None, (result.get("hint"), VCD_DIRECTION_HINT)))
+    return annotated

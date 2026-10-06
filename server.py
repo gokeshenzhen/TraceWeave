@@ -7557,17 +7557,18 @@ async def _dispatch(name: str, args: dict):
                         f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
                     )
                 entries = [
-                    annotate_signal_search_result(_search_one(str(kw)))
+                    annotate_signal_search_result(_search_one(str(kw)), wave_format=ext)
                     for kw in keyword
                 ]
                 return schemas.SearchSignalsBatchResult.model_validate(
                     {
                         "batch": entries,
                         "hint": "One entry per keyword, in input order. "
+                        + ((entries[0].get("hint") or "") + " " if ext == "vcd" else "")
                         + _SIGNAL_READBACK_HINT,
                     }
                 )
-            result = annotate_signal_search_result(_search_one(keyword))
+            result = annotate_signal_search_result(_search_one(keyword), wave_format=ext)
             result["hint"] = " ".join(
                 part for part in (result.get("hint"), _SIGNAL_READBACK_HINT) if part
             )
