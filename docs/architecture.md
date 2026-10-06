@@ -1379,7 +1379,7 @@ still replace the entire payload. Bootstrap and NPI acceptance are unchanged.
 Positive facts from the final artifact also survive a stalled or capped frontier
 expansion; its coverage gaps and specific expansion blocker remain visible.
 
-Source Graph's default `driver_chain` and `bit_provenance` group only identical
+Source Graph's canonical `driver_chain` and `bit_provenance` group only identical
 metadata belonging to the same known writer. `statement_semantics` retains the
 common guard, dependencies, selection, traversal and evidence strength. Every
 distinct line/column remains in ordered `statement_evidence`; `evidence_index`
@@ -1403,10 +1403,48 @@ It reports work/coverage, evidence counts, JSON characters/bytes, query/build an
 serialization time, frontend launches and process RSS. Scope is explicitly the
 fixture's nine instances. Run each revision/variant in a fresh process with the
 same Python and fixture; compare baseline correctness as well as response size.
-Response sizes use the validated driver schema and the server's default indented
-JSON; they exclude server routing/recovery receipts. Raw compact backend bytes
-are recorded separately. Schema validation and serialization are timed separately
-from the query, so these measurements are not end-to-end MCP latency.
+The original isolated-query measurements retain their explicit-full indented
+schema basis, excluding routing/recovery receipts. Raw minified backend bytes
+are separate. Version 3 also measures a captured short-path public result and
+actual `call_tool` TextContent, including routing, recovery, dependency and wave
+root-binding receipts. Five fresh runtimes followed by exact warm calls are the
+default; presentation uses 50 repetitions with median/min/max wall and CPU time.
+`artifact_attempt_count=1` in isolated samples still means one explicit prepare;
+the wire harness reads actual artifact attempts from the final receipt. It
+observes `runtime.prepare` metrics for frontend launches because ordinary
+one-shot public receipts can omit that field. Missing public fields are recorded
+as missing, not interpreted as zero launches.
+
+```bash
+driver_bench_dir="$(mktemp -d -t traceweave-driver-a.XXXXXX)"
+.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py \
+  --output-directory "$driver_bench_dir/bad" > "$driver_bench_dir/bad.json"
+.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py --corrected \
+  --output-directory "$driver_bench_dir/fixed" > "$driver_bench_dir/fixed.json"
+.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py --guards 300 \
+  --output-directory "$driver_bench_dir/guards" > "$driver_bench_dir/guards.json"
+```
+
+Use `--guards 100`/`450` for growth samples, `--assignment-limit 80`,
+`--evidence-limit 80` or `--max-depth 0` for bounded analysis, and
+`--memo-bytes 1024` for presentation optimization exhaustion. These benchmark
+overrides are not new MCP parameters. The wire harness always measures the
+public default codec limits, even when the short-path presentation uses a low
+memo budget. Inputs are synthetic source/log/VCD files; no simulator is run.
+The short-path in-memory frontend includes correctly resolved module names;
+older unit-test fixtures with an unrelated scope top can omit those fields.
+The standalone complete IR's S[5] negative and the scoped public query's S[5]
+`unknown` (`hierarchy_projection_scoped`) are different analysis contexts;
+both must roundtrip unchanged, and their claims cannot be interchanged.
+Each comparison uses the same complete captured model without stripping either
+variant's fields. Fixture digests, source-file digests, path shapes, Python,
+frontend version, limits and revision are recorded. Input-resident Python peak
+allocation and process RSS are measured in separate fresh processes for full,
+encode and decode; decode memory starts with its input dict resident. The child
+peak uses `/proc/self/status`'s `VmHWM` because `ru_maxrss` can inherit pre-exec
+parent history. Native-worker RSS and the parent high-water mark are reported
+separately. These timings and byte sizes do not establish client token budgets,
+client spill behavior, or query acceleration.
 
 Explicit driver `compile_context` recovery is orchestrated by the server; the
 context resolver stays read-only. Only `hierarchy_unavailable` can trigger one
@@ -2448,6 +2486,93 @@ defaults. `ExplainDriverResult` remains the internal/direct-dispatch model.
 Use `src.evidence_output.expand_compact_result(text_or_dict)` before reading
 its driver arrays. This default wire change requires migration of old parsers.
 
+### Driver response tables
+
+`src/driver_evidence_codec.py` projects the already-validated model once at the
+final output boundary. Routing, NPI priority, identity validation/recovery,
+dynamic branches, dependency analysis and the canonical model are unchanged.
+Successful NPI/Static results can have four empty tables; the encoder never
+invents Source Graph evidence for them. Only successful `ExplainDriverResult`
+models enter this envelope; errors and prerequisites keep their original shape.
+
+| Field under a driver/provenance row | Table in the same response | Meaning |
+|---|---|---|
+| `statement_semantics_ref` | `statement_semantics` | Complete identical JSON object, including guards, ordered mappings and dependencies |
+| `statement_evidence_ref` | `statement_evidence` | Pair of `locations_ref` and `evidence_indices_ref` |
+| pair's `locations_ref` | `locations` | Exact `columns=["source_line","source_column"]`, ordered rows |
+| pair's `evidence_indices_ref` | `evidence_indices` | Exact ordered integers belonging to this original array |
+
+Inline and referenced forms are mutually exclusive per field. IDs are strict,
+nonnegative, response-local integers, not writer/statement/artifact identities.
+The fixed table graph cannot patch arbitrary result paths. Interning compares
+complete canonical JSON values and preserves bool/int/float distinctions; it
+does not merge facts belonging to different writers. No rows or duplicates are
+removed. Resolution, reason codes, bit order, source/target mappings and all
+receipts remain inline. Identical 64-row location sequences can share storage
+while distinct index sequences still preserve each array's statement order.
+Sparse, reversed and repeated indices are literal values, not ranges.
+
+A null in the typed **location table's column cell only** means the public row
+lacked `source_column`; column zero remains zero. Explicit null in arbitrary
+semantics or an inline row remains present. Unknown/empty rows and
+`statement_count=0` survive. Encoding either leaves unsupported location shapes
+inline or rejects invalid schema inputs; it never drops their extra fields.
+Small/nonprofitable candidates stay inline. The planner includes table entries,
+pair/reference wrappers, comma/ID widths and first-table overhead in its cost.
+
+```python
+import json
+from src.evidence_output import expand_compact_result
+from src.driver_evidence import expand_driver_evidence
+
+response = json.loads(text_content.text)
+driver = (expand_compact_result(text_content.text)
+          if str(response.get("format", "")).startswith("traceweave.")
+          else response)  # explicit full, or an original error/prerequisite
+if "error" not in driver and driver.get("ok") is not False:
+    groups = driver.get("driver_chain") or []
+    statements = (expand_driver_evidence(groups)
+                  if all("evidence_index" in g and "statement_evidence" in g for g in groups)
+                  else groups)  # NPI/Static can already be ordinary, ungrouped rows
+```
+
+The decoder dispatches on the independent format version; the original
+`traceweave.compact.v1` rules remain unchanged. It rejects unknown versions/tools,
+bad ID types/bounds, dangling or inline-plus-ref fields, extra table objects,
+illegal columns/row widths, mismatched lengths and referenced statement counts.
+Pass raw JSON text to also reject duplicate object keys during parsing; a dict
+has already lost that information. Expanded groups own independent mutable
+copies. No external table, handle, source file or previous response is consulted.
+This validates a self-contained encoding, not authenticity: a structurally valid
+manually substituted table is not detectable without a trusted signature.
+
+Encoding defaults to a 16-MiB memo accounting budget (keys plus conservative
+candidate/occurrence/created-row charges), 8,192 candidate entries and 8,192
+emitted table entries. On exhaustion all remaining evidence stays inline. These
+are optimization limits, not a constant total-process-memory promise: input,
+projection and final text scale with evidence size. `DecodeLimits` defaults to
+64 MiB of input/expanded JSON bytes, 2,000,000 value/container nodes, 200,000 total
+statement rows and depth 128. Preflight checks precede output allocation and
+allocation is counted again while copying. A limit raises
+`DriverCodecLimitError`, never a successful empty/partial decode. Trusted offline
+callers may supply explicit limits; they are not client token budgets.
+
+The cancellable worker checks groups, key chunks and location/table rows and
+holds no wave lock. It performs zero additional frontend/backend/wave reads.
+One Pydantic export or Python JSON primitive/final serialization cannot be
+preempted mid-call; cancellation is checked on return. There is no pagination,
+summary mode, retained-result store or automatic evidence downgrade. Distinct
+301-guard evidence remains large even though singleton locations stay inline.
+Use the decoder before the existing per-statement expander; lossless delivery
+of retained facts does not change analysis limits or prove exhaustive coverage.
+
+The repository harness records client status `not_verified`. A real client can
+be labelled `verified_inline` or `verified_spill` only after confirming the new
+format and complete consumption in that client/version. TextContent size alone
+cannot establish either state.
+
+### Original compact.v1 tools
+
 The inspected waveform, discovery, comparison, X-trace, structural-scan and
 diagnostic tools accept `output_format="compact"`. The default `"full"` retains
 the original JSON shape and formatting. `src/schemas.py` owns the supported tool
@@ -2500,7 +2625,7 @@ recovers omitted transactions nor turns a bounded prefix into complete evidence.
 Request narrower scopes/windows or increase the existing display cap when the
 tool's next action permits it; insufficient retained facts require a new call.
 
-Projection runs after analysis in the existing cancellable worker without a
+For the original v1, projection runs after analysis in the existing cancellable worker without a
 waveform lock. It checks cancellation around projection/encoding and between the
 three factoring candidates; an individual Python encoding call is not
 preemptible. It makes no additional waveform/native reads. Temporary JSON

@@ -15,11 +15,33 @@ gap. Neither a null source path nor zero matches proves absence. A partial
 Source Graph result can remain the final result after unsupported Static;
 check `attempted_backends` and the scope blocker instead of repeating the same
 frontier expansion.
-Expand each group's `statement_evidence` when inspecting branches; the top
+Driver calls now default to `traceweave.driver.compact.v1`, including suggested
+calls that omit `output_format`. First resolve each response-local
+`statement_semantics_ref` and `statement_evidence_ref` using the accompanying
+typed tables (or `src.evidence_output.expand_compact_result`). All retained
+evidence is in the same response. Legacy text consumers can request
+`output_format="full"`; other tools retain their defaults. Table IDs and location
+occurrences do not count independent writers, and different writers sharing a
+table value remain distinct. The bad 8×64 fixture has 8 writers, 512 retained
+statement mappings and 640 provenance location occurrences because per-bit
+mapping splits can repeat a statement. Its two S[9] sources are structural
+evidence, not an observed value conflict. In the scoped public query, S[5]
+`unknown` retains its coverage reasons and cannot be called proved floating.
+The isolated complete-IR fixture can instead prove that bit has no structural
+writer; do not transfer that negative to a scoped query with exclusions.
+Sample the relevant waveform
+before making claims about values over time.
+
+After decoding, expand each group's `statement_evidence` when inspecting branches; the top
 `source_line` is only the first location. `statement_semantics` is shared only
 when all semantic fields agree. Use `query_instance_path` for the requested
 signal and `resolved_instance_path` for the first driver. VCD has no port
 direction metadata, so a null direction must not be inferred from naming.
+Analysis truncation, complete delivery of the retained evidence, and reading
+only part of a client's spilled file are separate conditions. Neither compact
+bytes nor table counts can establish complete analysis. Different evidence can
+still exceed a client's delivery limit; narrowing analysis or adding pagination
+is not an implicit consequence of using the lossless codec.
 
 If an explicit driver action's process-scoped hierarchy handle expired, the
 server first looks for the exact current hierarchy and may perform one bounded
