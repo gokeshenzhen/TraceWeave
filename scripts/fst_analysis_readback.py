@@ -126,6 +126,15 @@ endmodule
     assert r['runtime_protocol_coverage']['coverage_status']=='zero_coverage'
     r=await checked('explain_signal_driver',dict(**ctx,wave_path=str(fst),signal_path='top.q',time_ps=36))
     assert r['backend_status']['actual_backend']=='source_graph'
+    r=await checked('find_signal_loads',dict(**ctx,wave_path=str(fst),signal_path='top.q'))
+    assert r['backend_status']['actual_backend']=='source_graph'
+    assert [(load['load_path'],load['kind']) for load in r['loads']]==[('top.y','rhs_expr')]
+    assert r['loads'][0]['source_info_origin']=='source_graph'
+    r=await checked('trace_signal_path',dict(**ctx,wave_path=str(fst),
+        from_signal='top.q',to_signal='top.y',expand_assigns=True))
+    assert r['backend_status']['actual_backend']=='source_graph' and r['found']
+    assert r['hops']==1 and [hop['net_path'] for hop in r['path']]==['top.q[0]','top.y[0]'],r['path']
+    assert r['path'][-1]['edge_kind']=='continuous_assign'
     r=await checked('resolve_packed_fields',dict(**ctx,wave_path=str(fst),source_signal='top.bus',
         signal_path='top.bus[5:0]',fields=['valid','data','ready']))
     assert r['status']=='resolved' and r['fields']['data']['bits']==[4,3,2,1]

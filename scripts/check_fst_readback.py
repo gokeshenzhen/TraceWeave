@@ -155,7 +155,8 @@ async def run_check(work, installed, require_fsdb):
 
                 await validate_analyses(call, work, report, fingerprint)
                 observed_tools = {r['tool'] for r in report['calls']}
-                assert set(summary['fst_backend']['supported_tools']) <= observed_tools
+                missing_tools = set(summary['fst_backend']['supported_tools']) - observed_tools
+                assert not missing_tools, f"FST readback did not exercise: {sorted(missing_tools)}"
 
                 # Independent oracle already embodied by scale_100fs_tb.v;
                 # compare recorded digital observations, not analyzer output.
