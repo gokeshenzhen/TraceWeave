@@ -108,3 +108,17 @@ def test_guard_interruption_still_writes_receipt_and_kills_group(tmp_path,monkey
     receipt=json.loads((tmp_path/"guard/guard.json").read_text())
     assert receipt["guard_reason"]=="parent_interrupted" and receipt["returncode"]==-15
     assert signals==[(child.pid,bench.signal.SIGTERM)]
+
+
+def test_single_dense_session_retains_terminal_zero_span_metadata():
+    from scripts.benchmark_fsdb_optimization import validate_single_dense_session
+    import pytest
+    def row(a,b):return dict(start_tick=a,close_tick=b,start_ps=a,close_ps=b)
+    metadata=dict(sessions=2,scale_fs=1000,duration_ps=2000,session_layout=[row(0,2000),row(2000,2000)])
+    result=validate_single_dense_session(metadata,1001,1100)
+    assert result["positive_span_sessions"]==1 and result["terminal_zero_span_entries"]==1
+    for invalid in ([row(0,1000),row(1000,2000)], [row(0,2000),row(1100,1100)],
+                    [row(0,2000),row(1999,1999)], [row(2000,2000),row(0,2000)]):
+        with pytest.raises(AssertionError):
+            validate_single_dense_session(dict(metadata,session_layout=invalid),1001,1100)
+    with pytest.raises(AssertionError):validate_single_dense_session(metadata,1001,2000)

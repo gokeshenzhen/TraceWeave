@@ -36,14 +36,25 @@ int main(int argc,char **argv) {
     unsigned long long start=strtoull(argv[3],nullptr,10),end=strtoull(argv[4],nullptr,10);
     unsigned long long expected=strtoull(argv[5],nullptr,10);
     unsigned repeats=strtoul(argv[6],nullptr,10); std::string mode=argv[7];
+    struct Session { unsigned long long start_tick,close_tick,start_ps,close_ps; };
+    std::vector<Session> layout;
     unsigned sessions=0; unsigned long long max_span=0,min_span=~0ULL;
     for (auto item=ctx->obj->ffrGetSessionListInfo();item;item=item->next) {
+        require(sessions<1048576,"bounded session metadata");
         ++sessions;
-        unsigned long long a=_TagToPs(ctx,*(fsdbTag64*)&item->start_xtag);
-        unsigned long long b=_TagToPs(ctx,*(fsdbTag64*)&item->close_xtag);
+        Session row={};
+        unsigned long long a=_TagToPs(ctx,*(fsdbTag64*)&item->start_xtag,&row.start_tick);
+        unsigned long long b=_TagToPs(ctx,*(fsdbTag64*)&item->close_xtag,&row.close_tick);
+        require(row.close_tick>=row.start_tick,"ordered session boundary");
+        row.start_ps=a;row.close_ps=b;layout.push_back(row);
         max_span=std::max(max_span,b-a); min_span=std::min(min_span,b-a);
     }
-    printf("{\"phase\":\"metadata\",\"open_ms\":%.6f,\"sessions\":%u,\"largest_session_ps\":%llu,\"smallest_session_ps\":%llu,\"width\":%u,\"scale_fs\":%llu,\"duration_ps\":%llu}\n",open_ms,sessions,max_span,min_span,sig->bit_size,ctx->scale_fs,fsdb_get_end_time(ctx)); fflush(stdout);
+    printf("{\"phase\":\"metadata\",\"open_ms\":%.6f,\"sessions\":%u,\"largest_session_ps\":%llu,\"smallest_session_ps\":%llu,\"width\":%u,\"scale_fs\":%llu,\"duration_ps\":%llu,\"session_layout\":[",open_ms,sessions,max_span,min_span,sig->bit_size,ctx->scale_fs,fsdb_get_end_time(ctx));
+    for (unsigned i=0;i<layout.size();++i) {
+        const auto &row=layout[i];
+        printf("%s{\"start_tick\":%llu,\"close_tick\":%llu,\"start_ps\":%llu,\"close_ps\":%llu}",i ? "," : "",row.start_tick,row.close_tick,row.start_ps,row.close_ps);
+    }
+    printf("]}\n"); fflush(stdout);
     if (mode=="info") { fsdb_close(ctx); return 0; }
     for (unsigned repeat=0;repeat<repeats;++repeat) {
         bench_reclaims=bench_reclaim_ns=0;

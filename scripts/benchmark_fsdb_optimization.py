@@ -598,6 +598,32 @@ def quick_plan(args):
     write(args.output,dict(schema_version=1,smoke_only=True,inputs=[file_identity(args.dense_wave),file_identity(args.protocol_wave)],workloads=workloads))
 
 
+def validate_single_dense_session(metadata, start_ps, end_ps):
+    """Prove dense activity fits one session, preserving terminal zero spans.
+
+    The SDK reports flush boundaries, not whether a zero-span entry is empty.
+    Accept only one positive span covering the complete generated duration and
+    zero-span entries exactly at its end, strictly after the dense target's last
+    event. An interior/split span or a same-tick dense boundary is rejected.
+    """
+    rows=metadata["session_layout"]
+    assert len(rows)==metadata["sessions"] and rows
+    assert metadata["scale_fs"]==1000,"fixture must retain its declared 1 ps scale"
+    positive=[row for row in rows if row["close_tick"]>row["start_tick"]]
+    terminal=[row for row in rows if row["close_tick"]==row["start_tick"]]
+    assert len(positive)==1,"dense activity fixture was split by the writer"
+    span=positive[0]
+    assert span["start_tick"]==span["start_ps"]==0
+    assert span["close_tick"]==span["close_ps"]==metadata["duration_ps"]
+    assert 0<start_ps<=end_ps<span["close_ps"]
+    assert rows[0]==span and len(rows)==1+len(terminal)
+    assert all(row["start_tick"]==row["close_tick"]==row["start_ps"]==row["close_ps"]==span["close_ps"]
+        for row in terminal),"only terminal zero-span metadata is permitted"
+    return dict(positive_span_sessions=1,terminal_zero_span_entries=len(terminal),
+        dense_start_ps=start_ps,dense_end_ps=end_ps,
+        note="Terminal entries are retained; zero span does not prove zero records.")
+
+
 def inventory(args):
     plan=read(args.plan)
     args.output.mkdir(parents=True,exist_ok=False)
@@ -622,7 +648,9 @@ def inventory(args):
             metadata=next(json.loads(line) for line in (directory/"worker.log").read_text().splitlines()
                 if line.startswith('{"phase":"metadata"'))
             if "single_session_10m" in input_["realpath"]:
-                assert metadata["sessions"]==1,"single-session fixture was split by the writer"
+                target=next(item["native"] for item in items if item["kind"]=="native")
+                metadata["dense_session_validation"]=validate_single_dense_session(
+                    metadata,target["start_ps"],target["end_ps"])
             records.append(dict(wave_sha256=input_["sha256"],wave=input_["realpath"],signal=path,
                 metadata=metadata,receipt=str(directory/"guard.json"),receipt_sha256=sha(directory/"guard.json")))
     write(args.output/"INVENTORY.json",dict(plan_sha256=sha(args.plan),probe=file_identity(args.probe),records=records))
