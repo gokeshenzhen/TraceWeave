@@ -63,26 +63,27 @@ struct Ahb {
 };
 
 int main(int argc, char **argv) {
-    if (argc != 5 && argc != 6) { std::fprintf(stderr,"usage: fixture OUTPUT dense|wide|protocol STEPS SYNC_EVERY [MEMORY_MIB]\n"); return 2; }
+    if (argc != 5 && argc != 6) { std::fprintf(stderr,"usage: fixture OUTPUT dense|wide|wide64|wide256|wide1024|protocol STEPS SYNC_EVERY [MEMORY_MIB]\n"); return 2; }
     struct stat info;
     if (stat(argv[1],&info) == 0) return 3;
     std::string mode=argv[2]; uint64_t steps=std::strtoull(argv[3],nullptr,10);
     uint64_t sync=std::strtoull(argv[4],nullptr,10);
-    if (!steps || (mode!="dense" && mode!="wide" && mode!="protocol")) return 4;
+    bool wide=mode=="wide" || mode=="wide64" || mode=="wide256" || mode=="wide1024";
+    if (!steps || (mode!="dense" && !wide && mode!="protocol")) return 4;
     ffwObject *w=ffw_Open(argv[1],FSDB_FT_VERILOG); if (!w) return 5;
     ffw_SetVCMemLimit(w,argc == 6 ? std::strtoul(argv[5],nullptr,10) : 128);
     ffw_SetScaleUnit(w,(char*)"1ps"); ffw_SetGlitchNum(w,0);
     ffw_CreateTreeByHandleScheme(w); ffw_BeginTree(w); scope(w,"top");
     if (mode!="protocol") {
-        unsigned width=mode=="wide" ? 256 : 32;
+        unsigned width=mode=="wide64" ? 64 : mode=="wide1024" ? 1024 : wide ? 256 : 32;
         Signal clk(w,"clk",1), data(w,"data["+std::to_string(width-1)+":0]",width), sparse(w,"sparse",1);
         ffw_CreateUpscope(w); ffw_EndTree(w);
         at(w,0); clk.put(w,0); data.put(w,0); sparse.put(w,0);
-        const uint64_t offset=mode=="wide" ? 0 : 1000000000000ULL;
-        const uint64_t stride=mode=="wide" ? 10 : 1;
+        const uint64_t offset=wide ? 0 : 1000000000000ULL;
+        const uint64_t stride=wide ? 10 : 1;
         for (uint64_t i=1;i<=steps;++i) {
             at(w,offset+i*stride); clk.put(w,i&1);
-            data.put(w,uint32_t(i)*uint32_t(2654435761U),mode=="wide" && (i==5 || i==6) ?
+            data.put(w,uint32_t(i)*uint32_t(2654435761U),wide && (i==5 || i==6) ?
                 (i==5 ? FSDB_BT_VCD_X : FSDB_BT_VCD_Z) : -1);
             if (i==steps/2) sparse.put(w,1);
             if (sync && i%sync==0) ffw_Sync(w);

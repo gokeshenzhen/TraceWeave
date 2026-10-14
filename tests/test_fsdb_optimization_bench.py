@@ -117,6 +117,12 @@ def test_wide_oracle_preserves_all_lanes_and_unknowns():
     assert expected_bits(oracle,6,"top.data[255:0]")=="z"*256
     expected=format(2654435761,"064b")*4
     assert expected_bits(oracle,1,"top.data[255:0]")==expected
+    for width,steps in ((64,600000),(256,600000),(1024,200000)):
+        for index in (1,262144,steps):
+            actual=expected_bits(dict(oracle,width=width),index,f"top.data[{width-1}:0]")
+            assert len(actual)==width
+            assert actual==format(index*2654435761&0xffffffff,"064b")*(width//64)
+        assert steps//min(262144,(64*1024**2+width+7)//(width+8))>=2
 
 
 def test_guard_interruption_still_writes_receipt_and_kills_group(tmp_path,monkeypatch):

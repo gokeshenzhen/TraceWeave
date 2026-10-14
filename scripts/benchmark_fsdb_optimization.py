@@ -497,6 +497,9 @@ def generate(args):
     specifications=(("dense_10m","dense",10_000_000,0,128),
         ("dense_100m","dense",100_000_000,0,128),("single_session_10m","dense",10_000_000,0,1024),
         ("wide_256","wide",10000,100,128),
+        ("wide_64_reclaim","wide64",600000,0,128),
+        ("wide_256_reclaim","wide256",600000,0,128),
+        ("wide_1024_reclaim","wide1024",200000,0,128),
         ("protocol_small","protocol",256,32,128),("protocol_complete","protocol",32768,4096,128),
         ("protocol_large","protocol",131072,4096,128))
     assert not args.only or set(args.only)<={row[0] for row in specifications}
@@ -506,7 +509,8 @@ def generate(args):
         receipt=guarded([str(args.build/"fixture"),str(path),mode,str(steps),str(sync),str(memory)],
             directory/(name+"-generation"),dict(timeout_sec=900,rss_mib=4096,as_mib=8192,available_min_mib=2048))
         assert receipt["returncode"]==0 and not receipt["guard_reason"],receipt
-        records.append(dict(id=name,mode=mode,steps=steps,sync_every=sync,writer_memory_mib=memory,wave=file_identity(path)))
+        records.append(dict(id=name,mode=mode,steps=steps,sync_every=sync,writer_memory_mib=memory,
+            width={"wide64":64,"wide1024":1024}.get(mode,256 if mode.startswith("wide") else 32),wave=file_identity(path)))
     write(directory/"FIXTURES.json",dict(fixtures=records,generator=file_identity(args.build/"fixture")))
 
 
@@ -543,6 +547,7 @@ def make_plan(args):
     names=[row["id"] for row in fixtures]
     assert len(names)==len(set(names)),"duplicate fixture identity"
     assert {"dense_10m","dense_100m","single_session_10m","wide_256",
+        "wide_64_reclaim","wide_256_reclaim","wide_1024_reclaim",
         "protocol_small","protocol_complete","protocol_large"}<=set(names),"required fixture missing"
     for fixture in fixtures:
         inputs.append(fixture["wave"])
@@ -553,13 +558,14 @@ def make_plan(args):
                     expected_records=fixture["steps"]+1),capacity=True)
             else:
                 data.append((fixture["id"],Path(fixture["wave"]["realpath"]),fixture["steps"],OFFSET_PS,1,3 if fixture["steps"]==100_000_000 else 5))
-        elif fixture["mode"]=="wide":
-            wave=fixture["wave"]["realpath"];n=fixture["steps"]
-            oracle=dict(kind="counter",steps=n,offset_ps=0,stride_ps=10,width=256,unknown_records={"5":"x","6":"z"})
-            add("wide_256__native_count",wave,native=dict(signal="top.data[255:0]",start_ps=0,end_ps=-1,expected_records=n+1),oracle=oracle)
+        elif fixture["mode"].startswith("wide"):
+            wave=fixture["wave"]["realpath"];n=fixture["steps"];width=fixture.get("width",256)
+            path=f"top.data[{width-1}:0]"
+            oracle=dict(kind="counter",steps=n,offset_ps=0,stride_ps=10,width=width,unknown_records={"5":"x","6":"z"})
+            add(fixture["id"]+"__native_count",wave,native=dict(signal=path,start_ps=0,end_ps=-1,expected_records=n+1),oracle=oracle)
             for cap in (1,1000):
-                add(f"wide_256__cap{cap}",wave,dict(steps=[dict(label="transitions",tool="get_signal_transitions",
-                    arguments=dict(wave_path=wave,signal_path="top.data[255:0]",start_time_ps=0,end_time_ps=-1,max_transitions=cap))]),oracle=oracle)
+                add(fixture["id"]+f"__cap{cap}",wave,dict(steps=[dict(label="transitions",tool="get_signal_transitions",
+                    arguments=dict(wave_path=wave,signal_path=path,start_time_ps=0,end_time_ps=-1,max_transitions=cap))]),oracle=oracle)
         else:
             wave=fixture["wave"]["realpath"]
             for suffix,scope,start,end in (("full",None,0,-1),("window",None,20*64,20*192),
