@@ -170,13 +170,18 @@ def test_wide_oracle_preserves_all_lanes_and_unknowns():
 
 def test_guard_interruption_still_writes_receipt_and_kills_group(tmp_path,monkeypatch):
     import json
+    import threading
     import pytest
     from scripts import benchmark_fsdb_optimization as bench
+    terminated=threading.Event()
     class Child:
         pid=123456
         returncode=None
         def poll(self):return self.returncode
-        def wait(self,timeout):self.returncode=-15;return self.returncode
+        def wait(self,timeout=None):
+            assert terminated.wait(timeout)
+            self.returncode=-15
+            return self.returncode
     child=Child();signals=[];calls=0
     def sample(pid):
         nonlocal calls
@@ -186,12 +191,56 @@ def test_guard_interruption_still_writes_receipt_and_kills_group(tmp_path,monkey
     monkeypatch.setattr(bench.subprocess,"Popen",lambda *a,**kw:child)
     monkeypatch.setattr(bench,"group_memory",sample)
     monkeypatch.setattr(bench,"system_memory",lambda:dict(available_kib=10**9))
-    monkeypatch.setattr(bench.os,"killpg",lambda pid,sig:signals.append((pid,sig)))
+    def kill(pid,sig):
+        signals.append((pid,sig));terminated.set()
+    monkeypatch.setattr(bench.os,"killpg",kill)
     with pytest.raises(KeyboardInterrupt):
         bench.guarded(["worker"],tmp_path/"guard",bench.ORDINARY)
     receipt=json.loads((tmp_path/"guard/guard.json").read_text())
     assert receipt["guard_reason"]=="parent_interrupted" and receipt["returncode"]==-15
     assert signals==[(child.pid,bench.signal.SIGTERM)]
+
+
+def test_guard_observes_short_worker_exit_without_polling_quantization(tmp_path):
+    import json
+    import sys
+    import time
+    from scripts import benchmark_fsdb_optimization as bench
+    for delay in (.02,.18):
+        output=tmp_path/str(delay)
+        program=("import json,os,time; time.sleep("+str(delay)+
+            "); print(json.dumps({'finished':time.monotonic()}),flush=True); os._exit(0)")
+        receipt=bench.guarded([sys.executable,"-c",program],output,bench.ORDINARY)
+        returned=time.monotonic()
+        finished=json.loads((output/"worker.log").read_text())["finished"]
+        assert receipt["returncode"]==0 and receipt["guard_reason"] is None
+        # The old 200 ms sleep adds ~170 ms after a 20 ms child has exited.
+        assert 0<=returned-finished<.1
+        assert receipt["guard_wall_ms"]>=receipt["process_wall_ms"]>=delay*1000
+
+
+def test_guard_still_terminates_timed_out_process_group(tmp_path):
+    import sys
+    from scripts import benchmark_fsdb_optimization as bench
+    receipt=bench.guarded([sys.executable,"-c","import time; time.sleep(10)"],
+        tmp_path/"timeout",dict(bench.ORDINARY,timeout_sec=.05))
+    assert receipt["guard_reason"]=="timeout" and receipt["returncode"]<0
+    assert .05*1000<=receipt["process_wall_ms"]<5000
+    assert receipt["guard_wall_ms"]>=receipt["process_wall_ms"]
+
+
+def test_guard_monitor_start_failure_still_reaps_worker(tmp_path,monkeypatch):
+    import json
+    import sys
+    import pytest
+    from scripts import benchmark_fsdb_optimization as bench
+    def fail_start(self):raise RuntimeError("monitor unavailable")
+    monkeypatch.setattr(bench.threading.Thread,"start",fail_start)
+    with pytest.raises(RuntimeError,match="monitor unavailable"):
+        bench.guarded([sys.executable,"-c","import time; time.sleep(10)"],
+            tmp_path/"failure",bench.ORDINARY)
+    receipt=json.loads((tmp_path/"failure/guard.json").read_text())
+    assert receipt["guard_reason"]=="parent_interrupted" and receipt["returncode"]<0
 
 
 def test_single_dense_session_retains_terminal_zero_span_metadata():

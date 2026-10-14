@@ -26,6 +26,7 @@ import signal
 import statistics
 import subprocess
 import sys
+import threading
 import time
 
 SCRIPT = Path(__file__).resolve()
@@ -158,8 +159,19 @@ def guarded(command, output, limits, *, env=None):
     with (output / "worker.log").open("x") as stream:
         child = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
             start_new_session=True, preexec_fn=set_limits, env=env)
+        child_exited = threading.Event()
+        exit_times = []
+        def observe_exit():
+            # Resource polling must not round process duration up to the next
+            # 200 ms sample. A blocking wait records completion independently
+            # and wakes the guard immediately, including after termination.
+            child.wait()
+            exit_times.append(time.monotonic())
+            child_exited.set()
+        waiter = threading.Thread(target=observe_exit, daemon=True)
         try:
-            while child.poll() is None:
+            waiter.start()
+            while not child_exited.is_set():
                 memory, members = group_memory(child.pid)
                 for key, value in memory.items():
                     peak[key] = max(peak[key], value)
@@ -175,7 +187,7 @@ def guarded(command, output, limits, *, env=None):
                     reason = "host_memory_reserve"
                 if reason:
                     break
-                time.sleep(.2)
+                child_exited.wait(.2)
         except BaseException as exc:
             reason = "parent_interrupted"
             interrupted = exc
@@ -187,13 +199,24 @@ def guarded(command, output, limits, *, env=None):
                 except subprocess.TimeoutExpired:
                     terminate_group(child.pid, signal.SIGKILL)
                     child.wait(timeout=5)
+            if waiter.ident is not None:
+                waiter.join()
+            else:
+                # A failed monitor start still terminates/reaps the worker and
+                # writes the same failure receipt before re-raising.
+                exit_times.append(time.monotonic())
             # Kill any surviving group member even if the leader exited first.
             _, leftovers = group_memory(child.pid)
             if leftovers:
                 terminate_group(child.pid, signal.SIGKILL)
                 reason = reason or "orphan_processes"
+    guard_end = time.monotonic()
+    # Orphans reject the workload and include their forced group cleanup.
+    process_end = guard_end if leftovers else exit_times[0]
     result = dict(command=command, returncode=child.returncode, guard_reason=reason,
-        process_wall_ms=(time.monotonic()-start)*1000, observed_peak_kib=peak,
+        process_wall_ms=(process_end-start)*1000, guard_wall_ms=(guard_end-start)*1000,
+        process_timing="launch to blocking wait completion; guard sampling/cleanup separately recorded",
+        observed_peak_kib=peak,
         limits=limits, host_before=before, host_after=system_memory(), resource_samples=samples)
     write(output / "guard.json", result)
     if interrupted is not None:
@@ -635,6 +658,7 @@ def make_plan(args):
         conditions=dict(cache="no OS cache flush; hash all inputs before each suite equally",telemetry=False,
             timing="server.call_tool includes worker/lock/schema/JSON; excludes import/open/buffer, oracle and file I/O; whole process separately",
             native_timing="seek + exact scan + in-scan reclamation + group cleanup; final close and process wall separately",
+            process_timing="launch to blocking wait completion includes worker close/exit; independent 200 ms resource polling; full supervisor wall retained separately",
             environment="same CPU/SDK/compiler/default -O0; generation/hash/benchmark serialized"),
         tests_required=["tests/test_fsdb_cursor_reclaim.py","tests/test_fsdb_event_cursor_native.py","tests/test_event_pages.py",
             "tests/test_fsdb_capped_transitions.py","tests/test_fsdb_point_window.py","tests/test_fsdb_timescale.py",
