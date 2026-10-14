@@ -105,10 +105,53 @@ def test_pair_statistics_refuse_missing_arm_or_semantic_change():
 
 
 def test_small_same_direction_confirmation_is_not_a_regression_allowance():
-    frozen={"aa":{"w":{"metrics":{"query/first_ms":{"envelope":10}}}}}
+    frozen={"aa":{"w":{"metrics":{"query/first_ms":{"noise_radius":10}}}}}
     group={"metrics":{"query/first_ms":{"median_delta":1,"deltas":[1,1,2,1,3]}}}
-    assert not classify_metrics("w",group,frozen)[0]
+    # Consistent positive evidence already stops the first candidate suite,
+    # even when smaller than the A/A noise radius.
+    assert classify_metrics("w",group,frozen)[0]
     assert classify_metrics("w",group,frozen,confirmation=True)[0]
+
+
+def test_capacity_comparator_rejects_lost_completion_in_either_order():
+    from scripts.benchmark_fsdb_optimization import capacity_outcome
+    import pytest
+    a=dict(arm="A",status="completed",semantics=["exact"],prelude_semantics=[])
+    b=dict(a,arm="B",status="capacity_not_completed")
+    assert capacity_outcome([a,b])==capacity_outcome([b,a])=="completion_regression"
+    assert capacity_outcome([dict(a,status="capacity_not_completed"),dict(b,status="completed")])=="improved_completion"
+    assert capacity_outcome([dict(a,status="capacity_not_completed"),b])=="both_limited"
+    assert capacity_outcome([a,dict(b,status="completed")])=="preserved_completion"
+    with pytest.raises(AssertionError):capacity_outcome([a,dict(b,status="completed",semantics=["wrong"])])
+
+
+def test_aa_calibration_rejects_instability_without_using_max_as_allowance():
+    from scripts.benchmark_fsdb_optimization import AA_RULE,calibrate_aa
+    def groups(deltas):
+        return {"w":dict(capacity_only=False,metrics={"count/first_ms":dict(
+            a_values=[100]*5,b_values=[100+d for d in deltas],deltas=deltas,
+            median_delta=sorted(deltas)[2],envelope=max(abs(d) for d in deltas))})}
+    original=groups([-.1,.1,0,.1,4])
+    report=calibrate_aa(original,AA_RULE)
+    assert report["status"]=="stable"
+    assert original["w"]["metrics"]["count/first_ms"]["noise_radius"]<.2
+    candidate={"metrics":{"count/first_ms":dict(median_delta=.2,deltas=[.2,.2,-.1,.2,.2])}}
+    assert classify_metrics("w",candidate,{"aa":original})[0]
+    assert calibrate_aa(groups([-50,-20,0,20,50]),AA_RULE)["status"]=="unstable"
+    assert calibrate_aa(groups([20]*5),AA_RULE)["status"]=="unstable"
+
+
+def test_only_one_confirmation_is_reserved_with_exact_lineage(tmp_path):
+    from scripts.benchmark_fsdb_optimization import reserve_confirmation,write
+    import pytest
+    suite=dict(plan_sha256="p",harness_sha256="h",source_identities=["a","b"],
+        wrappers=["wa","wb"],probes=["pa","pb"],selected_workloads=["w"])
+    prior=dict(suite,status="suspected_regression",suspicions=[dict(workload="w")])
+    path=tmp_path/"summary.json";write(path,prior)
+    with pytest.raises(AssertionError):reserve_confirmation(path,dict(suite,probes=["changed"]),tmp_path/"bad")
+    assert not (tmp_path/"CONFIRMATION_RESERVED.json").exists()
+    reserve_confirmation(path,suite,tmp_path/"confirm")
+    with pytest.raises(FileExistsError):reserve_confirmation(path,suite,tmp_path/"try_again")
 
 
 def test_wide_oracle_preserves_all_lanes_and_unknowns():

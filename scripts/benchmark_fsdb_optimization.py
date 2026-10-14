@@ -40,6 +40,15 @@ METRICS = ("first_ms", "repeat_median_ms", "maximum_ms", "process_wall_ms",
 ORDINARY = dict(timeout_sec=900, rss_mib=4096, as_mib=8192, available_min_mib=2048)
 LONG = dict(timeout_sec=1800, rss_mib=4096, as_mib=8192, available_min_mib=2048)
 CAPACITY = dict(timeout_sec=900, rss_mib=2048, as_mib=4096, available_min_mib=2048)
+AA_RULE = dict(
+    method="paired differences; noise radius = max(resolution, median(abs(delta)) + 3*MAD(abs(delta)))",
+    timing_floor_ms=.001,rss_floor_kib=4,confirmation_rounds=1,
+    quality=dict(timing_relative_mad_max=.10,rss_relative_mad_max=.01,
+        timing_relative_pair_bias_max=.10,rss_relative_pair_bias_max=.01,
+        timing_relative_worst_pair_max=.50,rss_relative_worst_pair_max=.05),
+    quality_purpose="A/A repeatability gate only. These relative limits are not allowable candidate regressions.",
+    suspicion="Positive median beyond noise radius, or every pair positive even within noise, stops the candidate.",
+    acceptance="One independent confirmation only. Persistent positive evidence rejects; unresolved evidence never accepts. Capacity completion loss rejects immediately, without speed ratios.")
 
 
 def sha(path):
@@ -614,9 +623,7 @@ def make_plan(args):
         control_identity_sha256=sha(args.batch/"control/IDENTITY.json"),control_head=assets["head"],
         inputs=inputs,workloads=workloads,normalization_paths=NORMALIZED_RESPONSE_PATHS,
         metrics=METRICS,group_cap=16,performance_order="per-workload pairs; AB then BA alternating; fresh process per arm; 3 calls per worker",
-        aa_rule=dict(method="paired absolute differences; envelope=max(abs(diff)); median and MAD reported separately",
-            timing_floor_ms=.001,rss_floor_kib=4,confirmation_rounds=1,
-            acceptance="A/A envelope separates suspicion from noise, never authorizes regression. A confirmation with all paired differences positive and positive median is a confirmed regression even below the envelope. Unresolved candidates are not accepted."),
+        aa_rule=copy.deepcopy(AA_RULE),
         conditions=dict(cache="no OS cache flush; hash all inputs before each suite equally",telemetry=False,
             timing="server.call_tool includes worker/lock/schema/JSON; excludes import/open/buffer, oracle and file I/O; whole process separately",
             native_timing="seek + exact scan + in-scan reclamation + group cleanup; final close and process wall separately",
@@ -769,6 +776,21 @@ def run_arm(args,item,arm,round_index,root,wrapper,probe):
     return result
 
 
+def reserve_confirmation(prior_path, suite, output):
+    prior=read(prior_path)
+    assert prior["status"]=="suspected_regression","only one unresolved suspicion can be confirmed"
+    for field in ("plan_sha256","harness_sha256","source_identities","wrappers","probes"):
+        assert prior[field]==suite[field],("confirmation identity changed",field)
+    suspected={row["workload"] for row in prior["suspicions"]}
+    assert set(suite["selected_workloads"])==suspected,"confirm exactly the stopped workload set"
+    # Exclusive creation plus the suite-wide serial lock reserves the one
+    # permitted confirmation, including failed/interrupted confirmation runs.
+    write(prior_path.parent/"CONFIRMATION_RESERVED.json",
+        dict(original_summary_sha256=sha(prior_path),output=str(output),
+            selected_workloads=suite["selected_workloads"]))
+    return file_identity(prior_path)
+
+
 def run_suite(args):
     args.output=args.output.resolve();args.output.mkdir(parents=True,exist_ok=False)
     plan=read(args.plan);selected=[row for row in plan["workloads"] if not args.workload or row["id"] in args.workload]
@@ -787,6 +809,11 @@ def run_suite(args):
         source_identities=identities,wrappers=[file_identity(p) for p in wrappers],probes=[file_identity(p) for p in probes],
         python=sys.version,platform=platform.platform(),host=system_memory(),records=[],
         selected_workloads=[item["id"] for item in selected],status="running")
+    if args.confirmation:
+        assert frozen and args.confirmation_of,"confirmation requires a frozen plan and original suspicion receipt"
+        suite["confirmation_of"]=reserve_confirmation(args.confirmation_of,suite,args.output)
+    else:
+        assert not args.confirmation_of
     write(args.output/"RUN_START.json",{k:v for k,v in suite.items() if k!="records"})
     for item in selected:
         rounds=1 if args.command=="smoke" else item["pairs"]
@@ -805,6 +832,10 @@ def run_suite(args):
                     suite["status"]="rejected_semantic_mismatch"
                     write(args.output/"summary.json",suite)
                     raise RuntimeError(f"semantic mismatch: {item['id']}")
+            if item["capacity_only"] and capacity_outcome([a,b])=="completion_regression":
+                suite.update(status="rejected_capacity_regression",capacity_regression=item["id"])
+                write(args.output/"summary.json",suite)
+                raise RuntimeError(f"capacity completion lost: {item['id']}")
         if frozen and args.command!="smoke" and not item["capacity_only"]:
             group=summarize_pairs(suite,{"workloads":[item]})[item["id"]]
             suspicious=classify_metrics(item["id"],group,frozen,bool(args.confirmation))[0]
@@ -813,8 +844,23 @@ def run_suite(args):
                 write(args.output/"summary.json",suite)
                 raise RuntimeError(f"stop candidate measurement: {suite['status']}: {item['id']}")
     assert [source_identity(root) for root in roots]==identities,"source changed during run"
+    assert [file_identity(p) for p in wrappers]==suite["wrappers"],"wrapper changed during run"
+    assert [file_identity(p) for p in probes]==suite["probes"],"probe changed during run"
     suite["status"]="completed"
     write(args.output/"summary.json",suite)
+
+
+def capacity_outcome(rows):
+    assert len(rows)==2 and {row["arm"] for row in rows}=={"A","B"}
+    a=next(row for row in rows if row["arm"]=="A")
+    b=next(row for row in rows if row["arm"]=="B")
+    assert a["status"] in {"completed","capacity_not_completed"}
+    assert b["status"] in {"completed","capacity_not_completed"}
+    if a["status"]==b["status"]=="completed":
+        assert a["semantics"]==b["semantics"] and a["prelude_semantics"]==b["prelude_semantics"]
+        return "preserved_completion"
+    if a["status"]=="completed":return "completion_regression"
+    return "improved_completion" if b["status"]=="completed" else "both_limited"
 
 
 def summarize_pairs(summary,plan):
@@ -823,7 +869,9 @@ def summarize_pairs(summary,plan):
         rows=[row for row in summary["records"] if row["id"]==item["id"]]
         assert len(rows)==item["pairs"]*2,(item["id"],len(rows))
         if item["capacity_only"]:
-            groups[item["id"]]=dict(capacity_only=True,receipts=rows)
+            assert item["pairs"]==1
+            groups[item["id"]]=dict(capacity_only=True,receipts=rows,outcome=capacity_outcome(rows),
+                note="One protected capacity pair; no completed-time speed ratio or statistical performance claim.")
             continue
         assert all(row["status"]=="completed" for row in rows)
         pairs=[(next(r for r in rows if r["round"]==i and r["arm"]=="A"),
@@ -841,26 +889,80 @@ def summarize_pairs(summary,plan):
     return groups
 
 
+def calibrate_aa(groups, rule):
+    """Reject unstable calibration before any candidate result is observed."""
+    failures=[];reports={}
+    for workload,group in groups.items():
+        if group["capacity_only"]:
+            if group["outcome"] not in {"preserved_completion","both_limited"}:
+                failures.append(dict(workload=workload,reason="inconsistent_capacity_completion"))
+            continue
+        for metric,values in group["metrics"].items():
+            memory=metric.endswith("kib");kind="rss" if memory else "timing"
+            floor=rule["rss_floor_kib" if memory else "timing_floor_ms"]
+            observed=values["a_values"]+values["b_values"]
+            assert all(math.isfinite(v) and v>=0 for v in observed)
+            center=statistics.median(observed);scale=max(center,floor)
+            pooled_mad=statistics.median(abs(v-center) for v in observed)
+            arm_mads=[statistics.median(abs(v-statistics.median(arm)) for v in arm)
+                for arm in (values["a_values"],values["b_values"])]
+            absolute=[abs(v) for v in values["deltas"]]
+            absolute_median=statistics.median(absolute)
+            absolute_mad=statistics.median(abs(v-absolute_median) for v in absolute)
+            noise=max(floor,absolute_median+3*absolute_mad)
+            values["noise_radius"]=noise
+            receipt=dict(workload=workload,metric=metric,resolution_floor=floor,
+                baseline_median=center,pooled_mad=pooled_mad,largest_arm_mad=max(arm_mads),noise_radius=noise,
+                relative_mad=max(pooled_mad,*arm_mads)/scale,
+                relative_pair_bias=abs(values["median_delta"])/scale,
+                relative_worst_pair=max(absolute)/scale)
+            exceeded=[field for field in ("relative_mad","relative_pair_bias","relative_worst_pair")
+                if receipt[field]>rule["quality"][kind+"_"+field+"_max"]
+                and receipt[field]*scale>floor]
+            receipt.update(status="unstable" if exceeded else "stable",exceeded=exceeded)
+            reports[workload+"/"+metric]=receipt
+            if exceeded:failures.append(receipt)
+    return dict(status="unstable" if failures else "stable",rule=rule,metrics=reports,failures=failures,
+        note="Calibration bounds reject noisy baselines. They never authorize real time or memory regressions; 3/5 pairs have limited statistical power.")
+
+
+def calibration_report(args):
+    plan=read(args.plan);summary=read(args.summary)
+    assert summary["status"]=="completed" and summary["plan_sha256"]==sha(args.plan)
+    assert summary["harness_sha256"]==sha(SCRIPT) and plan["aa_rule"]==AA_RULE
+    report=calibrate_aa(summarize_pairs(summary,plan),plan["aa_rule"])
+    report.update(plan_sha256=sha(args.plan),summary_sha256=sha(args.summary),harness_sha256=sha(SCRIPT))
+    write(args.output,report)
+    print(json.dumps(dict(status=report["status"],failures=len(report["failures"]))))
+
+
 def freeze(args):
     plan=read(args.plan);summary=read(args.summary)
     assert not plan.get("smoke_only") and summary["status"]=="completed"
     assert summary["plan_sha256"]==sha(args.plan) and summary["harness_sha256"]==sha(SCRIPT)
     assert summary["source_identities"][0]["content_sha256"]==summary["source_identities"][1]["content_sha256"]
     assert summary["wrappers"][0]["sha256"]==summary["wrappers"][1]["sha256"]
+    assert summary["probes"][0]["sha256"]==summary["probes"][1]["sha256"]
+    assert plan["aa_rule"]==AA_RULE,"calibration rules changed after planning"
     aa=summarize_pairs(summary,plan)
+    calibration=calibrate_aa(aa,plan["aa_rule"])
+    calibration.update(plan_sha256=sha(args.plan),summary_sha256=sha(args.summary),harness_sha256=sha(SCRIPT))
+    assert calibration==read(args.calibration),"calibration receipt does not match the full A/A suite"
+    assert calibration["status"]=="stable","A/A repeatability failed; preserve evidence and investigate environment"
     # Presence of independent validation and MCP observations is an explicit
     # gate, not a boolean silently manufactured from A/A response equality.
     validation=read(args.validation)
     assert validation["status"]=="passed" and validation["mcp_fixture_observations"]
     assert validation["required_tests_complete"] and validation["metadata_complete"]
     assert validation["aa_calibration_review"]["status"]=="stable"
+    assert validation["aa_calibration_review"]["calibration_sha256"]==sha(args.calibration)
     for receipt in validation["evidence_files"]:
         assert sha(receipt["path"])==receipt["sha256"],"validation evidence changed"
     inventory_=read(validation["inventory_path"])
     assert inventory_["plan_sha256"]==sha(args.plan)
     assert {row["wave_sha256"] for row in inventory_["records"]}=={row["sha256"] for row in plan["inputs"]}
     write(args.output,dict(schema_version=1,status="frozen",plan=plan,plan_sha256=sha(args.plan),
-        harness_sha256=sha(SCRIPT),aa_summary_sha256=sha(args.summary),aa=aa,
+        harness_sha256=sha(SCRIPT),aa_summary_sha256=sha(args.summary),aa=aa,aa_calibration=calibration,
         validation_receipt=validation,validation_sha256=sha(args.validation),
         control=summary["source_identities"][0],wrapper=summary["wrappers"][0],probe=summary["probes"][0]))
 
@@ -869,10 +971,9 @@ def classify_metrics(workload,group,freeze_,confirmation=False):
     suspicions=[];improvements=[]
     for key,values in group["metrics"].items():
         before=freeze_["aa"][workload]["metrics"][key]
-        floor=4 if key.endswith("kib") else .001
-        envelope=max(before["envelope"],floor)
-        entry=dict(workload=workload,metric=key,envelope=envelope,**values)
-        if values["median_delta"]>envelope or (confirmation and all(d>0 for d in values["deltas"])):
+        envelope=before["noise_radius"]
+        entry=dict(workload=workload,metric=key,noise_radius=envelope,**values)
+        if values["median_delta"]>envelope or all(d>0 for d in values["deltas"]):
             suspicions.append(entry)
         if values["median_delta"] < -envelope:
             improvements.append(entry)
@@ -882,15 +983,20 @@ def classify_metrics(workload,group,freeze_,confirmation=False):
 def compare(args):
     freeze_=read(args.freeze);summary=read(args.summary);plan=freeze_["plan"]
     assert summary["plan_sha256"]==freeze_["plan_sha256"]
-    selected=set(summary["selected_workloads"])
+    assert summary["harness_sha256"]==freeze_["harness_sha256"]
+    assert bool(summary.get("confirmation_of"))==bool(args.confirmation)
+    selected={row["id"] for row in summary["records"]}
     subset={"workloads":[row for row in plan["workloads"] if row["id"] in selected]}
-    groups=summarize_pairs(summary,subset);suspicions=[];improvements=[]
+    groups=summarize_pairs(summary,subset);suspicions=[];improvements=[];capacity_regressions=[]
     for workload,group in groups.items():
-        if group["capacity_only"]:continue
+        if group["capacity_only"]:
+            if group["outcome"]=="completion_regression":capacity_regressions.append(workload)
+            continue
         bad,good=classify_metrics(workload,group,freeze_,args.confirmation)
         suspicions.extend(bad);improvements.extend(good)
-    report=dict(status="regression" if args.confirmation and suspicions else "suspicious" if suspicions else "no_detected_regression",
+    report=dict(status="regression" if capacity_regressions or (args.confirmation and suspicions) else "suspicious" if suspicions else "no_detected_regression",
         confirmation=bool(args.confirmation),suspicions=suspicions,improvements=improvements,groups=groups,
+        capacity_regressions=capacity_regressions,
         coverage_status="complete" if len(selected)==len(plan["workloads"]) else "partial",
         note="No detected regression is not acceptance: focused correctness, original-control and previous-accepted comparisons are still required.")
     write(args.output,report)
@@ -922,11 +1028,14 @@ def main():
         command.add_argument("--workload",action="append")
         command.add_argument("--freeze",type=Path)
         command.add_argument("--confirmation",action="store_true")
+        command.add_argument("--confirmation-of",type=Path)
     command=commands.add_parser("worker")
     for arg in ("plan","output","source-root","wrapper"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--workload",required=True)
     command=commands.add_parser("freeze")
-    for arg in ("plan","summary","validation","output"):command.add_argument("--"+arg,type=Path,required=True)
+    for arg in ("plan","summary","validation","calibration","output"):command.add_argument("--"+arg,type=Path,required=True)
+    command=commands.add_parser("calibrate")
+    for arg in ("plan","summary","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("compare")
     for arg in ("freeze","summary","output"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--confirmation",action="store_true")
@@ -935,7 +1044,7 @@ def main():
         asyncio.run(worker(args));return
     with serial_lock():
         {"build":build,"generate":generate,"plan":make_plan,"quick-plan":quick_plan,"inventory":inventory,"run":run_suite,"smoke":run_suite,
-         "freeze":freeze,"compare":compare}[args.command](args)
+         "freeze":freeze,"calibrate":calibration_report,"compare":compare}[args.command](args)
 
 
 if __name__=="__main__":
