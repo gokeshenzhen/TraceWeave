@@ -267,6 +267,22 @@ def test_suite_affinity_is_inherited_by_worker_and_restored_on_failure(tmp_path)
     assert os.sched_getaffinity(0)==original
 
 
+def test_memory_diagnostic_keeps_raw_mapping_and_refuses_overwrite(tmp_path):
+    import json
+    import pytest
+    from scripts import benchmark_fsdb_optimization as bench
+    relative=bench.memory_diagnostic_snapshot(tmp_path,"after-import")
+    raw=(tmp_path/relative).read_text()
+    assert "Rss:" in raw and "AnonHugePages:" in raw and "VmFlags:" in raw
+    receipt=json.loads((tmp_path/"memory-diagnostics/after-import.json").read_text())
+    assert receipt["diagnostic_only"] and receipt["smaps_file"]=="after-import.smaps"
+    assert receipt["before_memory_kib"]["VmRSS"]>0
+    assert receipt["peak_after_kib"]>=receipt["peak_before_kib"]
+    with pytest.raises(FileExistsError):
+        bench.memory_diagnostic_snapshot(tmp_path,"after-import")
+    assert (tmp_path/relative).read_text()==raw
+
+
 def test_single_dense_session_retains_terminal_zero_span_metadata():
     from scripts.benchmark_fsdb_optimization import validate_single_dense_session
     import pytest

@@ -475,8 +475,36 @@ def scheduling_snapshot():
     return dict(affinity=sorted(os.sched_getaffinity(0)),threads=threads)
 
 
+def memory_diagnostic_snapshot(output, phase):
+    """Keep raw mapping evidence without building a smaps object in the worker.
+
+    This opt-in observation is outside API timing and is never baseline data.
+    Small-buffer copying still perturbs a process, so retain before/after RSS.
+    """
+    directory=Path(output)/"memory-diagnostics"
+    directory.mkdir(exist_ok=True)
+    before=proc_memory(os.getpid())
+    peak_before=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    target=directory/(phase+".smaps")
+    with Path("/proc/self/smaps").open("rb",buffering=0) as source, target.open("xb",buffering=0) as dest:
+        while block:=source.read(4096):
+            if dest.write(block)!=len(block):
+                raise RuntimeError("incomplete diagnostic smaps write")
+    receipt=dict(diagnostic_only=True,phase=phase,smaps_file=target.name,
+        before_memory_kib=before,after_memory_kib=proc_memory(os.getpid()),
+        peak_before_kib=peak_before,peak_after_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        note="Raw mapping copy outside API timer; diagnostic observations may perturb allocation and scheduling.")
+    write(directory/(phase+".json"),receipt)
+    return str(target.relative_to(output))
+
+
 async def worker(args):
     scheduling=bool(getattr(args,"diagnostic_scheduling",False))
+    memory_observation=bool(getattr(args,"diagnostic_memory",False))
+    memory_snapshots=[]
+    def observe_memory(phase):
+        if memory_observation:
+            memory_snapshots.append(memory_diagnostic_snapshot(args.output,phase))
     diagnostic_cpu=getattr(args,"diagnostic_cpu",None)
     if diagnostic_cpu is not None:
         assert scheduling,"affinity override is restricted to diagnostic workers"
@@ -493,6 +521,7 @@ async def worker(args):
     item=next(row for row in read(args.plan)["workloads"] if row["id"]==args.workload)
     wave=item["wave"]
     initial=proc_memory(os.getpid())
+    observe_memory("after-import")
     captured={}
     original=server.usage_telemetry.record_call
     def capture(*a,**kw):
@@ -503,13 +532,17 @@ async def worker(args):
         started=time.perf_counter_ns(); parser=server._get_parser(wave);parser._open()
         open_ms=(time.perf_counter_ns()-started)/1e6
         opened=proc_memory(os.getpid())
+        observe_memory("after-open")
         started=time.perf_counter_ns();parser._get_buf()
         return parser,open_ms,opened,(time.perf_counter_ns()-started)/1e6
     parser,open_ms,opened,buffer_ms=await server._run_in_wave_thread(wave,prepare)
+    observe_memory("after-buffer")
     libraries=loaded_libraries()
     rows=[];prelude=[]
     before=Path(wave).stat()
     async def invoke(step,repeat,is_prelude=False):
+        observation_label=f"{'prelude' if is_prelude else repeat}-{step['label']}"
+        observe_memory("before-"+observation_label)
         gc.collect();mem_before=proc_memory(os.getpid())
         if scheduling:
             schedule_before=scheduling_snapshot()
@@ -535,6 +568,7 @@ async def worker(args):
         if scheduling:
             row["scheduling"]=dict(diagnostic_only=True,process_cpu_ms=cpu_ms,
                 before=schedule_before,after=schedule_after)
+        observe_memory("after-"+observation_label)
         return row
     try:
         for step in item["scenario"].get("prelude",[]):
@@ -546,13 +580,17 @@ async def worker(args):
         started=time.perf_counter_ns()
         await server._run_in_wave_thread(wave,parser.close)
         close_ms=(time.perf_counter_ns()-started)/1e6
+        observe_memory("after-close")
     after=Path(wave).stat()
     assert (before.st_ino,before.st_size,before.st_mtime_ns)==(after.st_ino,after.st_size,after.st_mtime_ns)
-    write(args.output/"result.json",dict(id=item["id"],scenario=item["scenario"],rows=rows,prelude=prelude,
+    result=dict(id=item["id"],scenario=item["scenario"],rows=rows,prelude=prelude,
         open_ms=open_ms,buffer_ms=buffer_ms,close_ms=close_ms,initial_memory_kib=initial,
         after_open_memory_kib=opened,after_close_memory_kib=proc_memory(os.getpid()),
         peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-        wrapper=file_identity(args.wrapper),loaded_libraries=libraries,source_root=str(source)))
+        wrapper=file_identity(args.wrapper),loaded_libraries=libraries,source_root=str(source))
+    if memory_observation:
+        result["memory_diagnostics"]=dict(diagnostic_only=True,snapshots=memory_snapshots)
+    write(args.output/"result.json",result)
 
 
 def build(args):
@@ -1144,6 +1182,7 @@ def main():
     for arg in ("plan","output","source-root","wrapper"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--workload",required=True)
     command.add_argument("--diagnostic-scheduling",action="store_true")
+    command.add_argument("--diagnostic-memory",action="store_true")
     command.add_argument("--diagnostic-cpu",type=int)
     command=commands.add_parser("freeze")
     for arg in ("plan","summary","validation","calibration","output"):command.add_argument("--"+arg,type=Path,required=True)
