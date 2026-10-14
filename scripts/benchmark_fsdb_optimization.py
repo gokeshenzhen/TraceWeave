@@ -618,7 +618,15 @@ def make_plan(args):
                 arguments=dict(wave_path=wave,signal_path=path,time_ps=when))]),oracle=oracle)
         add(f"giant__{role}_window",wave,dict(steps=[dict(label="window",tool="get_signal_transitions",
             arguments=dict(wave_path=wave,signal_path=path,start_time_ps=15_300_000_003,end_time_ps=15_300_000_203,max_transitions=1000))]),oracle=oracle)
-        add(f"giant__{role}_native_capacity",wave,native=dict(signal=path,start_ps=0,end_ps=-1,expected_records=1_700_000_001),oracle=oracle,capacity=True)
+        if role=="clock":
+            # The 900-second preflight completed in 347.595 seconds. Protect
+            # time/RSS with real pairs; 3 calls require a whole-worker budget.
+            add("giant__clock_native_count",wave,native=dict(signal=path,start_ps=0,end_ps=-1,
+                expected_records=1_700_000_001),oracle=oracle,pairs=3,
+                limits={**CAPACITY,"timeout_sec":1800})
+        else:
+            add("giant__data_native_capacity",wave,native=dict(signal=path,start_ps=0,end_ps=-1,
+                expected_records=1_700_000_001),oracle=oracle,capacity=True)
     plan=dict(schema_version=1,created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         control_identity_sha256=sha(args.batch/"control/IDENTITY.json"),control_head=assets["head"],
         inputs=inputs,workloads=workloads,normalization_paths=NORMALIZED_RESPONSE_PATHS,
