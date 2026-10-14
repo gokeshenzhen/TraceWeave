@@ -99,6 +99,34 @@ extern "C" int test_signal_state(void *p, const char *path, unsigned long long *
     out[1] = ctx->obj->ffrGetVCCount(id);
     return 0;
 }
+// Inject only the optional metadata policy. FFR event data, traversal and
+// Restore remain real, including the fixture's same-tick/sub-ps events.
+struct TestSessionReader {
+    ffrSessionInfo rows[2] = {};
+    int mode;
+    explicit TestSessionReader(int m) : mode(m) {
+        rows[0].next = &rows[1];
+        rows[0].close_xtag.hltag.L = 10;
+        rows[1].start_xtag.hltag.L = 10;
+        rows[1].close_xtag.hltag.L = 40;
+        if (mode == 2) rows[1].start_xtag.hltag.L = 9;
+        if (mode == 3) { rows[0].next = nullptr; rows[0].close_xtag.hltag.L = 40; }
+    }
+    fsdbFileType ffrGetFileType() { return FSDB_FT_VERILOG; }
+    fsdbRC ffrGetMinFsdbTag64(fsdbTag64 *tag) { *tag = {}; return FSDB_RC_SUCCESS; }
+    fsdbRC ffrGetMaxFsdbTag64(fsdbTag64 *tag) { *tag = {}; tag->L = 40; return FSDB_RC_SUCCESS; }
+    ffrSessionInfo *ffrGetSessionListInfo() {
+        if (mode == 4) throw 1;
+        return mode == 1 ? nullptr : rows;
+    }
+};
+extern "C" int test_session_plan(void *p, int mode) {
+    FsdbCtx *ctx = (FsdbCtx*)p;
+    ctx->event_session_plan = FsdbSessionReclaimPlan{};
+    TestSessionReader reader(mode);
+    if (mode == 5) ctx->path_to_sig["top.alias"] = ctx->path_to_sig.at("top.data");
+    return ctx->event_session_plan.Load(&reader) ? 1 : 0;
+}
 '''
         flags = []
         if mode.startswith("records"):

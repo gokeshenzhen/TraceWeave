@@ -13,6 +13,7 @@
 #include "ffrAPI.h"
 #include "fsdb_event_cursor.h"
 #include "fsdb_point_read.h"
+#include "fsdb_session_reclaim.h"
 #include <chrono>
 #include <ctype.h>
 #include <stdio.h>
@@ -54,6 +55,7 @@ struct FsdbEventCursor {
     unsigned long long start_ps, end_ps;
     bool valid;
     FsdbEventPosition position;
+    FsdbSessionReclaimPosition reclaim_position;
 };
 
 struct FsdbEventReclaimProgress {
@@ -83,6 +85,9 @@ struct FsdbCtx {
     std::set<fsdbVarIdcode>           transition_group_ids;
     std::map<unsigned long long, FsdbEventCursor> event_cursors;
     std::map<fsdbVarIdcode, FsdbEventReclaimProgress> event_reclaim_progress;
+    FsdbSessionReclaimPlan event_session_plan;
+    bool event_single_cursor = true, event_cursor_opened = false;
+    bool event_alias_checked = false, event_unaliased = false;
     unsigned long long next_event_cursor = 0;
     bool cleanup_failed = false;
 };
@@ -120,6 +125,10 @@ static bool _FinishTransitionGroup(FsdbCtx *ctx) {
         ctx->transition_group_lazy = false;
         ctx->transition_group_ids.clear();
         ctx->event_reclaim_progress.clear();
+        ctx->event_session_plan = FsdbSessionReclaimPlan{};
+        ctx->event_single_cursor = true;
+        ctx->event_cursor_opened = false;
+        ctx->event_alias_checked = ctx->event_unaliased = false;
     }
     return !ctx->cleanup_failed;
 }
@@ -1075,6 +1084,23 @@ struct FsdbEventPageV1 {
 #define TRACEWEAVE_FSDB_EVENT_RECLAIM_BYTES (64ULL * 1024 * 1024)
 #endif
 
+static bool _EventIdIsUnaliased(FsdbCtx *ctx, fsdbVarIdcode id) {
+    if (!ctx->event_alias_checked) {
+        ctx->event_alias_checked = true;
+        ctx->event_unaliased = true;
+        if (ctx->path_to_sig.size() != ctx->id_to_sig.size()) {
+            unsigned matches = 0;
+            for (const auto &entry : ctx->path_to_sig) {
+                if (entry.second.idcode == id && ++matches > 1) {
+                    ctx->event_unaliased = false;
+                    break;
+                }
+            }
+        }
+    }
+    return ctx->event_unaliased;
+}
+
 static int _ReclaimEventProgress(FsdbCtx *ctx, SigInfo *sig, unsigned int records) {
     if (!ctx->transition_group_lazy || !records) return 0;
     auto &progress = ctx->event_reclaim_progress[sig->idcode];
@@ -1086,14 +1112,28 @@ static int _ReclaimEventProgress(FsdbCtx *ctx, SigInfo *sig, unsigned int record
     bytes = progress.bytes + bytes * records;
     const auto maximum = std::numeric_limits<unsigned long long>::max();
     progress.bytes = bytes > maximum ? maximum : (unsigned long long)bytes;
-    progress.records += records;
+    progress.records = maximum - progress.records < records
+        ? maximum : progress.records + records;
     if (progress.records < TRACEWEAVE_FSDB_EVENT_RECLAIM_RECORDS &&
         progress.bytes < TRACEWEAVE_FSDB_EVENT_RECLAIM_BYTES) return 0;
+    // Releasing and restoring inside one flush session reloads the same
+    // physical data. Defer that work only for a unique, unaliased cursor with
+    // complete multi-session metadata. Crossing its saved session close (or
+    // reaching EOF) still runs the original unload/Restore path below.
+    FsdbEventCursor *single = ctx->event_cursors.size() == 1
+        ? &ctx->event_cursors.begin()->second : nullptr;
+    if (single && ctx->event_single_cursor &&
+        ctx->transition_group_ids.size() == 1 && single->valid &&
+        _EventIdIsUnaliased(ctx, sig->idcode) &&
+        ctx->event_session_plan.Load(ctx->obj) &&
+        ctx->event_session_plan.Defer(single->reclaim_position, single->position.tag))
+        return 0;
     std::vector<FsdbEventCursor*> siblings;
     for (auto &entry : ctx->event_cursors)
         if (entry.second.sig->idcode == sig->idcode) siblings.push_back(&entry.second);
     if (!FsdbReclaimEventCursors(ctx->obj, sig->idcode, siblings, ctx->cleanup_failed))
         return -6;
+    if (single) single->reclaim_position.anchor = single->position.tag;
     progress = FsdbEventReclaimProgress{};
     return 0;
 }
@@ -1157,8 +1197,13 @@ int fsdb_event_open_v1(void *handle, const char *path,
             }
         }
     }
-    FsdbEventCursor state = {hdl, &it->second, start_ps, end_ps, valid, {}};
+    FsdbEventCursor state = {hdl, &it->second, start_ps, end_ps, valid, {}, {}};
     if (valid && !state.position.Initialize(hdl, last_at_tick)) return read.Result(-3);
+    state.reclaim_position.anchor = state.position.tag;
+    // Once another cursor has existed in this group, keep its old safe path
+    // even after it closes; no retained-session ownership inference is needed.
+    if (ctx->event_cursor_opened) ctx->event_single_cursor = false;
+    ctx->event_cursor_opened = true;
     *cursor = ++ctx->next_event_cursor;
     ctx->event_cursors.emplace(*cursor, state);
     read.ReleaseHandle();
