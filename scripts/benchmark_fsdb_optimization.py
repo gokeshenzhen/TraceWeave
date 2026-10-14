@@ -251,7 +251,7 @@ def real_workloads(case):
     }
 
 
-def protocol_oracle(cycles, start=0, end=-1, scope=None):
+def protocol_oracle(cycles, start=0, end=-1, scope=None, clock_prefix_samples=None):
     """Independent sampled-stimulus model: count predicates and contiguous runs.
 
     No TraceWeave discovery, sampler or protocol implementation is imported.
@@ -280,6 +280,9 @@ def protocol_oracle(cycles, start=0, end=-1, scope=None):
             if ahb and index==1 and p==8:
                 payload=None
             beats.append((timestamp,valid,ready,payload))
+        truncated=clock_prefix_samples is not None and len(beats)>clock_prefix_samples
+        if truncated:
+            beats=beats[:clock_prefix_samples]
         runs=[]
         for stalled,group in itertools.groupby(beats,lambda row:row[1] is True and not row[2]):
             segment=list(group)
@@ -305,7 +308,7 @@ def protocol_oracle(cycles, start=0, end=-1, scope=None):
             x_while_valid_violations=unknown_episodes,write_data_hold_violations=write_changes,
             ready_without_valid_cycles=sum(v is False and r for _,v,r,_ in beats),
             unknown_sample_cycles=sum(v is None for _,v,_,_ in beats),
-            transition_data_truncated=False)
+            transition_data_truncated=truncated)
     return expected
 
 
@@ -337,15 +340,31 @@ def validate_result(item, step, result):
             if begin>0:
                 pi=min(n,max(0,(begin-1-offset)//stride))
                 assert pred is not None and pred["time_ps"]==(offset+pi*stride if pi else 0)
+        elif oracle.get("kind")=="wide_bus":
+            expected=[dict(time_ps=t,bits=bits) for t,bits in oracle["events"]
+                if t>=args["start_time_ps"] and (args["end_time_ps"]<0 or t<=args["end_time_ps"])]
+            assert result["transition_count"]==len(expected)
+            assert bool(result["truncated"])==(len(expected)>args["max_transitions"])
+            assert [(row["time_ps"],row["value"]["bin"]) for row in events]==[
+                (row["time_ps"],row["bits"]) for row in expected[:args["max_transitions"]]]
+            assert pred is None
     elif tool=="get_signal_at_time" and oracle.get("kind")=="counter":
         i=min(oracle["steps"],max(0,(args["time_ps"]-oracle["offset_ps"])//oracle["stride_ps"]))
         assert result["value"]["bin"].lower()==expected_bits(oracle,i,args["signal_path"])
+    elif tool=="get_signal_at_time" and oracle.get("kind")=="wide_bus":
+        expected=next(bits for when,bits in reversed(oracle["events"]) if when<=args["time_ps"])
+        assert result["value"]["bin"]==expected
     elif tool=="get_signals_by_cycle":
         assert result["num_cycles_returned"]==20 and not result["signal_errors"]
         assert not result.get("transition_data_truncated",False)
     elif tool=="sweep_handshakes" and oracle.get("kind")=="protocol":
-        expected=protocol_oracle(oracle["cycles"],args.get("start_time_ps",0),args.get("end_time_ps",-1),args.get("scope"))
-        assert result["coverage_status"]=="complete",result
+        expected=protocol_oracle(oracle["cycles"],args.get("start_time_ps",0),args.get("end_time_ps",-1),args.get("scope"),
+            oracle.get("clock_prefix_samples"))
+        truncated_count=sum(row["transition_data_truncated"] for row in expected.values())
+        expected_coverage="degraded" if truncated_count else "complete"
+        assert expected_coverage==oracle.get("expected_coverage","complete")
+        assert result["coverage_status"]==expected_coverage,result
+        assert result["transition_truncated_count"]==truncated_count
         assert result["interface_count"]==len(expected)>0
         assert result["discovered_count"]==len(expected) and not result["skipped"]
         actual={row["scope"]:row for row in result["interfaces"]}
@@ -357,6 +376,8 @@ def validate_result(item, step, result):
             coverage=row["coverage"]
             assert coverage["clock_sampled"] and coverage["stall_checked"]
             assert coverage["payload_hold_checked"] and coverage["valid_hold_checked"]
+            assert coverage["transition_data_truncated"]==facts["transition_data_truncated"]
+            assert row["transition_signals_truncated"]==([row["clock"]] if facts["transition_data_truncated"] else [])
             if ".m_if" in name:
                 assert coverage["x_while_valid_checked"] and coverage["write_data_hold_checked"]
         if result.get("cursor"):
@@ -473,10 +494,14 @@ def build(args):
 def generate(args):
     directory=args.output.resolve();directory.mkdir(parents=True,exist_ok=False)
     records=[]
-    for name,mode,steps,sync,memory in (("dense_10m","dense",10_000_000,0,128),
+    specifications=(("dense_10m","dense",10_000_000,0,128),
         ("dense_100m","dense",100_000_000,0,128),("single_session_10m","dense",10_000_000,0,1024),
         ("wide_256","wide",10000,100,128),
-        ("protocol_small","protocol",256,32,128),("protocol_large","protocol",131072,4096,128)):
+        ("protocol_small","protocol",256,32,128),("protocol_complete","protocol",32768,4096,128),
+        ("protocol_large","protocol",131072,4096,128))
+    assert not args.only or set(args.only)<={row[0] for row in specifications}
+    for name,mode,steps,sync,memory in specifications:
+        if args.only and name not in args.only:continue
         path=directory/(name+".fsdb")
         receipt=guarded([str(args.build/"fixture"),str(path),mode,str(steps),str(sync),str(memory)],
             directory/(name+"-generation"),dict(timeout_sec=900,rss_mib=4096,as_mib=8192,available_min_mib=2048))
@@ -512,8 +537,14 @@ def make_plan(args):
     data=[("activity_10m",existing/"activity_10000000.fsdb",10_000_000,0,10,5),
           ("activity_10m_small_sessions",existing/"activity_10m_small_sessions.fsdb",10_000_000,0,10,5),
           ("activity_100m",existing/"activity_100000000.fsdb",100_000_000,0,10,3)]
-    fixtures=read(args.fixtures/"FIXTURES.json")
-    for fixture in fixtures["fixtures"]:
+    fixtures=[]
+    for directory in [args.fixtures,*args.additional_fixtures]:
+        fixtures.extend(read(directory/"FIXTURES.json")["fixtures"])
+    names=[row["id"] for row in fixtures]
+    assert len(names)==len(set(names)),"duplicate fixture identity"
+    assert {"dense_10m","dense_100m","single_session_10m","wide_256",
+        "protocol_small","protocol_complete","protocol_large"}<=set(names),"required fixture missing"
+    for fixture in fixtures:
         inputs.append(fixture["wave"])
         if fixture["mode"]=="dense":
             if fixture["id"]=="single_session_10m":
@@ -538,7 +569,22 @@ def make_plan(args):
                     arguments.update(start_time_ps=start,end_time_ps=end)
                 if scope:arguments["scope"]=scope
                 add(fixture["id"]+"__sweep_"+suffix,wave,dict(steps=[dict(label="sweep",tool="sweep_handshakes",arguments=arguments)]),
-                    oracle=dict(kind="protocol",cycles=fixture["steps"]))
+                    oracle=dict(kind="protocol",cycles=fixture["steps"],clock_prefix_samples=65027,
+                        expected_coverage="degraded" if fixture["id"]=="protocol_large" and suffix!="window" else "complete",
+                        prefix_basis="Frozen control: 64 MiB / (512+4*1) bytes per clock event; retain safe edges strictly before the last retained event. Full/window arguments remain unchanged."))
+    wide_path=args.wide_wave
+    inputs.append(file_identity(wide_path));wide=str(wide_path.resolve())
+    for width,signal_path,value in ((64,"tb.dat3[63:0]",0xDEADBEEF00000000),
+                                  (1024,"tb.dat1[1023:0]",0x5A00000000000000)):
+        oracle=dict(kind="wide_bus",width=width,events=[[0,"0"*width],
+            [30000,format(value,"064b")*(width//64)],
+            [60000,format(value+1,"064b")*(width//64)]],
+            source="tests/fixtures/wide_bus_tb.sv: deterministic three-event payload stimulus")
+        add(f"wide_{width}__point",wide,dict(steps=[dict(label="point",tool="get_signal_at_time",
+            arguments=dict(wave_path=wide,signal_path=signal_path,time_ps=30000))]),oracle=oracle)
+        for cap in (1,1000):
+            add(f"wide_{width}__cap{cap}",wide,dict(steps=[dict(label="transitions",tool="get_signal_transitions",
+                arguments=dict(wave_path=wide,signal_path=signal_path,start_time_ps=0,end_time_ps=-1,max_transitions=cap))]),oracle=oracle)
     for name,path,n,offset,stride,pairs in data:
         wave=str(path.resolve())
         if not any(row["realpath"]==wave for row in inputs):inputs.append(file_identity(path))
@@ -847,8 +893,11 @@ def main():
     for arg in ("batch","source-root","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("generate")
     for arg in ("build","output"):command.add_argument("--"+arg,type=Path,required=True)
+    command.add_argument("--only",action="append")
     command=commands.add_parser("plan")
     for arg in ("batch","fixtures","real-manifest","output"):command.add_argument("--"+arg,type=Path,required=True)
+    command.add_argument("--additional-fixtures",type=Path,action="append",default=[])
+    command.add_argument("--wide-wave",type=Path,default=ROOT/"tests/fixtures/wide_bus.fsdb")
     command=commands.add_parser("quick-plan")
     for arg in ("dense-wave","protocol-wave","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("inventory")

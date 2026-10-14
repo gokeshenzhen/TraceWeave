@@ -55,6 +55,41 @@ def test_window_oracle_respects_absolute_edges_and_scope():
     assert row["max_stall_begin_ps"]==20*120+10
 
 
+def test_protocol_oracle_separates_full_prefix_and_complete_long_trace():
+    # The unchanged 64 MiB control clock budget retains 130055 one-bit
+    # records; safe before-edge sampling yields exactly 65027 rising edges.
+    prefix=(64*1024**2//(512+4)-1)//2
+    assert prefix==65027
+    rows=protocol_oracle(131072,clock_prefix_samples=prefix)
+    assert len(rows)==10 and all(row["sample_count"]==prefix for row in rows.values())
+    assert all(row["transition_data_truncated"] for row in rows.values())
+    ahb=rows["top.fast.m_if1"]
+    assert ahb["payload_hold_violations"]==1016
+    assert ahb["write_data_hold_violations"]==1016
+    assert ahb["final_stall_cycles"]==11
+    complete=protocol_oracle(32768,clock_prefix_samples=prefix)
+    assert not any(row["transition_data_truncated"] for row in complete.values())
+    assert complete["top.fast.vr1"]["payload_hold_violations"]==511
+    assert complete["top.slow.vr6"]["sample_count"]==16384
+    window=protocol_oracle(131072,1280,3840,clock_prefix_samples=prefix)
+    assert not any(row["transition_data_truncated"] for row in window.values())
+
+
+def test_wide_bus_guard_checks_full_value_and_exact_count():
+    import pytest
+    from scripts.benchmark_fsdb_optimization import validate_result
+    bits=format(0x5A00000000000000,"064b")*16
+    oracle=dict(kind="wide_bus",events=[[0,"0"*1024],[30000,bits],[60000,bits[:-1]+"1"]])
+    item=dict(id="wide_1024",oracle=oracle)
+    point=dict(tool="get_signal_at_time",arguments=dict(time_ps=30000))
+    assert validate_result(item,point,dict(value=dict(bin=bits)))
+    with pytest.raises(AssertionError):validate_result(item,point,dict(value=dict(bin=bits[1:])))
+    step=dict(tool="get_signal_transitions",arguments=dict(start_time_ps=0,end_time_ps=-1,max_transitions=1))
+    response=dict(transitions=[dict(time_ps=0,value=dict(bin="0"*1024))],transition_count=3,truncated=True)
+    assert validate_result(item,step,response)
+    with pytest.raises(AssertionError):validate_result(item,step,dict(response,transition_count=1))
+
+
 def test_pair_statistics_refuse_missing_arm_or_semantic_change():
     import pytest
     metrics={"query":dict(first_ms=1,repeat_median_ms=2,maximum_ms=3,process_wall_ms=4,
