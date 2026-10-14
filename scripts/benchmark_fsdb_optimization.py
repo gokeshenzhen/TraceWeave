@@ -431,7 +431,33 @@ def loaded_libraries():
     return [dict(path=p,sha256=sha(p)) for p in paths]
 
 
+def scheduling_snapshot():
+    """Opt-in diagnostic observations, outside the API timing boundary."""
+    threads=[]
+    for task in sorted(Path("/proc/self/task").iterdir()):
+        try:
+            stat=(task/"stat").read_text().rsplit(")",1)[1].split()
+            schedstat=[int(value) for value in (task/"schedstat").read_text().split()]
+            status=(task/"status").read_text().splitlines()
+            sched=(task/"sched").read_text().splitlines()
+            switches={line.split(":")[0]:int(line.split(":")[1]) for line in status
+                if line.startswith(("voluntary_ctxt_switches:","nonvoluntary_ctxt_switches:"))}
+            migrations=next((int(line.split(":")[1]) for line in sched
+                if line.strip().startswith("se.nr_migrations")),None)
+            threads.append(dict(tid=int(task.name),last_cpu=int(stat[36]),
+                runtime_ns=schedstat[0],runqueue_wait_ns=schedstat[1],timeslices=schedstat[2],
+                migrations=migrations,**switches))
+        except (FileNotFoundError,ProcessLookupError):
+            threads.append(dict(tid=int(task.name),status="exited_during_snapshot"))
+    return dict(affinity=sorted(os.sched_getaffinity(0)),threads=threads)
+
+
 async def worker(args):
+    scheduling=bool(getattr(args,"diagnostic_scheduling",False))
+    diagnostic_cpu=getattr(args,"diagnostic_cpu",None)
+    if diagnostic_cpu is not None:
+        assert scheduling,"affinity override is restricted to diagnostic workers"
+        os.sched_setaffinity(0,{diagnostic_cpu})
     source=Path(args.source_root).resolve()
     sys.path.insert(0,str(source))
     os.environ["TRACEWEAVE_TELEMETRY"]="0"
@@ -461,9 +487,16 @@ async def worker(args):
     rows=[];prelude=[]
     before=Path(wave).stat()
     async def invoke(step,repeat,is_prelude=False):
-        gc.collect();mem_before=proc_memory(os.getpid());started=time.perf_counter_ns()
+        gc.collect();mem_before=proc_memory(os.getpid())
+        if scheduling:
+            schedule_before=scheduling_snapshot()
+            cpu_started=time.process_time_ns()
+        started=time.perf_counter_ns()
         blocks=await server.call_tool(step["tool"],step["arguments"])
         elapsed=(time.perf_counter_ns()-started)/1e6
+        if scheduling:
+            cpu_ms=(time.process_time_ns()-cpu_started)/1e6
+            schedule_after=scheduling_snapshot()
         memory=proc_memory(os.getpid())
         encoded="".join(block.text for block in blocks if block.type=="text")
         name=f"responses/{'prelude' if is_prelude else repeat}-{step['label']}.json"
@@ -471,11 +504,15 @@ async def worker(args):
         with target.open("x") as stream:stream.write(encoded)
         result=json.loads(encoded)
         validate_result(item,step,result)
-        return dict(step=step["label"],repeat=repeat,elapsed_ms=elapsed,
+        row=dict(step=step["label"],repeat=repeat,elapsed_ms=elapsed,
             rss_before_kib=mem_before.get("VmRSS",0),rss_after_kib=memory.get("VmRSS",0),
             peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             response=name,response_sha256=sha(target),semantic_sha256=digest_json(canonical(result)),
             diagnostics=dict(captured),clock_cache=cache.snapshot())
+        if scheduling:
+            row["scheduling"]=dict(diagnostic_only=True,process_cpu_ms=cpu_ms,
+                before=schedule_before,after=schedule_after)
+        return row
     try:
         for step in item["scenario"].get("prelude",[]):
             prelude.append(await invoke(step,-1,True))
@@ -1064,6 +1101,8 @@ def main():
     command=commands.add_parser("worker")
     for arg in ("plan","output","source-root","wrapper"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--workload",required=True)
+    command.add_argument("--diagnostic-scheduling",action="store_true")
+    command.add_argument("--diagnostic-cpu",type=int)
     command=commands.add_parser("freeze")
     for arg in ("plan","summary","validation","calibration","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("calibrate")
