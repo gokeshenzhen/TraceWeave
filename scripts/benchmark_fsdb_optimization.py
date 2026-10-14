@@ -645,29 +645,34 @@ def quick_plan(args):
 
 
 def validate_single_dense_session(metadata, start_ps, end_ps):
-    """Prove dense activity fits one session, preserving terminal zero spans.
+    """Prove dense changes fit one session, preserving endpoint zero spans.
 
     The SDK reports flush boundaries, not whether a zero-span entry is empty.
     Accept only one positive span covering the complete generated duration and
-    zero-span entries exactly at its end, strictly after the dense target's last
-    event. An interior/split span or a same-tick dense boundary is rejected.
+    zero-span entries exactly at time zero or its end, outside the generated
+    dense changes. The initial/predecessor event may belong to the zero-span
+    start entry: this does not claim all N+1 records share one physical session.
+    Interior/split spans or a same-tick dense boundary are rejected.
     """
     rows=metadata["session_layout"]
     assert len(rows)==metadata["sessions"] and rows
     assert metadata["scale_fs"]==1000,"fixture must retain its declared 1 ps scale"
     positive=[row for row in rows if row["close_tick"]>row["start_tick"]]
-    terminal=[row for row in rows if row["close_tick"]==row["start_tick"]]
+    zero=[row for row in rows if row["close_tick"]==row["start_tick"]]
     assert len(positive)==1,"dense activity fixture was split by the writer"
     span=positive[0]
     assert span["start_tick"]==span["start_ps"]==0
     assert span["close_tick"]==span["close_ps"]==metadata["duration_ps"]
     assert 0<start_ps<=end_ps<span["close_ps"]
-    assert rows[0]==span and len(rows)==1+len(terminal)
-    assert all(row["start_tick"]==row["close_tick"]==row["start_ps"]==row["close_ps"]==span["close_ps"]
-        for row in terminal),"only terminal zero-span metadata is permitted"
-    return dict(positive_span_sessions=1,terminal_zero_span_entries=len(terminal),
+    initial=[row for row in zero if row["start_tick"]==0]
+    terminal=[row for row in zero if row["start_tick"]==span["close_tick"]]
+    assert len(rows)==1+len(initial)+len(terminal)
+    assert rows==initial+[span]+terminal,"session endpoints must retain chronological order"
+    assert all(row["start_tick"]==row["close_tick"]==row["start_ps"]==row["close_ps"] in (0,span["close_ps"])
+        for row in zero),"only endpoint zero-span metadata is permitted"
+    return dict(positive_span_sessions=1,initial_zero_span_entries=len(initial),terminal_zero_span_entries=len(terminal),
         dense_start_ps=start_ps,dense_end_ps=end_ps,
-        note="Terminal entries are retained; zero span does not prove zero records.")
+        note="Endpoint entries are retained; the initial predecessor may occupy a separate zero-span session.")
 
 
 def inventory(args):

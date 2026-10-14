@@ -152,8 +152,11 @@ def test_single_dense_session_retains_terminal_zero_span_metadata():
     metadata=dict(sessions=2,scale_fs=1000,duration_ps=2000,session_layout=[row(0,2000),row(2000,2000)])
     result=validate_single_dense_session(metadata,1001,1100)
     assert result["positive_span_sessions"]==1 and result["terminal_zero_span_entries"]==1
+    initial=dict(metadata,session_layout=[row(0,0),row(0,2000)])
+    assert validate_single_dense_session(initial,1001,1100)["initial_zero_span_entries"]==1
     for invalid in ([row(0,1000),row(1000,2000)], [row(0,2000),row(1100,1100)],
-                    [row(0,2000),row(1999,1999)], [row(2000,2000),row(0,2000)]):
+                    [row(0,2000),row(1999,1999)], [row(2000,2000),row(0,2000)],
+                    [row(0,2000),row(0,0)]):
         with pytest.raises(AssertionError):
             validate_single_dense_session(dict(metadata,session_layout=invalid),1001,1100)
     with pytest.raises(AssertionError):validate_single_dense_session(metadata,1001,2000)
