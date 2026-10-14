@@ -525,11 +525,11 @@ def generate(args):
 
 def make_plan(args):
     workloads=[];inputs=[]
-    def add(identifier,wave,scenario=None,*,oracle=None,pairs=5,capacity=False,native=None):
+    def add(identifier,wave,scenario=None,*,oracle=None,pairs=5,capacity=False,native=None,limits=None):
         workloads.append(dict(id=identifier,wave=wave,kind="native" if native else "public",
             scenario=scenario,native=native,oracle=oracle or {},pairs=1 if capacity else pairs,
             calls_per_worker=1 if capacity else 3,capacity_only=capacity,required=True,
-            limits=CAPACITY if capacity else (LONG if pairs==3 else ORDINARY)))
+            limits=limits or (CAPACITY if capacity else (LONG if pairs==3 else ORDINARY))))
     real=read(args.real_manifest)
     for case in real["cases"]:
         inputs.append(case["wave"])
@@ -562,9 +562,9 @@ def make_plan(args):
         inputs.append(fixture["wave"])
         if fixture["mode"]=="dense":
             if fixture["id"]=="single_session_10m":
-                add("single_session_10m__capacity",fixture["wave"]["realpath"],native=dict(
+                add("single_session_10m__native_count",fixture["wave"]["realpath"],native=dict(
                     signal="top.data[31:0]",start_ps=OFFSET_PS+1,end_ps=OFFSET_PS+fixture["steps"],
-                    expected_records=fixture["steps"]+1),capacity=True)
+                    expected_records=fixture["steps"]+1),limits=CAPACITY)
             else:
                 data.append((fixture["id"],Path(fixture["wave"]["realpath"]),fixture["steps"],OFFSET_PS,1,3 if fixture["steps"]==100_000_000 else 5))
         elif fixture["mode"].startswith("wide"):
