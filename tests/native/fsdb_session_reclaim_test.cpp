@@ -4,7 +4,8 @@
 #include <vector>
 
 struct fsdbTag64 { unsigned H, L; };
-struct fsdbXTag { fsdbTag64 hltag; };
+struct fsdbHLTag { unsigned H, L; }; // The SDK uses distinct tag structs.
+struct fsdbXTag { fsdbHLTag hltag; };
 struct Session { Session *next; fsdbXTag start_xtag, close_xtag; };
 const int FSDB_RC_SUCCESS = 0, FSDB_FT_VERILOG = 0;
 
@@ -21,7 +22,8 @@ struct Reader {
         rows.resize(boundaries.size() - 1);
         for (std::size_t i = 0; i < rows.size(); ++i)
             rows[i] = {i + 1 < rows.size() ? &rows[i + 1] : nullptr,
-                       {boundaries[i]}, {boundaries[i + 1]}};
+                       {{boundaries[i].H, boundaries[i].L}},
+                       {{boundaries[i + 1].H, boundaries[i + 1].L}}};
     }
     int ffrGetFileType() { return type; }
     int ffrGetMinFsdbTag64(fsdbTag64 *out) { *out = minimum; return bounds_fail ? 1 : 0; }

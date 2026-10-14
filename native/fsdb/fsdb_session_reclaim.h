@@ -44,8 +44,8 @@ public:
             std::size_t positive = 0;
             for (auto item = reader->ffrGetSessionListInfo(); item; item = item->next) {
                 if (closes.size() == MaxSessions) return false;
-                const fsdbTag64 start = item->start_xtag.hltag;
-                const fsdbTag64 close = item->close_xtag.hltag;
+                const fsdbTag64 start = {item->start_xtag.hltag.H, item->start_xtag.hltag.L};
+                const fsdbTag64 close = {item->close_xtag.hltag.H, item->close_xtag.hltag.L};
                 if (!Equal(start, previous) || Less(close, start) || Less(maximum, close))
                     return false;
                 if (Less(start, close)) ++positive;
