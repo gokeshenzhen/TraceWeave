@@ -136,9 +136,15 @@ def guarded(command, output, limits, *, env=None):
     def set_limits():
         resource.setrlimit(resource.RLIMIT_AS, (limits["as_mib"] * 1024**2,) * 2)
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    def terminate_group(pid, sig):
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            pass
     start = time.monotonic()
     peak = dict(VmRSS=0, VmHWM=0, VmSwap=0, VmSize=0)
     reason = None
+    interrupted = None
     samples = []
     with (output / "worker.log").open("x") as stream:
         child = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
@@ -161,26 +167,28 @@ def guarded(command, output, limits, *, env=None):
                 if reason:
                     break
                 time.sleep(.2)
-        except BaseException:
+        except BaseException as exc:
             reason = "parent_interrupted"
-            raise
+            interrupted = exc
         finally:
             if child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
+                terminate_group(child.pid, signal.SIGTERM)
                 try:
                     child.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    terminate_group(child.pid, signal.SIGKILL)
                     child.wait(timeout=5)
             # Kill any surviving group member even if the leader exited first.
             _, leftovers = group_memory(child.pid)
             if leftovers:
-                os.killpg(child.pid, signal.SIGKILL)
+                terminate_group(child.pid, signal.SIGKILL)
                 reason = reason or "orphan_processes"
     result = dict(command=command, returncode=child.returncode, guard_reason=reason,
         process_wall_ms=(time.monotonic()-start)*1000, observed_peak_kib=peak,
         limits=limits, host_before=before, host_after=system_memory(), resource_samples=samples)
     write(output / "guard.json", result)
+    if interrupted is not None:
+        raise interrupted
     return result
 
 
@@ -197,6 +205,16 @@ def canonical(result):
 
 def digest_json(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def expected_bits(oracle, index, path):
+    if "clk" in path:
+        return str(index & 1)
+    width=oracle.get("width",32)
+    unknown=oracle.get("unknown_records",{}).get(str(index))
+    if unknown:return unknown*width
+    value=(index*2654435761)&0xffffffff
+    return f"{value:064b}"*(width//64) if width>64 else format(value,f"0{width}b")
 
 
 def real_workloads(case):
@@ -272,6 +290,9 @@ def protocol_oracle(cycles, start=0, end=-1, scope=None):
             for run in runs for a,b in zip(run,run[1:]))
         unknown_episodes=sum(row[3] is None and (j==0 or beats[j-1][3] is not None)
             for j,row in enumerate(beats)) if ahb else 0
+        first_accept=next((t for t,v,r,_ in beats if v is True and r),math.inf)
+        write_changes=sum(a[3]!=b[3] and b[0]>first_accept
+            for run in runs for a,b in zip(run,run[1:])) if ahb and index else 0
         expected[name]=dict(sample_count=len(beats),
             transfer_count=sum(v is True and r for _,v,r,_ in beats),
             stall_count=sum(v is True and not r for _,v,r,_ in beats),
@@ -281,7 +302,7 @@ def protocol_oracle(cycles, start=0, end=-1, scope=None):
             payload_hold_violations=payload_changes,
             valid_deassert_violations=sum(a[1] is True and not a[2] and b[1] is False
                 for a,b in zip(beats,beats[1:])),
-            x_while_valid_violations=unknown_episodes,write_data_hold_violations=0,
+            x_while_valid_violations=unknown_episodes,write_data_hold_violations=write_changes,
             ready_without_valid_cycles=sum(v is False and r for _,v,r,_ in beats),
             unknown_sample_cycles=sum(v is None for _,v,_,_ in beats),
             transition_data_truncated=False)
@@ -312,15 +333,13 @@ def validate_result(item, step, result):
                 t=event["time_ps"]
                 i=0 if t==0 else (t-offset)//stride
                 assert t==0 or (1<=i<=n and t==offset+i*stride)
-                word=(i&1) if "clk" in args["signal_path"] else ((i*2654435761)&0xffffffff)
-                assert int(event["value"]["bin"],2)==word
+                assert event["value"]["bin"].lower()==expected_bits(oracle,i,args["signal_path"])
             if begin>0:
                 pi=min(n,max(0,(begin-1-offset)//stride))
                 assert pred is not None and pred["time_ps"]==(offset+pi*stride if pi else 0)
     elif tool=="get_signal_at_time" and oracle.get("kind")=="counter":
         i=min(oracle["steps"],max(0,(args["time_ps"]-oracle["offset_ps"])//oracle["stride_ps"]))
-        word=(i&1) if "clk" in args["signal_path"] else ((i*2654435761)&0xffffffff)
-        assert int(result["value"]["bin"],2)==word
+        assert result["value"]["bin"].lower()==expected_bits(oracle,i,args["signal_path"])
     elif tool=="get_signals_by_cycle":
         assert result["num_cycles_returned"]==20 and not result["signal_errors"]
         assert not result.get("transition_data_truncated",False)
@@ -344,6 +363,12 @@ def validate_result(item, step, result):
             top=result["interfaces"][0]
             assert result["cursor"]["time_ps"]==top["max_stall_begin_ps"]
             assert result["cursor"]["metadata"]["valid"]==top["valid"]
+    elif tool=="sweep_handshakes" and oracle.get("kind")=="opentitan_target":
+        assert result["coverage_status"]=="complete" and result["interface_count"]==oracle["interfaces"]
+        for row in result["interfaces"]:
+            assert row["sample_count"]==oracle["samples"] and row["transfer_count"]==oracle["transfers"]
+            assert row["stall_count"]==0 and not row["transition_data_truncated"]
+            assert row["coverage"]["payload_hold_checked"] and row["coverage"]["valid_hold_checked"]
     return True
 
 
@@ -388,11 +413,11 @@ async def worker(args):
         elapsed=(time.perf_counter_ns()-started)/1e6
         memory=proc_memory(os.getpid())
         encoded="".join(block.text for block in blocks if block.type=="text")
-        result=json.loads(encoded)
-        validate_result(item,step,result)
         name=f"responses/{'prelude' if is_prelude else repeat}-{step['label']}.json"
         target=args.output/name;target.parent.mkdir(exist_ok=True)
         with target.open("x") as stream:stream.write(encoded)
+        result=json.loads(encoded)
+        validate_result(item,step,result)
         return dict(step=step["label"],repeat=repeat,elapsed_ms=elapsed,
             rss_before_kib=mem_before.get("VmRSS",0),rss_after_kib=memory.get("VmRSS",0),
             peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
@@ -450,6 +475,7 @@ def generate(args):
     records=[]
     for name,mode,steps,sync,memory in (("dense_10m","dense",10_000_000,0,128),
         ("dense_100m","dense",100_000_000,0,128),("single_session_10m","dense",10_000_000,0,1024),
+        ("wide_256","wide",10000,100,128),
         ("protocol_small","protocol",256,32,128),("protocol_large","protocol",131072,4096,128)):
         path=directory/(name+".fsdb")
         receipt=guarded([str(args.build/"fixture"),str(path),mode,str(steps),str(sync),str(memory)],
@@ -474,6 +500,13 @@ def make_plan(args):
         add(case["id"]+"__sweep_window",case["wave"]["realpath"],dict(steps=[dict(label="sweep",tool="sweep_handshakes",
             arguments=dict(wave_path=case["wave"]["realpath"],start_time_ps=case["window_ps"][0],
                 end_time_ps=case["window_ps"][1],max_interfaces=64,max_wait_cycles=16))]))
+        add(case["id"]+"__sweep_full",case["wave"]["realpath"],dict(steps=[dict(label="sweep",tool="sweep_handshakes",
+            arguments=dict(wave_path=case["wave"]["realpath"],max_interfaces=64,max_wait_cycles=16))]))
+        if case["id"]=="opentitan":
+            add("opentitan__sweep_targeted",case["wave"]["realpath"],dict(steps=[dict(label="sweep",tool="sweep_handshakes",
+                arguments=dict(wave_path=case["wave"]["realpath"],scope="tb.dut.top_earlgrey.u_rv_core_ibex.fifo_d.reqfifo",
+                    start_time_ps=4600000003,end_time_ps=4600400003,max_interfaces=64,max_wait_cycles=16))]),
+                oracle=dict(kind="opentitan_target",interfaces=2,samples=40,transfers=9))
     assets=read(args.batch/"control/IDENTITY.json")
     existing=args.batch.parents[1]/"fsdb-billion-20261013"
     data=[("activity_10m",existing/"activity_10000000.fsdb",10_000_000,0,10,5),
@@ -489,6 +522,13 @@ def make_plan(args):
                     expected_records=fixture["steps"]+1),capacity=True)
             else:
                 data.append((fixture["id"],Path(fixture["wave"]["realpath"]),fixture["steps"],OFFSET_PS,1,3 if fixture["steps"]==100_000_000 else 5))
+        elif fixture["mode"]=="wide":
+            wave=fixture["wave"]["realpath"];n=fixture["steps"]
+            oracle=dict(kind="counter",steps=n,offset_ps=0,stride_ps=10,width=256,unknown_records={"5":"x","6":"z"})
+            add("wide_256__native_count",wave,native=dict(signal="top.data[255:0]",start_ps=0,end_ps=-1,expected_records=n+1),oracle=oracle)
+            for cap in (1,1000):
+                add(f"wide_256__cap{cap}",wave,dict(steps=[dict(label="transitions",tool="get_signal_transitions",
+                    arguments=dict(wave_path=wave,signal_path="top.data[255:0]",start_time_ps=0,end_time_ps=-1,max_transitions=cap))]),oracle=oracle)
         else:
             wave=fixture["wave"]["realpath"]
             for suffix,scope,start,end in (("full",None,0,-1),("window",None,20*64,20*192),
@@ -536,6 +576,58 @@ def make_plan(args):
     write(args.output,plan)
 
 
+def quick_plan(args):
+    """Disposable correctness-only smoke plan; not eligible for baseline freeze."""
+    workloads=[]
+    wave=str(args.dense_wave.resolve())
+    for cap in (1,1000):
+        workloads.append(dict(id=f"dense_tiny__cap{cap}",wave=wave,kind="public",
+            scenario=dict(steps=[dict(label="transitions",tool="get_signal_transitions",arguments=dict(
+                wave_path=wave,signal_path="top.data[31:0]",start_time_ps=OFFSET_PS+1,
+                end_time_ps=OFFSET_PS+1000,max_transitions=cap))]),oracle=dict(kind="counter",steps=1000,offset_ps=OFFSET_PS,stride_ps=1),
+            pairs=1,calls_per_worker=3,capacity_only=False,required=True,limits=ORDINARY))
+    wave=str(args.protocol_wave.resolve())
+    for name,scope,start,end in (("full",None,0,-1),("window",None,1280,3840),("single","top.fast.vr1",0,-1),("ahb","top.fast.m_if1",0,-1)):
+        arguments=dict(wave_path=wave,max_interfaces=64,max_wait_cycles=8)
+        if scope:arguments["scope"]=scope
+        if start or end!=-1:arguments.update(start_time_ps=start,end_time_ps=end)
+        workloads.append(dict(id="protocol_tiny__"+name,wave=wave,kind="public",
+            scenario=dict(steps=[dict(label="sweep",tool="sweep_handshakes",arguments=arguments)]),
+            oracle=dict(kind="protocol",cycles=256),pairs=1,calls_per_worker=3,
+            capacity_only=False,required=True,limits=ORDINARY))
+    write(args.output,dict(schema_version=1,smoke_only=True,inputs=[file_identity(args.dense_wave),file_identity(args.protocol_wave)],workloads=workloads))
+
+
+def inventory(args):
+    plan=read(args.plan)
+    args.output.mkdir(parents=True,exist_ok=False)
+    records=[]
+    for index,input_ in enumerate(plan["inputs"]):
+        items=[item for item in plan["workloads"] if item["wave"]==input_["realpath"]]
+        paths=set()
+        for item in items:
+            if item["kind"]=="native":paths.add(item["native"]["signal"])
+            else:
+                for step in item["scenario"]["steps"]:
+                    arguments=step["arguments"]
+                    paths.update(arguments.get("signal_paths",[]))
+                    paths.update(arguments[key] for key in ("signal_path","clock_path") if key in arguments)
+                if item.get("oracle",{}).get("kind")=="protocol":
+                    paths.update(("top.fast.clk","top.fast.vr1.data_o[31:0]","top.fast.m_if1.htrans_o[1:0]"))
+        assert paths,(input_,"metadata has no signal")
+        for signal_index,path in enumerate(sorted(paths)):
+            directory=args.output/f"input-{index:02d}-signal-{signal_index:02d}"
+            receipt=guarded([str(args.probe.resolve()),input_["realpath"],path,"0",str(UINT64_MAX),"0","0","info"],directory,ORDINARY)
+            assert receipt["returncode"]==0 and not receipt["guard_reason"]
+            metadata=next(json.loads(line) for line in (directory/"worker.log").read_text().splitlines()
+                if line.startswith('{"phase":"metadata"'))
+            if "single_session_10m" in input_["realpath"]:
+                assert metadata["sessions"]==1,"single-session fixture was split by the writer"
+            records.append(dict(wave_sha256=input_["sha256"],wave=input_["realpath"],signal=path,
+                metadata=metadata,receipt=str(directory/"guard.json"),receipt_sha256=sha(directory/"guard.json")))
+    write(args.output/"INVENTORY.json",dict(plan_sha256=sha(args.plan),probe=file_identity(args.probe),records=records))
+
+
 def metrics(record, guard):
     rows=record["rows"]
     labels=list(dict.fromkeys(row["step"] for row in rows))
@@ -581,8 +673,8 @@ def run_arm(args,item,arm,round_index,root,wrapper,probe):
     guard=guarded(command,directory,item["limits"])
     result=dict(id=item["id"],arm=arm,round=round_index,directory=str(directory),guard=guard)
     if guard["returncode"] or guard["guard_reason"]:
-        assert item["capacity_only"],f"required workload failed: {directory}"
-        result["status"]="capacity_not_completed"
+        limited=guard["guard_reason"] in {"rss_limit","timeout","host_memory_reserve"}
+        result["status"]="capacity_not_completed" if item["capacity_only"] and limited else "failed"
     else:
         record=read(directory/"result.json") if item["kind"]=="public" else native_record(directory,item)
         result.update(status="completed",metrics=metrics(record,guard),
@@ -603,9 +695,13 @@ def run_suite(args):
     for input_ in plan["inputs"]:
         if input_["realpath"] in {row["wave"] for row in selected}:
             assert Path(input_["realpath"]).stat().st_size==input_["size_bytes"] and sha(input_["realpath"])==input_["sha256"]
+    frozen=read(args.freeze) if args.freeze else None
+    if frozen:
+        assert frozen["plan_sha256"]==sha(args.plan) and frozen["harness_sha256"]==sha(SCRIPT)
     suite=dict(plan_sha256=sha(args.plan),harness_sha256=sha(SCRIPT),mode=args.command,
         source_identities=identities,wrappers=[file_identity(p) for p in wrappers],probes=[file_identity(p) for p in probes],
-        python=sys.version,platform=platform.platform(),host=system_memory(),records=[])
+        python=sys.version,platform=platform.platform(),host=system_memory(),records=[],
+        selected_workloads=[item["id"] for item in selected],status="running")
     write(args.output/"RUN_START.json",{k:v for k,v in suite.items() if k!="records"})
     for item in selected:
         rounds=1 if args.command=="smoke" else item["pairs"]
@@ -614,10 +710,25 @@ def run_suite(args):
                 record=run_arm(args,item,"AB"[index],round_index,roots[index],wrappers[index],probes[index])
                 suite["records"].append(record)
                 print(json.dumps({"id":item["id"],"arm":"AB"[index],"round":round_index,"status":record["status"]}),flush=True)
+                if record["status"]=="failed":
+                    suite["status"]="rejected_workload_failure"
+                    write(args.output/"summary.json",suite)
+                    raise RuntimeError(f"required workload failed: {record['directory']}")
             a,b=suite["records"][-2:]
             if a["status"]==b["status"]=="completed":
-                assert a["semantics"]==b["semantics"] and a["prelude_semantics"]==b["prelude_semantics"],f"semantic mismatch: {item['id']}"
+                if a["semantics"]!=b["semantics"] or a["prelude_semantics"]!=b["prelude_semantics"]:
+                    suite["status"]="rejected_semantic_mismatch"
+                    write(args.output/"summary.json",suite)
+                    raise RuntimeError(f"semantic mismatch: {item['id']}")
+        if frozen and args.command!="smoke" and not item["capacity_only"]:
+            group=summarize_pairs(suite,{"workloads":[item]})[item["id"]]
+            suspicious=classify_metrics(item["id"],group,frozen,bool(args.confirmation))[0]
+            if suspicious:
+                suite.update(status="confirmed_regression" if args.confirmation else "suspected_regression",suspicions=suspicious)
+                write(args.output/"summary.json",suite)
+                raise RuntimeError(f"stop candidate measurement: {suite['status']}: {item['id']}")
     assert [source_identity(root) for root in roots]==identities,"source changed during run"
+    suite["status"]="completed"
     write(args.output/"summary.json",suite)
 
 
@@ -647,6 +758,7 @@ def summarize_pairs(summary,plan):
 
 def freeze(args):
     plan=read(args.plan);summary=read(args.summary)
+    assert not plan.get("smoke_only") and summary["status"]=="completed"
     assert summary["plan_sha256"]==sha(args.plan) and summary["harness_sha256"]==sha(SCRIPT)
     assert summary["source_identities"][0]["content_sha256"]==summary["source_identities"][1]["content_sha256"]
     assert summary["wrappers"][0]["sha256"]==summary["wrappers"][1]["sha256"]
@@ -656,29 +768,45 @@ def freeze(args):
     validation=read(args.validation)
     assert validation["status"]=="passed" and validation["mcp_fixture_observations"]
     assert validation["required_tests_complete"] and validation["metadata_complete"]
+    assert validation["aa_calibration_review"]["status"]=="stable"
+    for receipt in validation["evidence_files"]:
+        assert sha(receipt["path"])==receipt["sha256"],"validation evidence changed"
+    inventory_=read(validation["inventory_path"])
+    assert inventory_["plan_sha256"]==sha(args.plan)
+    assert {row["wave_sha256"] for row in inventory_["records"]}=={row["sha256"] for row in plan["inputs"]}
     write(args.output,dict(schema_version=1,status="frozen",plan=plan,plan_sha256=sha(args.plan),
         harness_sha256=sha(SCRIPT),aa_summary_sha256=sha(args.summary),aa=aa,
         validation_receipt=validation,validation_sha256=sha(args.validation),
         control=summary["source_identities"][0],wrapper=summary["wrappers"][0],probe=summary["probes"][0]))
 
 
+def classify_metrics(workload,group,freeze_,confirmation=False):
+    suspicions=[];improvements=[]
+    for key,values in group["metrics"].items():
+        before=freeze_["aa"][workload]["metrics"][key]
+        floor=4 if key.endswith("kib") else .001
+        envelope=max(before["envelope"],floor)
+        entry=dict(workload=workload,metric=key,envelope=envelope,**values)
+        if values["median_delta"]>envelope or (confirmation and all(d>0 for d in values["deltas"])):
+            suspicions.append(entry)
+        if values["median_delta"] < -envelope:
+            improvements.append(entry)
+    return suspicions,improvements
+
+
 def compare(args):
     freeze_=read(args.freeze);summary=read(args.summary);plan=freeze_["plan"]
     assert summary["plan_sha256"]==freeze_["plan_sha256"]
-    groups=summarize_pairs(summary,plan);suspicions=[];improvements=[]
+    selected=set(summary["selected_workloads"])
+    subset={"workloads":[row for row in plan["workloads"] if row["id"] in selected]}
+    groups=summarize_pairs(summary,subset);suspicions=[];improvements=[]
     for workload,group in groups.items():
         if group["capacity_only"]:continue
-        for key,values in group["metrics"].items():
-            before=freeze_["aa"][workload]["metrics"][key]
-            floor=4 if key.endswith("kib") else .001
-            envelope=max(before["envelope"],floor)
-            entry=dict(workload=workload,metric=key,envelope=envelope,**values)
-            if values["median_delta"]>envelope or (args.confirmation and all(d>0 for d in values["deltas"])):
-                suspicions.append(entry)
-            if values["median_delta"] < -envelope:
-                improvements.append(entry)
+        bad,good=classify_metrics(workload,group,freeze_,args.confirmation)
+        suspicions.extend(bad);improvements.extend(good)
     report=dict(status="regression" if args.confirmation and suspicions else "suspicious" if suspicions else "no_detected_regression",
         confirmation=bool(args.confirmation),suspicions=suspicions,improvements=improvements,groups=groups,
+        coverage_status="complete" if len(selected)==len(plan["workloads"]) else "partial",
         note="No detected regression is not acceptance: focused correctness, original-control and previous-accepted comparisons are still required.")
     write(args.output,report)
     print(json.dumps(dict(status=report["status"],suspicions=len(suspicions),improvements=len(improvements))))
@@ -693,6 +821,10 @@ def main():
     for arg in ("build","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("plan")
     for arg in ("batch","fixtures","real-manifest","output"):command.add_argument("--"+arg,type=Path,required=True)
+    command=commands.add_parser("quick-plan")
+    for arg in ("dense-wave","protocol-wave","output"):command.add_argument("--"+arg,type=Path,required=True)
+    command=commands.add_parser("inventory")
+    for arg in ("plan","probe","output"):command.add_argument("--"+arg,type=Path,required=True)
     for name in ("run","smoke"):
         command=commands.add_parser(name)
         for arg in ("plan","output","control-root","control-wrapper","control-probe"):
@@ -700,6 +832,8 @@ def main():
         for arg in ("candidate-root","candidate-wrapper","candidate-probe"):
             command.add_argument("--"+arg,type=Path)
         command.add_argument("--workload",action="append")
+        command.add_argument("--freeze",type=Path)
+        command.add_argument("--confirmation",action="store_true")
     command=commands.add_parser("worker")
     for arg in ("plan","output","source-root","wrapper"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--workload",required=True)
@@ -712,7 +846,7 @@ def main():
     if args.command=="worker":
         asyncio.run(worker(args));return
     with serial_lock():
-        {"build":build,"generate":generate,"plan":make_plan,"run":run_suite,"smoke":run_suite,
+        {"build":build,"generate":generate,"plan":make_plan,"quick-plan":quick_plan,"inventory":inventory,"run":run_suite,"smoke":run_suite,
          "freeze":freeze,"compare":compare}[args.command](args)
 
 

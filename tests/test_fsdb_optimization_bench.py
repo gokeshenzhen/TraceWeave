@@ -2,7 +2,7 @@
 import copy
 
 from scripts.benchmark_fsdb_optimization import (
-    canonical, protocol_oracle, real_workloads, summarize_pairs,
+    canonical, classify_metrics, expected_bits, protocol_oracle, real_workloads, summarize_pairs,
 )
 
 
@@ -42,6 +42,8 @@ def test_protocol_formula_has_nonzero_cross_boundary_evidence():
     assert rows["top.fast.vr4"]["unknown_sample_cycles"]==8
     assert rows["top.fast.m_if1"]["x_while_valid_violations"]==4
     assert rows["top.fast.m_if1"]["payload_hold_violations"]==3
+    assert rows["top.fast.m_if1"]["write_data_hold_violations"]==3
+    assert rows["top.fast.m_if0"]["write_data_hold_violations"]==0
     assert rows["top.slow.vr6"]["sample_count"]==128
 
 
@@ -65,3 +67,44 @@ def test_pair_statistics_refuse_missing_arm_or_semantic_change():
     with pytest.raises(AssertionError):summarize_pairs({"records":[a]},plan)
     b["semantics"]=["changed"]
     with pytest.raises(AssertionError):summarize_pairs({"records":[a,b]},plan)
+
+
+def test_small_same_direction_confirmation_is_not_a_regression_allowance():
+    frozen={"aa":{"w":{"metrics":{"query/first_ms":{"envelope":10}}}}}
+    group={"metrics":{"query/first_ms":{"median_delta":1,"deltas":[1,1,2,1,3]}}}
+    assert not classify_metrics("w",group,frozen)[0]
+    assert classify_metrics("w",group,frozen,confirmation=True)[0]
+
+
+def test_wide_oracle_preserves_all_lanes_and_unknowns():
+    oracle={"width":256,"unknown_records":{"5":"x","6":"z"}}
+    assert expected_bits(oracle,5,"top.data[255:0]")=="x"*256
+    assert expected_bits(oracle,6,"top.data[255:0]")=="z"*256
+    expected=format(2654435761,"064b")*4
+    assert expected_bits(oracle,1,"top.data[255:0]")==expected
+
+
+def test_guard_interruption_still_writes_receipt_and_kills_group(tmp_path,monkeypatch):
+    import json
+    import pytest
+    from scripts import benchmark_fsdb_optimization as bench
+    class Child:
+        pid=123456
+        returncode=None
+        def poll(self):return self.returncode
+        def wait(self,timeout):self.returncode=-15;return self.returncode
+    child=Child();signals=[];calls=0
+    def sample(pid):
+        nonlocal calls
+        calls+=1
+        if calls==1:raise KeyboardInterrupt()
+        return {},[]
+    monkeypatch.setattr(bench.subprocess,"Popen",lambda *a,**kw:child)
+    monkeypatch.setattr(bench,"group_memory",sample)
+    monkeypatch.setattr(bench,"system_memory",lambda:dict(available_kib=10**9))
+    monkeypatch.setattr(bench.os,"killpg",lambda pid,sig:signals.append((pid,sig)))
+    with pytest.raises(KeyboardInterrupt):
+        bench.guarded(["worker"],tmp_path/"guard",bench.ORDINARY)
+    receipt=json.loads((tmp_path/"guard/guard.json").read_text())
+    assert receipt["guard_reason"]=="parent_interrupted" and receipt["returncode"]==-15
+    assert signals==[(child.pid,bench.signal.SIGTERM)]

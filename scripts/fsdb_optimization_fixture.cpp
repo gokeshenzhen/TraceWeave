@@ -57,32 +57,37 @@ struct Ahb {
         htrans.put(w,2); ready.put(w,phase < 24 || phase >= 48);
         address.put(w,((cycle + 32) / 64) * 8 + (index && phase >= 32 ? 4 : 0),
                     index && phase == 8 ? FSDB_BT_VCD_X : -1);
-        write.put(w,1); size.put(w,2); burst.put(w,0); prot.put(w,3); data.put(w,0);
+        write.put(w,1); size.put(w,2); burst.put(w,0); prot.put(w,3);
+        data.put(w,index ? ((cycle + 32) / 64) * 8 + (phase >= 32 ? 4 : 0) : 0);
     }
 };
 
 int main(int argc, char **argv) {
-    if (argc != 5 && argc != 6) { std::fprintf(stderr,"usage: fixture OUTPUT dense|protocol STEPS SYNC_EVERY [MEMORY_MIB]\n"); return 2; }
+    if (argc != 5 && argc != 6) { std::fprintf(stderr,"usage: fixture OUTPUT dense|wide|protocol STEPS SYNC_EVERY [MEMORY_MIB]\n"); return 2; }
     struct stat info;
     if (stat(argv[1],&info) == 0) return 3;
     std::string mode=argv[2]; uint64_t steps=std::strtoull(argv[3],nullptr,10);
     uint64_t sync=std::strtoull(argv[4],nullptr,10);
-    if (!steps || (mode!="dense" && mode!="protocol")) return 4;
+    if (!steps || (mode!="dense" && mode!="wide" && mode!="protocol")) return 4;
     ffwObject *w=ffw_Open(argv[1],FSDB_FT_VERILOG); if (!w) return 5;
     ffw_SetVCMemLimit(w,argc == 6 ? std::strtoul(argv[5],nullptr,10) : 128);
     ffw_SetScaleUnit(w,(char*)"1ps"); ffw_SetGlitchNum(w,0);
     ffw_CreateTreeByHandleScheme(w); ffw_BeginTree(w); scope(w,"top");
-    if (mode=="dense") {
-        Signal clk(w,"clk",1), data(w,"data[31:0]",32), sparse(w,"sparse",1);
+    if (mode!="protocol") {
+        unsigned width=mode=="wide" ? 256 : 32;
+        Signal clk(w,"clk",1), data(w,"data["+std::to_string(width-1)+":0]",width), sparse(w,"sparse",1);
         ffw_CreateUpscope(w); ffw_EndTree(w);
         at(w,0); clk.put(w,0); data.put(w,0); sparse.put(w,0);
-        const uint64_t offset=1000000000000ULL;
+        const uint64_t offset=mode=="wide" ? 0 : 1000000000000ULL;
+        const uint64_t stride=mode=="wide" ? 10 : 1;
         for (uint64_t i=1;i<=steps;++i) {
-            at(w,offset+i); clk.put(w,i&1); data.put(w,uint32_t(i)*uint32_t(2654435761U));
+            at(w,offset+i*stride); clk.put(w,i&1);
+            data.put(w,uint32_t(i)*uint32_t(2654435761U),mode=="wide" && (i==5 || i==6) ?
+                (i==5 ? FSDB_BT_VCD_X : FSDB_BT_VCD_Z) : -1);
             if (i==steps/2) sparse.put(w,1);
             if (sync && i%sync==0) ffw_Sync(w);
         }
-        at(w,2*offset+steps); sparse.put(w,0);
+        at(w,2*offset+steps*stride); sparse.put(w,0);
     } else {
         scope(w,"fast"); Signal fast(w,"clk",1);
         std::vector<Vr*> vr;
