@@ -283,6 +283,24 @@ def test_memory_diagnostic_keeps_raw_mapping_and_refuses_overwrite(tmp_path):
     assert (tmp_path/relative).read_text()==raw
 
 
+def test_guard_disables_thp_in_exec_child_without_changing_parent(tmp_path):
+    import os
+    import sys
+    import pytest
+    from scripts import benchmark_fsdb_optimization as bench
+    parent_thp=bench.proc_thp_enabled(os.getpid())
+    if parent_thp is None:pytest.skip("requires Linux THP status reporting")
+    command=[sys.executable,"-c",
+        "from pathlib import Path; import time; "
+        "print(next(line for line in Path('/proc/self/status').read_text().splitlines() "
+        "if line.startswith('THP_enabled:')),flush=True); time.sleep(.05)"]
+    receipt=bench.guarded(command,tmp_path/"thp-child",bench.ORDINARY,disable_worker_thp=True)
+    assert receipt["returncode"]==0 and receipt["guard_reason"] is None
+    assert receipt["worker_thp_enabled"]==0
+    assert receipt["parent_thp_enabled"]==parent_thp==bench.proc_thp_enabled(os.getpid())
+    assert (tmp_path/"thp-child/worker.log").read_text().strip().split()==["THP_enabled:","0"]
+
+
 def test_single_dense_session_retains_terminal_zero_span_metadata():
     from scripts.benchmark_fsdb_optimization import validate_single_dense_session
     import pytest

@@ -126,6 +126,14 @@ def proc_memory(pid):
         return {}
 
 
+def proc_thp_enabled(pid):
+    try:
+        return next((int(line.split()[1]) for line in Path(f"/proc/{pid}/status").read_text().splitlines()
+            if line.startswith("THP_enabled:")),None)
+    except (FileNotFoundError,ProcessLookupError):
+        return None
+
+
 def system_memory():
     fields = {line.split()[0][:-1]: int(line.split()[1])
         for line in Path("/proc/meminfo").read_text().splitlines()}
@@ -153,15 +161,28 @@ def group_memory(pgid):
     return sums, members
 
 
-def guarded(command, output, limits, *, env=None, worker_affinity=None):
+def guarded(command, output, limits, *, env=None, worker_affinity=None, disable_worker_thp=False):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     before = system_memory()
     if before["available_kib"] < limits["available_min_mib"] * 1024:
         raise RuntimeError("host memory reserve unavailable before launch")
+    prctl=None
+    if disable_worker_thp:
+        # Prepare the libc binding in the parent, but change only the forked
+        # child. Linux preserves PR_SET_THP_DISABLE across exec; no sysfs or
+        # parent setting is modified. See the installed prctl(2) definition.
+        import ctypes
+        libc=ctypes.CDLL(None,use_errno=True)
+        prctl=libc.prctl
+        prctl.argtypes=[ctypes.c_int]+[ctypes.c_ulong]*4
+        prctl.restype=ctypes.c_int
     def set_limits():
         if worker_affinity is not None:
             os.sched_setaffinity(0,set(worker_affinity))
+        if prctl is not None:
+            if prctl(41,1,0,0,0)!=0 or prctl(42,0,0,0,0)!=1:
+                raise OSError(ctypes.get_errno(),"cannot set child PR_SET_THP_DISABLE")
         resource.setrlimit(resource.RLIMIT_AS, (limits["as_mib"] * 1024**2,) * 2)
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     def terminate_group(pid, sig):
@@ -175,6 +196,7 @@ def guarded(command, output, limits, *, env=None, worker_affinity=None):
     interrupted = None
     samples = []
     observed_affinity = None
+    observed_thp = None
     with (output / "worker.log").open("x") as stream:
         child = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
             start_new_session=True, preexec_fn=set_limits, env=env)
@@ -192,6 +214,9 @@ def guarded(command, output, limits, *, env=None, worker_affinity=None):
             if worker_affinity is not None:
                 observed_affinity=sorted(os.sched_getaffinity(child.pid))
                 assert observed_affinity==sorted(worker_affinity),"worker affinity differs from frozen placement"
+            observed_thp=proc_thp_enabled(child.pid)
+            if disable_worker_thp:
+                assert observed_thp==0,"worker THP policy differs from frozen setting"
             waiter.start()
             while not child_exited.is_set():
                 memory, members = group_memory(child.pid)
@@ -237,6 +262,7 @@ def guarded(command, output, limits, *, env=None, worker_affinity=None):
     process_end = guard_end if leftovers else exit_times[0]
     result = dict(command=command, returncode=child.returncode, guard_reason=reason,
         worker_cpu_affinity=observed_affinity,parent_cpu_affinity=sorted(os.sched_getaffinity(0)),
+        worker_thp_enabled=observed_thp,parent_thp_enabled=proc_thp_enabled(os.getpid()),
         process_wall_ms=(process_end-start)*1000, guard_wall_ms=(guard_end-start)*1000,
         process_timing="launch to blocking wait completion; guard sampling/cleanup separately recorded",
         observed_peak_kib=peak,
@@ -492,6 +518,7 @@ def memory_diagnostic_snapshot(output, phase):
                 raise RuntimeError("incomplete diagnostic smaps write")
     receipt=dict(diagnostic_only=True,phase=phase,smaps_file=target.name,
         before_memory_kib=before,after_memory_kib=proc_memory(os.getpid()),
+        thp_enabled=proc_thp_enabled(os.getpid()),
         peak_before_kib=peak_before,peak_after_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         note="Raw mapping copy outside API timer; diagnostic observations may perturb allocation and scheduling.")
     write(directory/(phase+".json"),receipt)
@@ -761,6 +788,7 @@ def make_plan(args):
         metrics=METRICS,group_cap=16,performance_order="per-workload pairs; AB then BA alternating; fresh process per arm; 3 calls per worker",
         aa_rule=copy.deepcopy(AA_RULE),
         conditions=dict(cache="no OS cache flush; hash all inputs before each suite equally",telemetry=False,cpu_affinity=placement,
+            disable_worker_thp=bool(getattr(args,"disable_worker_thp",False)),
             timing="server.call_tool includes worker/lock/schema/JSON; excludes import/open/buffer, oracle and file I/O; whole process separately",
             native_timing="seek + exact scan + in-scan reclamation + group cleanup; final close and process wall separately",
             process_timing="launch to blocking wait completion includes worker close/exit; independent 200 ms resource polling; full supervisor wall retained separately",
@@ -890,7 +918,7 @@ def native_record(directory, item):
     return record
 
 
-def run_arm(args,item,arm,round_index,root,wrapper,probe,worker_affinity=None):
+def run_arm(args,item,arm,round_index,root,wrapper,probe,worker_affinity=None,disable_worker_thp=False):
     directory=args.output/item["id"]/f"r{round_index:02d}-{arm}"
     if item["kind"]=="public":
         command=[sys.executable,str(SCRIPT),"worker","--plan",str(args.plan.resolve()),"--workload",item["id"],
@@ -899,7 +927,8 @@ def run_arm(args,item,arm,round_index,root,wrapper,probe,worker_affinity=None):
         req=item["native"]
         command=[str(probe),item["wave"],req["signal"],str(req["start_ps"]),
             str(UINT64_MAX if req["end_ps"]<0 else req["end_ps"]),str(req["expected_records"]),str(item["calls_per_worker"]),"count"]
-    guard=guarded(command,directory,item["limits"],worker_affinity=worker_affinity)
+    guard=guarded(command,directory,item["limits"],worker_affinity=worker_affinity,
+        disable_worker_thp=disable_worker_thp)
     result=dict(id=item["id"],arm=arm,round=round_index,directory=str(directory),guard=guard)
     if guard["returncode"] or guard["guard_reason"]:
         limited=guard["guard_reason"] in {"rss_limit","timeout","host_memory_reserve"}
@@ -933,6 +962,7 @@ def run_suite(args):
     plan=read(args.plan);selected=[row for row in plan["workloads"] if not args.workload or row["id"] in args.workload]
     placement=plan.get("conditions",{}).get("cpu_affinity")
     worker_affinity=[placement["worker_cpu"]] if placement else None
+    disable_worker_thp=plan.get("conditions",{}).get("disable_worker_thp",False)
     if placement:
         assert sorted(os.sched_getaffinity(0))==[placement["guard_cpu"]],"guard affinity differs from frozen placement"
     assert selected and (not args.workload or len(selected)==len(set(args.workload))),"unknown workload"
@@ -948,6 +978,7 @@ def run_suite(args):
         assert frozen["plan_sha256"]==sha(args.plan) and frozen["harness_sha256"]==sha(SCRIPT)
     suite=dict(plan_sha256=sha(args.plan),harness_sha256=sha(SCRIPT),mode=args.command,
         parent_cpu_affinity=sorted(os.sched_getaffinity(0)),
+        parent_thp_enabled=proc_thp_enabled(os.getpid()),disable_worker_thp=disable_worker_thp,
         source_identities=identities,wrappers=[file_identity(p) for p in wrappers],probes=[file_identity(p) for p in probes],
         python=sys.version,platform=platform.platform(),host=system_memory(),records=[],
         selected_workloads=[item["id"] for item in selected],status="running")
@@ -961,7 +992,8 @@ def run_suite(args):
         rounds=1 if args.command=="smoke" else item["pairs"]
         for round_index in range(rounds):
             for index in ((0,1) if round_index%2==0 else (1,0)):
-                record=run_arm(args,item,"AB"[index],round_index,roots[index],wrappers[index],probes[index],worker_affinity)
+                record=run_arm(args,item,"AB"[index],round_index,roots[index],wrappers[index],probes[index],
+                    worker_affinity,disable_worker_thp)
                 suite["records"].append(record)
                 print(json.dumps({"id":item["id"],"arm":"AB"[index],"round":round_index,"status":record["status"]}),flush=True)
                 if record["status"]=="failed":
@@ -1090,6 +1122,10 @@ def freeze(args):
         assert summary["parent_cpu_affinity"]==[placement["guard_cpu"]]
         assert all(row["guard"]["worker_cpu_affinity"]==[placement["worker_cpu"]]
             and row["guard"]["parent_cpu_affinity"]==[placement["guard_cpu"]] for row in summary["records"])
+    if plan.get("conditions",{}).get("disable_worker_thp",False):
+        assert summary["disable_worker_thp"] is True
+        assert all(row["guard"]["worker_thp_enabled"]==0 and
+            row["guard"]["parent_thp_enabled"]==summary["parent_thp_enabled"] for row in summary["records"])
     assert plan["aa_rule"]==AA_RULE,"calibration rules changed after planning"
     aa=summarize_pairs(summary,plan)
     calibration=calibrate_aa(aa,plan["aa_rule"])
@@ -1164,6 +1200,7 @@ def main():
     command.add_argument("--wide-wave",type=Path,default=ROOT/"tests/fixtures/wide_bus.fsdb")
     command.add_argument("--guard-cpu",type=int)
     command.add_argument("--worker-cpu",type=int)
+    command.add_argument("--disable-worker-thp",action="store_true")
     command=commands.add_parser("quick-plan")
     for arg in ("dense-wave","protocol-wave","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("inventory")
