@@ -243,6 +243,30 @@ def test_guard_monitor_start_failure_still_reaps_worker(tmp_path,monkeypatch):
     assert receipt["guard_reason"]=="parent_interrupted" and receipt["returncode"]<0
 
 
+def test_suite_affinity_is_inherited_by_worker_and_restored_on_failure(tmp_path):
+    import json
+    import os
+    import sys
+    import pytest
+    from scripts import benchmark_fsdb_optimization as bench
+    original=set(os.sched_getaffinity(0))
+    if len(original)<2:pytest.skip("requires two permitted logical CPUs")
+    guard_cpu,worker_cpu=sorted(original)[:2]
+    plan=dict(conditions=dict(cpu_affinity=dict(guard_cpu=guard_cpu,worker_cpu=worker_cpu)))
+    with pytest.raises(RuntimeError,match="leave suite"):
+        with bench.suite_affinity(plan):
+            assert os.sched_getaffinity(0)=={guard_cpu}
+            receipt=bench.guarded([sys.executable,"-c",
+                "import os,json; print(json.dumps(sorted(os.sched_getaffinity(0))))"],
+                tmp_path/"affinity",bench.ORDINARY,worker_affinity=[worker_cpu])
+            assert receipt["returncode"]==0 and receipt["guard_reason"] is None
+            assert receipt["worker_cpu_affinity"]==[worker_cpu]
+            assert receipt["parent_cpu_affinity"]==[guard_cpu]
+            assert json.loads((tmp_path/"affinity/worker.log").read_text())==[worker_cpu]
+            raise RuntimeError("leave suite")
+    assert os.sched_getaffinity(0)==original
+
+
 def test_single_dense_session_retains_terminal_zero_span_metadata():
     from scripts.benchmark_fsdb_optimization import validate_single_dense_session
     import pytest

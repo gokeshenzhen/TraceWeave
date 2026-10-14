@@ -101,6 +101,22 @@ def serial_lock():
         yield
 
 
+@contextmanager
+def suite_affinity(plan):
+    placement=plan.get("conditions",{}).get("cpu_affinity")
+    if not placement:
+        yield
+        return
+    original=set(os.sched_getaffinity(0))
+    guard_cpu,worker_cpu=placement["guard_cpu"],placement["worker_cpu"]
+    assert guard_cpu!=worker_cpu and {guard_cpu,worker_cpu}<=original,"unavailable or overlapping benchmark CPUs"
+    try:
+        os.sched_setaffinity(0,{guard_cpu})
+        yield
+    finally:
+        os.sched_setaffinity(0,original)
+
+
 def proc_memory(pid):
     try:
         return {line.split()[0][:-1]: int(line.split()[1])
@@ -137,13 +153,15 @@ def group_memory(pgid):
     return sums, members
 
 
-def guarded(command, output, limits, *, env=None):
+def guarded(command, output, limits, *, env=None, worker_affinity=None):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     before = system_memory()
     if before["available_kib"] < limits["available_min_mib"] * 1024:
         raise RuntimeError("host memory reserve unavailable before launch")
     def set_limits():
+        if worker_affinity is not None:
+            os.sched_setaffinity(0,set(worker_affinity))
         resource.setrlimit(resource.RLIMIT_AS, (limits["as_mib"] * 1024**2,) * 2)
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     def terminate_group(pid, sig):
@@ -156,6 +174,7 @@ def guarded(command, output, limits, *, env=None):
     reason = None
     interrupted = None
     samples = []
+    observed_affinity = None
     with (output / "worker.log").open("x") as stream:
         child = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
             start_new_session=True, preexec_fn=set_limits, env=env)
@@ -170,6 +189,9 @@ def guarded(command, output, limits, *, env=None):
             child_exited.set()
         waiter = threading.Thread(target=observe_exit, daemon=True)
         try:
+            if worker_affinity is not None:
+                observed_affinity=sorted(os.sched_getaffinity(child.pid))
+                assert observed_affinity==sorted(worker_affinity),"worker affinity differs from frozen placement"
             waiter.start()
             while not child_exited.is_set():
                 memory, members = group_memory(child.pid)
@@ -214,6 +236,7 @@ def guarded(command, output, limits, *, env=None):
     # Orphans reject the workload and include their forced group cleanup.
     process_end = guard_end if leftovers else exit_times[0]
     result = dict(command=command, returncode=child.returncode, guard_reason=reason,
+        worker_cpu_affinity=observed_affinity,parent_cpu_affinity=sorted(os.sched_getaffinity(0)),
         process_wall_ms=(process_end-start)*1000, guard_wall_ms=(guard_end-start)*1000,
         process_timing="launch to blocking wait completion; guard sampling/cleanup separately recorded",
         observed_peak_kib=peak,
@@ -687,12 +710,19 @@ def make_plan(args):
         else:
             add("giant__data_native_capacity",wave,native=dict(signal=path,start_ps=0,end_ps=-1,
                 expected_records=1_700_000_001),oracle=oracle,capacity=True)
+    guard_cpu=getattr(args,"guard_cpu",None);worker_cpu=getattr(args,"worker_cpu",None)
+    assert (guard_cpu is None)==(worker_cpu is None),"declare both guard and worker CPU, or neither"
+    placement=None
+    if guard_cpu is not None:
+        assert guard_cpu!=worker_cpu and {guard_cpu,worker_cpu}<=set(os.sched_getaffinity(0))
+        placement=dict(guard_cpu=guard_cpu,worker_cpu=worker_cpu,
+            scope="process-local affinity only; equal for both arms; no global machine settings changed")
     plan=dict(schema_version=1,created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         control_identity_sha256=sha(args.batch/"control/IDENTITY.json"),control_head=assets["head"],
         inputs=inputs,workloads=workloads,normalization_paths=NORMALIZED_RESPONSE_PATHS,
         metrics=METRICS,group_cap=16,performance_order="per-workload pairs; AB then BA alternating; fresh process per arm; 3 calls per worker",
         aa_rule=copy.deepcopy(AA_RULE),
-        conditions=dict(cache="no OS cache flush; hash all inputs before each suite equally",telemetry=False,
+        conditions=dict(cache="no OS cache flush; hash all inputs before each suite equally",telemetry=False,cpu_affinity=placement,
             timing="server.call_tool includes worker/lock/schema/JSON; excludes import/open/buffer, oracle and file I/O; whole process separately",
             native_timing="seek + exact scan + in-scan reclamation + group cleanup; final close and process wall separately",
             process_timing="launch to blocking wait completion includes worker close/exit; independent 200 ms resource polling; full supervisor wall retained separately",
@@ -822,7 +852,7 @@ def native_record(directory, item):
     return record
 
 
-def run_arm(args,item,arm,round_index,root,wrapper,probe):
+def run_arm(args,item,arm,round_index,root,wrapper,probe,worker_affinity=None):
     directory=args.output/item["id"]/f"r{round_index:02d}-{arm}"
     if item["kind"]=="public":
         command=[sys.executable,str(SCRIPT),"worker","--plan",str(args.plan.resolve()),"--workload",item["id"],
@@ -831,7 +861,7 @@ def run_arm(args,item,arm,round_index,root,wrapper,probe):
         req=item["native"]
         command=[str(probe),item["wave"],req["signal"],str(req["start_ps"]),
             str(UINT64_MAX if req["end_ps"]<0 else req["end_ps"]),str(req["expected_records"]),str(item["calls_per_worker"]),"count"]
-    guard=guarded(command,directory,item["limits"])
+    guard=guarded(command,directory,item["limits"],worker_affinity=worker_affinity)
     result=dict(id=item["id"],arm=arm,round=round_index,directory=str(directory),guard=guard)
     if guard["returncode"] or guard["guard_reason"]:
         limited=guard["guard_reason"] in {"rss_limit","timeout","host_memory_reserve"}
@@ -863,6 +893,10 @@ def reserve_confirmation(prior_path, suite, output):
 def run_suite(args):
     args.output=args.output.resolve();args.output.mkdir(parents=True,exist_ok=False)
     plan=read(args.plan);selected=[row for row in plan["workloads"] if not args.workload or row["id"] in args.workload]
+    placement=plan.get("conditions",{}).get("cpu_affinity")
+    worker_affinity=[placement["worker_cpu"]] if placement else None
+    if placement:
+        assert sorted(os.sched_getaffinity(0))==[placement["guard_cpu"]],"guard affinity differs from frozen placement"
     assert selected and (not args.workload or len(selected)==len(set(args.workload))),"unknown workload"
     roots=[args.control_root.resolve(),(args.candidate_root or args.control_root).resolve()]
     wrappers=[args.control_wrapper.resolve(),(args.candidate_wrapper or args.control_wrapper).resolve()]
@@ -875,6 +909,7 @@ def run_suite(args):
     if frozen:
         assert frozen["plan_sha256"]==sha(args.plan) and frozen["harness_sha256"]==sha(SCRIPT)
     suite=dict(plan_sha256=sha(args.plan),harness_sha256=sha(SCRIPT),mode=args.command,
+        parent_cpu_affinity=sorted(os.sched_getaffinity(0)),
         source_identities=identities,wrappers=[file_identity(p) for p in wrappers],probes=[file_identity(p) for p in probes],
         python=sys.version,platform=platform.platform(),host=system_memory(),records=[],
         selected_workloads=[item["id"] for item in selected],status="running")
@@ -888,7 +923,7 @@ def run_suite(args):
         rounds=1 if args.command=="smoke" else item["pairs"]
         for round_index in range(rounds):
             for index in ((0,1) if round_index%2==0 else (1,0)):
-                record=run_arm(args,item,"AB"[index],round_index,roots[index],wrappers[index],probes[index])
+                record=run_arm(args,item,"AB"[index],round_index,roots[index],wrappers[index],probes[index],worker_affinity)
                 suite["records"].append(record)
                 print(json.dumps({"id":item["id"],"arm":"AB"[index],"round":round_index,"status":record["status"]}),flush=True)
                 if record["status"]=="failed":
@@ -1012,6 +1047,11 @@ def freeze(args):
     assert summary["source_identities"][0]["content_sha256"]==summary["source_identities"][1]["content_sha256"]
     assert summary["wrappers"][0]["sha256"]==summary["wrappers"][1]["sha256"]
     assert summary["probes"][0]["sha256"]==summary["probes"][1]["sha256"]
+    placement=plan.get("conditions",{}).get("cpu_affinity")
+    if placement:
+        assert summary["parent_cpu_affinity"]==[placement["guard_cpu"]]
+        assert all(row["guard"]["worker_cpu_affinity"]==[placement["worker_cpu"]]
+            and row["guard"]["parent_cpu_affinity"]==[placement["guard_cpu"]] for row in summary["records"])
     assert plan["aa_rule"]==AA_RULE,"calibration rules changed after planning"
     aa=summarize_pairs(summary,plan)
     calibration=calibrate_aa(aa,plan["aa_rule"])
@@ -1084,6 +1124,8 @@ def main():
     for arg in ("batch","fixtures","real-manifest","output"):command.add_argument("--"+arg,type=Path,required=True)
     command.add_argument("--additional-fixtures",type=Path,action="append",default=[])
     command.add_argument("--wide-wave",type=Path,default=ROOT/"tests/fixtures/wide_bus.fsdb")
+    command.add_argument("--guard-cpu",type=int)
+    command.add_argument("--worker-cpu",type=int)
     command=commands.add_parser("quick-plan")
     for arg in ("dense-wave","protocol-wave","output"):command.add_argument("--"+arg,type=Path,required=True)
     command=commands.add_parser("inventory")
@@ -1114,8 +1156,13 @@ def main():
     if args.command=="worker":
         asyncio.run(worker(args));return
     with serial_lock():
-        {"build":build,"generate":generate,"plan":make_plan,"quick-plan":quick_plan,"inventory":inventory,"run":run_suite,"smoke":run_suite,
-         "freeze":freeze,"calibrate":calibration_report,"compare":compare}[args.command](args)
+        action={"build":build,"generate":generate,"plan":make_plan,"quick-plan":quick_plan,"inventory":inventory,"run":run_suite,"smoke":run_suite,
+            "freeze":freeze,"calibrate":calibration_report,"compare":compare}[args.command]
+        if args.command in {"run","smoke"}:
+            with suite_affinity(read(args.plan)):
+                action(args)
+        else:
+            action(args)
 
 
 if __name__=="__main__":
