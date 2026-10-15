@@ -86,6 +86,11 @@ class _NativeEventPageV1(ctypes.Structure):
         ("has_next", "complete", "truncated", "events", "output_bytes")]
 
 
+class _NativeCountBoundaryV1(ctypes.Structure):
+    _fields_ = [("boundary_ps", ctypes.c_uint64),
+                ("events_before_boundary", ctypes.c_uint), ("valid", ctypes.c_uint)]
+
+
 def _profile_dict(profile: ctypes.Structure) -> dict[str, int]:
     return {name: int(getattr(profile, name)) for name, _ in profile._fields_}
 
@@ -176,6 +181,16 @@ def _setup(lib):
         lib.fsdb_event_count_v1.argtypes = [ctypes.c_void_p, ctypes.c_uint64,
             ctypes.c_uint, ctypes.POINTER(_NativeEventPageV1), ctypes.c_uint]
         lib._traceweave_has_event_count_v1 = lib._traceweave_has_event_pages_v1
+    except AttributeError:
+        pass
+
+    lib._traceweave_has_event_count_index_v1 = False
+    try:
+        lib.fsdb_event_count_index_v1.restype = ctypes.c_int
+        lib.fsdb_event_count_index_v1.argtypes = [ctypes.c_void_p, ctypes.c_uint64,
+            ctypes.c_uint, ctypes.POINTER(_NativeEventPageV1), ctypes.c_uint,
+            ctypes.POINTER(_NativeCountBoundaryV1), ctypes.c_uint]
+        lib._traceweave_has_event_count_index_v1 = lib._traceweave_has_event_count_v1
     except AttributeError:
         pass
 
@@ -333,6 +348,10 @@ _METADATA_MAX_ENTRIES = 1024
 _METADATA_MAX_BYTES = 256 * 1024
 _SUMMARY_PATH_BYTES = 64 * 1024
 _SUMMARY_TOP_LIMIT = 256
+# Counts only: never retain a mutable response, values, or a native cursor.
+# The budget includes the key and conservative OrderedDict bookkeeping.
+_TRANSITION_COUNT_MAX_ENTRIES = 1024
+_TRANSITION_COUNT_MAX_BYTES = 256 * 1024
 
 
 def _transition_group_limit() -> int:
@@ -362,6 +381,13 @@ class FSDBParser:
         self._summary_paths = None
         self._metadata_cache = OrderedDict()
         self._metadata_bytes = 0
+        self._transition_count_cache = OrderedDict()
+        self._transition_count_cache_bytes = 0
+        self._transition_indexes = OrderedDict()
+        self._transition_index_bytes = 0
+        self._transition_index_stats = dict.fromkeys(("builds", "hits", "misses",
+            "edge_queries", "edge_records", "interior_records", "coarsenings",
+            "small_window_bypasses"), 0)
         self._scope_epoch = object()
 
     def _stat_identity(self):
@@ -452,6 +478,13 @@ class FSDBParser:
         self._file_identity = None
         self._metadata_cache = OrderedDict()
         self._metadata_bytes = 0
+        self._transition_count_cache = OrderedDict()
+        self._transition_count_cache_bytes = 0
+        self._transition_indexes = OrderedDict()
+        self._transition_index_bytes = 0
+        self._transition_index_stats = dict.fromkeys(("builds", "hits", "misses",
+            "edge_queries", "edge_records", "interior_records", "coarsenings",
+            "small_window_bypasses"), 0)
         if self._handle and self._lib:
             if getattr(self, "_transition_group_active", False):
                 profile = _NativeTransitionGroupProfileV1()
@@ -585,6 +618,9 @@ class FSDBParser:
 
         Internal callers retain ``get_transitions`` and its full-list contract.
         The dispatch layer still applies its return cap to legacy fallbacks.
+        A bounded, parser-local cache reuses completed exact counts for the
+        same signal and window. Prefix values and the predecessor are always
+        read again, including when callers change their requested detail cap.
         """
         if type(max_transitions) is not int or max_transitions < 1:
             raise ValueError("max_transitions must be a positive integer")
@@ -603,53 +639,144 @@ class FSDBParser:
         if record_bytes > 1048576:
             return self.get_transitions(signal_path, start_ps, end_ps)
         page_bytes = max(262144, record_bytes)
+        return self._read_transitions_capped(signal_path, start_ps, end_ps,
+                                             max_transitions, page_bytes)
 
-        # Public timestamps ceil to ps. Reading from the previous integer ps
-        # includes every sub-ps event that rounds into start_ps, and enough
-        # history to select the last real public-ps predecessor separately.
+    def _read_transitions_capped(self, signal_path, start_ps, end_ps,
+                                 max_transitions, page_bytes, *, use_indexes=True):
+        from .event_pages import page_records
+        from . import fsdb_count_index as index_module
+        identity, epoch = self._file_identity, self._scope_epoch
+        count_key = (signal_path, start_ps, end_ps)
+        cached_count = self._transition_count_cache.get(count_key) if use_indexes else None
+        index_match = None
+        builder = None
+        if use_indexes and cached_count is None:
+            index_match = self._find_transition_index(signal_path, start_ps, end_ps)
+            if (index_match is None and index_module.MAX_ENTRIES > 0 and
+                    index_module.MAX_BYTES > 0 and
+                    getattr(self._lib, '_traceweave_has_event_count_index_v1', False)):
+                builder = index_module.CountIndexBuilder(start_ps)
+
+        # Ceil public ps: read from the preceding integer ps to include all
+        # sub-ps records rounding into start_ps, plus the true predecessor.
         physical_start = max(0, start_ps - 1)
         transitions, previous = [], None
         total, native_truncated = 0, False
-        from .event_pages import page_records
+        index_used, scanned_complete = False, False
+        resolved_end = end_ps if end_ps >= 0 else None
+        last_prefix_ps = None
         with self._event_transition_group([signal_path], physical_start, end_ps) as active:
             if not active:
                 return self.get_transitions(signal_path, start_ps, end_ps)
             with self._event_pages(signal_path, physical_start, end_ps,
                                    max_events=min(1024, max_transitions), max_bytes=page_bytes) as reader:
+                if resolved_end is None and reader.end_fs is not None:
+                    resolved_end = (reader.end_fs + 999) // 1000
+                reader.index_counts = builder is not None and builder.enabled
                 complete = False
                 while not complete and not native_truncated:
                     check_cancelled()
                     if len(transitions) < max_transitions:
-                        # Native pages never format suffix values beyond the
-                        # requested prefix. Pre-window records do not use cap.
                         reader.max_events = min(1024, max_transitions - len(transitions))
                         page = reader.read_page()
                         records = page_records(page)
+                        boundary = None
                         for event in records:
                             check_cancelled()
                             if event.time_ps < start_ps:
                                 previous = event
                             elif end_ps == -1 or event.time_ps <= end_ps:
+                                if event.time_ps != last_prefix_ps:
+                                    boundary = event.time_ps, total
+                                last_prefix_ps = event.time_ps
                                 transitions.append({
                                     "time_ps": event.time_ps,
                                     "time_ns": event.time_ps / 1000,
                                     "value": _enrich_value(event.value),
                                 })
                                 total += 1
+                        if builder is not None and boundary is not None and boundary[0] > start_ps:
+                            builder.offer(*boundary)
                         if not records and not page.complete and not page.truncated:
                             raise RuntimeError('FSDB event page made no progress')
                     else:
-                        # The prefix consumed every anchor and start-boundary
-                        # record; all remaining cursor records are in-window.
-                        page = reader.count_page()
+                        if cached_count is not None and cached_count[0] >= total:
+                            total = cached_count[0]
+                            break
+                        if index_match is not None:
+                            index, (left, right, interior) = index_match
+                            effective_end = index.end if end_ps == -1 else end_ps
+                            left_needs_read = (start_ps < left and
+                                transitions[-1]['time_ps'] < left)
+                            right_needs_read = right <= effective_end
+                            # Saving at most one count page rarely pays for
+                            # extra FFR group loads. Keep the current cursor
+                            # and count its suffix instead. Pure index answers
+                            # requiring no extra native read remain eligible.
+                            if interior <= 65536 and (left_needs_read or right_needs_read):
+                                self._transition_index_stats['small_window_bypasses'] += 1
+                                index_match = None
+                            else:
+                                index_used = True
+                                break
+                        # Smaller initial blocks also help modest real designs.
+                        # Large scans retain the original 65536 checkpoint cap.
+                        if reader.index_counts and total < 65536:
+                            page = reader.count_page(4096)
+                        else:
+                            page = reader.count_page()
+                        boundary_ps = getattr(page, 'boundary_ps', None)
+                        if builder is not None and boundary_ps is not None:
+                            builder.offer(boundary_ps, total + page.events_before_boundary)
                         total += page.events
                     complete, native_truncated = page.complete, page.truncated
+                scanned_complete = complete and not native_truncated
+        self._check_metadata_identity(identity)
+        if epoch is not self._scope_epoch:
+            raise RuntimeError("FSDB reader changed during transition query")
+        if index_used:
+            index, (left, right, interior) = index_match
+            total = interior
+            self._transition_index_stats['hits'] += 1
+            self._transition_index_stats['interior_records'] += interior
+            effective_end = index.end if end_ps == -1 else end_ps
+            for lo, hi in ((start_ps, left - 1), (right, effective_end)):
+                if lo > hi:
+                    continue
+                check_cancelled()
+                # A prefix reaching the left anchor has consumed ALL records
+                # strictly before it, even if it stops mid-group AT the anchor.
+                if lo == start_ps and transitions and transitions[-1]['time_ps'] >= left:
+                    total += sum(row['time_ps'] < left for row in transitions)
+                    continue
+                self._transition_index_stats['edge_queries'] += 1
+                edge = self._read_transitions_capped(signal_path, lo, hi, 1,
+                                                     page_bytes, use_indexes=False)
+                self._transition_index_stats['edge_records'] += edge['transition_count']
+                total += edge['transition_count']
+                native_truncated |= edge['transition_count_is_lower_bound']
+            if not native_truncated and total < len(transitions):
+                raise RuntimeError('FSDB count index disagrees with detail prefix')
         check_cancelled()
         predecessor = None if previous is None else {
             "time_ps": previous.time_ps,
             "time_ns": previous.time_ps / 1000,
             "value": _enrich_value(previous.value),
         }
+        # Edges have independent cursor/group lifetimes. No live cursor or
+        # FFR allocation crosses a group boundary, and no index publishes until
+        # every cleanup, cancellation checkpoint and file-identity check passes.
+        self._check_metadata_identity(identity)
+        if epoch is not self._scope_epoch:
+            raise RuntimeError("FSDB reader changed during transition query")
+        if use_indexes and not native_truncated:
+            self._cache_transition_count(count_key, total)
+            if builder is not None and scanned_complete:
+                index = builder.finish(resolved_end, total, full_tail=end_ps == -1)
+                if index is not None:
+                    self._cache_transition_index(signal_path, index)
+                    self._transition_index_stats['coarsenings'] += builder.coarsenings
         return {
             "signal": signal_path, "start_ps": start_ps, "end_ps": end_ps,
             "transition_count": total, "transitions": transitions,
@@ -657,6 +784,55 @@ class FSDBParser:
             "truncated": native_truncated or total > len(transitions),
             "transition_count_is_lower_bound": native_truncated,
         }
+
+    def _find_transition_index(self, path, start, end):
+        # Most recently useful covering span wins. Never combine partial or
+        # overlapping coverage into a fabricated whole-window count.
+        for key in reversed(self._transition_indexes):
+            if key[0] != path:
+                continue
+            index, _ = self._transition_indexes[key]
+            plan = index.plan(start, end)
+            if plan is not None:
+                self._transition_indexes.move_to_end(key)
+                return index, plan
+        self._transition_index_stats['misses'] += 1
+        return None
+
+    def _cache_transition_index(self, path, index):
+        from . import fsdb_count_index as index_module
+        key = path, index.start, index.end, index.full_tail
+        size = index.accounted_bytes(key)
+        if size > index_module.MAX_BYTES or index_module.MAX_ENTRIES < 1:
+            return
+        old = self._transition_indexes.pop(key, None)
+        if old is not None:
+            self._transition_index_bytes -= old[1]
+        while self._transition_indexes and (
+                len(self._transition_indexes) >= index_module.MAX_ENTRIES or
+                self._transition_index_bytes + size > index_module.MAX_BYTES):
+            _, (_, old_size) = self._transition_indexes.popitem(last=False)
+            self._transition_index_bytes -= old_size
+        self._transition_indexes[key] = index, size
+        self._transition_index_bytes += size
+        self._transition_index_stats['builds'] += 1
+
+    def _cache_transition_count(self, key, count):
+        size = (sys.getsizeof(key) + sum(map(sys.getsizeof, key)) +
+                sys.getsizeof(count) + sys.getsizeof((count, 0)) +
+                sys.getsizeof(0) + 128)
+        if size > _TRANSITION_COUNT_MAX_BYTES or _TRANSITION_COUNT_MAX_ENTRIES < 1:
+            return
+        previous = self._transition_count_cache.pop(key, None)
+        if previous is not None:
+            self._transition_count_cache_bytes -= previous[1]
+        while self._transition_count_cache and (
+                len(self._transition_count_cache) >= _TRANSITION_COUNT_MAX_ENTRIES or
+                self._transition_count_cache_bytes + size > _TRANSITION_COUNT_MAX_BYTES):
+            _, (_, old_size) = self._transition_count_cache.popitem(last=False)
+            self._transition_count_cache_bytes -= old_size
+        self._transition_count_cache[key] = (count, size)
+        self._transition_count_cache_bytes += size
 
     @contextmanager
     def transition_group(self, signal_paths: list[str]) -> Iterator[bool]:

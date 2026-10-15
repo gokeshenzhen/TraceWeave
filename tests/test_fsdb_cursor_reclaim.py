@@ -102,14 +102,17 @@ extern "C" int test_signal_state(void *p, const char *path, unsigned long long *
 // Inject only the optional metadata policy. FFR event data, traversal and
 // Restore remain real, including the fixture's same-tick/sub-ps events.
 struct TestSessionReader {
-    ffrSessionInfo rows[2] = {};
+    ffrSessionInfo rows[3] = {};
     int mode;
     explicit TestSessionReader(int m) : mode(m) {
         rows[0].next = &rows[1];
-        rows[0].close_xtag.hltag.L = 10;
-        rows[1].start_xtag.hltag.L = 10;
-        rows[1].close_xtag.hltag.L = 40;
-        if (mode == 2) rows[1].start_xtag.hltag.L = 9;
+        rows[0].close_xtag.hltag.L = 1;
+        rows[1].start_xtag.hltag.L = 1;
+        rows[1].next = &rows[2];
+        rows[1].close_xtag.hltag.L = 10;
+        rows[2].start_xtag.hltag.L = 10;
+        rows[2].close_xtag.hltag.L = 40;
+        if (mode == 2) rows[1].start_xtag.hltag.L = 0;
         if (mode == 3) { rows[0].next = nullptr; rows[0].close_xtag.hltag.L = 40; }
     }
     fsdbFileType ffrGetFileType() { return FSDB_FT_VERILOG; }

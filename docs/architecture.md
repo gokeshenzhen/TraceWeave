@@ -69,6 +69,7 @@ Auto-debug primitives (cursors + verification)
   src/handshake_suggest.py        # suggest_handshakes / suggest_protocol_bundles
   src/handshake_sweep.py          # sweep_handshakes: whole-design handshake anomaly sweep
   src/fsdb_sweep_stream.py        # bounded event pages / edge blocks for capable FSDB sweeps
+  src/fsdb_count_index.py         # parser-local cumulative counts for covered time windows
   src/tlul.py                     # explicit A/D mapping over handshake/transaction engines
   src/packed_layout.py            # packed-member export from trusted semantic artifacts
   src/txn_reconstruct.py          # reconstruct_transactions: id-correlated transaction layer
@@ -615,6 +616,42 @@ Verification
   lower), with identical transition counts and truncation receipts. This
   validates the mechanism only; the one-run metrics are required to judge a
   proprietary workload.
+- Capped public FSDB transition queries retain only the requested detail
+  prefix while counting the rest through the event-count ABI. A parser-local
+  exact-count LRU holds at most 1,024 signal/window keys or 256 KiB of accounted
+  memory. Changing the detail cap can reuse that count; values and the true
+  predecessor are always reread. Partial, cancelled and failed queries never
+  publish an exact count. Internal full-list reads retain their existing
+  contract.
+  The optional `fsdb_event_count_index_v1` ABI also records a proved boundary
+  between complete public-picosecond groups. `src/fsdb_count_index.py` stores
+  cumulative counts strictly before these boundaries, so same-tick records
+  and sub-ps ticks rounding to the same public ps are never split into a false
+  complete boundary. A subsequent contained window can use the cumulative
+  difference for its interior and count both edges exactly. An already-read
+  detail prefix may supply the left edge. When the saved interior is at most
+  65,536 records and an extra native edge read would be required, the query
+  continues counting on its current cursor instead of paying for extra loads.
+  Each index has at most 32,768 points, coarsening without changing cumulative
+  counts; the parser's LRU admits at most 16 indexes or 4 MiB of accounted
+  memory. Builders have a separate point bound and coarsening can temporarily
+  retain old and new arrays; these budgets are not process RSS limits.
+  Only a fully covering index is eligible; uncovered or expanded windows and
+  old wrappers use the exact scan. The first scan still reads the requested
+  history. Indexes publish only after cursor/group cleanup, cancellation and
+  file-identity checks. Real path, device, inode, size, nanosecond mtime/ctime
+  and parser epoch protect reuse; close/reopen clears both caches. No index
+  survives a process restart or is persisted to disk. Public schemas, closed
+  time windows, the global FFR lock and cancellation checkpoints are unchanged.
+- For a unique, unaliased event cursor owning one signal, validated complete
+  multi-session metadata can defer the existing record/byte-triggered reclaim
+  across at most two adjacent metadata spans from the saved anchor. Crossing
+  that bound or EOF still uses the existing unload/restore path, preserving
+  raw-tick ordinals. Invalid metadata, aliases, multiple cursors or multiple
+  signal IDs retain the original reclaim budget. This amortizes repeated
+  decompression and cleanup, but FFR session sizes and demand-loading remain
+  outside the progress budget's control; two spans are not a resident-byte
+  guarantee. No native handle is retained by the count caches.
 - `scripts/benchmark_sweep_fsdb_group.py` compares complete sweep results while
   alternating forced-legacy and grouped runs, and emits aggregates only. On a
   local 34,874-byte AHB repro FSDB (634 signals, four discovered interfaces,

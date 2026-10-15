@@ -57,6 +57,8 @@ class EventCountPage:
     next_time: int | None = None
     complete: bool = False
     truncated: bool = False
+    boundary_ps: int | None = None
+    events_before_boundary: int = 0
 
 
 def page_records(page):
@@ -240,6 +242,7 @@ class FsdbEventReader:
         self.buffer = ctypes.create_string_buffer(max_bytes)
         self.max_events, self.max_bytes = max_events, max_bytes
         self.width = parser.get_signal_width(path)
+        self.index_counts = False
         raw_end = ctypes.c_uint64()
         rc = parser._lib.fsdb_event_end_tick_v1(self.handle, ctypes.byref(raw_end))
         parser._check_native_cleanup(rc, "event-duration")
@@ -301,26 +304,38 @@ class FsdbEventReader:
     def count_page(self, max_events=65536):
         """Advance a bounded suffix without requesting or formatting values."""
         import ctypes
-        from .fsdb_parser import _NativeEventPageV1
+        from .fsdb_parser import _NativeEventPageV1, _NativeCountBoundaryV1
         if type(max_events) is not int or not 1 <= max_events <= 65536:
             raise ValueError('event count limit requires 1..65536 records')
         self._check_owner()
         if not getattr(self.parser._lib, '_traceweave_has_event_count_v1', False):
             raise RuntimeError('FSDB event count capability unavailable')
         receipt = _NativeEventPageV1()
+        boundary = _NativeCountBoundaryV1()
+        indexed = self.index_counts and getattr(self.parser._lib,
+            '_traceweave_has_event_count_index_v1', False)
         started = time.perf_counter()
         try:
-            rc = self.parser._lib.fsdb_event_count_v1(self.handle, self.cursor,
-                max_events, ctypes.byref(receipt), ctypes.sizeof(receipt))
+            if indexed:
+                rc = self.parser._lib.fsdb_event_count_index_v1(self.handle, self.cursor,
+                    max_events, ctypes.byref(receipt), ctypes.sizeof(receipt),
+                    ctypes.byref(boundary), ctypes.sizeof(boundary))
+            else:
+                rc = self.parser._lib.fsdb_event_count_v1(self.handle, self.cursor,
+                    max_events, ctypes.byref(receipt), ctypes.sizeof(receipt))
         finally:
             operation_metrics.record_sweep_native_event("page", (time.perf_counter() - started) * 1000,
                 transitions=receipt.events, output_bytes=receipt.output_bytes, truncated=bool(receipt.truncated))
         self._check_read_result(rc, "event-count")
         if not receipt.events and not receipt.complete and not receipt.truncated:
             raise RuntimeError('FSDB event count made no progress')
+        if boundary.valid and not 0 < boundary.events_before_boundary <= receipt.events:
+            raise RuntimeError('FSDB count boundary receipt invalid')
         return EventCountPage(int(receipt.events),
             receipt.next_tick*self.parser._scale_fs if receipt.has_next else None,
-            bool(receipt.complete), bool(receipt.truncated))
+            bool(receipt.complete), bool(receipt.truncated),
+            int(boundary.boundary_ps) if boundary.valid else None,
+            int(boundary.events_before_boundary) if boundary.valid else 0)
 
     def close(self):
         unwinding = sys.exc_info()[0] is not None

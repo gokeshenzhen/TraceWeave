@@ -67,15 +67,22 @@ public:
         return valid_;
     }
 
-    bool Defer(FsdbSessionReclaimPosition &position, const fsdbTag64 &next) const {
-        if (!valid_ || Less(position.anchor, minimum_) ||
+    bool Defer(FsdbSessionReclaimPosition &position, const fsdbTag64 &next,
+               std::size_t max_sessions = 1) const {
+        // Coalesce at most two metadata spans after the original progress
+        // budget fires. This bounds deferral, not FFR's physical allocation:
+        // a page can demand-load beyond a close before this check runs.
+        if (!valid_ || !max_sessions || max_sessions > 2 ||
+            Less(position.anchor, minimum_) ||
             Less(next, position.anchor) || Less(closes_.back(), next)) return false;
         // The anchor is the cursor's initial or most recently restored tag.
         // Across pages/reclaims this index only advances: no full-table scan.
         while (position.session < closes_.size() &&
                Less(closes_[position.session], position.anchor)) ++position.session;
-        return position.session < closes_.size() &&
-               !Less(closes_[position.session], next);
+        if (position.session >= closes_.size()) return false;
+        const std::size_t remaining = closes_.size() - position.session;
+        const std::size_t span = max_sessions < remaining ? max_sessions : remaining;
+        return !Less(closes_[position.session + span - 1], next);
     }
 };
 

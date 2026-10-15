@@ -29,7 +29,7 @@ def session_policy_probe(tmp_path_factory):
     return binary
 
 
-@pytest.mark.parametrize("mode", ["valid", "zero_prefix", "carry", "missing", "single",
+@pytest.mark.parametrize("mode", ["two_session", "valid", "zero_prefix", "carry", "missing", "single",
     "single_zero", "gap", "overlap", "reverse", "first", "last", "beyond",
     "zero_middle", "bounds", "throws", "type", "cycle", "limit"])
 def test_session_metadata_and_raw_boundaries(session_policy_probe, mode):
@@ -51,7 +51,8 @@ def test_defer_preserves_raw_ordinals_then_reclaims_across_close(
             assert _plan(parser) == 1
             with _Cursor(parser) as cursor:
                 remaining = _expected()
-                # Next tags 1/2/9 and every ordinal of tag 10 stay in session.
+                # The first two metadata sessions end at raw 1 and raw 10.
+                # All ordinals at their second closed endpoint remain deferred.
                 for _ in range(7):
                     remaining = _take(cursor, remaining, 1, count=count)
                     assert _snapshot(parser)["unloads"] == 0

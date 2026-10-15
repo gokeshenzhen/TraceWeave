@@ -1071,6 +1071,13 @@ fsdb_end_transition_group(void *handle,
  * FFR may decompress a whole flush session, so progress budgets below are not
  * a universal resident-byte bound. Same-tick replay may also be longer than a
  * page when a file contains a very large glitch group. */
+// A proved boundary strictly between two public-ps groups seen in one page.
+// next_tick alone is NOT such a boundary (it can split an unfinished group).
+struct FsdbCountBoundaryV1 {
+    unsigned long long boundary_ps;
+    unsigned int events_before_boundary, valid;
+};
+
 struct FsdbEventPageV1 {
     unsigned long long next_tick;
     unsigned int has_next, complete, truncated, events, output_bytes;
@@ -1118,15 +1125,18 @@ static int _ReclaimEventProgress(FsdbCtx *ctx, SigInfo *sig, unsigned int record
         progress.bytes < TRACEWEAVE_FSDB_EVENT_RECLAIM_BYTES) return 0;
     // Releasing and restoring inside one flush session reloads the same
     // physical data. Defer that work only for a unique, unaliased cursor with
-    // complete multi-session metadata. Crossing its saved session close (or
-    // reaching EOF) still runs the original unload/Restore path below.
+    // complete multi-session metadata. Coalesce at most two metadata sessions
+    // from the saved anchor to amortize unloading and demand-loading the
+    // incoming session again. Crossing that bound (or reaching EOF) still runs
+    // the original unload/Restore path. The extra retained span trades memory
+    // for fewer reloads; session sizes are not a resident-byte guarantee.
     FsdbEventCursor *single = ctx->event_cursors.size() == 1
         ? &ctx->event_cursors.begin()->second : nullptr;
     if (single && ctx->event_single_cursor &&
         ctx->transition_group_ids.size() == 1 && single->valid &&
         _EventIdIsUnaliased(ctx, sig->idcode) &&
         ctx->event_session_plan.Load(ctx->obj) &&
-        ctx->event_session_plan.Defer(single->reclaim_position, single->position.tag))
+        ctx->event_session_plan.Defer(single->reclaim_position, single->position.tag, 2))
         return 0;
     std::vector<FsdbEventCursor*> siblings;
     for (auto &entry : ctx->event_cursors)
@@ -1229,8 +1239,11 @@ int fsdb_event_close_v1(void *handle, unsigned long long cursor) {
 
 static int _ReadEventPage(FsdbCtx *ctx, unsigned long long cursor,
                          unsigned int max_events, char *out, unsigned int capacity,
-                         FsdbEventPageV1 *page) {
+                         FsdbEventPageV1 *page, FsdbCountBoundaryV1 *boundary = nullptr) {
     memset(page, 0, sizeof(*page));
+    if (boundary) memset(boundary, 0, sizeof(*boundary));
+    bool boundary_pending = boundary != nullptr, first_boundary_record = true;
+    unsigned long long first_ps = 0;
     if (out) out[0] = '\0';
     if (ctx->cleanup_failed) return -6;
     if (!ctx->scale_fs) return FSDB_ERR_SCALE_UNKNOWN;
@@ -1245,6 +1258,21 @@ static int _ReadEventPage(FsdbCtx *ctx, unsigned long long cursor,
         if (c.end_ps != (unsigned long long)-1 && fs > (unsigned __int128)c.end_ps * FS_PER_PS) {
             c.valid = false;
             break;
+        }
+        // Save the first complete ps boundary in this page, then stop
+        // observing. Equal raw ticks AND different ticks rounding to the
+        // same public ps remain one indivisible count group. This also works
+        // when the later group is only the page's unread peek.
+        if (boundary_pending) {
+            if (first_boundary_record) {
+                first_ps = ps;
+                first_boundary_record = false;
+            } else if (ps > first_ps) {
+                boundary->boundary_ps = ps;
+                boundary->events_before_boundary = page->events;
+                boundary->valid = 1;
+                boundary_pending = false;
+            }
         }
         page->next_tick = tick;
         page->has_next = 1;
@@ -1300,6 +1328,18 @@ int fsdb_event_count_v1(void *handle, unsigned long long cursor,
     if (!handle || !page || page_size != sizeof(*page) || !max_events
         || max_events > 65536) return -1;
     return _ReadEventPage((FsdbCtx*)handle, cursor, max_events, nullptr, 0, page);
+}
+
+/* Additive private ABI; old event/count callers and receipts are unchanged.
+ * Each call remains bounded to 65536 records for cancellation checkpoints. */
+int fsdb_event_count_index_v1(void *handle, unsigned long long cursor,
+                             unsigned int max_events, FsdbEventPageV1 *page,
+                             unsigned int page_size, FsdbCountBoundaryV1 *boundary,
+                             unsigned int boundary_size) {
+    if (!handle || !page || page_size != sizeof(*page) || !boundary ||
+        boundary_size != sizeof(*boundary) || !max_events || max_events > 65536)
+        return -1;
+    return _ReadEventPage((FsdbCtx*)handle, cursor, max_events, nullptr, 0, page, boundary);
 }
 
 int

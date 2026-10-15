@@ -40,6 +40,46 @@ int main(int argc, char **argv) {
     const std::string mode = argv[1];
     Reader reader;
     FsdbSessionReclaimPlan plan;
+    if (mode == "two_session") {
+        Reader r;
+        r.maximum={0,40};
+        r.Set({{0,0},{0,10},{0,20},{0,30},{0,40}});
+        FsdbSessionReclaimPlan p;
+        assert(p.Load(&r));
+        FsdbSessionReclaimPosition pos;
+        assert(!p.Defer(pos,{0,1},0));
+        assert(!p.Defer(pos,{0,1},3));
+        assert(p.Defer(pos,{0,10},2));
+        assert(p.Defer(pos,{0,20},2));
+        assert(!p.Defer(pos,{0,21},2));
+        assert(!p.Defer(pos,{0,41},2));
+        pos.anchor={0,21};
+        assert(p.Defer(pos,{0,40},2));
+        assert(!p.Defer(pos,{0,20},2));
+        // Optional leading initial-state session also counts against the fixed cap.
+        Reader z;
+        z.Set({{0,0},{0,0},{0,10},{0,20}});
+        FsdbSessionReclaimPlan zp;
+        assert(zp.Load(&z));
+        FsdbSessionReclaimPosition zz;
+        assert(zp.Defer(zz,{0,10},2));
+        assert(!zp.Defer(zz,{0,11},2));
+        // Cross-low-word carry and exact closed endpoints.
+        Reader c;
+        c.minimum={0,0xfffffff0};
+        c.maximum={1,30};
+        c.Set({c.minimum,{1,0},{1,10},{1,20},c.maximum});
+        FsdbSessionReclaimPlan cp;
+        assert(cp.Load(&c));
+        FsdbSessionReclaimPosition cc;
+        cc.anchor=c.minimum;
+        assert(cp.Defer(cc,{1,10},2));
+        assert(!cp.Defer(cc,{1,11},2));
+        cc.anchor={1,11};
+        assert(cp.Defer(cc,{1,30},2));
+        assert(!cp.Defer(cc,{1,10},2));
+        return 0;
+    }
     if (mode == "valid" || mode == "zero_prefix" || mode == "carry") {
         if (mode == "zero_prefix") reader.Set({{0, 0}, {0, 0}, {0, 10}, {0, 20}});
         if (mode == "carry") {
