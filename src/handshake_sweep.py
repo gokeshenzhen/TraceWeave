@@ -622,12 +622,17 @@ def sweep_handshake_anomalies(
             for unit in pack["units"]
             for member in unit["members"]
         ]
-        transition_group = getattr(parser, "transition_group", None)
-        group_context = (
-            transition_group(list(pack["paths"]))
-            if transition_group is not None and pack["paths"]
-            else nullcontext(False)
-        )
+        event_group = getattr(parser, "_event_transition_group", None)
+        transition_group = event_group or getattr(parser, "transition_group", None)
+        group_context = nullcontext(False)
+        if transition_group is not None and pack["paths"]:
+            if event_group is not None:
+                # Keep pack ownership while cursors demand-load their histories.
+                # The existing context handles older native ABIs and preserves
+                # the original view, exact boundaries, and predecessor evidence.
+                group_context = event_group(list(pack["paths"]), start_ps, end_ps)
+            else:
+                group_context = transition_group(list(pack["paths"]))
         if transition_group is None and getattr(parser, '_event_batch', None) and pack['paths']:
             from .waveform_batch import sampling_batch
             group_context = sampling_batch(parser, list(pack['paths']), start_ps, end_ps)

@@ -554,6 +554,15 @@ Verification
   oversized fallback without raising the resident-signal limit. Packs remain
   serial under the process-global FSDB lock and every native group unloads in
   its existing `finally` path.
+  The sweep uses the private `_event_transition_group(paths, start, end)`
+  entry point when available. With the lazy native ABI this reserves the same
+  packed signals without `ffrLoadSignals()`; the existing event cursors load
+  their histories on demand. It keeps the original native view and requested
+  window, including the default full-duration request, so predecessor and
+  exact-time sampling semantics remain intact. Wrappers without lazy support
+  retain eager grouping. The signal cap, shared sampling sessions and analysis
+  budgets are unchanged; FFR session decompression and Python transition lists
+  can still retain substantial memory.
   `TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS` can set 1..256 after RSS review. Oversized
   groups, begin failures, and older wrappers automatically use the legacy
   per-signal path. Cancellation between interfaces unwinds the context before

@@ -865,3 +865,79 @@ def test_sweep_cancellation_inside_clock_group_releases_native_group(
     assert inspect_calls == 1
     assert entered == 1
     assert exited == 1
+
+
+class _RecordingEventGroupParser(_RecordingGroupParser):
+    """Exercise pack ownership while real VCD reads supply independent facts."""
+    def __init__(self, path, limit=16, active=True):
+        super().__init__(path, limit)
+        self.event_groups = []
+        self.event_depth = 0
+        self.ended_groups = 0
+        self.active_result = active
+
+    @contextmanager
+    def _event_transition_group(self, paths, start, end):
+        assert not self._transition_group_active
+        outer = self.event_depth == 0
+        if outer:
+            self.event_groups.append((tuple(paths), start, end))
+        self.event_depth += 1
+        self._transition_group_active = self.active_result
+        try:
+            yield self.active_result
+        finally:
+            self._transition_group_active = False
+            self.event_depth -= 1
+            if outer:
+                self.ended_groups += 1
+
+    @contextmanager
+    def transition_group(self, paths):
+        raise AssertionError('sweep must prefer event ownership over eager loading')
+        yield
+
+
+@pytest.mark.parametrize('start,end', [(0, -1), (12, 88)])
+@pytest.mark.parametrize('active', [False, True])
+def test_sweep_event_group_preserves_window_facts_and_fallback(tmp_path, start, end, active):
+    wave = _write(tmp_path, _shared_clock_vcd(['1', '0', '1'], n_cycles=10))
+    parser = _RecordingEventGroupParser(wave, limit=4, active=active)
+    args = dict(wave_path=wave, max_wait_cycles=4, start_ps=start, end_ps=end)
+    result = sweep_handshake_anomalies(get_parser=lambda _: parser, **args)
+    reference = sweep_handshake_anomalies(get_parser=_parser_factory(), **args)
+    assert result == reference
+    assert [len(paths) for paths, _, _ in parser.event_groups] == [3, 4]
+    assert all((s, e) == (start, end) for _, s, e in parser.event_groups)
+    assert parser.ended_groups == len(parser.event_groups)
+    assert not parser._transition_group_active
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_sweep_event_group_cleanup_and_reuse_after_interrupt(tmp_path, monkeypatch, cancel):
+    wave = _write(tmp_path, _shared_clock_vcd(['1', '0'], n_cycles=10))
+    parser = _RecordingEventGroupParser(wave)
+    args = dict(get_parser=lambda _: parser, wave_path=wave, max_wait_cycles=4)
+    real_inspect = handshake_sweep.inspect_handshake
+    event = threading.Event()
+    def interrupt(**kwargs):
+        assert parser._transition_group_active
+        if cancel:
+            event.set()
+            cancellation.check_cancelled()
+        raise ValueError('injected interface failure')
+    monkeypatch.setattr(handshake_sweep, 'inspect_handshake', interrupt)
+    token = cancellation.push_cancel_event(event)
+    try:
+        with pytest.raises(OperationCancelled if cancel else ValueError):
+            sweep_handshake_anomalies(**args)
+    finally:
+        cancellation.pop_cancel_event(token)
+    assert parser.ended_groups == 1
+    assert not parser._transition_group_active
+    monkeypatch.setattr(handshake_sweep, 'inspect_handshake', real_inspect)
+    recovered = sweep_handshake_anomalies(**args)
+    reference = sweep_handshake_anomalies(get_parser=_parser_factory(), wave_path=wave, max_wait_cycles=4)
+    assert recovered == reference
+    assert parser.ended_groups == 2
+    assert not parser._transition_group_active
