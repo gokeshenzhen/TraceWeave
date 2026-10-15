@@ -491,3 +491,26 @@ def test_event_readers_share_window_group_and_close_cursors_first(monkeypatch, e
         ('open_cursor', 'top.clk', 50, 60), ('open_cursor', 'top.data', 50, 60),
         ('close_cursor', 'top.data'), ('close_cursor', 'top.clk'), 'end',
     ]
+
+
+@pytest.mark.parametrize('reason', ['old_group_abi', 'oversized'])
+def test_event_group_fallback_keeps_materialized_reads_usable(monkeypatch, reason):
+    lib = _FakeLazyGroupLib()
+    parser = _fake_group_parser(lib)
+    paths = ['top.clk', 'top.valid']
+    if reason == 'old_group_abi':
+        lib._traceweave_has_transition_group = False
+        def legacy_read(handle, path, start, end, buf, size):
+            lib.calls.append(('legacy', path.decode()))
+            buf.value = b'10\t1\n'
+            return 1
+        lib.fsdb_get_transitions = legacy_read
+    else:
+        monkeypatch.setenv('TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS', '1')
+    with parser._event_transition_group(paths, 5, 10) as active:
+        assert not active
+        assert not parser._transition_group_active
+        result = parser.get_transitions('top.clk', 0, 10)
+    assert result['transition_count'] == 1
+    assert not parser._transition_group_active
+    assert all(not (isinstance(call, tuple) and call[0] in {'begin', 'lazy_begin'}) for call in lib.calls)
