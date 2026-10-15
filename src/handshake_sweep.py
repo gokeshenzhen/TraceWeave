@@ -98,7 +98,7 @@ def _iter_clock_groups(
 
 
 def _chunk_oversized_clock_unit(
-    unit: dict[str, Any], limit: int
+    unit: dict[str, Any], limit: int, *, streaming: bool = False
 ) -> list[dict[str, Any]]:
     """Split one clock unit at interface boundaries without splitting a row."""
     chunks: list[dict[str, Any]] = []
@@ -121,13 +121,13 @@ def _chunk_oversized_clock_unit(
         current_members = []
         # The shared sampling session already owns the clock transition/edge
         # vectors after its first chunk, so later native groups need not load it.
-        current_paths = set()
+        current_paths = set(unit.get("clock_paths", ())) if streaming else set()
 
     for member, member_paths in zip(unit["members"], unit["member_paths"]):
         candidate = current_paths | set(member_paths)
         if current_members and len(candidate) > limit:
             flush()
-            candidate = set(member_paths)
+            candidate = current_paths | set(member_paths)
         current_members.append(member)
         current_paths = candidate
         # If one interface alone exceeds the bound, keep it intact and let the
@@ -139,14 +139,14 @@ def _chunk_oversized_clock_unit(
 
 
 def _pack_clock_units(
-    units: list[dict[str, Any]], limit: int
+    units: list[dict[str, Any]], limit: int, *, streaming: bool = False
 ) -> list[dict[str, Any]]:
     """Deterministic bounded first-fit packing of complete clock units."""
     packs: list[dict[str, Any]] = []
     regular: list[dict[str, Any]] = []
     for unit in units:
         if len(unit["paths"]) > limit:
-            packs.extend(_chunk_oversized_clock_unit(unit, limit))
+            packs.extend(_chunk_oversized_clock_unit(unit, limit, streaming=streaming))
         else:
             regular.append(unit)
 
@@ -608,7 +608,10 @@ def sweep_handshake_anomalies(
         })
 
     group_limit = max(1, int(getattr(parser, "transition_group_limit", 16)))
-    packs = _pack_clock_units(logical_units, group_limit)
+    from .fsdb_sweep_stream import supports_streaming, stream_fsdb_pack, SweepBudget
+    streaming = parser is not None and supports_streaming(parser)
+    stream_budget = SweepBudget() if streaming else None
+    packs = _pack_clock_units(logical_units, group_limit, streaming=streaming)
     session_last_pack: dict[int, int] = {}
     for pack_index, pack in enumerate(packs):
         for unit in pack["units"]:
@@ -641,7 +644,11 @@ def sweep_handshake_anomalies(
                 clock_count=int(pack.get("clock_count", 0)),
                 chunked=bool(pack.get("chunked")),
             )
-        with group_context:
+        with group_context as group_active:
+            streamed = stream_fsdb_pack(parser, pack_entries, resolution_cache,
+                wave_path=wave_path, start_ps=start_ps, end_ps=end_ps, edge=edge,
+                max_wait_cycles=max_wait_cycles, budget=stream_budget
+            ) if streaming and group_active else {}
             for nb, sampling_session in pack_entries:
                 # Per-interface cancellation checkpoint: an abandoned whole-design
                 # sweep stops at the next interface instead of finishing all of them.
@@ -662,20 +669,24 @@ def sweep_handshake_anomalies(
                 res: dict[str, Any] | None = None
                 try:
                     assert parser is not None
-                    res = inspect_handshake(
-                        get_parser=lambda _: parser, wave_path=wave_path,
-                        clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
-                        edge=edge, start_ps=start_ps, end_ps=end_ps,
-                        max_wait_cycles=max_wait_cycles,
-                        cursor_store=None,  # the sweep sets ONE cursor, not one per interface
-                        _sampling_session=sampling_session,
-                        _resolution_cache=resolution_cache,
-                        _compact_sampling=True,
-                        **nb["inspect_kwargs"],
-                    )
+                    if id(nb) in streamed:
+                        res, shared_ms = streamed[id(nb)]
+                    else:
+                        res = inspect_handshake(
+                            get_parser=lambda _: parser, wave_path=wave_path,
+                            clock=nb["clock"], ready=nb["ready"], payload=nb["payload"],
+                            edge=edge, start_ps=start_ps, end_ps=end_ps,
+                            max_wait_cycles=max_wait_cycles,
+                            cursor_store=None,  # the sweep sets ONE cursor, not one per interface
+                            _sampling_session=sampling_session,
+                            _resolution_cache=resolution_cache,
+                            _compact_sampling=True,
+                            **nb["inspect_kwargs"],
+                        )
                 finally:
                     operation_metrics.record_sweep_interface(
-                        (time.perf_counter() - inspect_started) * 1000.0,
+                        (shared_ms if id(nb) in streamed else
+                         (time.perf_counter() - inspect_started) * 1000.0),
                         completed=res is not None,
                         transition_truncated=bool(
                             res and res.get("transition_data_truncated")

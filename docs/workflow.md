@@ -393,8 +393,14 @@ This discipline pairs with tool coverage facts: inspection tools should report
 which checks they actually performed, and the agent uses that coverage to avoid
 treating a one-sided result as a full protocol conclusion.
 
-**Global vs. Targeted Protocol Checks:** `sweep_handshakes` performs a whole-design
-scan across every protocol interface in the waveform. `inspect_handshake`, 
+**Global vs. Targeted Protocol Checks:** `sweep_handshakes` discovers protocol
+interfaces across the requested scope and checks the selected AHB / valid-ready
+bundles within discovery, interface and resource limits. Capable FSDB readers
+stream bounded sample blocks with continuous protocol state; reaching the end
+of selected histories does not remove discovery, interface-cap or skipped-check
+gaps. A work-budget stop remains partial, and compatibility readers can still
+stop at a materialized-transition prefix. Always inspect coverage and warnings.
+`inspect_handshake`,
 `reconstruct_transactions`, and `verify_window` are targeted checks on one interface
 or signal. A targeted clean result ("no violation on Master0's R channel") does NOT
 erase earlier global findings ("W channel has payload-hold violations"). State both

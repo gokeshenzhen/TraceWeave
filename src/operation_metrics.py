@@ -146,6 +146,27 @@ _PUBLIC_FIELDS = {
     "source_graph_trace_scope_expansion_count",
     "source_graph_trace_restart_count",
 }
+_SWEEP_STREAM_FIELDS = {
+    "sweep_stream_events_total", "sweep_stream_blocks",
+    "sweep_stream_live_page_records_peak", "sweep_stream_live_page_bytes_peak",
+    "sweep_stream_active_cursors_peak", "sweep_stream_block_edges_peak",
+    "sweep_stream_block_bytes_peak", "sweep_stream_work_limit_stops",
+}
+_PUBLIC_FIELDS.update(_SWEEP_STREAM_FIELDS)
+
+
+def record_sweep_stream(name: str, value: int, *, peak: bool = False) -> None:
+    """Numeric page/block accounting only; logical bytes are not process RSS."""
+    metrics = current()
+    if name not in _SWEEP_STREAM_FIELDS or type(value) is not int or value < 0 or metrics is None:
+        return
+    with metrics.lock:
+        if metrics.values.get("_sweep_active") is not True:
+            return
+        previous = int(metrics.values.get(name, 0))
+        metrics.values[name] = max(previous, value) if peak else previous + value
+
+
 _PUBLIC_PHASES = {
     "discover_valid_ready",
     "discover_ahb",
