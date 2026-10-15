@@ -68,6 +68,7 @@ Auto-debug primitives (cursors + verification)
   src/window_verify.py            # verify_window: temporal predicate over a clock window
   src/handshake_suggest.py        # suggest_handshakes / suggest_protocol_bundles
   src/handshake_sweep.py          # sweep_handshakes: whole-design handshake anomaly sweep
+  src/fsdb_sweep_stream.py        # bounded event pages / edge blocks for capable FSDB sweeps
   src/tlul.py                     # explicit A/D mapping over handshake/transaction engines
   src/packed_layout.py            # packed-member export from trusted semantic artifacts
   src/txn_reconstruct.py          # reconstruct_transactions: id-correlated transaction layer
@@ -498,7 +499,8 @@ Verification
   case measurements, not full-coverage or general speed/memory guarantees.
 - A full `sweep_handshakes` does not independently reread and re-extract the
   same clock for every interface. `handshake_sweep` groups discovered bundles
-  by clock and creates one private `EdgeSamplingSession` per group;
+  by clock. The compatibility path creates one private `EdgeSamplingSession`
+  per group;
   `cycle_query` reads the clock transitions, extracts edges, and builds sample
   times once, then reuses them for every interface in that group. Signals used
   by more than one interface are also reused, with a remaining-consumer count
@@ -547,8 +549,9 @@ Verification
   or changing truncation receipts. The default
   native group limit is 16 signals to bound resident FFR data on multi-GB waves;
   the sweep scheduler first-fit packs complete small clock units into that
-  bound. An oversized clock unit is split only at interface boundaries while
-  retaining one `EdgeSamplingSession`: the first chunk reads/caches the clock,
+  bound. On the compatibility path an oversized clock unit is split only at
+  interface boundaries while retaining one `EdgeSamplingSession`: the first
+  chunk reads/caches the clock,
   later chunks load only their signal subset, and a single interface that
   itself exceeds the bound falls back honestly. This removes whole-group
   oversized fallback without raising the resident-signal limit. Packs remain
@@ -560,9 +563,49 @@ Verification
   their histories on demand. It keeps the original native view and requested
   window, including the default full-duration request, so predecessor and
   exact-time sampling semantics remain intact. Wrappers without lazy support
-  retain eager grouping. The signal cap, shared sampling sessions and analysis
-  budgets are unchanged; FFR session decompression and Python transition lists
-  can still retain substantial memory.
+  retain eager grouping. FFR session decompression can still retain substantial
+  memory independently of the Python sampling strategy.
+  With event-page and transition-group support, FSDB sweeps consume bounded
+  pages and sample blocks through `fsdb_sweep_stream`; other backends and failed
+  or unsupported groups retain the compatibility sampler. Each cursor keeps
+  one page (at most 1,024 records / 256 KiB native output). Each block contains
+  at most 2,048 edges and an 8 MiB conservative logical value budget; a single
+  row exceeding that budget stops with partial coverage. Page objects, reader
+  buffers, protocol latches and native residency are separate costs, not part
+  of that 8 MiB estimate. Consumed columns and clock history are released.
+  Shared-clock interfaces consume the same block columns within a pack.
+  Chunked clock units reserve a clock slot in every pack and reread that clock
+  once per pack rather than retaining full clock history across packs.
+  `HandshakeConsumer` runs the same protocol loop used by standalone
+  `inspect_handshake`. It preserves open stalls, latched payload/valid,
+  X-episode debounce, AHB outstanding writes/data phases, counts, longest
+  intervals and both independent finding quotas across blocks. Only final
+  settlement closes a tail stall; finding display limits never stop counting.
+  Physical femtoseconds and whole timestamp groups preserve strict-before
+  sampling, including events spanning pages and sub-ps edges sharing a public
+  ps label. Unknown/ambiguous clock history stops at the safe prefix; missing
+  signal history yields unknown samples with explicit incomplete coverage.
+  One request-wide budget caps streaming at 50 million page records, 32 GiB
+  logical event work, or 300 seconds, independently of the block bounds. A
+  record/byte budget may overshoot by one bounded page. Stops carry fixed
+  `sweep_event_budget`, `sweep_byte_budget` or `sweep_time_budget` sampling gaps
+  and transition truncation; they never assert complete coverage. Discovery,
+  interface caps and skipped candidates remain separate coverage gaps.
+  Cursors close before the native group unloads, including exceptions and
+  cancellation; the global FFR lock and native-call cancellation boundary are
+  unchanged. Numeric operation metrics expose block/page peaks and work stops,
+  not paths, signals, sampled values or block identifiers. Logical Python
+  working-set estimates do not imply a constant process RSS: FFR can decompress
+  or retain entire flush sessions, especially with multiple live cursors.
+  The private sweep cursor fast path consumes a single ordinary transition only
+  when its successor is strictly later or absent. Pending initial observations,
+  equal timestamps and uncertain ordering retain the generic group fold;
+  cancellation checkpoints and truncation checks are preserved. Cached peek
+  results avoid repeated lookups without changing page or work budgets.
+  `tests/test_p2b_handshake_streaming.py` covers cross-block protocol state,
+  limits, cleanup and native compatibility; `tests/test_p2b_refinements.py`
+  compares cursor values, group flags and cancellation points with the generic
+  cursor and checks accounting, row publication and consumer isolation.
   `TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS` can set 1..256 after RSS review. Oversized
   groups, begin failures, and older wrappers automatically use the legacy
   per-signal path. Cancellation between interfaces unwinds the context before

@@ -744,6 +744,7 @@ def inspect_handshake(
     _resolution_cache: dict[str, str] | None = None,
     _compact_sampling: bool = False,
     _sampled: dict | None = None,
+    _defer_sampling: bool = False,
 ) -> dict[str, Any]:
     """Classify a valid/ready handshake cycle-by-cycle and surface protocol
     facts an LLM cannot get from a transition dump or a scoreboard log.
@@ -856,6 +857,19 @@ def inspect_handshake(
     wdata_sig = resolve(write_data) if want_write_data_hold else None
     extra_signals = [s for s in (hwrite_sig, wdata_sig) if s]
 
+    settings = dict(wave_path=wave_path, clock=clock, ready=ready,
+        valid_signal=valid_signal, valid_source=valid_source, payload=payload,
+        use_htrans=use_htrans, htrans_rule=htrans_rule,
+        want_write_data_hold=want_write_data_hold, hwrite_sig=hwrite_sig,
+        wdata_sig=wdata_sig, extra_signals=extra_signals, edge=edge,
+        start_ps=start_ps, end_ps=end_ps, max_wait_cycles=max_wait_cycles,
+        check_payload_hold=check_payload_hold, check_valid_hold=check_valid_hold,
+        active_high=active_high, max_findings=max_findings,
+        cursor_store=cursor_store, cursor_name=cursor_name, cursor_note=cursor_note,
+        _compact_sampling=_compact_sampling)
+    consumer = HandshakeConsumer(settings)
+    if _defer_sampling:
+        return consumer
     sampled = _sampled if _sampled is not None else sample_signals_on_edges(
         parser, clock, [valid_signal, ready, *payload, *extra_signals],
         start_ps=start_ps, end_ps=end_ps, edge=edge,
@@ -863,6 +877,102 @@ def inspect_handshake(
         compact=_compact_sampling,
         sample_offset_ps=0, sample_phase="before",
     )
+    consumer.consume(sampled)
+    return consumer.finish()
+
+
+class HandshakeConsumer:
+    """Private request-local protocol accumulator; only finish settles a tail stall.
+
+    Blocks use the existing compact/row sampler shape. ``inactive_cycles`` is
+    relative to the block. Empty intermediate blocks do not end the request.
+    """
+    def __init__(self, settings):
+        self.settings = settings
+        self._machine = None
+        self._result = None
+        self._finished = False
+        self._sample_count = 0
+        self._status = {"signal_errors": {}, "sampling_gaps": [],
+                        "transition_signals_truncated": []}
+
+    def _merge_status(self, sampled):
+        self._status["signal_errors"].update(sampled.get("signal_errors", {}))
+        for key in ("sampling_gaps", "transition_signals_truncated"):
+            for value in sampled.get(key, ()):
+                if value not in self._status[key]:
+                    self._status[key].append(value)
+
+    def consume(self, sampled):
+        if self._finished:
+            raise RuntimeError("handshake consumer already finished")
+        check_cancelled()
+        self._merge_status(sampled)
+        self._sample_count += len(sampled.get("edge_times", [])) if self.settings["_compact_sampling"] else len(sampled.get("samples", []))
+        if not sampled.get("edge_times") and not sampled.get("samples"):
+            return
+        if self._result is not None:
+            return
+        try:
+            if self._machine is None:
+                self._machine = _handshake_samples(sampled, **self.settings)
+                next(self._machine)
+            else:
+                self._machine.send(sampled)
+        except StopIteration as done:
+            self._result = done.value
+            self._machine = None
+
+    def finish(self, sampling_status=None):
+        if self._finished:
+            return self._result
+        if sampling_status is not None:
+            self._merge_status(sampling_status)
+        if self._result is None:
+            try:
+                if self._machine is None:
+                    self._machine = _handshake_samples(self._status, **self.settings)
+                    next(self._machine)
+                else:
+                    self._machine.send(None)
+            except StopIteration as done:
+                self._result = done.value
+            finally:
+                self.close()
+        result = self._result
+        result["sample_count"] = self._sample_count
+        # Late clock/page/work-budget boundaries apply to every fact already
+        # consumed. Preserve warning order and the public coverage contract.
+        limited = list(self._status["transition_signals_truncated"])
+        gaps = list(self._status["sampling_gaps"])
+        result["signal_errors"] = dict(self._status["signal_errors"])
+        result["transition_signals_truncated"] = limited
+        result["transition_data_truncated"] = bool(limited)
+        result["coverage"].update(transition_data_truncated=bool(limited),
+            transition_signals_truncated=len(limited), sampling_gaps=gaps)
+        previous_gaps = result["warnings"][:]
+        warnings = [w for w in previous_gaps if w not in gaps and
+                    not w.startswith("TRANSITION DATA TRUNCATED:")]
+        result["warnings"] = gaps + ([
+            "TRANSITION DATA TRUNCATED: the reader or sampling boundary retained only a prefix "
+            f"for {len(limited)} sampled signal(s). Findings "
+            "and zero counts cover only that prefix; this is not complete coverage."
+        ] if limited else []) + warnings
+        self._finished = True
+        return result
+
+    def close(self):
+        if self._machine is not None:
+            self._machine.close()
+            self._machine = None
+
+
+def _handshake_samples(sampled, *, wave_path, clock, ready, valid_signal, valid_source,
+        payload, use_htrans, htrans_rule, want_write_data_hold, hwrite_sig, wdata_sig,
+        extra_signals, edge, start_ps, end_ps, max_wait_cycles, check_payload_hold,
+        check_valid_hold, active_high, max_findings, cursor_store, cursor_name,
+        cursor_note, _compact_sampling):
+    """One protocol state machine; a yield is a consumption boundary, never EOF."""
     signal_errors = sampled.get("signal_errors", {})
     transition_signals_truncated = list(
         sampled.get("transition_signals_truncated", [])
@@ -911,10 +1021,7 @@ def inspect_handshake(
         "start_ps": int(start_ps),
         "end_ps": int(end_ps),
         "active_high": active_high,
-        "sample_count": (
-            len(sampled.get("edge_times", []))
-            if _compact_sampling else len(sampled.get("samples", []))
-        ),
+        "sample_count": 0,
         "transfer_count": 0,
         "stall_count": 0,
         "max_stall_cycles": 0,
@@ -1084,165 +1191,184 @@ def inspect_handshake(
         stall_cycles = 0
         stall_begin = None
 
-    protocol_scan_started = time.perf_counter()
-    for cycle_index in range(sample_count):
-        if not cycle_index % CANCEL_CHECK_STRIDE:
-            check_cancelled()
-        if _compact_sampling:
-            column_view.index = cycle_index
-            sig = column_view
-            sample_time_ps = compact_edge_times[cycle_index]
-        else:
-            sig = samples[cycle_index]["signals"]
-            sample_time_ps = samples[cycle_index]["time_ps"]
-        if cycle_index in sampled.get("inactive_cycles", {}):
-            # An adapter can provide an explicit reset/unknown-reset boundary.
-            # It breaks history without manufacturing a producer deassertion.
-            _close_stall(sample_time_ps)
-            wd_phase_open = False
-            wd_outstanding_write = None
-            x_while_valid_active.clear()
-            continue
-        if use_htrans:
-            v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
-        else:
-            v = _hs_truth(sig.get(valid_signal), active_high)
-        r = _hs_truth(sig.get(ready), active_high)
-
-        if do_write_data_hold:
-            # This is byte-for-byte the state transition order of the former
-            # _ahb_write_data_hold pass: inspect the live data phase first,
-            # then advance it from the address accepted on this edge.
-            wd_htr = _ahb_valid_truth(sig.get(valid_signal), "active")
-            wd_hw = _hs_truth(sig.get(hwrite_sig), active_high)
-            wd_value = sig.get(wdata_sig)
-            if wd_outstanding_write is True:
-                if not wd_phase_open:
-                    wd_phase_open = True
-                    wd_latched = wd_value
-                elif (
-                    _hs_known(wd_latched)
-                    and _hs_known(wd_value)
-                    and wd_value != wd_latched
-                ):
-                    wd_count += 1
-                    if len(wd_findings) < max_findings:
-                        wd_findings.append({
-                            "type": "write_data_hold_violation",
-                            "severity": "error",
-                            "time_ps": sample_time_ps,
-                            "signal": wdata_sig,
-                            "from_value": _hs_repr(wd_latched),
-                            "to_value": _hs_repr(wd_value),
-                        })
-                    wd_latched = wd_value
+    last_sample_time_ps = None
+    while sampled is not None:
+        samples = sampled.get("samples", [])
+        compact_edge_times = sampled.get("edge_times", [])
+        compact_columns = sampled.get("signal_columns", {})
+        sample_count = len(compact_edge_times) if _compact_sampling else len(samples)
+        column_view.columns = compact_columns
+        result["sample_count"] += sample_count
+        protocol_scan_started = time.perf_counter()
+        for cycle_index in range(sample_count):
+            if not cycle_index % CANCEL_CHECK_STRIDE:
+                check_cancelled()
+            if _compact_sampling:
+                column_view.index = cycle_index
+                sig = column_view
+                sample_time_ps = compact_edge_times[cycle_index]
             else:
+                sig = samples[cycle_index]["signals"]
+                sample_time_ps = samples[cycle_index]["time_ps"]
+            if cycle_index in sampled.get("inactive_cycles", {}):
+                # An adapter can provide an explicit reset/unknown-reset boundary.
+                # It breaks history without manufacturing a producer deassertion.
+                _close_stall(sample_time_ps)
                 wd_phase_open = False
-                wd_latched = None
-
-            if r is True:
-                wd_phase_open = False
-                wd_latched = None
-                wd_outstanding_write = (
-                    (wd_hw is True) if wd_htr is True else None
-                )
-            elif r is None:
                 wd_outstanding_write = None
-                wd_phase_open = False
-                wd_latched = None
+                x_while_valid_active.clear()
+                continue
+            if use_htrans:
+                v = _ahb_valid_truth(sig.get(valid_signal), htrans_rule)
+            else:
+                v = _hs_truth(sig.get(valid_signal), active_high)
+            r = _hs_truth(sig.get(ready), active_high)
 
-        # Wait-state hold: if the previous edge left us stalled (valid high,
-        # ready low) the beat must persist until accepted. A known-low valid
-        # here means the master dropped the transfer before ready arrived — a
-        # premature deassertion (e.g. AHB htrans -> IDLE without waiting for
-        # HREADY). Evaluated BEFORE this edge is reclassified, and only on a
-        # known False (an x/z valid is "unknown", never a deassertion).
-        if in_stall and check_valid_hold and v is False:
-            result["valid_deassert_violations"] += 1
-            if len(findings) < max_findings:
-                findings.append({
-                    "type": "premature_valid_deassertion",
-                    "severity": "error",
-                    "time_ps": sample_time_ps,
-                    "signal": valid_signal,
-                    "from_value": stall_valid_repr,
-                    "to_value": _hs_repr(sig.get(valid_signal)),
-                    "stall_begin_ps": stall_begin,
-                    "stall_cycles": stall_cycles,
-                    # The dropped beat was stalled (ready/HREADY low) the whole time it
-                    # was asserted — it was NEVER accepted. This is the witness that
-                    # forecloses the "it's just AHB pipeline overlap" reading: an
-                    # accepted beat would have seen ready high before valid dropped.
-                    "accepted_before_deassert": False,
-                })
-
-        # x-while-valid: with a known-asserted valid the address/control payload
-        # must be fully driven. An x/z here is a definite violation (active transfer
-        # carrying an unknown control field). Debounced so a persistent x reports
-        # once per episode, not every cycle; reset when valid drops so a fresh beat
-        # re-reports. Only the control payload (AHB) reaches here — see do_x_while_valid.
-        if do_x_while_valid and v is True:
-            for p in resolved_payload:
-                if not _hs_known(sig.get(p)):
-                    if p not in x_while_valid_active:
-                        x_while_valid_active.add(p)
-                        result["x_while_valid_violations"] += 1
-                        if len(findings) < max_findings:
-                            findings.append({
-                                "type": "x_while_valid",
+            if do_write_data_hold:
+                # This is byte-for-byte the state transition order of the former
+                # _ahb_write_data_hold pass: inspect the live data phase first,
+                # then advance it from the address accepted on this edge.
+                wd_htr = _ahb_valid_truth(sig.get(valid_signal), "active")
+                wd_hw = _hs_truth(sig.get(hwrite_sig), active_high)
+                wd_value = sig.get(wdata_sig)
+                if wd_outstanding_write is True:
+                    if not wd_phase_open:
+                        wd_phase_open = True
+                        wd_latched = wd_value
+                    elif (
+                        _hs_known(wd_latched)
+                        and _hs_known(wd_value)
+                        and wd_value != wd_latched
+                    ):
+                        wd_count += 1
+                        if len(wd_findings) < max_findings:
+                            wd_findings.append({
+                                "type": "write_data_hold_violation",
                                 "severity": "error",
                                 "time_ps": sample_time_ps,
-                                "signal": p,
-                                "from_value": _hs_repr(sig.get(valid_signal)),
-                                "to_value": _hs_repr(sig.get(p)),
+                                "signal": wdata_sig,
+                                "from_value": _hs_repr(wd_latched),
+                                "to_value": _hs_repr(wd_value),
                             })
+                        wd_latched = wd_value
                 else:
-                    x_while_valid_active.discard(p)
-        elif do_x_while_valid:
-            x_while_valid_active.clear()
+                    wd_phase_open = False
+                    wd_latched = None
 
-        if v is None or r is None:
-            result["unknown_sample_cycles"] += 1
-            _close_stall(sample_time_ps)
-            continue
+                if r is True:
+                    wd_phase_open = False
+                    wd_latched = None
+                    wd_outstanding_write = (
+                        (wd_hw is True) if wd_htr is True else None
+                    )
+                elif r is None:
+                    wd_outstanding_write = None
+                    wd_phase_open = False
+                    wd_latched = None
 
-        if v and r:
-            result["transfer_count"] += 1
-            _close_stall(sample_time_ps)
-        elif r and not v:
-            result["ready_without_valid_cycles"] += 1
-            _close_stall(sample_time_ps)
-        elif v and not r:
-            result["stall_count"] += 1
-            if not in_stall:
-                in_stall = True
-                stall_begin = sample_time_ps
-                stall_cycles = 1
-                stall_payload = {p: sig.get(p) for p in resolved_payload}
-                stall_valid_repr = _hs_repr(sig.get(valid_signal))
-            else:
-                stall_cycles += 1
-                if do_hold_check:
-                    for p in resolved_payload:
-                        cur = sig.get(p)
-                        prev = stall_payload.get(p)
-                        if _hs_known(cur) and _hs_known(prev) and cur != prev:
-                            result["payload_hold_violations"] += 1
+            # Wait-state hold: if the previous edge left us stalled (valid high,
+            # ready low) the beat must persist until accepted. A known-low valid
+            # here means the master dropped the transfer before ready arrived — a
+            # premature deassertion (e.g. AHB htrans -> IDLE without waiting for
+            # HREADY). Evaluated BEFORE this edge is reclassified, and only on a
+            # known False (an x/z valid is "unknown", never a deassertion).
+            if in_stall and check_valid_hold and v is False:
+                result["valid_deassert_violations"] += 1
+                if len(findings) < max_findings:
+                    findings.append({
+                        "type": "premature_valid_deassertion",
+                        "severity": "error",
+                        "time_ps": sample_time_ps,
+                        "signal": valid_signal,
+                        "from_value": stall_valid_repr,
+                        "to_value": _hs_repr(sig.get(valid_signal)),
+                        "stall_begin_ps": stall_begin,
+                        "stall_cycles": stall_cycles,
+                        # The dropped beat was stalled (ready/HREADY low) the whole time it
+                        # was asserted — it was NEVER accepted. This is the witness that
+                        # forecloses the "it's just AHB pipeline overlap" reading: an
+                        # accepted beat would have seen ready high before valid dropped.
+                        "accepted_before_deassert": False,
+                    })
+
+            # x-while-valid: with a known-asserted valid the address/control payload
+            # must be fully driven. An x/z here is a definite violation (active transfer
+            # carrying an unknown control field). Debounced so a persistent x reports
+            # once per episode, not every cycle; reset when valid drops so a fresh beat
+            # re-reports. Only the control payload (AHB) reaches here — see do_x_while_valid.
+            if do_x_while_valid and v is True:
+                for p in resolved_payload:
+                    if not _hs_known(sig.get(p)):
+                        if p not in x_while_valid_active:
+                            x_while_valid_active.add(p)
+                            result["x_while_valid_violations"] += 1
                             if len(findings) < max_findings:
                                 findings.append({
-                                    "type": "payload_hold_violation",
+                                    "type": "x_while_valid",
                                     "severity": "error",
                                     "time_ps": sample_time_ps,
                                     "signal": p,
-                                    "from_value": _hs_repr(prev),
-                                    "to_value": _hs_repr(cur),
-                                    "stall_begin_ps": stall_begin,
+                                    "from_value": _hs_repr(sig.get(valid_signal)),
+                                    "to_value": _hs_repr(sig.get(p)),
                                 })
-                            # Re-latch so only the first change of each beat is
-                            # reported, not every cycle of an ongoing mismatch.
-                            stall_payload[p] = cur
-        else:  # not v and not r — idle
-            _close_stall(sample_time_ps)
+                    else:
+                        x_while_valid_active.discard(p)
+            elif do_x_while_valid:
+                x_while_valid_active.clear()
+
+            if v is None or r is None:
+                result["unknown_sample_cycles"] += 1
+                _close_stall(sample_time_ps)
+                continue
+
+            if v and r:
+                result["transfer_count"] += 1
+                _close_stall(sample_time_ps)
+            elif r and not v:
+                result["ready_without_valid_cycles"] += 1
+                _close_stall(sample_time_ps)
+            elif v and not r:
+                result["stall_count"] += 1
+                if not in_stall:
+                    in_stall = True
+                    stall_begin = sample_time_ps
+                    stall_cycles = 1
+                    stall_payload = {p: sig.get(p) for p in resolved_payload}
+                    stall_valid_repr = _hs_repr(sig.get(valid_signal))
+                else:
+                    stall_cycles += 1
+                    if do_hold_check:
+                        for p in resolved_payload:
+                            cur = sig.get(p)
+                            prev = stall_payload.get(p)
+                            if _hs_known(cur) and _hs_known(prev) and cur != prev:
+                                result["payload_hold_violations"] += 1
+                                if len(findings) < max_findings:
+                                    findings.append({
+                                        "type": "payload_hold_violation",
+                                        "severity": "error",
+                                        "time_ps": sample_time_ps,
+                                        "signal": p,
+                                        "from_value": _hs_repr(prev),
+                                        "to_value": _hs_repr(cur),
+                                        "stall_begin_ps": stall_begin,
+                                    })
+                                # Re-latch so only the first change of each beat is
+                                # reported, not every cycle of an ongoing mismatch.
+                                stall_payload[p] = cur
+            else:  # not v and not r — idle
+                _close_stall(sample_time_ps)
+
+        if sample_count:
+            last_sample_time_ps = compact_edge_times[-1] if _compact_sampling else samples[-1]["time_ps"]
+        operation_metrics.add_sweep_execution_timing(
+            "protocol_scan", (time.perf_counter() - protocol_scan_started) * 1000.0)
+        # No consumed history is kept by the suspended protocol consumer.
+        sampled = None
+        samples = compact_edge_times = compact_columns = None
+        column_view.columns = {}
+        sig = None
+        sampled = yield
 
     # Flush a stall still open at the window edge. A stall that is still open
     # when the window ends is the deadlock signature: valid asserted, ready
@@ -1252,15 +1378,7 @@ def inspect_handshake(
     if in_stall:
         result["ended_in_stall"] = True
         result["final_stall_cycles"] = stall_cycles
-        last_sample_time_ps = (
-            compact_edge_times[-1]
-            if _compact_sampling else samples[-1]["time_ps"]
-        )
         _close_stall(last_sample_time_ps)
-    operation_metrics.add_sweep_execution_timing(
-        "protocol_scan",
-        (time.perf_counter() - protocol_scan_started) * 1000.0,
-    )
 
     # AHB write data-phase hold findings have an independent budget so other
     # noisy finding classes cannot hide their witnesses.
