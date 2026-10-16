@@ -3047,6 +3047,12 @@ class SourceQueryMetrics(SourceFactModel):
     worker_source_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_kdb_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_result_validation_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_query_ms: Annotated[float, Field(ge=0)] | None = None
+    context_transport_encode_ms: Annotated[float, Field(ge=0)] | None = None
+    context_transport_bytes: SourceFactCount | None = None
+    lsf_parent_preparation_ms: Annotated[float, Field(ge=0)] | None = None
+    lsf_round_trip_ms: Annotated[float, Field(ge=0)] | None = None
+    lsf_result_validation_ms: Annotated[float, Field(ge=0)] | None = None
 
 
 class SourceKdbBindingEvidence(KdbArtifactEvidence):

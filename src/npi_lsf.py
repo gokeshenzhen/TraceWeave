@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import secrets
@@ -221,15 +222,25 @@ class LsfNpiTransport:
         self._config = config
         self._timeout_sec = timeout_sec or config.timeout_sec
 
-    def execute(self, request: NpiWorkerRequest) -> LsfExecutionResult:
+    def execute(self, request: NpiWorkerRequest, *, deadline: float | None = None) -> LsfExecutionResult:
+        if deadline is not None:
+            if isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
+                raise ValueError("invalid local submission deadline")
+            # Monotonic timestamps stay in this process. The remote request
+            # carries a duration; this deadline also bounds its queue wait.
+            deadline = min(deadline, time.monotonic() + self._timeout_sec)
         if not self._config.valid or self._config.mode != "lsf":
             return _failed_execution("npi_lsf_config_invalid")
         check_cancelled()
+        if deadline is not None and time.monotonic() >= deadline:
+            return _timed_out_execution()
 
         try:
             self._config.staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             if not self._config.staging_dir.is_dir():
                 return _failed_execution("npi_lsf_worker_failed")
+        except TimeoutError:
+            raise
         except OSError:
             return _failed_execution("npi_lsf_worker_failed")
 
@@ -239,8 +250,10 @@ class LsfNpiTransport:
                 dir=str(self._config.staging_dir),
             ) as temp_dir:
                 os.chmod(temp_dir, 0o700)
+                if deadline is not None:
+                    return self._execute_in_dir(request, Path(temp_dir), deadline=deadline)
                 return self._execute_in_dir(request, Path(temp_dir))
-        except OperationCancelled:
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning(
@@ -253,6 +266,8 @@ class LsfNpiTransport:
         self,
         request: NpiWorkerRequest,
         temp_dir: Path,
+        *,
+        deadline: float | None = None,
     ) -> LsfExecutionResult:
         request_path = temp_dir / "request.json"
         response_path = temp_dir / "response.json"
@@ -296,6 +311,8 @@ class LsfNpiTransport:
         try:
             with os.fdopen(log_fd, "wb") as log_file:
                 check_cancelled()
+                if deadline is not None and time.monotonic() >= deadline:
+                    return _timed_out_execution()
                 try:
                     proc = subprocess.Popen(
                         argv,
@@ -304,6 +321,8 @@ class LsfNpiTransport:
                         stderr=subprocess.STDOUT,
                         shell=False,
                     )
+                except TimeoutError:
+                    raise
                 except (OSError, ValueError) as exc:
                     _LOG.warning(
                         "LSF NPI submission failed (%s)",
@@ -311,16 +330,12 @@ class LsfNpiTransport:
                     )
                     return _failed_execution("npi_lsf_submit_failed")
 
-                wait_status = self._wait_for_submission(proc)
+                wait_status = (self._wait_for_submission(proc, deadline=deadline)
+                               if deadline is not None else self._wait_for_submission(proc))
                 if wait_status == "timed_out":
                     self._cancel_submission(proc, job_name)
-                    return LsfExecutionResult(
-                        result=None,
-                        scheduler_status="timed_out",
-                        worker_status="failed",
-                        fallback_reason="npi_lsf_timeout",
-                    )
-        except OperationCancelled:
+                    return _timed_out_execution()
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             if proc is not None:
                 self._cancel_submission(proc, job_name)
             raise
@@ -362,8 +377,11 @@ class LsfNpiTransport:
     def _wait_for_submission(
         self,
         proc: subprocess.Popen[bytes],
+        *,
+        deadline: float | None = None,
     ) -> Literal["completed", "timed_out"]:
-        deadline = time.monotonic() + self._timeout_sec
+        if deadline is None:
+            deadline = time.monotonic() + self._timeout_sec
         while proc.poll() is None:
             check_cancelled()
             if time.monotonic() >= deadline:
@@ -533,14 +551,15 @@ class LsfConnectivityBackend:
             anchor.require_current()
         return result
 
-    def _execute_bound_request(self, request):
+    def _execute_bound_request(self, request, *, deadline=None):
         check_cancelled()
         anchor = getattr(self, "_bound_kdb_anchor", None)
         if anchor is not None:
             anchor.require_current()
         try:
-            outcome = self._transport.execute(request)
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+            outcome = (self._transport.execute(request, deadline=deadline) if deadline is not None
+                       else self._transport.execute(request))
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception:
             if anchor is not None:
@@ -551,9 +570,23 @@ class LsfConnectivityBackend:
             raise KdbBindingChanged()
         if outcome.fallback_reason == "kdb_identity_timeout":
             raise CaptureAborted("timeout")
+        if outcome.fallback_reason == "context_identity_changed":
+            raise CaptureAborted("input_changed")
+        if outcome.fallback_reason == "context_identity_timeout":
+            raise CaptureAborted("timeout")
+        if outcome.fallback_reason == "query_timeout":
+            raise TimeoutError("npi_query_timeout")
+        if deadline is not None and (outcome.scheduler_status == "timed_out"
+                                     or outcome.fallback_reason == "npi_lsf_timeout"):
+            raise TimeoutError("npi_lsf_timeout")
         if anchor is not None:
             anchor.require_current()
         return outcome
+
+    def query_source(self, request) -> dict:
+        """Execute a prepared source plan locally for metadata, or over LSF."""
+        from .npi_source_lsf import query_source_over_lsf
+        return query_source_over_lsf(self, request)
 
     def get_dynamic_step(self, signal_path: str, compile_log: str, *,
                          top_hint: str | None = None, simulator: str = "auto",
@@ -949,6 +982,8 @@ def execute_worker_request(
     except CaptureAborted as exc:
         code = "kdb_identity_timeout" if exc.code == "timeout" else "kdb_identity_changed"
         return WorkerError(error_code=code, stage=stage)
+    except TimeoutError:
+        return WorkerError(error_code="query_timeout", stage=stage)
     except Exception:  # noqa: BLE001
         if anchor is not None:
             try:
@@ -1058,8 +1093,14 @@ def _read_worker_response(path: Path) -> NpiWorkerResponse | None:
         size = path.stat().st_size
         if size <= 0 or size > _MAX_RESPONSE_BYTES:
             return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as stream:
+            data = stream.read(_MAX_RESPONSE_BYTES + 1)
+        if not data or len(data) > _MAX_RESPONSE_BYTES:
+            return None
+        raw = json.loads(data.decode("utf-8"))
         return _RESPONSE_ADAPTER.validate_python(raw)
+    except TimeoutError:
+        raise
     except (OSError, UnicodeError, ValueError, ValidationError, json.JSONDecodeError):
         return None
 
@@ -1086,6 +1127,10 @@ def _failed_execution(reason: str) -> LsfExecutionResult:
         worker_status="failed",
         fallback_reason=reason,
     )
+
+
+def _timed_out_execution() -> LsfExecutionResult:
+    return LsfExecutionResult(None, "timed_out", "failed", "npi_lsf_timeout")
 
 
 def _worker_failed_execution() -> LsfExecutionResult:

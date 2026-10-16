@@ -532,9 +532,23 @@ Verification
   have distinct fixed protocol labels. Mandatory final validation can outlive
   analysis limits but cannot publish complete coverage after the deadline.
   Decode, source/map validation and result validation costs are exposed.
-  Parent source routing and independent protocol/real-LSF tests are pending;
-  shared paths alone do not prove matching stat/environment observations on
-  another node. No persistent worker or verified checkout reuse is implied.
+  Prepared LSF `query_source` keeps metadata-only work local, before any
+  configuration, binding or transport access. Semantic requests transfer only
+  the remaining work limits; the parent's monotonic deadline also bounds queue
+  wait and triggers bounded job cancellation. No monotonic timestamp is sent
+  to another node. Parent and worker catalog costs are both charged, so a tight
+  byte budget can stop LSF work earlier than the equivalent local query. Source
+  request encoding bytes/time, parent preparation, round-trip time (including
+  bound-map checks), worker time and result validation are separate metrics;
+  aggregate `query_ms` retains the original parent start. A scheduled worker
+  that stops before loading cannot gain a KDB load receipt from file markers.
+  Ordinary provider failures carry fixed placement status and never invoke
+  licensed work locally. Typed identity/timeout/cancellation failures propagate.
+  Common connectivity workers also preserve a native `TimeoutError` through the
+  fixed protocol code. Public six-tool routing and independent protocol/real-LSF
+  tests remain pending; shared paths alone do not prove matching stat/environment
+  observations on another node. No persistent worker or verified checkout reuse
+  is implied.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

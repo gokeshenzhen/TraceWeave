@@ -237,7 +237,7 @@ def test_bound_queries_use_fixed_anchor_and_deep_copied_metadata_without_reparse
         assert request.kdb_path == anchor.path and request.top == TOP
         assert request.kdb_identity_sha256 == anchor.identity_sha256
         assert request.kdb_identity_max_bytes == anchor.max_bytes
-        assert request.protocol_version == "3.0"
+        assert request.protocol_version == "4.0"
         field = {"driver": "recursive", "loads": "include_expr", "path": "expand_assigns", "dynamic": "include_dependency_candidates"}[op]
         assert getattr(request, field) is (False if op == "loads" else True)
 
@@ -454,12 +454,12 @@ def _request(op, anchor, *, bound=True, **overrides):
 
 
 @pytest.mark.parametrize("op", OPS)
-def test_protocol_3_roundtrip_carries_exact_bound_identity_and_budget(tmp_path, op):
+def test_protocol_4_roundtrip_carries_exact_bound_identity_and_budget(tmp_path, op):
     maps, _, _ = _fixture(tmp_path)
     anchor = capture_kdb_anchor(str(maps), max_bytes=128)
     request = _request(op, anchor)
     decoded = npi_lsf.parse_worker_request_bytes(json.dumps(request.model_dump()).encode())
-    assert decoded.protocol_version == "3.0"
+    assert decoded.protocol_version == "4.0"
     assert decoded.kdb_identity_sha256 == anchor.identity_sha256
     assert decoded.kdb_identity_max_bytes == 128
     legacy = _request(op, anchor, bound=False)
@@ -568,7 +568,7 @@ def test_mock_scheduler_transport_preserves_worker_identity_error_code(tmp_path,
         def __init__(self, argv, **kwargs):
             assert kwargs["shell"] is False
             path = Path(argv[argv.index("--response") + 1])
-            path.write_text(json.dumps({"protocol_version": "3.0", "status": "error", "error_code": reason, "stage": stage}))
+            path.write_text(json.dumps({"protocol_version": "4.0", "status": "error", "error_code": reason, "stage": stage}))
 
         def poll(self):
             return 2
