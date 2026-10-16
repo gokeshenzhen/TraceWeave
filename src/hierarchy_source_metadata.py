@@ -84,8 +84,8 @@ class CompileSourceCatalog:
         filters = (basename, name_contains, path_contains)
         if all(value is None for value in filters):
             raise ValueError("a metadata file filter is required")
-        if any(value is not None and not isinstance(value, str) for value in filters):
-            raise ValueError("metadata file filters must be strings")
+        if any(value is not None and (not isinstance(value, str) or not value) for value in filters):
+            raise ValueError("metadata file filters must be nonempty strings")
         for item in self.files:
             checkpoint()
             spellings = (item.path, *item.aliases)
