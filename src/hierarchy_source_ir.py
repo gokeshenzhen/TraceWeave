@@ -124,19 +124,21 @@ class HierarchyQueryBudget:
 
     def __init__(self, *, timeout_sec: float = 30, max_scopes: int = 10000,
                  max_calls: int = 100000, max_bytes: int = 8 * 1024 * 1024,
-                 max_depth: int = 256):
+                 max_depth: int = 256, max_symbols: int = 10000):
         if isinstance(timeout_sec, bool) or not isinstance(timeout_sec, (int, float)) or not math.isfinite(timeout_sec) or not 0 < timeout_sec <= 300:
             raise ValueError("timeout_sec must be finite and in (0, 300]")
         for name, value, ceiling in (("max_scopes", max_scopes, 100000),
                                     ("max_calls", max_calls, 1000000),
                                     ("max_bytes", max_bytes, 64 * 1024 * 1024),
-                                    ("max_depth", max_depth, 256)):
+                                    ("max_depth", max_depth, 256),
+                                    ("max_symbols", max_symbols, 100000)):
             if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= ceiling:
                 raise ValueError(f"invalid {name}")
         self.started = time.monotonic()
         self.deadline = self.started + timeout_sec
         self.max_scopes, self.max_calls = max_scopes, max_calls
         self.max_bytes, self.max_depth = max_bytes, max_depth
+        self.max_symbols, self.symbol_count = max_symbols, 0
         self.scope_count = self.call_count = self.fact_bytes = 0
 
     def checkpoint(self):
@@ -166,5 +168,17 @@ class HierarchyQueryBudget:
 
     def metrics(self) -> dict:
         return {"scope_count": self.scope_count, "native_call_count": self.call_count,
+                "symbol_count": self.symbol_count,
                 "estimated_fact_bytes": self.fact_bytes,
                 "query_ms": (time.monotonic() - self.started) * 1000}
+
+    def admit_symbol(self, fact):
+        """Charge a copied declaration, including any resolved base reference."""
+        self.checkpoint()
+        if self.symbol_count >= self.max_symbols:
+            raise HierarchyBudgetExceeded("symbol_limit")
+        size = 512 + 4 * len(json.dumps(fact.row(), ensure_ascii=True))
+        if self.fact_bytes + size > self.max_bytes:
+            raise HierarchyBudgetExceeded("fact_byte_limit")
+        self.symbol_count += 1
+        self.fact_bytes += size

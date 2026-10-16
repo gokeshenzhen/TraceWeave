@@ -445,6 +445,14 @@ Verification
   Basename/path filtering and the three compile-record exports can use this
   layer without loading a frontend. Semantic file filters, file symbols,
   classes and the remaining exports still require the shared provider work.
+  `hierarchy_source_symbols` defines copied source declarations and class-base
+  bindings by semantic ID. Its internal class renderer keeps same-name classes
+  separate, exposes unresolved/external bases and inheritance cycles, and never
+  presents static declarations as runtime UVM components. Derivative lookup
+  can require the provider's full class inventory; symbol and byte limits cover
+  that work independently of display depth. The legacy class `total` remains
+  the rendered-node count, with separate inventory completeness/count fields.
+  Native/Slang class-stream projection and public routing are subsequent work.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
