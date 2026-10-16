@@ -48,6 +48,9 @@ class DesignContext:
     metrics: tuple[tuple[str, int | float], ...]
     replay_environment: tuple[tuple[str, str], ...] = ()
     requested_kdb_path: str | None = None
+    # Extra lookup observations made when verifying a historical source token.
+    # They include readable candidates, unlike negative input observations.
+    path_observations: tuple[tuple[str, tuple], ...] = ()
 
     def compile_result(self) -> dict:
         """A mutable caller copy; nested metadata cannot alter this context."""
@@ -64,6 +67,10 @@ class DesignContext:
             if os.path.realpath(spelling) != canonical:
                 return False
         for spelling, observation in self.unavailable:
+            checkpoint()
+            if _availability(spelling) != observation:
+                return False
+        for spelling, observation in self.path_observations:
             checkpoint()
             if _availability(spelling) != observation:
                 return False
@@ -102,5 +109,6 @@ class DesignContext:
             self.aliases, self.unavailable,
             tuple((r.candidates, r.selected, r.selected_spelling) for r in self.include_resolutions),
             self.environment, self.replay_environment, self.gaps, self.requested_kdb_path,
+            self.path_observations,
         )
         return 4096 + 4 * len(json.dumps(payload, ensure_ascii=False).encode())

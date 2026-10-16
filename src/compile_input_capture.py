@@ -19,7 +19,7 @@ import time
 
 from .cancellation import check_cancelled
 from .compile_session_snapshot import (
-    CompileSessionSnapshot, FileContentSnapshot, _marker_codes,
+    CompileSessionSnapshot, FileContentSnapshot, SourceContentRead, _decode_source, _marker_codes,
 )
 from .hdl_suffixes import is_protected_systemverilog_path
 
@@ -224,6 +224,12 @@ class CompileInputCapture:
         raw = self.read_bytes(path)
         with io.TextIOWrapper(io.BytesIO(raw), encoding=encoding, errors="replace") as stream:
             return stream.read()
+
+    def read_source_content(self, path: str | os.PathLike) -> SourceContentRead:
+        """Expose the historical source-reader shape over the captured bytes."""
+        raw = self.read_bytes(path)
+        canonical = self.observe_path(path)
+        return SourceContentRead(_decode_source(raw), self._records[canonical])
 
     def validate(self) -> bool:
         self.checkpoint()
