@@ -195,7 +195,7 @@ def prepare_design_context(
             # Native per-phase metadata remains intact. The small preprocessor
             # cannot establish compilation-unit macro lifetime across phases.
             gaps.add("phase_local_compile_options_unmodeled")
-        reader = _DependencyReader(compile_result, capture, max_include_depth)
+        reader = None
         dependencies_complete = True
         has_conditionals = False
         env_names: set[str] = set()
@@ -208,6 +208,10 @@ def prepare_design_context(
                     capture.read_bytes(path)
                 except OSError:
                     gaps.add("compile_input_unavailable")
+            # Context-index construction also observes source/cwd aliases and
+            # replays options. Its budget belongs to source preparation, not
+            # the already-completed compile-log parse.
+            reader = _DependencyReader(compile_result, capture, max_include_depth)
             for path in dict.fromkeys(sources):
                 capture.checkpoint()
                 if os.path.splitext(path)[1].lower() in VHDL_SOURCE_SUFFIXES:
@@ -256,7 +260,7 @@ def prepare_design_context(
                 gaps.add("protected_region")
                 dependencies_complete = False
         dependencies_complete &= snapshot.complete
-        resolutions = tuple(reader.resolutions.values())
+        resolutions = tuple(reader.resolutions.values()) if reader is not None else ()
         if not all(item.current(checkpoint=capture.checkpoint) for item in resolutions):
             raise CaptureAborted("input_changed")
         payload = {
@@ -271,7 +275,8 @@ def prepare_design_context(
         metrics = (
             ("parse_ms", parsed_ms), ("prepare_ms", (time.monotonic() - started) * 1000),
             ("input_file_count", snapshot.file_count), ("captured_bytes", snapshot.total_bytes),
-            ("read_bytes", capture.read_bytes_count), ("dependency_file_visits", reader.visits),
+            ("read_bytes", capture.read_bytes_count),
+            ("dependency_file_visits", reader.visits if reader is not None else 0),
         )
         context = DesignContext(
             logs, results[0]["simulator"], selected_top, backend_preference,
