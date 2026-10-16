@@ -426,6 +426,25 @@ Verification
   Independent-context Source Graph trace planning is still unavailable during
   this migration: it reports that gap and uses bound Static metadata, without
   silently borrowing a legacy tree. This limitation does not complete D7.
+  Dual-side `trace_divergence` accepts these handles independently, including
+  mixed legacy/prepared sides. `divergence_design_context` pins all unique
+  handles before any await, then prepares them under the existing graph
+  deadline without nesting binding locks. Prepared compile arguments come from
+  the handle; explicitly repeated arguments must match, and legacy identity
+  tokens cannot be combined with it. Design keys use immutable context identity
+  rather than random handles. Legacy H and independent C identity schemes do
+  not imply equivalence, so mixed designs still need explicit dependency maps.
+  Per-side dynamic routes retain actual backend/load receipts; shared candidate
+  evidence and preparation metrics identify their single `metrics_owner_side`.
+  Equal roots do not load NPI. Source/map hashes run outside wave locks once per
+  unique handle at final validation; a final metadata pass checks both contexts
+  again after hashing and parser-generation validation. This is bounded file
+  observation, not an atomic filesystem snapshot. Post-budget validation is
+  measured separately and included in elapsed time. Typed lifecycle failures
+  clear the graph and root comparison and return `inconclusive`; cancellation
+  propagates. Registry ownership and cancellation are checked on the event
+  loop immediately before cursor publication. No abandoned worker publishes
+  registry state, and all request pins release on every exit.
   Neither optional Slang cache default changes. Preparation, registration validation and later
   query costs must be measured together before claiming a speedup.
   `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:

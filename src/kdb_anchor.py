@@ -66,6 +66,42 @@ class KdbAnchor:
     root_identity: tuple[int, ...] | None
     max_bytes: int
 
+    def metadata_current(self) -> bool:
+        """Recheck aliases/stat after a multi-design content-validation pass.
+
+        This is not a replacement for current(), which hashes the maps. It
+        catches ordinary changes to an earlier design while a later design is
+        being hashed, without rereading the same maps for each waveform side.
+        """
+        check_cancelled()
+        if os.path.realpath(self.path) != self.canonical_path:
+            return False
+        try:
+            root = os.stat(self.path)
+        except FileNotFoundError:
+            return (self.artifact_status == "missing" and self.root_identity is None
+                    and not self.map_records)
+        except OSError:
+            return False
+        if (root.st_dev, root.st_ino, root.st_mode) != self.root_identity:
+            return False
+        for record in self.map_records:
+            check_cancelled()
+            path = os.path.join(self.path, record.name)
+            if os.path.realpath(path) != record.canonical_path:
+                return False
+            try:
+                identity = _stat_identity(os.stat(path))
+            except FileNotFoundError:
+                if record.disposition != "missing":
+                    return False
+                continue
+            except OSError:
+                return False
+            if identity != record.stat_identity:
+                return False
+        return True
+
     def current(self, *, timeout_sec: float = 5.0) -> bool:
         try:
             observed = capture_kdb_anchor(self.path, max_bytes=self.max_bytes, timeout_sec=timeout_sec)

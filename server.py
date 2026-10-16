@@ -7110,13 +7110,18 @@ async def list_tools():
                 "Use real signal paths as roots; supported RTL expressions are extracted internally. "
                 "Verify a waveform difference and backtrace its active data/control dependencies "
                 "on both sides within explicit time/work limits. Uses the normal trusted NPI, "
-                "Source Graph, Static route. Each side requires its exact compile context and "
-                "a current build_tb_hierarchy result. Explicit signal/scope mappings are required "
+                "Source Graph, Static route. Each side independently accepts a design_handle "
+                "from prepare_design_context, or its exact legacy compile context with a current "
+                "build_tb_hierarchy result. A design_handle may omit compile_log and cannot be "
+                "combined with legacy identity tokens. Explicit signal/scope mappings are required "
                 "across different designs. Reports evidence, candidates and honest frontiers; "
                 "does not claim a unique root cause or rerun simulation. Clock mode requires "
                 "aligned clock_a/clock_b edges. History never extends before start_time_ps."
                 " Observations are reused only within this request and graph artifact; "
                 "a sub-ps event difference remains a sampling frontier for dynamic tracing."
+                " Independent-context source trace planning remains unavailable; bound Static "
+                "fallback reports that limitation. Identity changes discard both sides and the "
+                "root comparison before any evidence cursor is published."
             ),
             inputSchema=schemas.TraceDivergenceInput.model_json_schema(),
         ),

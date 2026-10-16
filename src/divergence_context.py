@@ -156,6 +156,29 @@ def driver_action(
         action["evidence"]["cursor_name"] = result["cursor"]["name"]
     if context is None:
         return action
+    if context.get("design_handle") is not None:
+        if bound is not None:
+            arguments["design_handle"] = bound.design_handle
+            action.update(status="ready", missing_fields=[])
+            return action
+        action["missing_fields"] = [f"side_{side}.design_handle"]
+        action["evidence"]["context_status"] = reason
+        # A new preparation establishes current inputs. Never relay a stale
+        # random handle or a composite historical-source fingerprint as an
+        # expected identity for the ordinary prepare API.
+        if context.get("compile_log"):
+            prepare = {key: context[key] for key in (
+                "compile_log", "simulator", "supplementary_compile_logs",
+                "top_hint", "backend_preference", "kdb_path",
+            ) if context.get(key) is not None}
+            action["status"] = "needs_prerequisite"
+            action["prerequisite_calls"] = [{
+                "id": f"design_{side}", "tool": "prepare_design_context",
+                "arguments": prepare, "depends_on": [],
+            }]
+        else:
+            action["missing_fields"].append(f"side_{side}.compile_log")
+        return action
     ctx = DivergenceContext.model_validate(context).model_dump(exclude_none=True)
     arguments.update(
         compile_log=ctx["compile_log"], simulator=ctx["simulator"], compile_context=ctx

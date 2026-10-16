@@ -282,6 +282,18 @@ KDB generation 及历史波形与源码的对应关系仍需各自的证据。
 X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
 接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
 history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。
+`trace_divergence` 的 `side_a.design_handle` 与 `side_b.design_handle` 可分别指定，
+也可与另一侧旧编译上下文混用。带 handle 的侧可省略 `compile_log`；额外编译参数
+必须匹配，不能混入旧 hierarchy/source 身份令牌。两侧上下文在准备、比较、追踪和
+最终校验期间保持 pinned。准备计入同一 trace deadline；分析预算耗尽后仍执行最终
+身份校验并报告成本。身份、capture 或执行策略失效时返回 `inconclusive`，清空两侧图
+和根比较，不新增 cursor。后续 driver 建议沿用对应 handle。不同身份协议之间不凭
+相同源码路径推断设计相同，仍需显式依赖映射。
+
+`contexts.*.design_context` 报告共享候选证据；每个唯一 handle 仅在
+`metrics_owner_side` 指定侧记录一份准备成本。各侧实际后端和加载事实分别保留在
+`contexts.*.backend_status`；无差异比较不会查询 NPI。独立源码范围规划仍保留上述
+X-trace 的当前限制。
 六个层次/源码工具仍使用既有流程与 handle。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。

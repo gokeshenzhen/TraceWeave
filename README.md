@@ -128,6 +128,23 @@ NPI route without a hierarchy; its source fallback currently reports unavailable
 semantic trace planning and recomputes with bound Static metadata. History keeps
 its dynamic-evidence limitations and includes context validation in the request
 deadline. A clean waveform target does not establish that NPI loaded a KDB.
+`trace_divergence` also accepts `side_a.design_handle` and
+`side_b.design_handle` independently, including a mix with one legacy side.
+Each handle side may omit `compile_log`; optional compile metadata must match
+the handle, and old hierarchy/source identity tokens cannot be combined with it.
+Both designs stay pinned across preparation, comparison, tracing and final
+validation. Preparation shares the trace deadline; final identity checks still
+run after an exhausted analysis budget and report their cost. A typed identity,
+capture or execution-policy failure returns `inconclusive` with an empty graph
+and comparison and no new cursor. Driver suggestions reuse the corresponding
+handle. Different identity schemes require explicit dependency mappings even
+when their displayed source paths match.
+
+The per-side `contexts.*.design_context` describes shared candidate evidence,
+with `metrics_owner_side` identifying the one copy of preparation metrics for
+each unique handle. Actual backend/load facts remain per side in
+`contexts.*.backend_status`; a no-difference comparison performs no NPI query.
+Independent source planning has the same limitation as X-trace above.
 The six hierarchy/source tools still use their existing workflow and handles.
 
 Capabilities for large designs, with selected examples of validated scale:

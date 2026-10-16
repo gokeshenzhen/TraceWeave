@@ -2806,8 +2806,22 @@ class XHistoryInput(SchemaModel):
 
 
 class DivergenceSide(DivergenceContext):
+    compile_log: str | None = Field(default=None, min_length=1)
+    design_handle: str | None = Field(default=None, min_length=1)
     wave_path: str = Field(min_length=1)
     signal_path: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def explicit_design_identity(self):
+        if self.design_handle is None:
+            if self.compile_log is None:
+                raise ValueError("compile_log_or_design_handle_required")
+        elif any(getattr(self, key) is not None for key in (
+            "hierarchy_handle", "snapshot_sha256", "source_snapshot_sha256",
+            "compile_log_identity_sha256",
+        )):
+            raise ValueError("design_handle_conflicts_with_legacy_identity")
+        return self
 
 
 class DivergencePair(SchemaModel):

@@ -298,6 +298,9 @@ class DynamicRoute:
                     self.attempts.append(
                         dict(backend="verdi_npi", status="inconclusive", reason=reason)
                     )
+                    note_failure = getattr(self.s, "_note_design_trace_failure", None)
+                    if self.prepared is not None and note_failure is not None:
+                        note_failure(self.bound.design_handle, reason)
                     self.fallback_reason = reason
                     self.stage = "source_graph"
                     self.backend = None
@@ -384,8 +387,8 @@ class DynamicRoute:
             result['wave_design_binding'] = self.root_binding.receipt(wave_signal)
         return result
 
-    def current(self):
-        if self.prepared is not None:
+    def current(self, *, validate_binding=True):
+        if self.prepared is not None and validate_binding:
             self.prepared.binding.require_current()
         if self.root_binding:
             from .scope_metadata import file_identity
