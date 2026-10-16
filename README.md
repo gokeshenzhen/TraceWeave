@@ -94,6 +94,8 @@ or a blocker. Input verification can reread captured bytes; preparation metrics
 report that work separately from query time. Supplied identity
 tokens are revalidated; without a historical source fingerprint, recovery
 establishes current sources only. Structural scanning remains a separate step.
+Historical compile-log tokens contain stat identity; matching them does not
+verify prior log bytes if a rewrite preserves those stat fields.
 
 `prepare_design_context(compile_log=..., backend_preference="source")` can
 independently capture compile inputs and source identities under file, byte and

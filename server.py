@@ -1323,7 +1323,8 @@ async def _resolve_explicit_driver_context(raw: dict):
                 identity_basis="validated_historical_source" if ctx.get("source_snapshot_sha256") else "current_sources",
                 note=("Source identity matches the supplied historical fingerprint; this does not establish waveform/source correspondence."
                       if ctx.get("source_snapshot_sha256") else
-                      "Established the current source context; historical simulation or session sources are not established."))
+                      "Established the current source context; historical simulation or session sources are not established.")
+                     + " Historical compile-log tokens contain stat identity, not archived log bytes.")
             return bound, "ready", receipt
     except TimeoutError:
         reason = "hierarchy_recovery_timeout"

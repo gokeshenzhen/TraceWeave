@@ -1676,6 +1676,10 @@ order, simulator, compile-selected top, supplied snapshots and historical source
 fingerprints are validated again on the private candidate before publication.
 The old source fingerprint is the stat/raw-digest identity of the old
 preprocessor's observed files, not the new capture of logs, filelists and sources.
+The historical compile-log token contains stat identity only. Equal-size
+rewrites with restored mtime can also retain ctime within a filesystem clock
+tick; equal legacy tokens therefore do not establish historical log bytes.
+New independent prepare recovery uses the captured raw-content identity.
 `legacy_context_observations` reproduces that read set with dependency-only
 preprocessing, preserving the old exact-log include policy without materializing
 HDL or enumerating definitions. Additional inputs, aliases and positive/negative
