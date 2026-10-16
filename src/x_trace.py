@@ -44,6 +44,7 @@ async def trace_x_source(
     value_lookup: ValueLookup | None = None,
     upstream_lookup: UpstreamLookup | None = None,
     upstream_scope_guard: ScopeGuard | None = None,
+    propagate_value_errors: tuple[type[Exception], ...] = (),
 ) -> dict[str, Any]:
     """Trace X/Z propagation using injected wave and connectivity lookups.
 
@@ -96,6 +97,10 @@ async def trace_x_source(
                 )
             )
         except OperationCancelled:
+            raise
+        except propagate_value_errors:
+            # The composition layer may mark an identity/ownership failure as
+            # fatal; it must not become a missing-signal observation.
             raise
         except Exception:
             chain.append(

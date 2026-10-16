@@ -260,15 +260,19 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 字节数和时间预算内独立捕获编译输入与源码身份。返回的 `design_handle` 在进程重启或
 登记项淘汰后失效；receipt 分别报告输入捕获、include 解析及语义覆盖状态。
 准备阶段不构建 hierarchy、不运行 Slang、不探测或加载 KDB。driver、loads、path
-三个工具可传入 `design_handle` 并省略 `compile_log`。默认 `auto` 策略在首次查询时
+及 X-trace 的 snapshot/history 两种模式可传入 `design_handle` 并省略 `compile_log`。
+默认 `auto` 策略在首次查询时
 固定 KDB 候选；可选 `kdb_path` 只声明候选。后续校验源码与 KDB 绑定，变化或重启后
 需要重新准备。`source` 策略不调用 NPI；确认的 NPI 加载失败也会被记住，重新准备
 上下文才重试。`backend_status.design_context` 分别报告候选身份、实际加载、源码
 关联及发现/校验成本；外部 KDB 的源码关联仍为未验证。
 
 新 handle 的 driver/load 源码回退默认使用有界 bootstrap；新 handle 的 path 当前
-需要 NPI，无 NPI 时使用既有 hierarchy 流程取得 Source Graph 路径回退。六个层次/
-源码工具、X-trace 和历史上下文恢复仍使用既有流程与 handle。
+需要 NPI，无 NPI 时使用既有 hierarchy 流程取得 Source Graph 路径回退。独立上下文的
+X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
+接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
+history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。
+六个层次/源码工具及显式历史上下文恢复仍使用既有流程与 handle。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 

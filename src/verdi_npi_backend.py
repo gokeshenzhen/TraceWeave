@@ -365,6 +365,7 @@ class VerdiNpiBackend:
                          include_dependency_candidates: bool = False, **_kwargs) -> dict:
         from .dynamic_evidence import unsupported_step
         from .npi_dynamic import query_step
+        self._last_query_kdb_status = None
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
             if compile_result is None:
@@ -373,6 +374,7 @@ class VerdiNpiBackend:
             top = top_hint or self._top_from(compile_result)
             if not kdb or not top or not self._ensure_loaded(kdb, top):
                 return self._finish_bound_query(unsupported_step(signal_path, self.name, "npi_load_failed"))
+            self._record_query_kdb_status()
             with _silence_native_stdio():
                 result = query_step(self, signal_path,
                                     include_dependency_candidates=include_dependency_candidates)

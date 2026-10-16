@@ -519,6 +519,7 @@ class LsfConnectivityBackend:
                          top_hint: str | None = None, simulator: str = "auto",
                          include_dependency_candidates: bool = False, **_kwargs) -> dict:
         from .dynamic_evidence import unsupported_step
+        self._last_kdb_status = None
         target, reason = self._resolve_target(compile_log, simulator, top_hint)
         if target is None:
             return self._finish_bound_query(unsupported_step(signal_path, self.name, reason))
@@ -1091,12 +1092,16 @@ def _attach_execution_receipt(
     outcome: LsfExecutionResult,
     *,
     kdb_path: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     result[NPI_EXECUTION_STATUS_KEY] = {
         "execution_mode": mode,
         "scheduler_status": outcome.scheduler_status,
         "worker_status": outcome.worker_status,
     }
+    if outcome.result is None:
+        # Scheduler/worker failure is execution evidence only. Filesystem
+        # markers cannot establish that this request loaded the design.
+        return None
     load_quality = outcome.kdb_load_quality
     if load_quality is None:
         load_quality = (

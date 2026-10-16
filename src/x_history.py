@@ -34,14 +34,22 @@ def _clock_key(step):
     return (expr.get('signal'), tuple(expr.get('bits', ())), clock['edge'])
 
 
-async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
+async def trace_x_history(services, raw, *, route_factory=DynamicRoute, bound_context=None, started_at=None):
     request = XHistoryInput.model_validate(raw).model_dump(exclude_none=True)
+    if bound_context is not None:
+        # Internal relay only: raw public input was validated before injection.
+        request['design_handle'] = bound_context.design_handle
     start = services._resolve_time(request['history_start_ps'])
     time = services._resolve_time(request['time_ps'])
     if start > time:
         raise ValueError('history window requires history_start_ps <= time_ps')
     limits = {k: request[k] for k in ('max_depth', 'max_nodes', 'max_events', 'max_read_bytes', 'timeout_sec')}
     budget = HistoryBudget(limits)
+    if started_at is not None:
+        # Independent context preparation belongs to this request's deadline.
+        # Final identity checks still run after an exhausted analysis budget.
+        budget.started = started_at
+        budget.deadline = started_at + limits['timeout_sec']
     session = ObservationSession(budget, stream_reader=budget.read_stream)
     budget.observations = session
     path = request['wave_path']
@@ -86,16 +94,21 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
         evidence['coverage'].update(checks=[], gaps=[], truncated=False)
 
     try:
-        bound, reason = await budget.run(lambda: services._run_in_cancellable_thread(
-            lambda: resolve_context(context, services._handle_store)))
+        if bound_context is None:
+            bound, reason = await budget.run(lambda: services._run_in_cancellable_thread(
+                lambda: resolve_context(context, services._handle_store)))
+        else:
+            budget.check()
+            bound, reason = bound_context, 'ready'
         evidence['context'] = dict(compile_context=bound.context if bound else context,
                                    waveform_identity=original_wave, binding_basis='caller_supplied',
                                    waveform_compile_version_relation='not_independently_proven')
         if bound is None:
             frontier(None, reason)
         else:
-            design = hashlib.sha256(json.dumps([bound.snapshot, bound.context,
-                bound.hierarchy['_compile_session_snapshot'].content_fingerprint_sha256], sort_keys=True).encode()).hexdigest()
+            design = (bound.snapshot if bound_context is not None else hashlib.sha256(json.dumps([
+                bound.snapshot, bound.context,
+                bound.hierarchy['_compile_session_snapshot'].content_fingerprint_sha256], sort_keys=True).encode()).hexdigest())
             evidence['context']['design_identity_sha256'] = design
             side = {**bound.context, 'wave_path': path, 'signal_path': split_selection(request['signal_path'])[0]}
             route = route_factory(services, 'x', side, bound, budget)
@@ -137,7 +150,7 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
             changed.append('parser_generation_changed')
     if bound is not None and not await services._run_in_cancellable_thread(bound.current):
         changed.append('compile_context_changed')
-    if route is not None and not route.current():
+    if route is not None and not await services._run_in_cancellable_thread(route.current):
         changed.append('compile_artifact_changed')
     if changed:
         clear_graph()
@@ -153,6 +166,16 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute):
         receipt['backend'] = receipt['selected_backend']
     if bound is not None:
         receipt['simulator'] = bound.context['simulator']
+    if bound_context is not None and 'kdb_load_status' not in receipt:
+        # A clean target needs no dynamic query. An exhausted graph can also
+        # have no final receipt after a failed earlier backend attempt.
+        failure = bound_context.prepared.npi_failure
+        attempts = receipt.get('attempted_backends', ())
+        failed_load = failure or any(a.get('reason') in {
+            'npi_load_failed', 'npi_lsf_npi_unavailable'} for a in attempts)
+        loaded = (route is not None and getattr(route, 'npi_backend', None) is not None
+                  and services._npi_kdb_status(route.npi_backend) is not None)
+        receipt['kdb_load_status'] = 'failed' if failed_load else 'loaded' if loaded else 'not_checked'
     if changed:
         receipt.pop('artifact_sha256', None)
         receipt['evidence_discarded'] = True
@@ -283,10 +306,13 @@ async def _walk(result, request, services, route, budget, session, design, wave,
             for control in obs['controls']:
                 if control['edge_at_unknown_onset'] is not True:
                     continue
-                driver_args = dict(wave_path=path, compile_log=request['compile_log'],
-                                   simulator=request['simulator'])
-                if request.get('top_hint'):
-                    driver_args['top_hint'] = request['top_hint']
+                if request.get('design_handle'):
+                    driver_args = dict(wave_path=path, design_handle=request['design_handle'])
+                else:
+                    driver_args = dict(wave_path=path, compile_log=request['compile_log'],
+                                       simulator=request['simulator'])
+                    if request.get('top_hint'):
+                        driver_args['top_hint'] = request['top_hint']
                 result['candidates'].append(dict(node_id=node_id, kind='async_control_onset_candidate',
                     control_signal=control['signal'],
                     competing_hypotheses=['asynchronous_assignment', 'other_driver_or_scheduling_effect'],

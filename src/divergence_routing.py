@@ -12,6 +12,9 @@ import json
 
 from config import get_source_graph_execution_config
 from .cancellation import OperationCancelled
+from .compile_input_capture import CaptureAborted
+from .design_backend_binding import ExecutionBindingChanged
+from .design_context_runtime import ContextUnavailable
 from .connectivity_backend import (
     DeferredConnectivityFallbackBackend,
     StaticConnectivityBackend,
@@ -19,6 +22,7 @@ from .connectivity_backend import (
 )
 from .divergence_budget import TraceRestart, BudgetExceeded
 from .kdb_identity import kdb_identity
+from .kdb_anchor import KdbBindingChanged
 from .dynamic_evidence import unsupported_step
 from .source_graph_adapter import AdapterStatus
 from .source_graph_runtime import PrepareStatus
@@ -54,6 +58,8 @@ class DynamicRoute:
         self.selected_backend = "source_graph"
         self.retain_async_controls = False
         self.root_binding = None
+        self.prepared = getattr(bound, "prepared", None)
+        self.npi_backend = None
 
     async def initialize(self):
         if str(self.side['signal_path']).startswith('TOP.'):
@@ -64,41 +70,54 @@ class DynamicRoute:
                     self.bound.compile_result, top_hint=self.side.get('top_hint'))))
             if self.root_binding:
                 self.targets = [self.root_binding.to_design(p) for p in self.targets]
-        self.probe = await self.budget.run(
-            lambda: self.s._run_in_cancellable_thread(
-                lambda: self.s.probe_verdi_backend(
-                    self.bound.compile_result,
-                    compile_log_path=self.bound.context["compile_log"],
+        selection_reason = None
+        if self.prepared is not None:
+            self.budget.check()
+            self.backend, self.probe, selection_reason = self.s._select_prepared_backend(
+                self.prepared, DeferredConnectivityFallbackBackend()
+            )
+        else:
+            self.probe = await self.budget.run(
+                lambda: self.s._run_in_cancellable_thread(
+                    lambda: self.s.probe_verdi_backend(
+                        self.bound.compile_result,
+                        compile_log_path=self.bound.context["compile_log"],
+                    )
                 )
             )
-        )
-        try:
-            self.backend = select_backend(
-                self.probe, fallback=DeferredConnectivityFallbackBackend()
-            )
-        except OperationCancelled:
-            raise
-        except Exception:
-            self.backend = None
+            try:
+                self.backend = select_backend(
+                    self.probe, fallback=DeferredConnectivityFallbackBackend()
+                )
+            except (OperationCancelled, CaptureAborted, KdbBindingChanged, ExecutionBindingChanged, ContextUnavailable):
+                raise
+            except Exception:
+                self.backend = None
         if getattr(self.backend, "name", None) == "verdi_npi":
-            self.backend.bind_compile_context(self.bound.compile_result)
+            self.npi_backend = self.backend
+            if self.prepared is None:
+                self.backend.bind_compile_context(self.bound.compile_result)
             self.stage = "verdi_npi"
             self.selected_backend = "verdi_npi"
             kdb = self.probe.get("kdb_path")
-            self.kdb_identity = kdb_identity(kdb) if kdb else None
+            self.kdb_identity = (self.prepared.binding.anchor.identity_sha256 if self.prepared is not None
+                                 else kdb_identity(kdb) if kdb else None)
             self.artifact = hashlib.sha256(
                 json.dumps(
                     [self.bound.snapshot, self.side.get("top_hint"), self.kdb_identity]
                 ).encode()
             ).hexdigest()
         else:
-            reason = (
+            reason = selection_reason or self.probe.get("_npi_selection_reason") or (
                 "npi_skipped_by_policy"
                 if self.probe.get("connectivity_route") == "source_graph"
                 else "npi_kdb_unavailable"
             )
             self.attempts.append(
-                dict(backend="verdi_npi", status="unavailable", reason=reason)
+                dict(backend="verdi_npi", status=("failed" if selection_reason else
+                    "skipped" if self.prepared is not None and (
+                        self.prepared.binding.disposition == "source_policy" or self.prepared.npi_failure
+                    ) else "unavailable"), reason=reason)
             )
             self.fallback_reason = reason
             self.stage = "source_graph"
@@ -111,6 +130,10 @@ class DynamicRoute:
                 if not self.config.enabled
                 else "source_graph_config_invalid"
             )
+        elif self.prepared is not None and self.bound.hierarchy is None:
+            # The semantic trace planner will accept independent contexts in
+            # its own migration. Never borrow a recent legacy tree meanwhile.
+            reason = "source_graph_hierarchy_context_unavailable"
         else:
             try:
                 plan = await self.budget.run(
@@ -160,10 +183,18 @@ class DynamicRoute:
                     reason = self.s._SOURCE_GRAPH_PREPARE_REASONS.get(
                         outcome.status, "source_graph_prepare_failed"
                     )
-            except (OperationCancelled, BudgetExceeded):
+            except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
+                    ExecutionBindingChanged, ContextUnavailable):
                 raise
             except Exception:
                 reason = "source_graph_prepare_failed"
+        if self.prepared is not None and self.source_receipt is None:
+            self.source_receipt = self.s._blocked_source_graph_receipt(
+                "disabled" if not self.config.enabled else "invalid" if not self.config.valid else "blocked",
+                code=reason,
+                stage="execution_config" if not self.config.enabled or not self.config.valid else "target_scope",
+            )
+            self.source_receipt["fallback_used"] = True
         self.attempts.append(
             dict(backend="source_graph", status="unavailable", reason=reason)
         )
@@ -190,6 +221,8 @@ class DynamicRoute:
 
     async def query(self, signal):
         self.budget.check()
+        if self.prepared is not None:
+            self.prepared.binding.require_policy_current()
         if self.stage is None:
             await self.initialize()
         wave_signal = signal
@@ -235,9 +268,12 @@ class DynamicRoute:
                     result = await self.budget.run(
                         lambda: self.s._run_in_cancellable_thread(query)
                     )
+                if self.prepared is not None:
+                    self.prepared.binding.require_policy_current()
             except SourceGraphTraceScopeExpansion as exc:
                 self._expand(exc.signal_paths)
-            except (OperationCancelled, BudgetExceeded):
+            except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
+                    ExecutionBindingChanged, ContextUnavailable):
                 raise
             except Exception:
                 result = unsupported_step(
@@ -323,6 +359,19 @@ class DynamicRoute:
             "source_graph": self.source_receipt,
             **self.execution,
         }
+        if self.prepared is not None:
+            finalized = self.s._finalize_public_connectivity_status(
+                backend_status=self.probe,
+                selected_backend=self.selected_backend,
+                actual_backend=self.stage,
+                attempts=self.receipt["attempted_backends"],
+                fallback_reason=self.fallback_reason,
+                npi_backend=self.npi_backend,
+                npi_execution=self.execution or None,
+                source_graph_receipt=self.source_receipt,
+                npi_kdb_status=self.s._npi_kdb_status(self.npi_backend) if self.npi_backend is not None else None,
+            )
+            self.receipt = {**finalized, "artifact_sha256": self.artifact}
 
         if self.root_binding:
             from .x_history_observe import bind_step_wave
@@ -336,10 +385,12 @@ class DynamicRoute:
         return result
 
     def current(self):
+        if self.prepared is not None:
+            self.prepared.binding.require_current()
         if self.root_binding:
             from .scope_metadata import file_identity
             if self.root_binding.wave_identity != file_identity(self.side['wave_path']):
                 return False
-        if self.stage == "verdi_npi" and self.kdb_identity is not None:
+        if self.prepared is None and self.stage == "verdi_npi" and self.kdb_identity is not None:
             return kdb_identity(self.probe["kdb_path"]) == self.kdb_identity
         return True

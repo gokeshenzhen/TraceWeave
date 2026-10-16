@@ -402,9 +402,22 @@ Verification
   and unexecuted semantic/KDB checks. It returns full identity and ordered
   recovery inputs without promising semantic capabilities. The optional
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
-  of source association. Driver/load/path accept `design_handle` and derive
+  of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  Six-tool, X-trace and historical recovery migration remains separate work.
+  Six-tool and explicit historical recovery migration remains separate work.
+  `PreparedTraceContext` supplies source identity and compile metadata to the
+  existing dynamic route without a hierarchy or legacy-handle lookup. Snapshot
+  attempts retain waveform file/parser generation across whole-chain restarts;
+  history retains its observation-session, time window, selection, cumulative
+  work budgets and whole-graph restart rules. Context validation and first
+  binding share the history deadline; final identity checks still run after an
+  exhausted analysis budget. Typed identity/capture failures and cancellation
+  cannot become fallback attempts. A clean/missing waveform target performs no
+  driver query and leaves KDB load status unverified. Dynamic NPI queries record
+  actual load evidence even when their semantic model returns partial facts.
+  Independent-context Source Graph trace planning is still unavailable during
+  this migration: it reports that gap and uses bound Static metadata, without
+  silently borrowing a legacy tree. This limitation does not complete D7.
   Neither optional Slang cache default changes. Preparation, registration validation and later
   query costs must be measured together before claiming a speedup.
   `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:

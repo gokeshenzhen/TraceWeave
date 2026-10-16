@@ -94,8 +94,9 @@ independently capture compile inputs and source identities under file, byte and
 time budgets. Its `design_handle` expires on process restart or registry eviction;
 the receipt separates input capture from include resolution and semantic coverage.
 Preparation does not build a hierarchy, run Slang or probe/load KDB. Pass its
-`design_handle` to `explain_signal_driver`, `find_signal_loads` or
-`trace_signal_path`; `compile_log` can then be omitted. With the default `auto`
+`design_handle` to `explain_signal_driver`, `find_signal_loads`,
+`trace_signal_path` or `trace_x_source` (snapshot and history); `compile_log`
+can then be omitted. With the default `auto`
 preference, the first query fixes a candidate KDB (optional `kdb_path` declares
 one explicitly). Later queries validate that binding and source context; a
 change or restart requires a new handle. `source` avoids NPI, and a recorded NPI
@@ -106,8 +107,13 @@ KDB source association remains unverified.
 
 New-handle driver/load source fallback uses bounded bootstrap by default. The
 new-handle path route currently needs NPI; use the existing hierarchy workflow
-for a Source Graph path fallback. The six hierarchy/source tools, X-trace and
-historical context recovery still use their existing workflow and handles.
+for a Source Graph path fallback. Independent-context X-trace uses the bound
+NPI route without a hierarchy; its source fallback currently reports unavailable
+semantic trace planning and recomputes with bound Static metadata. History keeps
+its dynamic-evidence limitations and includes context validation in the request
+deadline. A clean waveform target does not establish that NPI loaded a KDB.
+The six hierarchy/source tools and explicit historical context recovery still
+use their existing workflow and handles.
 
 Capabilities for large designs, with selected examples of validated scale:
 

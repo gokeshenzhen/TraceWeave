@@ -2831,10 +2831,10 @@ def _finalize_public_connectivity_status(
             if "error_log" in npi_kdb_status:
                 status["kdb_error_log"] = npi_kdb_status["error_log"]
     if "kdb_load_status" in status:
-        if npi_kdb_status is not None or actual_backend == "verdi_npi":
-            status["kdb_load_status"] = "loaded"
-        elif any(a.get("reason") in {"npi_load_failed", "npi_lsf_npi_unavailable"} for a in attempts):
+        if any(a.get("reason") in {"npi_load_failed", "npi_lsf_npi_unavailable"} for a in attempts):
             status["kdb_load_status"] = "failed"
+        elif npi_kdb_status is not None or actual_backend == "verdi_npi":
+            status["kdb_load_status"] = "loaded"
     if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
         status["parser_match"] = "exact"
     return status
@@ -4452,6 +4452,8 @@ async def _run_trace_x_attempt(
     abort_on_backend_fallback: bool,
     upstream_scope_guard: Callable[[list[str]], object] | None = None,
     root_binding=None,
+    parser_observer=None,
+    backend_guard=None,
 ) -> tuple[dict, dict]:
     """Run one backend-consistent X-trace attempt.
 
@@ -4465,7 +4467,10 @@ async def _run_trace_x_attempt(
 
     async def _value_lookup(path: str, at_ps: int) -> dict:
         def _work():
-            return _get_parser(wave_path).get_value_at_time(
+            parser = _get_parser(wave_path)
+            if parser_observer is not None:
+                parser_observer(parser)
+            return parser.get_value_at_time(
                 root_binding.to_wave(path) if root_binding else path, at_ps)
 
         return await _run_in_wave_request(wave_path, _work)
@@ -4476,8 +4481,11 @@ async def _run_trace_x_attempt(
         at_ps: int,
     ) -> list[dict]:
         def _work():
+            parser = _get_parser(wave_path)
+            if parser_observer is not None:
+                parser_observer(parser)
             observations = inspect_upstream_values(
-                _get_parser(wave_path),
+                parser,
                 [root_binding.to_wave(p) for p in upstream_names] if root_binding else upstream_names,
                 root_binding.to_wave(current_signal_path) if root_binding else current_signal_path,
                 at_ps,
@@ -4493,6 +4501,8 @@ async def _run_trace_x_attempt(
 
     async def _driver_lookup(path: str) -> dict:
         nonlocal kdb_status
+        if backend_guard is not None:
+            backend_guard()
 
         def _query_backend():
             return backend.find_driver(
@@ -4520,6 +4530,8 @@ async def _run_trace_x_attempt(
             raw = await _run_in_cancellable_thread(_query_backend)
         else:
             raw = await _call_connectivity_backend(backend, _query_backend)
+        if backend_guard is not None:
+            backend_guard()
         if not isinstance(raw, dict):
             raise TypeError("connectivity backend find_driver must return a mapping")
 
@@ -4589,6 +4601,8 @@ async def _run_trace_x_attempt(
         value_lookup=_value_lookup,
         upstream_lookup=_upstream_lookup,
         upstream_scope_guard=upstream_scope_guard,
+        **({"propagate_value_errors": (design_context_runtime.ContextUnavailable,)}
+           if parser_observer is not None else {}),
     )
     result = await attempt if inspect.isawaitable(attempt) else attempt
     if not isinstance(result, dict):
@@ -4602,14 +4616,30 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     """Route X-trace through NPI -> one Source Graph artifact -> Static."""
 
     mode = args.get("mode", "snapshot")
+    prepared = args.get("_prepared_design")
     if mode == "history":
         from src.x_history import trace_x_history
+        if prepared is not None:
+            from src.prepared_trace_context import PreparedTraceContext
+            history_args = {k: v for k, v in args.items() if k not in {
+                "design_handle", "_prepared_design", "supplementary_compile_logs",
+                "_design_query_started",
+            }}
+            return await trace_x_history(
+                sys.modules[__name__], {**history_args, "simulator": simulator},
+                bound_context=PreparedTraceContext(prepared, args["design_handle"]),
+                started_at=args.get("_design_query_started"),
+            )
         return await trace_x_history(sys.modules[__name__], {**args, "simulator": simulator})
     if mode != "snapshot":
         raise ValueError("trace_x_source mode must be snapshot or history")
     if any(k in args for k in ("history_start_ps", "signal_bits", "phase", "max_nodes", "max_events", "max_read_bytes", "timeout_sec", "compile_context")):
         raise ValueError("history parameters require mode=history")
     original_signal = args['signal_path']
+    wave_guard = None
+    if prepared is not None:
+        from src.prepared_trace_context import PreparedTraceWave
+        wave_guard = PreparedTraceWave(args["wave_path"])
     root_binding = await _bind_wave_design_root(args, simulator)
     if root_binding:
         args = {**args, 'signal_path': root_binding.to_design(original_signal)}
@@ -4626,24 +4656,29 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     signal_path = args["signal_path"]
     top_hint = args.get("top_hint")
     max_depth = args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH)
-    backend_status = _safe_probe_backend(compile_log, simulator)
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
-    try:
-        selector_parameters = inspect.signature(select_backend).parameters.values()
-        supports_injected_fallback = any(
-            parameter.name == "fallback"
-            or parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in selector_parameters
-        )
-        npi_backend = (
-            select_backend(backend_status, fallback=deferred)
-            if supports_injected_fallback
-            else select_backend(backend_status)
-        )
-    except Exception:  # noqa: BLE001
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    if prepared is not None:
+        npi_backend, backend_status, npi_selection_reason = _select_prepared_backend(prepared, deferred)
+    else:
+        backend_status = _safe_probe_backend(compile_log, simulator)
+        try:
+            selector_parameters = inspect.signature(select_backend).parameters.values()
+            supports_injected_fallback = any(
+                parameter.name == "fallback"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in selector_parameters
+            )
+            npi_backend = (
+                select_backend(backend_status, fallback=deferred)
+                if supports_injected_fallback
+                else select_backend(backend_status)
+            )
+        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+            raise
+        except Exception:  # noqa: BLE001
+            npi_backend = deferred
+            npi_selection_reason = "npi_backend_initialization_failed"
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
@@ -4653,13 +4688,16 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     npi_reason: str | None = None
     probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
 
-    def _finalize_trace(
+    async def _finalize_trace(
         result: dict,
         *,
         actual_backend: str,
         fallback_reason: str | None,
         source_graph_receipt: dict | None,
     ):
+        if wave_guard is not None:
+            await _run_in_wave_request(wave_path, lambda: wave_guard.observe(_get_parser(wave_path)))
+            wave_guard.require_current()
         finalized = _finalize_public_connectivity_status(
             backend_status=backend_status,
             selected_backend=selected_backend,
@@ -4671,6 +4709,10 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             source_graph_receipt=source_graph_receipt,
             npi_kdb_status=npi_kdb_status,
         )
+        if prepared is not None and actual_backend == "verdi_npi" and npi_kdb_status is None:
+            # A clean or absent waveform signal can finish without asking a
+            # driver. Backend selection alone is not evidence of a KDB load.
+            finalized["kdb_load_status"] = backend_status["kdb_load_status"]
         configured_mode = getattr(npi_backend, "execution_mode", None)
         if finalized.get("execution_mode") is None and configured_mode in {
             "local",
@@ -4706,9 +4748,13 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                 max_depth=max_depth,
                 simulator=simulator,
                 abort_on_backend_fallback=True,
+                **({"parser_observer": wave_guard.observe} if wave_guard else {}),
+                **({"backend_guard": prepared.binding.require_policy_current} if prepared else {}),
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable):
+            raise
         except _TraceBackendFallback as exc:
             npi_reason = _sanitize_npi_fallback_reason(exc.reason)
             npi_execution = dict(exc.execution_status) or None
@@ -4753,7 +4799,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                     coverage_status="partial" if degraded else None,
                 )
             )
-            return _finalize_trace(
+            return await _finalize_trace(
                 result,
                 actual_backend="verdi_npi",
                 fallback_reason=None,
@@ -4766,7 +4812,11 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                "failed" if npi_selection_reason else (
+                    "skipped" if prepared is not None and (
+                        prepared.binding.disposition == "source_policy" or prepared.npi_failure
+                    ) else "unavailable"
+                ),
                 reason=npi_reason,
             )
         )
@@ -4803,8 +4853,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
         )
     else:
-        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
-            compile_log, simulator
+        hierarchy_result, hierarchy_snapshot_sha256 = (
+            (None, prepared.context.identity_sha256) if prepared is not None
+            else _resolve_hierarchy_context(compile_log, simulator)
         )
         if hierarchy_result is None:
             source_graph_reason = "source_graph_hierarchy_context_unavailable"
@@ -5010,9 +5061,13 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                             simulator=simulator,
                             abort_on_backend_fallback=False,
                             upstream_scope_guard=(trace_backend.require_scope),
+                            **({"parser_observer": wave_guard.observe} if wave_guard else {}),
+                            **({"backend_guard": prepared.binding.require_policy_current} if prepared else {}),
                         )
                     except OperationCancelled as exc:
                         raise asyncio.CancelledError from exc
+                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable):
+                        raise
                     except SourceGraphTraceScopeExpansion as exc:
                         attempted_query_count += len(
                             trace_backend.ledger.query_fingerprints_sha256
@@ -5178,7 +5233,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                             )
                         )
                         operation_metrics.set_value("source_graph_phase", "complete")
-                        return _finalize_trace(
+                        return await _finalize_trace(
                             source_result,
                             actual_backend="source_graph",
                             fallback_reason=npi_reason,
@@ -5208,9 +5263,12 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     operation_metrics.set_value(
         "source_graph_trace_restart_count", len(restart_reasons)
     )
+    static_backend = StaticConnectivityBackend()
+    if prepared is not None:
+        static_backend.bind_compile_context(prepared.context.compile_result())
     try:
         static_result, _ = await _run_trace_x_attempt(
-            backend=StaticConnectivityBackend(),
+            backend=static_backend,
             wave_path=wave_path,
             **({"root_binding": root_binding} if root_binding else {}),
             signal_path=signal_path,
@@ -5220,6 +5278,8 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             max_depth=max_depth,
             simulator=simulator,
             abort_on_backend_fallback=False,
+            **({"parser_observer": wave_guard.observe} if wave_guard else {}),
+            **({"backend_guard": prepared.binding.require_policy_current} if prepared else {}),
         )
     except OperationCancelled as exc:
         raise asyncio.CancelledError from exc
@@ -5229,7 +5289,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         if source_graph_attempted or artifact_attempt_count
         else npi_reason or source_graph_reason
     )
-    return _finalize_trace(
+    return await _finalize_trace(
         static_result,
         actual_backend="static",
         fallback_reason=final_reason,
@@ -6574,6 +6634,10 @@ async def list_tools():
             name="trace_x_source",
             description=(
                 "Start from a real signal path; supported RTL expressions are extracted internally. "
+                "Accepts compile_log with the legacy hierarchy, or an explicit design_handle from "
+                "prepare_design_context for both modes. A healthy bound NPI route needs no full "
+                "hierarchy. Independent-context Source Graph trace planning is not yet available; "
+                "source fallback currently uses bound Static metadata and reports that limitation. "
                 "When a signal shows X/Z at a target time, trace its propagation "
                 "chain through upstream driver logic. Uses the selected connectivity "
                 "route (trusted local/LSF NPI, bounded Source Graph, then Static). "
@@ -6606,6 +6670,8 @@ async def list_tools():
                         "description": "Trace start time." + _TIMESPEC_HINT,
                     },
                     "compile_log": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1,
+                                      "description": "Explicit independent context; replaces compile_log and legacy hierarchy prerequisite."},
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / verilator / auto; session default.",
@@ -6626,7 +6692,8 @@ async def list_tools():
                     "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 30},
                     "compile_context": schemas.DivergenceContext.model_json_schema(),
                 },
-                "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
+                "required": ["wave_path", "signal_path", "time_ps"],
+                "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}],
                 "allOf": [{"if": {"properties": {"mode": {"const": "history"}}, "required": ["mode"]},
                            "then": {"required": ["history_start_ps"]}}],
             },
@@ -7779,19 +7846,28 @@ async def _dispatch_design_query(name: str, args: dict):
     store = _design_context_store
     started = time.monotonic()
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
+    history_deadline = None
+
+    def remaining(limit):
+        if history_deadline is None:
+            return limit
+        value = history_deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError
+        return min(limit, value)
 
     def ensure_owner():
         if store is not _design_context_store:
             raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
 
-    async def validate_source(context):
-        with anyio.fail_after(30):
+    async def validate_source(context, *, final=False):
+        with anyio.fail_after(30 if final else remaining(30)):
             current = await _run_in_cancellable_thread(context.current)
         if not current:
             raise design_context_runtime.ContextUnavailable("design_context_changed")
 
-    async def validate_binding(binding):
-        with anyio.fail_after(5):
+    async def validate_binding(binding, *, final=False):
+        with anyio.fail_after(5 if final else remaining(5)):
             await _run_in_cancellable_thread(binding.require_current)
 
     try:
@@ -7812,18 +7888,31 @@ async def _dispatch_design_query(name: str, args: dict):
                        for path, expected in zip(supplied_logs, context.ordered_compile_logs[1:]))
             ):
                 raise design_context_runtime.ContextUnavailable("design_context_arguments_mismatch")
+            if name == "trace_x_source" and args.get("mode") == "history":
+                history_args = {k: v for k, v in args.items() if k not in {
+                    "design_handle", "supplementary_compile_logs",
+                }}
+                history_request = schemas.XHistoryInput.model_validate({
+                    **history_args, "compile_log": context.ordered_compile_logs[0],
+                    "simulator": context.simulator, "top_hint": context.selected_top,
+                })
+                history_deadline = started + history_request.timeout_sec
             phase = time.monotonic()
             await validate_source(context)
             metrics["source_validation_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            with anyio.fail_after(30):
+            with anyio.fail_after(remaining(30)):
                 async with entry.binding_lock:
                     metrics["binding_wait_ms"] = (time.monotonic() - phase) * 1000
                     reused = entry.binding is not None
                     if reused:
                         binding = entry.binding
                     else:
-                        binding = await _run_in_cancellable_thread(lambda: prepare_backend_binding(context))
+                        binding_budget = remaining(30)
+                        binding = await _run_in_cancellable_thread(
+                            lambda: prepare_backend_binding(context, timeout_sec=binding_budget)
+                            if history_deadline is not None else prepare_backend_binding(context)
+                        )
                         validation_started = time.monotonic()
                         await validate_source(context)
                         metrics["source_validation_ms"] += (time.monotonic() - validation_started) * 1000
@@ -7831,6 +7920,7 @@ async def _dispatch_design_query(name: str, args: dict):
                         await validate_binding(binding)
                         metrics["binding_validation_ms"] += (time.monotonic() - validation_started) * 1000
                         await anyio.lowlevel.checkpoint()
+                        remaining(30)
                         ensure_owner()
                         store.publish_binding(handle, binding)
                         metrics.update(dict(binding.metrics))
@@ -7847,13 +7937,15 @@ async def _dispatch_design_query(name: str, args: dict):
             }
             if name in {"explain_signal_driver", "find_signal_loads"}:
                 resolved.setdefault("allow_bounded_bootstrap", True)
+            if history_deadline is not None:
+                resolved["_design_query_started"] = started
             phase = time.monotonic()
             previous_failure = entry.npi_failure
             result = await _dispatch_inner(name, resolved)
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            await validate_source(context)
-            await validate_binding(binding)
+            await validate_source(context, final=True)
+            await validate_binding(binding, final=True)
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             ensure_owner()
@@ -7874,6 +7966,11 @@ async def _dispatch_design_query(name: str, args: dict):
                     include_resolution_status="complete" if context.include_resolution_complete else "partial",
                     previous_npi_failure=previous_failure, metrics=metrics,
                 )
+                history = getattr(result, "history", None)
+                if history is not None:
+                    history.context.setdefault("backend_status", {})["design_context"] = (
+                        status.design_context.model_dump(mode="json", exclude_none=True)
+                    )
             return result
     except OperationCancelled as exc:
         raise asyncio.CancelledError from exc
@@ -7893,10 +7990,10 @@ async def _dispatch_design_query(name: str, args: dict):
 
 
 async def _dispatch(name: str, args: dict):
-    if "_prepared_design" in args:
+    if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path"}:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
     return await _dispatch_inner(name, args)
