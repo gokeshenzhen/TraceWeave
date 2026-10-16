@@ -118,7 +118,9 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
     ``gaps`` meaningful after exhaustion. Finding derived classes can require
     an inventory across compilation scopes; that work is explicit and charged,
     even for a single root. The legacy ``total`` remains the number of rendered
-    nodes. Inventory counts and its incomplete coverage are separate fields.
+    nodes. Inventory counts cover provider declarations, excluding reference-
+    only base nodes. Unresolved inheritance can leave the view partial while
+    the declaration inventory is complete; a query budget stop cannot.
     """
     if root_class is not None and (not isinstance(root_class, str) or not root_class):
         raise ValueError("root_class must be a nonempty identity or name")
@@ -154,6 +156,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
     except HierarchyBudgetExceeded as exc:
         complete = False
         limits.add(exc.reason)
+    inventory_complete = complete
 
     # Rows and links are copied facts. A bound external reference is not a
     # declaration recovered by matching its spelling against a local class.
@@ -212,6 +215,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
             selected = [key for key, row in nodes.items() if row["name"] == root_class]
         if len(selected) > 1:
             error = "class_name_ambiguous"
+            output_truncated = len(selected) > max_nodes
             candidates = [{"symbol_id": key, "qualified_name": nodes[key]["qualified_name"]}
                           for key in sorted(selected, key=order)[:max_nodes]]
             selected = []
@@ -257,6 +261,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
         budget.checkpoint()
     except HierarchyBudgetExceeded as exc:
         complete = False
+        inventory_complete = False
         limits.add(exc.reason)
         if error == "class_not_found":
             error = "class_unresolved"
@@ -264,8 +269,9 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
         "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "facts_origin": provider.origin,
         "artifact_identity": provider.artifact_identity, "view": "static_class_inheritance",
         "roots": roots, "total": emitted, "output_truncated": output_truncated,
-        "class_inventory_count": len(classes) if complete else None,
-        "class_inventory_lower_bound": len(classes), "class_inventory_complete": complete,
+        "class_inventory_domain": "provider_declarations",
+        "class_inventory_count": len(classes) if inventory_complete else None,
+        "class_inventory_lower_bound": len(classes), "class_inventory_complete": inventory_complete,
         "coverage_status": "complete" if complete else "partial",
         "coverage_gaps": sorted(gaps), "analysis_limits": sorted(limits),
         "query_metrics": budget.metrics(),

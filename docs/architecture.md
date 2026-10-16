@@ -452,6 +452,9 @@ Verification
   can require the provider's full class inventory; symbol and byte limits cover
   that work independently of display depth. The legacy class `total` remains
   the rendered-node count, with separate inventory completeness/count fields.
+  The inventory counts provider declarations, excluding reference-only bases;
+  unresolved inheritance or a cycle can make the view partial without erasing
+  a completed declaration count. Budget stops invalidate the count proof.
   Native/Slang class-stream projection and public routing are subsequent work.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
