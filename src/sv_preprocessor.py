@@ -21,6 +21,7 @@ import shlex
 from typing import Any, Callable, Mapping, Sequence
 
 from .cancellation import check_cancelled
+from .compile_input_capture import read_compile_text
 from .compile_environment import (
     CompileEnvironment,
     _expand_with_environment,
@@ -382,8 +383,7 @@ def _extract_tokens_options(
                 continue
             visited_filelists.add(filelist_path)
             try:
-                with open(filelist_path, "r", errors="replace") as stream:
-                    nested = tokenize_filelist(stream.read())
+                nested = tokenize_filelist(read_compile_text(filelist_path))
             except (OSError, ValueError):
                 complete = False
                 index += 2

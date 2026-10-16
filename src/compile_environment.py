@@ -14,6 +14,7 @@ import re
 import shlex
 
 from .cancellation import check_cancelled
+from .compile_input_capture import read_compile_text
 from .filelist_tokenizer import tokenize_filelist
 
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -390,7 +391,7 @@ def _infer_compile_environment(
                 break
             try:
                 tokens = tokenize_filelist(
-                    path.read_text(encoding="utf-8", errors="replace")
+                    read_compile_text(path, encoding="utf-8")
                 )
             except (OSError, ValueError):
                 continue

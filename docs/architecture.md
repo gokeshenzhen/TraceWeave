@@ -361,6 +361,17 @@ Verification
   the final waiter arms cooperative cancellation. A bounded bootstrap is
   reuse-only: it may join an active exact index but never starts a full-design
   preload itself.
+  `CompileInputCapture` is the independent preparation primitive for log and
+  filelist evidence. An optional call-local reader binds VCS, Xcelium and
+  Verilator parsing, preprocessor options and compile-environment inference to
+  the exact captured raw bytes. Ordinary parsing keeps its streaming I/O.
+  Capture has file/reference, byte and cooperative time budgets, rejects
+  non-regular inputs, records original path aliases, and rehashes content before
+  producing an immutable snapshot. Cancellation and capture aborts propagate
+  past parser warning handlers. Closing the capture clears all source bodies;
+  snapshot completeness describes captured inputs, not semantic include
+  closure. This primitive does not build a hierarchy, run a frontend or load
+  a KDB, and does not yet change public handle routing.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first

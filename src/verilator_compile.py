@@ -11,6 +11,7 @@ import shlex
 from pathlib import Path
 
 from .cancellation import check_cancelled
+from .compile_input_capture import read_compile_text, sample_compile_bytes
 from .filelist_tokenizer import tokenize_filelist
 from .hdl_suffixes import HDL_SOURCE_SUFFIXES
 
@@ -34,14 +35,7 @@ _BANNER = re.compile(r'(?:V e r i l a t i o n\s+R e p o r t: Verilator|Running o
 
 
 def bounded_sample(path: str) -> str:
-    with open(path, 'rb') as handle:
-        size = os.fstat(handle.fileno()).st_size
-        if size <= MAX_BYTES:
-            return handle.read(MAX_BYTES).decode('utf-8', errors='replace')
-        head = handle.read(MAX_BYTES // 2)
-        handle.seek(size - MAX_BYTES // 2)
-        tail = handle.read(MAX_BYTES // 2)
-    return (head + b'\n' + tail).decode('utf-8', errors='replace')
+    return sample_compile_bytes(path, MAX_BYTES).decode('utf-8', errors='replace')
 
 
 def invocation(text: str, log_dir: str) -> tuple[str | None, str]:
@@ -132,7 +126,7 @@ def parse(log_path: str) -> dict:
                     try:
                         if Path(path).stat().st_size > MAX_BYTES:
                             raise ValueError('filelist byte limit')
-                        nested = tokenize_filelist(Path(path).read_text(errors='replace'))
+                        nested = tokenize_filelist(read_compile_text(path))
                     except (OSError, ValueError) as exc:
                         warnings.append('Verilator filelist unavailable: ' + path + ': ' + str(exc))
                     else:
