@@ -267,12 +267,18 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 上下文才重试。`backend_status.design_context` 分别报告候选身份、实际加载、源码
 关联及发现/校验成本；外部 KDB 的源码关联仍为未验证。
 
+淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`
+的参数。其 `context_identity_sha256` 是待匹配的身份；输入变化时拒绝发布 handle，
+成功则返回新 handle 和 `identity_verification="matched_recovery_identity"`。
+新 handle 在首次查询时重新建立后端绑定。恢复只校验已记录的编译/源码身份；
+KDB generation 及历史波形与源码的对应关系仍需各自的证据。
+
 新 handle 的 driver/load 源码回退默认使用有界 bootstrap；新 handle 的 path 当前
 需要 NPI，无 NPI 时使用既有 hierarchy 流程取得 Source Graph 路径回退。独立上下文的
 X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
 接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
 history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。
-六个层次/源码工具及显式历史上下文恢复仍使用既有流程与 handle。
+六个层次/源码工具及旧 `compile_context` 恢复仍使用既有流程与 handle。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 

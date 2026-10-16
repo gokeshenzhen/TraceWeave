@@ -105,6 +105,14 @@ Read `backend_status.design_context`: candidate identity, actual load and source
 association are separate, and validation/discovery costs are reported. External
 KDB source association remains unverified.
 
+After eviction or restart, pass the returned `recovery_context` unchanged as
+the arguments to `prepare_design_context`. Its `context_identity_sha256` is an
+expected identity: changed inputs are rejected before publishing a handle.
+Success returns a new handle with `identity_verification="matched_recovery_identity"`.
+The restored handle performs a new backend binding on its first query. This
+verifies the recorded compile/source identity; KDB generation and historical
+waveform correspondence still require their separate evidence.
+
 New-handle driver/load source fallback uses bounded bootstrap by default. The
 new-handle path route currently needs NPI; use the existing hierarchy workflow
 for a Source Graph path fallback. Independent-context X-trace uses the bound
@@ -112,7 +120,7 @@ NPI route without a hierarchy; its source fallback currently reports unavailable
 semantic trace planning and recomputes with bound Static metadata. History keeps
 its dynamic-evidence limitations and includes context validation in the request
 deadline. A clean waveform target does not establish that NPI loaded a KDB.
-The six hierarchy/source tools and explicit historical context recovery still
+The six hierarchy/source tools and legacy `compile_context` recovery still
 use their existing workflow and handles.
 
 Capabilities for large designs, with selected examples of validated scale:

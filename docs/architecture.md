@@ -401,10 +401,17 @@ Verification
   The MCP receipt separates captured-input completeness, include resolution,
   and unexecuted semantic/KDB checks. It returns full identity and ordered
   recovery inputs without promising semantic capabilities. The optional
+  `context_identity_sha256` preparation input makes those recovery inputs
+  directly replayable: capture must reproduce the expected compile/source
+  identity before registration validation or publication. A match issues a
+  new process handle and reports `matched_recovery_identity`; it does not
+  recover a native session, loaded KDB generation or old registry entry.
+  Partial-input and include gaps remain part of the identity and receipt.
+  The optional
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
   of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  Six-tool and explicit historical recovery migration remains separate work.
+  Six-tool and legacy `compile_context` recovery migration remains separate work.
   `PreparedTraceContext` supplies source identity and compile metadata to the
   existing dynamic route without a hierarchy or legacy-handle lookup. Snapshot
   attempts retain waveform file/parser generation across whole-chain restarts;

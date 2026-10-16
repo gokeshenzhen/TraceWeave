@@ -276,6 +276,11 @@ class PrepareDesignContextOptions(SchemaModel):
     kdb_path: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = Field(
         default=None, description="Explicit candidate, captured on first query; does not prove source association.",
     )
+    context_identity_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$",
+        description=("Expected compile/source identity when replaying a recovery_context. "
+                     "A mismatch rejects preparation before a new handle is published."),
+    )
     timeout_sec: float = Field(default=30.0, gt=0, le=300, allow_inf_nan=False)
     max_files: int = Field(default=32768, ge=1, le=32768)
     max_bytes: int = Field(default=128 * 1024 * 1024, ge=1, le=128 * 1024 * 1024)
@@ -309,6 +314,7 @@ class PrepareDesignContextResult(SchemaModel):
     design_handle: str
     handle_lifetime: Literal["process"] = "process"
     context_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    identity_verification: Literal["current_inputs", "matched_recovery_identity"] = "current_inputs"
     simulator: Literal["vcs", "xcelium", "verilator"]
     selected_top: str | None = None
     backend_preference: Literal["auto", "source"]

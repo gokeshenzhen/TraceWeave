@@ -196,8 +196,8 @@ async def test_ordered_supplements_and_source_preference_survive_recovery_token(
     assert token["simulator"] == "vcs" and token["top_hint"] == "top"
     assert token["backend_preference"] == "source"
     assert token["context_identity_sha256"] == payload["context_identity_sha256"]
-    # The identity is a recovery token for later consumers, not an additional
-    # input silently accepted by this prepare endpoint.
+    # Omitting the expected identity explicitly establishes current inputs.
+    # Exact recovery_context replay is covered by the recovery contract tests.
     repeat_arguments = {key: value for key, value in token.items() if key != "context_identity_sha256"}
     repeated = await _public(repeat_arguments)
     assert repeated["context_identity_sha256"] == payload["context_identity_sha256"]
@@ -276,7 +276,7 @@ INVALID_ARGUMENTS = [
     {"max_include_depth": 0.5}, {"max_include_depth": "0"},
     {"kdb_path": ""}, {"kdb_path": "   "}, {"kdb_path": False}, {"kdb_path": 12},
     {"unknown_option": 1},
-    {"context_identity_sha256": "0" * 64},
+    {"context_identity_sha256": "not-a-sha256"},
 ]
 
 

@@ -1907,6 +1907,8 @@ async def _handle_prepare_design_context(args: dict):
                 max_references=options.max_references, timeout_sec=remaining(),
             ),
         )
+        if options.context_identity_sha256 not in (None, context.identity_sha256):
+            raise design_context_runtime.ContextUnavailable("design_context_changed")
         register_started = time.monotonic()
         ticket = store.prepare_registration(context, timeout_sec=remaining())
         return ticket, (time.monotonic() - register_started) * 1000
@@ -1924,6 +1926,8 @@ async def _handle_prepare_design_context(args: dict):
             result = schemas.PrepareDesignContextResult(
                 design_handle=ticket.handle,
                 context_identity_sha256=context.identity_sha256,
+                identity_verification=("matched_recovery_identity"
+                    if options.context_identity_sha256 is not None else "current_inputs"),
                 simulator=context.simulator,
                 selected_top=context.selected_top,
                 backend_preference=context.backend_preference,
@@ -5721,7 +5725,9 @@ async def list_tools():
                 "VCS, Xcelium or Verilator logs. Returns an explicit process-scoped design_handle, "
                 "coverage gaps, preparation costs and recovery identity. Does not build a hierarchy, "
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
-                "include resolution and semantic coverage. Driver/load/path accept design_handle; "
+                "include resolution and semantic coverage. Replay recovery_context as this tool's "
+                "arguments to require the same compile/source identity after eviction or restart; "
+                "identity mismatch publishes no handle. Driver/load/path and X-trace accept design_handle; "
                 "their first query fixes a KDB candidate and reports validation costs. An optional "
                 "kdb_path declares a candidate without asserting source association. The hierarchy tools still use "
                 "their build_tb_hierarchy handles."
