@@ -7988,6 +7988,66 @@ async def call_tool(name: str, arguments: dict):
             operation_metrics.pop(metrics_token)
 
 
+def _require_design_store_owner(store):
+    if store is not _design_context_store:
+        raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
+
+
+async def _validate_design_source(context, *, timeout_sec=30):
+    with anyio.fail_after(timeout_sec):
+        current = await _run_in_cancellable_thread(context.current)
+    if not current:
+        raise design_context_runtime.ContextUnavailable("design_context_changed")
+
+
+async def _validate_design_binding(binding, *, timeout_sec=5):
+    with anyio.fail_after(timeout_sec):
+        await _run_in_cancellable_thread(binding.require_current)
+
+
+async def _prepare_pinned_design_entry(store, handle, entry, *, metrics,
+                                       remaining=lambda limit: limit, budget_binding=False):
+    """Validate and bind one entry while its caller owns the whole-query pin.
+
+    Shared by tracing consumers. No wave lock or native load is acquired here;
+    the caller must perform final identity validation before returning facts.
+    """
+    context = entry.context
+    phase = time.monotonic()
+    await _validate_design_source(context, timeout_sec=remaining(30))
+    metrics["source_validation_ms"] += (time.monotonic() - phase) * 1000
+    phase = time.monotonic()
+    with anyio.fail_after(remaining(30)):
+        async with entry.binding_lock:
+            metrics["binding_wait_ms"] += (time.monotonic() - phase) * 1000
+            reused = entry.binding is not None
+            if reused:
+                binding = entry.binding
+            else:
+                binding_budget = remaining(30)
+                binding = await _run_in_cancellable_thread(
+                    lambda: prepare_backend_binding(context, timeout_sec=binding_budget)
+                    if budget_binding else prepare_backend_binding(context)
+                )
+                phase = time.monotonic()
+                await _validate_design_source(context, timeout_sec=remaining(30))
+                metrics["source_validation_ms"] += (time.monotonic() - phase) * 1000
+                phase = time.monotonic()
+                await _validate_design_binding(binding, timeout_sec=remaining(5))
+                metrics["binding_validation_ms"] += (time.monotonic() - phase) * 1000
+                await anyio.lowlevel.checkpoint()
+                remaining(30)
+                _require_design_store_owner(store)
+                store.publish_binding(handle, binding)
+                metrics.update(dict(binding.metrics))
+    phase = time.monotonic()
+    await _validate_design_binding(binding, timeout_sec=remaining(5))
+    metrics["binding_validation_ms"] += (time.monotonic() - phase) * 1000
+    await anyio.lowlevel.checkpoint()
+    _require_design_store_owner(store)
+    return binding, reused
+
+
 async def _dispatch_design_query(name: str, args: dict):
     """Own one independent context across binding, query and publication.
 
@@ -8010,20 +8070,6 @@ async def _dispatch_design_query(name: str, args: dict):
         if value <= 0:
             raise TimeoutError
         return min(limit, value)
-
-    def ensure_owner():
-        if store is not _design_context_store:
-            raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
-
-    async def validate_source(context, *, final=False):
-        with anyio.fail_after(30 if final else remaining(30)):
-            current = await _run_in_cancellable_thread(context.current)
-        if not current:
-            raise design_context_runtime.ContextUnavailable("design_context_changed")
-
-    async def validate_binding(binding, *, final=False):
-        with anyio.fail_after(5 if final else remaining(5)):
-            await _run_in_cancellable_thread(binding.require_current)
 
     try:
         with store.pin(handle) as entry:
@@ -8052,38 +8098,9 @@ async def _dispatch_design_query(name: str, args: dict):
                     "simulator": context.simulator, "top_hint": context.selected_top,
                 })
                 history_deadline = started + history_request.timeout_sec
-            phase = time.monotonic()
-            await validate_source(context)
-            metrics["source_validation_ms"] = (time.monotonic() - phase) * 1000
-            phase = time.monotonic()
-            with anyio.fail_after(remaining(30)):
-                async with entry.binding_lock:
-                    metrics["binding_wait_ms"] = (time.monotonic() - phase) * 1000
-                    reused = entry.binding is not None
-                    if reused:
-                        binding = entry.binding
-                    else:
-                        binding_budget = remaining(30)
-                        binding = await _run_in_cancellable_thread(
-                            lambda: prepare_backend_binding(context, timeout_sec=binding_budget)
-                            if history_deadline is not None else prepare_backend_binding(context)
-                        )
-                        validation_started = time.monotonic()
-                        await validate_source(context)
-                        metrics["source_validation_ms"] += (time.monotonic() - validation_started) * 1000
-                        validation_started = time.monotonic()
-                        await validate_binding(binding)
-                        metrics["binding_validation_ms"] += (time.monotonic() - validation_started) * 1000
-                        await anyio.lowlevel.checkpoint()
-                        remaining(30)
-                        ensure_owner()
-                        store.publish_binding(handle, binding)
-                        metrics.update(dict(binding.metrics))
-            phase = time.monotonic()
-            await validate_binding(binding)
-            metrics["binding_validation_ms"] += (time.monotonic() - phase) * 1000
-            await anyio.lowlevel.checkpoint()
-            ensure_owner()
+            binding, reused = await _prepare_pinned_design_entry(
+                store, handle, entry, metrics=metrics, remaining=remaining,
+                budget_binding=history_deadline is not None)
             resolved = {
                 **args, "compile_log": context.ordered_compile_logs[0],
                 "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
@@ -8099,11 +8116,11 @@ async def _dispatch_design_query(name: str, args: dict):
             result = await _dispatch_inner(name, resolved)
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            await validate_source(context, final=True)
-            await validate_binding(binding, final=True)
+            await _validate_design_source(context)
+            await _validate_design_binding(binding)
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
-            ensure_owner()
+            _require_design_store_owner(store)
             status = getattr(result, "backend_status", None)
             if status is not None:
                 for attempt in status.attempted_backends:
