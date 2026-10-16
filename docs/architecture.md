@@ -509,6 +509,13 @@ Verification
   top; its receipt separates KDB load evidence from the unverified association
   with current source bytes. The caller still owns context pinning and final
   validation. Public routing and the LSF protocol remain subsequent work.
+  The version 2 source schemas and `hierarchy_source_codec` preserve explicit
+  unknown values instead of passing semantic facts through legacy defaults.
+  The boundary validates shallow rows and iteratively checks scope/class trees,
+  file ownership, count proofs and export completeness. This avoids a recursive
+  model depth cap below the service's 256-level limit. Validation checks shape
+  and consistency, not the truth of an NPI/Slang fact. Public/worker routing must
+  still adopt this boundary; its new independent regression is pending.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

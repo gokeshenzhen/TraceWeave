@@ -2871,3 +2871,292 @@ class TraceDivergenceResult(SchemaModel):
     next_actions: list[DivergenceNextAction] = Field(default_factory=list)
     cursor: CursorRefSchema | None = None
     operation_metrics: dict[str, int | float] = Field(default_factory=dict)
+
+
+# Version 2 hierarchy/source facts. Legacy handle schemas above remain intact.
+# Trees use shallow rows plus iterative validation at the transport boundary;
+# a supported depth of 256 must not depend on Pydantic's recursive-model cap.
+SourceFactLabel = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]
+SourceFactCount = Annotated[int, Field(ge=0, strict=True)]
+SourceFactName = Annotated[str, Field(min_length=1)]
+
+
+class SourceFactModel(SchemaModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+
+class SourceScopeRow(SourceFactModel):
+    scope_id: SourceFactName
+    path: SourceFactName
+    inst: SourceFactName
+    kind: Literal["module", "interface", "program", "generate", "instance_array"]
+    parent: SourceFactName | None
+    definition_id: SourceFactName | None
+    module: SourceFactName | None
+    source_file: SourceFactName | None
+    source_line: Annotated[int, Field(ge=1)] | None
+    definition_file: SourceFactName | None
+    definition_line: Annotated[int, Field(ge=1)] | None
+    parameterization: dict[str, str]
+    gaps: list[SourceFactLabel]
+
+    @model_validator(mode="after")
+    def consistent_locations(self):
+        for left, right in ((self.definition_id, self.module), (self.source_file, self.source_line),
+                            (self.definition_file, self.definition_line)):
+            if (left is None) != (right is None):
+                raise ValueError("scope identity/location pairs must agree")
+        if self.parent == self.path:
+            raise ValueError("a scope cannot parent itself")
+        return self
+
+
+class SourceScopeNode(SourceScopeRow):
+    children: list[dict[str, Any]]
+    child_count: SourceFactCount | None
+    child_count_lower_bound: SourceFactCount
+    truncated: bool
+
+
+class SourceSymbolRow(SourceFactModel):
+    symbol_id: SourceFactName
+    name: SourceFactName
+    qualified_name: SourceFactName
+    kind: Literal["module", "interface", "program", "package", "class", "typedef",
+                  "function", "task", "variable", "parameter", "enum"]
+    scope_id: SourceFactName | None = None
+    declaration_id: SourceFactName | None = None
+    type_id: SourceFactName | None = None
+    source_file: SourceFactName | None
+    source_line: Annotated[int, Field(ge=1)] | None
+    source_column: SourceFactCount | None
+    parameterization: dict[str, str] = Field(default_factory=dict)
+    external: bool
+    gaps: list[SourceFactLabel]
+    declaration_status: Literal["declaration", "specialization", "namespace_observation"] = "declaration"
+
+    @model_validator(mode="after")
+    def consistent_location(self):
+        if (self.source_file is None) != (self.source_line is None):
+            raise ValueError("symbol file and line must agree")
+        if self.source_file is None and self.source_column is not None:
+            raise ValueError("an unknown location cannot supply a column")
+        return self
+
+
+class SourceClassNode(SourceSymbolRow):
+    kind: Literal["class"]
+    children: list[dict[str, Any]]
+    truncated: bool
+    reference_only: bool = False
+    base_status: Literal["none", "resolved", "unresolved"] | None = None
+    base_symbol_id: SourceFactName | None = None
+    base_qualified_name: SourceFactName | None = None
+    binding_gaps: list[SourceFactLabel] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def consistent_binding(self):
+        if self.reference_only:
+            if not self.external or self.base_status is not None:
+                raise ValueError("a reference-only base is not a recovered declaration")
+        elif self.base_status is None:
+            raise ValueError("class base status must be explicit")
+        if self.base_status == "resolved":
+            if self.base_symbol_id is None or self.base_qualified_name is None:
+                raise ValueError("a resolved base requires its semantic binding")
+        elif self.base_symbol_id is not None:
+            raise ValueError("an unresolved base cannot have a bound identity")
+        if self.base_status == "none" and self.base_qualified_name is not None:
+            raise ValueError("a class with no base cannot name one")
+        return self
+
+
+class SourceFileRow(SourceFactModel):
+    file_id: SourceFactName
+    path: SourceFactName
+    aliases: list[str]
+    ownership_origin: Literal["compile_metadata"]
+    compile_categories: list[str]
+    compiler_file_types: list[str]
+    compilation_roles: list[str]
+    includes: list[str]
+    include_origin: Literal["compile_log"]
+    is_compilation_unit: bool
+    is_reported_include: bool
+    is_dependency_include: bool
+    source_status: Literal["captured", "unavailable", "not_captured"]
+    file_type: str | None
+    modules: list[str] | None
+    classes: list[str] | None
+    interfaces: list[str] | None
+    symbols: list[SourceSymbolRow] | None
+    has_uvm_import: bool | None
+    contains_uvm: bool | None
+    semantic_status: Literal["not_run", "unavailable", "complete", "partial"]
+    semantic_work_scope: Literal["not_run", "provider_defined", "file_declarations", "global_namespaces_bounded"]
+    symbol_inventory_complete: bool
+    symbol_count: SourceFactCount | None
+    symbol_count_lower_bound: SourceFactCount
+    semantic_gaps: list[SourceFactLabel]
+    analysis_limits: list[SourceFactLabel]
+
+    @model_validator(mode="after")
+    def consistent_inventory(self):
+        if self.has_uvm_import is True and self.contains_uvm is not True:
+            raise ValueError("UVM import requires positive usage")
+        if self.symbol_inventory_complete != (self.symbol_count is not None):
+            raise ValueError("symbol count requires complete inventory")
+        if self.symbol_count is not None and self.symbol_count != self.symbol_count_lower_bound:
+            raise ValueError("exact symbol count must equal its lower bound")
+        if self.symbols is not None and len(self.symbols) != self.symbol_count_lower_bound:
+            raise ValueError("file detail must retain every admitted symbol")
+        if self.analysis_limits and self.symbol_inventory_complete:
+            raise ValueError("limited file inventory cannot be complete")
+        if self.semantic_status == "complete" and (not self.symbol_inventory_complete or self.semantic_gaps):
+            raise ValueError("complete file semantics requires complete gap-free inventory")
+        if self.semantic_status in {"not_run", "unavailable"} and any(value is not None for value in (
+            self.symbols, self.file_type, self.modules, self.classes, self.interfaces,
+            self.has_uvm_import, self.contains_uvm,
+        )):
+            raise ValueError("unqueried file semantics must remain unknown")
+        seen, owned_paths = set(), {self.path, *self.aliases}
+        from .cancellation import check_cancelled
+        for symbol in self.symbols or []:
+            check_cancelled()
+            if symbol.symbol_id in seen:
+                raise ValueError("duplicate file symbol identity")
+            seen.add(symbol.symbol_id)
+            if symbol.source_file is not None and symbol.source_file not in owned_paths:
+                raise ValueError("symbol belongs to another compile member")
+        return self
+
+
+class SourceQueryMetrics(SourceFactModel):
+    scope_count: SourceFactCount
+    native_call_count: SourceFactCount
+    symbol_count: SourceFactCount
+    file_count: SourceFactCount
+    estimated_fact_bytes: SourceFactCount
+    query_ms: Annotated[float, Field(ge=0)]
+    native_handle_count: SourceFactCount | None = None
+    native_iterator_release_count: SourceFactCount | None = None
+    language_cleanup_ms: Annotated[float, Field(ge=0)] | None = None
+    design_load_ms: Annotated[float, Field(ge=0)] | None = None
+    query_with_cleanup_validation_ms: Annotated[float, Field(ge=0)] | None = None
+
+
+class SourceKdbBindingEvidence(KdbArtifactEvidence):
+    load_quality: Literal["clean", "degraded"]
+
+
+class SourceQueryEnvelope(SourceFactModel):
+    schema_version: Literal[2]
+    facts_origin: Literal["compile_metadata", "verdi_npi", "slang", "static_inference"]
+    artifact_identity: SourceFactName
+    coverage_status: Literal["complete", "partial"]
+    coverage_gaps: list[SourceFactLabel]
+    analysis_limits: list[SourceFactLabel]
+    query_metrics: SourceQueryMetrics
+    error: SourceFactLabel | None = None
+    semantic_status: Literal["not_run", "unavailable", "complete", "partial"] | None = None
+    coverage_domain: SourceFactLabel | None = None
+    context_identity_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    ownership_identity: SourceFactName | None = None
+    kdb_binding: SourceKdbBindingEvidence | None = None
+    handle: str | None = None
+    design_handle: str | None = None
+    design_context: DesignQueryReceipt | None = None
+    backend_status: BackendStatus | None = None
+
+    @model_validator(mode="after")
+    def consistent_coverage(self):
+        if self.analysis_limits and self.coverage_status == "complete":
+            raise ValueError("limited analysis cannot prove complete coverage")
+        if self.error in {"hierarchy_query_incomplete", "semantic_provider_unavailable", "file_query_incomplete"}:
+            if self.coverage_status != "partial":
+                raise ValueError("unavailable/incomplete queries must remain partial")
+        return self
+
+
+class SourceCountResult(SourceQueryEnvelope):
+    count_status: Literal["exact", "lower_bound"]
+    count_lower_bound: SourceFactCount
+    count_mode: Literal["bounded", "exact"] | None = None
+    count_domain: SourceFactLabel | None = None
+    output_truncated: bool
+
+
+class SourceSubtreeResult(SourceCountResult):
+    root: str
+    node: dict[str, Any] | None
+    total_descendants: SourceFactCount | None
+    truncated: bool
+
+
+class SourceInstanceResult(SourceCountResult):
+    hits: list[SourceScopeRow]
+    total: SourceFactCount | None
+    truncated: bool
+
+
+class SourceFileLookupResult(SourceCountResult):
+    matches: list[SourceFileRow]
+    total: SourceFactCount | None
+    unknown_filter_files: SourceFactCount
+    examined_files: SourceFactCount
+    semantic_file_queries: SourceFactCount
+    truncated: bool
+
+
+class SourceFileDetailResult(SourceQueryEnvelope, SourceFileRow):
+    semantic_status: Literal["not_run", "unavailable", "complete", "partial"]
+
+
+class SourceFileMissResult(SourceQueryEnvelope):
+    path: str
+    did_you_mean: list[str] = Field(default_factory=list)
+    error: Literal["file_not_in_compile_set", "file_query_incomplete"]
+
+
+class SourceClassResult(SourceQueryEnvelope):
+    view: Literal["static_class_inheritance"]
+    roots: list[dict[str, Any]]
+    total: SourceFactCount
+    output_truncated: bool
+    class_inventory_domain: Literal["provider_declarations"]
+    class_inventory_count: SourceFactCount | None
+    class_inventory_lower_bound: SourceFactCount
+    class_inventory_complete: bool
+    candidates: list[dict[str, str]] = Field(default_factory=list)
+
+
+class SourceSectionResult(SourceQueryEnvelope):
+    section: Literal["compile_result", "include_tree", "filelist_tree", "files_full",
+                     "interfaces", "component_tree_full", "class_hierarchy_full"]
+    data: Any
+    export_complete: bool
+    output_truncated: bool
+    warning: str = ""
+    record_export_complete: bool | None = None
+    count_status: Literal["exact", "lower_bound"] | None = None
+    count_lower_bound: SourceFactCount | None = None
+    count_mode: Literal["bounded", "exact"] | None = None
+    count_domain: SourceFactLabel | None = None
+    total: SourceFactCount | None = None
+    examined_files: SourceFactCount | None = None
+    root: str | None = None
+    total_descendants: SourceFactCount | None = None
+    truncated: bool | None = None
+    view: Literal["elaborated_instances", "static_class_inheritance"] | None = None
+    class_inventory_domain: Literal["provider_declarations"] | None = None
+    class_inventory_count: SourceFactCount | None = None
+    class_inventory_lower_bound: SourceFactCount | None = None
+    class_inventory_complete: bool | None = None
+    candidates: list[dict[str, str]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def consistent_export(self):
+        if self.export_complete and (self.coverage_status != "complete" or self.coverage_gaps
+                                     or self.analysis_limits or self.output_truncated or self.error):
+            raise ValueError("partial/truncated exports cannot be complete")
+        return self
