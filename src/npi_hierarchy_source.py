@@ -314,6 +314,10 @@ class NpiHierarchySourceProvider:
                 raise
 
     def close(self):
+        if threading.get_ident() != self.thread:
+            raise NpiHierarchyUnavailable("npi_language_owner_unavailable")
+        if not self.active:
+            return
         started = time.monotonic()
         first_error = self.cleanup_error
         try:
