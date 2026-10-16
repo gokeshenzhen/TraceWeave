@@ -219,7 +219,13 @@ class HierarchyQueryBudget:
         """Charge a copied metadata export without inventing semantic facts."""
         self.checkpoint()
         size = 512 + 4 * len(json.dumps(value, ensure_ascii=True))
+        self.reserve_bytes(size)
+
+    def reserve_bytes(self, size):
+        """Reserve an existing conservative metadata/fact allocation estimate."""
         self.checkpoint()
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError("invalid retained byte estimate")
         if self.fact_bytes + size > self.max_bytes:
             raise HierarchyBudgetExceeded("fact_byte_limit")
         self.fact_bytes += size

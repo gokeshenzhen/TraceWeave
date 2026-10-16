@@ -481,6 +481,13 @@ Verification
   complete. Version 2 data keeps semantic identities and separate locations;
   legacy handles keep their raw scan dictionaries. These internal exports do
   not yet replace the public six-tool route or its static UVM inference view.
+  `hierarchy_source_request` validates all six operations before backend
+  selection. Its request-local plan uses only captured compile ownership to
+  detect metadata-only work, nonmember files and empty file selections. Those
+  requests need no NPI/Slang acquisition. Catalog preparation and execution
+  share one budget; cancellation/typed failures propagate, and a preparation
+  limit reports partial/not-run without selecting another backend. The plan
+  retains no source bodies or frontend state and is not a registry cache.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

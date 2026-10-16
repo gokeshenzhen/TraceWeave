@@ -127,7 +127,12 @@ def _export_section(context, provider, section, max_items, catalog, budget):
                     query_metrics=budget.metrics())
     if section in {"files_full", "interfaces"}:
         if catalog is None:
-            catalog = build_compile_source_catalog(context, checkpoint=budget.checkpoint)
+            available = budget.max_bytes - budget.fact_bytes - 512
+            if available < 1:
+                raise HierarchyBudgetExceeded("fact_byte_limit")
+            catalog = build_compile_source_catalog(context, max_bytes=min(16 * 1024 * 1024, available),
+                                                   checkpoint=budget.checkpoint)
+            budget.reserve_bytes(512 + catalog.metadata_bytes)
         if catalog.context_identity != context.identity_sha256:
             raise ValueError("file catalog belongs to a different context")
         result = _file_export(catalog, provider, section, max_items, budget)

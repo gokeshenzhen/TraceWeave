@@ -14,6 +14,35 @@ from .hierarchy_source_metadata import CompileSourceCatalog
 from .hierarchy_source_symbols import SourceSymbol, _gaps
 
 
+def validate_file_query(operation, arguments):
+    """Pure argument validation before a caller acquires a semantic backend."""
+    allowed = {
+        "get_tb_file_detail": {"path"},
+        "lookup_tb_files": {"basename", "name_contains", "path_contains", "has_module",
+                            "contains_uvm", "file_type", "limit", "count_mode"},
+    }
+    if operation not in allowed or not isinstance(arguments, dict) or set(arguments) - allowed[operation]:
+        raise ValueError("unsupported file query or arguments")
+    if operation == "get_tb_file_detail":
+        if not isinstance(arguments.get("path"), str) or not arguments["path"]:
+            raise ValueError("a nonempty source path is required")
+        return
+    text_filters = tuple(arguments.get(name) for name in
+                         ("basename", "name_contains", "path_contains", "has_module", "file_type"))
+    contains_uvm = arguments.get("contains_uvm")
+    if all(value is None for value in (*text_filters, contains_uvm)):
+        raise ValueError("at least one file filter is required")
+    if any(value is not None and (not isinstance(value, str) or not value) for value in text_filters):
+        raise ValueError("file filters must be nonempty strings")
+    if contains_uvm is not None and not isinstance(contains_uvm, bool):
+        raise ValueError("contains_uvm must be an explicit bool")
+    limit = arguments.get("limit", 50)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 5000:
+        raise ValueError("limit must be an integer in [1, 5000]")
+    if arguments.get("count_mode", "bounded") not in {"bounded", "exact"}:
+        raise ValueError("count_mode must be bounded or exact")
+
+
 def _budget(provider, requested):
     budget = requested if requested is not None else getattr(provider, "budget", None)
     budget = budget if budget is not None else HierarchyQueryBudget()
@@ -103,8 +132,7 @@ def query_file_detail(catalog: CompileSourceCatalog, provider=None, *, path,
     """Resolve compile membership first; a miss never starts semantic work."""
     if not isinstance(catalog, CompileSourceCatalog):
         raise TypeError("a captured compile source catalog is required")
-    if not isinstance(path, str) or not path:
-        raise ValueError("a nonempty source path is required")
+    validate_file_query("get_tb_file_detail", {"path": path})
     budget = _budget(provider, budget)
     try:
         entry = catalog.find_file(path, checkpoint=budget.checkpoint)
@@ -172,17 +200,9 @@ def lookup_source_files(catalog: CompileSourceCatalog, provider=None, *, basenam
     """
     if not isinstance(catalog, CompileSourceCatalog):
         raise TypeError("a captured compile source catalog is required")
-    text_filters = (basename, name_contains, path_contains, has_module, file_type)
-    if all(value is None for value in (*text_filters, contains_uvm)):
-        raise ValueError("at least one file filter is required")
-    if any(value is not None and (not isinstance(value, str) or not value) for value in text_filters):
-        raise ValueError("file filters must be nonempty strings")
-    if contains_uvm is not None and not isinstance(contains_uvm, bool):
-        raise ValueError("contains_uvm must be an explicit bool")
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 5000:
-        raise ValueError("limit must be an integer in [1, 5000]")
-    if count_mode not in {"bounded", "exact"}:
-        raise ValueError("count_mode must be bounded or exact")
+    validate_file_query("lookup_tb_files", dict(basename=basename, name_contains=name_contains,
+                        path_contains=path_contains, has_module=has_module, contains_uvm=contains_uvm,
+                        file_type=file_type, limit=limit, count_mode=count_mode))
     budget = _budget(provider, budget)
     semantic = any(value is not None for value in (has_module, contains_uvm, file_type))
     matches, gaps, limits = [], set(catalog.gaps), set()
