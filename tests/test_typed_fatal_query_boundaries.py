@@ -258,13 +258,16 @@ def test_callback_reset_fatal_without_prior_error_propagates(kind):
 @pytest.mark.parametrize('kind', (*KINDS, 'ordinary'))
 def test_local_public_backend_catches_do_not_advance_fallback_for_fatal(monkeypatch, operation, kind):
     error = ValueError('ordinary query failure') if kind == 'ordinary' else failure(kind)
-    target = backend()
-    target.bind_compile_context({'primary_top': 'top'})
+    target, entered = backend(), []
+    target.bind_compile_context({'top_modules': ['top']})
     monkeypatch.setattr(target, '_kdb_path_from', lambda *a: 'candidate')
     monkeypatch.setattr(target, '_ensure_loaded', lambda *a: True)
     monkeypatch.setattr(target, '_record_query_kdb_status', lambda: None)
     monkeypatch.setattr(target, '_finish_bound_query', lambda result: result)
-    monkeypatch.setattr(target, '_npi_find_' + operation, throwing(error))
+    def native_query(*args, **kwargs):
+        entered.append(operation)
+        raise error
+    monkeypatch.setattr(target, '_npi_find_' + operation, native_query)
     query = {'driver': lambda: target.find_driver('top.q', 'wave.vcd', 'compile.log'),
              'loads': lambda: target.find_loads('top.q', 'compile.log'),
              'path': lambda: target.find_path('top.a', 'top.b', 'compile.log')}[operation]
@@ -273,6 +276,7 @@ def test_local_public_backend_catches_do_not_advance_fallback_for_fatal(monkeypa
     else:
         with pytest.raises(type(error)) as caught: query()
         assert caught.value is error and target._fallback.calls == []
+    assert entered == [operation]
 
 
 @pytest.mark.parametrize('kind', (*KINDS, 'ordinary'))
@@ -293,14 +297,18 @@ def test_dynamic_projector_catch_never_demotes_fatal_to_semantic_gap(kind):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_outer_local_dynamic_entry_preserves_projector_fatal(monkeypatch, kind):
-    error, target = failure(kind), backend()
-    target.bind_compile_context({'primary_top': 'top'})
+    error, target, entered = failure(kind), backend(), []
+    target.bind_compile_context({'top_modules': ['top']})
     monkeypatch.setattr(target, '_kdb_path_from', lambda *a: 'candidate')
     monkeypatch.setattr(target, '_ensure_loaded', lambda *a: True)
     monkeypatch.setattr(target, '_record_query_kdb_status', lambda: None)
-    monkeypatch.setattr(npi_dynamic, 'query_step', throwing(error))
+    def project(*args, **kwargs):
+        entered.append('project')
+        raise error
+    monkeypatch.setattr(npi_dynamic, 'query_step', project)
     with pytest.raises(type(error)) as caught: target.get_dynamic_step('top.q', 'compile.log')
     assert caught.value is error and target._fallback.calls == []
+    assert entered == ['project']
 
 
 async def inline(fn, *args, **kwargs): return fn()
