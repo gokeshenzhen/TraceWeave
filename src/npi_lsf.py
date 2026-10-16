@@ -21,7 +21,7 @@ import tempfile
 import time
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from config import (
     KDB_BUILD_TIMEOUT_SEC,
@@ -43,9 +43,12 @@ from .verdi_backend import (
 
 _LOG = logging.getLogger(__name__)
 
-NPI_WORKER_PROTOCOL_VERSION: Literal["3.0"] = "3.0"
+NPI_WORKER_PROTOCOL_VERSION: Literal["4.0"] = "4.0"
 NPI_EXECUTION_STATUS_KEY = "_npi_execution_status"
 _MAX_REQUEST_BYTES = 1 * 1024 * 1024
+# Source observations include bounded snapshots, never source bodies. Other
+# operations keep their original request cap.
+MAX_WORKER_REQUEST_BYTES = 16 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _WAIT_POLL_SEC = 0.1
 _CANCEL_WAIT_SEC = 2.0
@@ -57,7 +60,7 @@ class _ProtocolModel(BaseModel):
 
 
 class _WorkerRequestBase(_ProtocolModel):
-    protocol_version: Literal["3.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
 
 
 class _ConnectivityWorkerRequestBase(_WorkerRequestBase):
@@ -93,6 +96,34 @@ class FindPathWorkerRequest(_ConnectivityWorkerRequestBase):
     expand_assigns: bool = False
 
 
+class SourceWorkerLimits(_ProtocolModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    timeout_sec: float = Field(gt=0, le=300)
+    max_scopes: int = Field(ge=1, le=100000)
+    max_calls: int = Field(ge=1, le=1000000)
+    max_bytes: int = Field(ge=1, le=64 * 1024 * 1024)
+    max_depth: int = Field(ge=1, le=256)
+    max_symbols: int = Field(ge=1, le=100000)
+    max_files: int = Field(ge=1, le=100000)
+
+
+class HierarchySourceWorkerRequest(_ConnectivityWorkerRequestBase):
+    operation: Literal["hierarchy_source"] = "hierarchy_source"
+    kdb_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool: Literal["get_tb_subtree", "find_tb_instance", "lookup_tb_files",
+                  "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section"]
+    arguments: dict[str, Any]
+    context_payload: dict[str, Any]
+    limits: SourceWorkerLimits
+
+    @model_validator(mode="after")
+    def valid_query(self):
+        from .hierarchy_source_request import validate_source_query
+        validate_source_query(self.tool, self.arguments)
+        return self
+
+
 class BuildKdbWorkerRequest(_WorkerRequestBase):
     operation: Literal["build_kdb"] = "build_kdb"
     compile_log: str = Field(min_length=1, max_length=16_384)
@@ -109,6 +140,7 @@ NpiWorkerRequest = Annotated[
     | DynamicStepWorkerRequest
     | FindLoadsWorkerRequest
     | FindPathWorkerRequest
+    | HierarchySourceWorkerRequest
     | BuildKdbWorkerRequest,
     Field(discriminator="operation"),
 ]
@@ -116,21 +148,21 @@ _REQUEST_ADAPTER = TypeAdapter(NpiWorkerRequest)
 
 
 class WorkerSuccess(_ProtocolModel):
-    protocol_version: Literal["3.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["ok"] = "ok"
     result: dict[str, Any]
     kdb_load_quality: Literal["clean", "degraded"] | None = None
 
 
 class WorkerUnavailable(_ProtocolModel):
-    protocol_version: Literal["3.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["npi_unavailable"] = "npi_unavailable"
     error_code: Literal["npi_load_failed"] = "npi_load_failed"
     stage: Literal["load"] = "load"
 
 
 class WorkerError(_ProtocolModel):
-    protocol_version: Literal["3.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["error"] = "error"
     error_code: Literal[
         "request_invalid",
@@ -138,6 +170,10 @@ class WorkerError(_ProtocolModel):
         "worker_internal_error",
         "kdb_identity_changed",
         "kdb_identity_timeout",
+        "context_identity_changed",
+        "context_identity_timeout",
+        "query_timeout",
+        "hierarchy_source_unavailable",
     ]
     stage: Literal["request", "load", "query", "result", "response"]
 
@@ -224,6 +260,8 @@ class LsfNpiTransport:
         _write_private_text(
             request_path,
             _REQUEST_ADAPTER.dump_json(request).decode("utf-8"),
+            max_bytes=(MAX_WORKER_REQUEST_BYTES if isinstance(request, HierarchySourceWorkerRequest)
+                       else _MAX_REQUEST_BYTES),
         )
 
         job_name = f"tw_npi_{secrets.token_hex(8)}"
@@ -295,7 +333,9 @@ class LsfNpiTransport:
         if isinstance(response, WorkerError):
             # A valid error envelope proves that the scheduled worker started
             # and finished its protocol handling, even though it exits nonzero.
-            if response.error_code in {"kdb_identity_changed", "kdb_identity_timeout"}:
+            if response.error_code in {"kdb_identity_changed", "kdb_identity_timeout",
+                                       "context_identity_changed", "context_identity_timeout",
+                                       "query_timeout", "hierarchy_source_unavailable"}:
                 return LsfExecutionResult(None, "completed", "failed", response.error_code)
             return _worker_failed_execution()
         if proc is None or proc.returncode != 0:
@@ -822,6 +862,12 @@ def execute_worker_request(
 ) -> NpiWorkerResponse:
     """Execute one licensed worker request, never a local parent fallback."""
 
+    if isinstance(request, HierarchySourceWorkerRequest):
+        # This path must acquire the Language owner BEFORE loading a KDB.
+        # The old connectivity pre-load path below cannot own Language handles.
+        from .npi_source_worker import execute_source_worker
+        return execute_source_worker(request, backend=backend)
+
     if isinstance(request, BuildKdbWorkerRequest):
         try:
             from .kdb_builder import build_kdb  # noqa: PLC0415
@@ -930,6 +976,9 @@ def _validate_operation_result(
     """Validate and normalize a worker result on both protocol boundaries."""
 
     try:
+        if isinstance(request, HierarchySourceWorkerRequest):
+            from .npi_source_worker import validate_source_worker_result
+            return validate_source_worker_result(request, result)
         if isinstance(request, BuildKdbWorkerRequest):
             validated_build = _BuildKdbWorkerResult.model_validate(result)
             payload = validated_build.model_dump(exclude_none=True)
@@ -956,7 +1005,7 @@ def _validate_operation_result(
             validated = schemas.TraceSignalPathResult.model_validate(result)
             if validated.backend != "verdi_npi":
                 return None
-    except (ValidationError, TypeError, ValueError):
+    except (ValidationError, TypeError, ValueError, KeyError):
         return None
     return validated.model_dump(
         exclude_none=True,
@@ -965,9 +1014,12 @@ def _validate_operation_result(
 
 
 def parse_worker_request_bytes(data: bytes) -> NpiWorkerRequest:
-    if len(data) > _MAX_REQUEST_BYTES:
+    if len(data) > MAX_WORKER_REQUEST_BYTES:
         raise ValueError("request too large")
     raw = json.loads(data.decode("utf-8"))
+    if (not isinstance(raw, dict)
+            or (raw.get("operation") != "hierarchy_source" and len(data) > _MAX_REQUEST_BYTES)):
+        raise ValueError("invalid or oversized worker request")
     return _REQUEST_ADAPTER.validate_python(raw)
 
 
@@ -1012,9 +1064,9 @@ def _read_worker_response(path: Path) -> NpiWorkerResponse | None:
         return None
 
 
-def _write_private_text(path: Path, text: str) -> None:
+def _write_private_text(path: Path, text: str, *, max_bytes: int = _MAX_REQUEST_BYTES) -> None:
     encoded = text.encode("utf-8")
-    if len(encoded) > _MAX_REQUEST_BYTES:
+    if len(encoded) > max_bytes:
         raise ValueError("request too large")
     fd = os.open(
         path,

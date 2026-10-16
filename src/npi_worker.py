@@ -12,6 +12,7 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from src.npi_lsf import (  # type: ignore
+        MAX_WORKER_REQUEST_BYTES,
         WorkerError,
         execute_worker_request,
         parse_worker_request_bytes,
@@ -19,6 +20,7 @@ if __package__ in (None, ""):
     )
 else:
     from .npi_lsf import (
+        MAX_WORKER_REQUEST_BYTES,
         WorkerError,
         execute_worker_request,
         parse_worker_request_bytes,
@@ -40,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     response_path = Path(args.response)
 
     try:
-        request = parse_worker_request_bytes(request_path.read_bytes())
+        with request_path.open("rb") as stream:
+            data = stream.read(MAX_WORKER_REQUEST_BYTES + 1)
+        request = parse_worker_request_bytes(data)
     except Exception:  # noqa: BLE001
         try:
             write_worker_response(

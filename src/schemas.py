@@ -3043,6 +3043,10 @@ class SourceQueryMetrics(SourceFactModel):
     language_cleanup_ms: Annotated[float, Field(ge=0)] | None = None
     design_load_ms: Annotated[float, Field(ge=0)] | None = None
     query_with_cleanup_validation_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_context_decode_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_source_validation_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_kdb_validation_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_result_validation_ms: Annotated[float, Field(ge=0)] | None = None
 
 
 class SourceKdbBindingEvidence(KdbArtifactEvidence):

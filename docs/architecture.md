@@ -508,21 +508,33 @@ Verification
   Semantic work requires matching captured compile metadata and the selected
   top; its receipt separates KDB load evidence from the unverified association
   with current source bytes. The caller still owns context pinning and final
-  validation. Public routing and the LSF protocol remain subsequent work.
+  validation. Public routing remains subsequent work.
   The version 2 source schemas and `hierarchy_source_codec` preserve explicit
   unknown values instead of passing semantic facts through legacy defaults.
   The boundary validates shallow rows and iteratively checks scope/class trees,
   file ownership, count proofs and export completeness. This avoids a recursive
   model depth cap below the service's 256-level limit. Validation checks shape
-  and consistency, not the truth of an NPI/Slang fact. Public/worker routing must
-  still adopt this boundary; its new independent regression is pending.
+  and consistency, not the truth of an NPI/Slang fact. The source worker uses
+  this boundary; public routing and independent regression remain pending.
   `design_context_codec` supplies a bounded private metadata transport for
   prepared workers. It preserves ordinary and explicit-recovery identities,
   snapshots and path observations without source bodies or native handles.
   Its payload hash proves message integrity only; decoding performs no I/O,
   and workers must still validate current inputs before/after execution.
-  The 8 MiB payload cap is explicit. This transport is not yet used by LSF,
-  and its independent round-trip/resource controls remain pending.
+  The 8 MiB context payload cap is explicit. Protocol 4.0 adds a private
+  `hierarchy_source` worker request with strict query limits and a required KDB
+  fingerprint. Its request envelope permits 16 MiB; other operations retain
+  their 1 MiB cap, and responses remain capped at 8 MiB. File reads are bounded
+  before parsing. The worker rebuilds only the metadata catalog, validates the
+  captured source observation before/after querying, and enters the same
+  Language owner before loading a KDB. It rejects foreign context/artifact
+  identities and non-NPI semantic facts. Context, KDB and native timeout errors
+  have distinct fixed protocol labels. Mandatory final validation can outlive
+  analysis limits but cannot publish complete coverage after the deadline.
+  Decode, source/map validation and result validation costs are exposed.
+  Parent source routing and independent protocol/real-LSF tests are pending;
+  shared paths alone do not prove matching stat/environment observations on
+  another node. No persistent worker or verified checkout reuse is implied.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
@@ -573,7 +585,7 @@ Verification
   generations before loading and after querying. Bound compile metadata is
   copied and shared with driver/load/path and source fallback; it is not
   reparsed from a different log. Local loaded-design identity includes the raw
-  map fingerprint for these bound calls. The LSF protocol (3.0) carries the
+  map fingerprint for these bound calls. The LSF protocol (4.0) carries the
   expected map fingerprint and budget; the worker validates before load and
   after query, and reports fixed identity-change/timeout failures to the parent.
   These failures and cancellation propagate without starting Static fallback.
@@ -2300,7 +2312,7 @@ ordered declared bits. Typed arithmetic, variable shifts, vector bitwise,
 logical and reduction cells use the shared evaluator. Ambiguous EqComp cells
 (`==` versus `===`), generic OpCells and unproven operand order explicitly
 restart the whole trace on Source Graph. NPI facts are never relabeled as
-Slang evidence. The LSF worker protocol is 3.0; the dynamic step fact protocol
+Slang evidence. The LSF worker protocol is 4.0; the dynamic step fact protocol
 remains 2.0.
 
 Slang preserves pure SV operators, casts, packed dimensions, fixed-array leaf
