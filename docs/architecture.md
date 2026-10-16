@@ -516,6 +516,13 @@ Verification
   model depth cap below the service's 256-level limit. Validation checks shape
   and consistency, not the truth of an NPI/Slang fact. Public/worker routing must
   still adopt this boundary; its new independent regression is pending.
+  `design_context_codec` supplies a bounded private metadata transport for
+  prepared workers. It preserves ordinary and explicit-recovery identities,
+  snapshots and path observations without source bodies or native handles.
+  Its payload hash proves message integrity only; decoding performs no I/O,
+  and workers must still validate current inputs before/after execution.
+  The 8 MiB payload cap is explicit. This transport is not yet used by LSF,
+  and its independent round-trip/resource controls remain pending.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
