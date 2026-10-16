@@ -193,6 +193,10 @@ class NpiHierarchySourceProvider:
                     gaps.add("npi_parameter_name_ambiguous")
                     continue
                 parameters.append((name, str(value)))
+            else:
+                # Invalid or duplicate entries still consume the scan budget.
+                # A capped iterator has not proved the parameter inventory ends.
+                gaps.add("npi_parameter_limit")
         finally:
             self.close_iterator(iterator)
         # The SDK fixture proves value parameters only. Do not share a
