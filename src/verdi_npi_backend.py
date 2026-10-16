@@ -456,7 +456,7 @@ class VerdiNpiBackend:
                 result = query_step(self, signal_path,
                                     include_dependency_candidates=include_dependency_candidates)
             return self._finish_bound_query(result)
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception:
             self._finish_bound_query(None)
@@ -504,7 +504,7 @@ class VerdiNpiBackend:
                 recursive=recursive,
             )
             return self._finish_bound_query(result)
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
@@ -551,7 +551,7 @@ class VerdiNpiBackend:
                 include_expr, kind_filter,
             )
             return self._finish_bound_query(result)
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception as exc:  # noqa: BLE001 - never crash the MCP server
             _LOG.warning("VerdiNpiBackend.find_loads failed: %s", exc)
@@ -593,7 +593,7 @@ class VerdiNpiBackend:
                 from_signal, to_signal, expand_assigns=expand_assigns,
             )
             return self._finish_bound_query(result)
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_path failed: %s", exc)
@@ -1206,7 +1206,7 @@ class VerdiNpiBackend:
                 self._degraded_error_log = None
             self._finish_bound_query(None)
             return True
-        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
             _NPI_ACTIVE_DESIGNS.pop(id(npisys), None)
             self._clear_loaded_state(failed=True)
             raise
