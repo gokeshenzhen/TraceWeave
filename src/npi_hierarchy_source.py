@@ -15,12 +15,15 @@ import time
 
 from .connectivity_ir import SourceLocation
 from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyScope, ScopeLookup, semantic_fact_id
+from .hierarchy_source_symbols import ClassFact, SourceSymbol
 
 
 _KINDS = {"npiModule": "module", "npiInterface": "interface", "npiProgram": "program",
           "npiGenScope": "generate", "npiModuleArray": "instance_array",
           "npiInterfaceArray": "instance_array", "npiProgramArray": "instance_array"}
 _NON_INSTANCE_SCOPES = {"npiClassDefn", "npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork"}
+_NAMESPACES = dict(_KINDS, npiPackage="package", npiClassDefn="class", npiTask="task",
+                   npiFunction="function", npiNamedBegin="named_begin", npiNamedFork="named_fork")
 _OWNER_LOCK = threading.Lock()
 
 
@@ -103,6 +106,90 @@ class _Children:
             if fact.parent_path != self.scope.path:
                 raise NpiHierarchyUnavailable("npi_scope_parent_mismatch")
             return fact
+
+
+class _Classes:
+    """Bounded global static declaration walk, with no eager SDK list calls.
+
+    Derived-class lookup requires examining compilation scopes, including
+    packages outside the selected top's instance subtree. This walk is paid
+    only by an explicit class query. The verified relation does not yet prove
+    visibility of uninstantiated definitions or every class specialization.
+    """
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.complete = False
+        self.gaps = ("npi_uninstantiated_declaration_inventory_unverified",
+                     "npi_class_specialization_inventory_unverified")
+        if provider.degraded:
+            self.add_gap("npi_degraded_design")
+        self.seen, self.pending = set(), None
+        iterator = _LanguageIterator(provider, provider.low.Instance, None)
+        self.stack = [(iterator, None, 0)]
+        if iterator.raw is None:
+            self.add_gap("npi_class_roots_unavailable")
+
+    def add_gap(self, gap):
+        self.gaps = tuple(sorted(set(self.gaps) | {gap}))
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        provider = self.provider
+        while True:
+            provider.check()
+            if self.pending is not None:
+                handle, path, depth = self.pending
+                self.pending = None
+                iterator = _LanguageIterator(provider, provider.low.InternalScope, handle)
+                self.stack.append((iterator, path, depth + 1))
+            if not self.stack:
+                # Exhausting observed Language scopes is not proof that the
+                # KDB exposes every source declaration or specialization.
+                raise StopIteration
+            iterator, parent, depth = self.stack[-1]
+            handle = iterator.read()
+            if handle is None:
+                self.stack.pop()
+                continue
+            kind, path = provider.scalar(handle, "type"), provider.scalar(handle, "full_name")
+            if not isinstance(path, str) or not path or not isinstance(kind, str) or not kind:
+                raise NpiHierarchyUnavailable("npi_namespace_identity_unavailable")
+            provider.budget.admit_namespace(kind, path, depth)
+            key = kind, path
+            if key in self.seen:
+                self.add_gap("npi_namespace_alias_or_cycle")
+                continue
+            self.seen.add(key)
+            if kind not in _NAMESPACES:
+                self.add_gap("npi_namespace_kind_unmodeled")
+                continue
+            parent_handle = provider.one(handle, "scope_handle")
+            actual_parent = (provider.scalar(parent_handle, "full_name")
+                             if parent_handle is not None else None)
+            if actual_parent != parent:
+                raise NpiHierarchyUnavailable("npi_namespace_parent_mismatch")
+            if _NAMESPACES[kind] == "instance_array":
+                self.add_gap("npi_array_container_children_unavailable")
+                continue
+            self.pending = handle, path, depth
+            if kind == "npiClassDefn":
+                return provider.project_class(handle)
+
+    def close(self):
+        self.pending = None
+        first_error = None
+        while self.stack:
+            iterator, _, _ = self.stack.pop()
+            try:
+                self.provider.close_iterator(iterator)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
 
 class NpiHierarchySourceProvider:
@@ -240,6 +327,47 @@ class NpiHierarchySourceProvider:
             definition_id, definition_name, location, definition_location, parameters, tuple(gaps),
         )
 
+    def project_class(self, handle):
+        path, name = self.scalar(handle, "full_name"), self.scalar(handle, "name")
+        if not isinstance(path, str) or not path or not isinstance(name, str) or not name:
+            raise NpiHierarchyUnavailable("npi_class_identity_unavailable")
+        identity = semantic_fact_id(self.origin, self.artifact_identity, "class", path)
+        parent = self.one(handle, "scope_handle")
+        scope_id, gaps = None, set()
+        if parent is not None:
+            parent_kind, parent_path = self.scalar(parent, "type"), self.scalar(parent, "full_name")
+            if parent_kind in _NAMESPACES and isinstance(parent_path, str) and parent_path:
+                scope_id = semantic_fact_id(self.origin, self.artifact_identity,
+                                           _NAMESPACES[parent_kind], parent_path)
+            else:
+                gaps.add("npi_class_scope_identity_unavailable")
+        location = self._location(handle)
+        if location is None:
+            gaps.add("npi_class_location_unavailable")
+        parameters, parameter_gaps = self._parameters(handle)
+        gaps.update(parameter_gaps)
+        # Native full_name distinguishes the observed declaration. Until the
+        # specialization API is verified, do not coalesce it with a generic
+        # source template or infer a type identity from parameter spellings.
+        gaps.add("npi_class_specialization_identity_unverified")
+        symbol = SourceSymbol(identity, name, path, "class", location=location,
+                              scope_id=scope_id, declaration_id=identity,
+                              parameterization=parameters, gaps=tuple(gaps))
+        extends = self.one(handle, "extends_handle")
+        if extends is None:
+            return ClassFact(symbol, "none")
+        if self.scalar(extends, "type") == "npiClassTypespec":
+            base = self.one(extends, "class_defn_handle")
+            if base is not None and self.scalar(base, "type") == "npiClassDefn":
+                base_path = self.scalar(base, "full_name")
+                if isinstance(base_path, str) and base_path:
+                    return ClassFact(symbol, "resolved",
+                                     semantic_fact_id(self.origin, self.artifact_identity, "class", base_path),
+                                     base_path)
+        # A Typespec's bare name is not a qualified binding. Keep it out of
+        # base_qualified_name rather than matching it against package classes.
+        return ClassFact(symbol, "unresolved", gaps=("npi_class_base_binding_unavailable",))
+
     def _require_top(self):
         if self._top_handle is None:
             handle = self.lookup(self.top)
@@ -302,6 +430,17 @@ class NpiHierarchySourceProvider:
             yield _Children(self, scope, iterator)
         finally:
             self.close_iterator(iterator)
+
+    @contextmanager
+    def open_classes(self, budget):
+        if budget is not self.budget:
+            raise ValueError("a native owner uses one query budget")
+        self._require_top()
+        stream = _Classes(self)
+        try:
+            yield stream
+        finally:
+            stream.close()
 
     def close_iterator(self, iterator):
         active_error = sys.exc_info()[1]

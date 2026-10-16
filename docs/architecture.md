@@ -455,7 +455,15 @@ Verification
   The inventory counts provider declarations, excluding reference-only bases;
   unresolved inheritance or a cycle can make the view partial without erasing
   a completed declaration count. Budget stops invalidate the count proof.
-  Native/Slang class-stream projection and public routing are subsequent work.
+  The internal NPI provider also projects observed classes through bounded
+  `Instance(None)` / `InternalScope` iterators. It binds `extends` through the
+  actual class Typespec/definition handle and charges every visited namespace,
+  including namespaces without class declarations. This explicit class query
+  can visit global compilation scopes; instance browsing never triggers it.
+  Uninstantiated declarations and class specializations remain unverified
+  inventory gaps, not complete negative results. All iterators and handles
+  share the same exclusive Language owner and cleanup deadline as instances.
+  Slang class projection and public six-tool routing are subsequent work.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

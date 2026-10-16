@@ -365,7 +365,7 @@ class VerdiNpiBackend:
 
     def query_hierarchy(self, operation: str, arguments: dict, *, top: str,
                         budget=None) -> dict:
-        """Internal prepared-context instance service; no discovery or fallback.
+        """Internal prepared-context source service; no discovery or fallback.
 
         Like the existing local NPI entry points, this runs synchronously on
         the dispatch/native-owner thread. The caller pins and validates its
@@ -425,7 +425,9 @@ class VerdiNpiBackend:
                                       prepare_owner=prepare_owner,
                                       degraded=lambda: self._loaded_degraded) as provider:
                 service = HierarchySourceService(provider)
-                method = service.subtree if operation == "get_tb_subtree" else service.find_instances
+                method = {"get_tb_subtree": service.subtree,
+                          "find_tb_instance": service.find_instances,
+                          "get_tb_class_hierarchy": service.class_hierarchy}[operation]
                 result = method(**arguments, budget=budget)
         require_owner()
         self._finish_bound_query(None)

@@ -1,8 +1,8 @@
 """Bounded hierarchy queries over one semantic provider and artifact.
 
-The first two operations form the instance part of the shared source service.
-File, class and type operations use the same provider/identity boundary as they
-are added. This module neither builds a lexical tree nor loads a frontend. It
+Instance and static class operations share the provider/identity boundary.
+File and type operations use that boundary as they are added. This module
+neither builds a lexical tree nor loads a frontend. It
 does not change the legacy full-result handle tools or their exact counts.
 """
 from __future__ import annotations
@@ -53,6 +53,7 @@ def validate_hierarchy_query(operation: str, arguments: dict):
     allowed = {
         "get_tb_subtree": {"root", "depth", "max_nodes", "count_mode"},
         "find_tb_instance": {"path", "module", "limit", "count_mode"},
+        "get_tb_class_hierarchy": {"root_class", "depth", "max_nodes"},
     }
     if operation not in allowed or not isinstance(arguments, dict) or set(arguments) - allowed[operation]:
         raise ValueError("unsupported hierarchy query or arguments")
@@ -64,11 +65,14 @@ def validate_hierarchy_query(operation: str, arguments: dict):
             raise ValueError("depth must be an integer in [-1, 256]")
         if not isinstance(arguments.get("root", ""), str):
             raise ValueError("root must be a string")
-    else:
+    elif operation == "find_tb_instance":
         _output_limit(arguments.get("limit", 100), "limit")
         path, module = arguments.get("path"), arguments.get("module")
         if (path is None) == (module is None) or not isinstance(path or module, str) or not (path or module):
             raise ValueError("provide exactly one nonempty path or module")
+    else:
+        from .hierarchy_source_symbols import validate_class_query
+        validate_class_query(**arguments)
 
 
 def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
@@ -82,13 +86,20 @@ def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
         budget.checkpoint()
     except HierarchyBudgetExceeded as exc:
         result["coverage_status"] = "partial"
-        result["count_status"] = "lower_bound"
         result["analysis_limits"] = sorted(set(result["analysis_limits"]) | {exc.reason})
-        for key in ("total", "total_descendants"):
-            if key in result:
-                result[key] = None
-        if result.get("error") == "instance_not_found":
-            result["error"] = "instance_unresolved"
+        if result.get("view") == "static_class_inheritance":
+            # Class total is the number rendered, not a global exact count.
+            result["class_inventory_count"] = None
+            result["class_inventory_complete"] = False
+            if result.get("error") == "class_not_found":
+                result["error"] = "class_unresolved"
+        else:
+            result["count_status"] = "lower_bound"
+            for key in ("total", "total_descendants"):
+                if key in result:
+                    result[key] = None
+            if result.get("error") == "instance_not_found":
+                result["error"] = "instance_unresolved"
     result["query_metrics"].update(budget.metrics())
     return result
 
@@ -96,6 +107,11 @@ def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
 class HierarchySourceService:
     def __init__(self, provider: HierarchySourceProvider):
         self.provider = provider
+
+    def class_hierarchy(self, *, root_class=None, depth=-1, max_nodes=5000, budget=None):
+        from .hierarchy_source_symbols import query_class_hierarchy
+        return query_class_hierarchy(self.provider, root_class=root_class, depth=depth,
+                                     max_nodes=max_nodes, budget=budget)
 
     def _query_budget(self, requested):
         # A native provider's owner budget starts before loading/importing.

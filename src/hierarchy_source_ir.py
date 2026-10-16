@@ -182,3 +182,21 @@ class HierarchyQueryBudget:
             raise HierarchyBudgetExceeded("fact_byte_limit")
         self.symbol_count += 1
         self.fact_bytes += size
+
+    def admit_namespace(self, kind: str, path: str, depth: int):
+        """Charge an inspected namespace even when it contains no declarations.
+
+        Class/file inventories can walk semantic scopes without materializing
+        instance facts. Their visited identities still consume scope and byte
+        budgets; an empty declaration stream is not free work.
+        """
+        self.checkpoint()
+        if depth > self.max_depth:
+            raise HierarchyBudgetExceeded("scope_depth_limit")
+        if self.scope_count >= self.max_scopes:
+            raise HierarchyBudgetExceeded("scope_limit")
+        size = 256 + 4 * len(json.dumps([kind, path], ensure_ascii=True))
+        if self.fact_bytes + size > self.max_bytes:
+            raise HierarchyBudgetExceeded("fact_byte_limit")
+        self.scope_count += 1
+        self.fact_bytes += size

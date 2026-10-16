@@ -110,6 +110,16 @@ class ClassFact:
                     binding_gaps=list(self.gaps))
 
 
+def validate_class_query(*, root_class=None, depth=-1, max_nodes=5000):
+    """Pure validation shared by the renderer and pre-load dispatch."""
+    if root_class is not None and (not isinstance(root_class, str) or not root_class):
+        raise ValueError("root_class must be a nonempty identity or name")
+    if isinstance(depth, bool) or not isinstance(depth, int) or not -1 <= depth <= 256:
+        raise ValueError("depth must be an integer in [-1, 256]")
+    if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or not 1 <= max_nodes <= 5000:
+        raise ValueError("max_nodes must be an integer in [1, 5000]")
+
+
 def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000,
                           budget: HierarchyQueryBudget | None = None):
     """Render the provider's static class inventory with explicit work limits.
@@ -122,12 +132,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
     only base nodes. Unresolved inheritance can leave the view partial while
     the declaration inventory is complete; a query budget stop cannot.
     """
-    if root_class is not None and (not isinstance(root_class, str) or not root_class):
-        raise ValueError("root_class must be a nonempty identity or name")
-    if isinstance(depth, bool) or not isinstance(depth, int) or not -1 <= depth <= 256:
-        raise ValueError("depth must be an integer in [-1, 256]")
-    if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or not 1 <= max_nodes <= 5000:
-        raise ValueError("max_nodes must be an integer in [1, 5000]")
+    validate_class_query(root_class=root_class, depth=depth, max_nodes=max_nodes)
     budget = budget if budget is not None else getattr(provider, "budget", None)
     budget = budget if budget is not None else HierarchyQueryBudget()
     if not isinstance(budget, HierarchyQueryBudget):
@@ -135,6 +140,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
     classes, gaps, limits = {}, set(), set()
     complete, output_truncated, error = False, False, None
     roots, emitted, candidates = [], 0, []
+    stream = None
     try:
         budget.checkpoint()
         with provider.open_classes(budget) as stream:
@@ -156,6 +162,8 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
     except HierarchyBudgetExceeded as exc:
         complete = False
         limits.add(exc.reason)
+        if stream is not None:
+            gaps.update(_gaps(stream.gaps))
     inventory_complete = complete
 
     # Rows and links are copied facts. A bound external reference is not a
