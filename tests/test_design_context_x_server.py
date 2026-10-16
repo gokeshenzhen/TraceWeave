@@ -506,7 +506,17 @@ async def test_history_public_input_rejects_invalid_controls_before_backend_sele
     else:
         args["mode"] = "snapshot" if invalid == "snapshot_history_flags" else "unrecognized"
     result = await _public("trace_x_source", args)
-    assert "error_code" in result and "history" not in result
+    # Ordinary input validation retains the existing public error shape;
+    # fixed design-identity codes belong to the typed context failure paths.
+    expected_error = {
+        "missing_window": "history_start_ps",
+        "reverse_window": "history_start_ps <= time_ps",
+        "phase": "phase",
+        "bits": "signal_bits",
+        "snapshot_history_flags": "history parameters require mode=history",
+        "unknown_mode": "mode must be snapshot or history",
+    }[invalid]
+    assert expected_error in result.get("error", "") and "history" not in result
     assert not _npi_calls(controls) and not controls.selections
 
 
