@@ -275,8 +275,13 @@ async def test_historical_changes_or_wrong_tokens_do_not_publish_or_query(tmp_pa
         os.utime(project.header, ns=(previous.st_atime_ns, previous.st_mtime_ns + 1_000_000_000))
     elif change == "log":
         previous = project.log.stat()
-        project.log.write_text(project.log.read_text().replace("-sverilog", "-sverilOg"))
+        # Historical log tokens contain stat, not archived raw bytes. An
+        # equal-size rewrite + restored mtime can also retain ctime within one
+        # filesystem tick. Change size while leaving the handle's mtime fixed
+        # to exercise the full log-stat token deterministically.
+        project.log.write_text(project.log.read_text() + "\n# updated compile record\n")
         os.utime(project.log, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        assert project.log.stat().st_size != previous.st_size
     elif change == "top":
         token["top_hint"] = "other"
     else:
