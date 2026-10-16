@@ -383,18 +383,24 @@ class VerdiNpiBackend:
         budget.checkpoint()
         self._last_query_kdb_status = None
         started = time.monotonic()
-        if not self._ensure_loaded(anchor.path, top):
-            raise NpiHierarchyUnavailable("npi_load_failed")
-        load_ms = (time.monotonic() - started) * 1000
-        budget.checkpoint()
-        self._record_query_kdb_status()
-        npisys_id = id(self._npi_modules[0])
+        npisys_id, load_ms = None, 0.0
         expected = (anchor.path, top, ("bounded_maps", anchor.identity_sha256))
         owner_thread = threading.get_ident()
+
+        def prepare_owner():
+            nonlocal npisys_id, load_ms
+            load_started = time.monotonic()
+            if not self._ensure_loaded(anchor.path, top):
+                raise NpiHierarchyUnavailable("npi_load_failed")
+            load_ms = (time.monotonic() - load_started) * 1000
+            budget.checkpoint()
+            self._record_query_kdb_status()
+            npisys_id = id(self._npi_modules[0])
 
         def require_owner():
             # Identity-only: cleanup must still run when the caller cancelled.
             if (threading.get_ident() != owner_thread or self._state != "ready"
+                    or self._npi_modules is None or id(self._npi_modules[0]) != npisys_id
                     or _NPI_ACTIVE_DESIGNS.get(npisys_id) != expected):
                 raise NpiHierarchyUnavailable("npi_loaded_generation_changed")
 
@@ -407,7 +413,8 @@ class VerdiNpiBackend:
         with _silence_native_stdio():
             with language_query_owner(top=top, artifact_identity=identity, budget=budget,
                                       require_owner=require_owner, cleanup_failed=cleanup_failed,
-                                      degraded=self._loaded_degraded) as provider:
+                                      prepare_owner=prepare_owner,
+                                      degraded=lambda: self._loaded_degraded) as provider:
                 service = HierarchySourceService(provider)
                 method = service.subtree if operation == "get_tb_subtree" else service.find_instances
                 result = method(**arguments, budget=budget)

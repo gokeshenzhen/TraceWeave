@@ -349,12 +349,13 @@ class NpiHierarchySourceProvider:
 
 @contextmanager
 def language_query_owner(*, top, artifact_identity, budget, require_owner,
-                         cleanup_failed, degraded=False):
+                         cleanup_failed, degraded=False, prepare_owner=None):
     """Exclusive query boundary; caller owns/serializes the loaded native design.
 
-    This does not initialize/load/end NPI, acquire a waveform lock, or retain
-    any native handle for the next request. Nested/concurrent Language owners
-    are rejected before importing or freeing another owner's resources.
+    The optional prepare_owner callback may load the caller's design only
+    after exclusivity is acquired. No waveform lock or native handle survives
+    the request. Nested/concurrent Language owners are rejected before loading,
+    importing or freeing another owner's resources.
     require_owner checks generation/thread only, including during cleanup;
     cancellation and deadlines belong to the budget checkpoints.
     """
@@ -362,12 +363,16 @@ def language_query_owner(*, top, artifact_identity, budget, require_owner,
         raise NpiHierarchyUnavailable("npi_language_owner_busy")
     owner = None
     try:
+        budget.checkpoint()
+        if prepare_owner is not None:
+            prepare_owner()
         require_owner()
         budget.checkpoint()
         from pynpi import lang, lang_l0, lang_l0_util
         owner = NpiHierarchySourceProvider(lang, lang_l0, lang_l0_util, top=top,
                                           artifact_identity=artifact_identity, budget=budget,
-                                          require_owner=require_owner, degraded=degraded)
+                                          require_owner=require_owner,
+                                          degraded=degraded() if callable(degraded) else degraded)
         try:
             yield owner
         finally:
