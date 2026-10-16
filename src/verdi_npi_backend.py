@@ -360,6 +360,69 @@ class VerdiNpiBackend:
             anchor.require_current()
         return result
 
+    def query_hierarchy(self, operation: str, arguments: dict, *, top: str,
+                        budget=None) -> dict:
+        """Internal prepared-context instance service; no discovery or fallback.
+
+        Like the existing local NPI entry points, this runs synchronously on
+        the dispatch/native-owner thread. The caller pins and validates its
+        compile context and execution policy; this method validates the bound
+        KDB and ensures no Language handle survives the operation.
+        """
+        from .hierarchy_source_ir import HierarchyQueryBudget
+        from .hierarchy_source_service import HierarchySourceService, validate_hierarchy_query
+        from .npi_hierarchy_source import NpiHierarchyUnavailable, language_query_owner
+
+        validate_hierarchy_query(operation, arguments)
+        if not isinstance(top, str) or not top:
+            raise ValueError("an explicit selected top is required")
+        anchor = getattr(self, "_bound_kdb_anchor", None)
+        if anchor is None or getattr(self, "_bound_compile_result", None) is None:
+            raise NpiHierarchyUnavailable("npi_prepared_context_required")
+        budget = budget or HierarchyQueryBudget()
+        budget.checkpoint()
+        self._last_query_kdb_status = None
+        started = time.monotonic()
+        if not self._ensure_loaded(anchor.path, top):
+            raise NpiHierarchyUnavailable("npi_load_failed")
+        load_ms = (time.monotonic() - started) * 1000
+        budget.checkpoint()
+        self._record_query_kdb_status()
+        npisys_id = id(self._npi_modules[0])
+        expected = (anchor.path, top, ("bounded_maps", anchor.identity_sha256))
+        owner_thread = threading.get_ident()
+
+        def require_owner():
+            # Identity-only: cleanup must still run when the caller cancelled.
+            if (threading.get_ident() != owner_thread or self._state != "ready"
+                    or _NPI_ACTIVE_DESIGNS.get(npisys_id) != expected):
+                raise NpiHierarchyUnavailable("npi_loaded_generation_changed")
+
+        def cleanup_failed():
+            if _NPI_ACTIVE_DESIGNS.get(npisys_id) == expected:
+                _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
+            self._clear_loaded_state(failed=True)
+
+        identity = hashlib.sha256((anchor.identity_sha256 + "\0" + top).encode()).hexdigest()
+        with _silence_native_stdio():
+            with language_query_owner(top=top, artifact_identity=identity, budget=budget,
+                                      require_owner=require_owner, cleanup_failed=cleanup_failed,
+                                      degraded=self._loaded_degraded) as provider:
+                service = HierarchySourceService(provider)
+                method = service.subtree if operation == "get_tb_subtree" else service.find_instances
+                result = method(**arguments, budget=budget)
+        require_owner()
+        self._finish_bound_query(None)
+        # Native cleanup and final map validation are mandatory even after an
+        # analysis limit; expose their cost rather than hiding it in a cache hit.
+        result["query_metrics"].update(
+            native_handle_count=provider.handle_count,
+            native_iterator_release_count=provider.iterator_releases,
+            language_cleanup_ms=provider.cleanup_ms, design_load_ms=load_ms,
+            query_with_cleanup_validation_ms=(time.monotonic() - started) * 1000,
+        )
+        return result
+
     def get_dynamic_step(self, signal_path: str, compile_log: str, *,
                          top_hint: str | None = None, simulator: str = "auto",
                          include_dependency_candidates: bool = False, **_kwargs) -> dict:

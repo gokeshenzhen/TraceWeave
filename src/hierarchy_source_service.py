@@ -48,6 +48,29 @@ def _output_limit(value, name):
         raise ValueError(f"{name} must be an integer in [1, 5000]")
 
 
+def validate_hierarchy_query(operation: str, arguments: dict):
+    """Validate before a provider starts licensed or frontend work."""
+    allowed = {
+        "get_tb_subtree": {"root", "depth", "max_nodes", "count_mode"},
+        "find_tb_instance": {"path", "module", "limit", "count_mode"},
+    }
+    if operation not in allowed or not isinstance(arguments, dict) or set(arguments) - allowed[operation]:
+        raise ValueError("unsupported hierarchy query or arguments")
+    _count_mode(arguments.get("count_mode", "bounded"))
+    if operation == "get_tb_subtree":
+        _output_limit(arguments.get("max_nodes", 500), "max_nodes")
+        depth = arguments.get("depth", 1)
+        if isinstance(depth, bool) or not isinstance(depth, int) or not -1 <= depth <= 256:
+            raise ValueError("depth must be an integer in [-1, 256]")
+        if not isinstance(arguments.get("root", ""), str):
+            raise ValueError("root must be a string")
+    else:
+        _output_limit(arguments.get("limit", 100), "limit")
+        path, module = arguments.get("path"), arguments.get("module")
+        if (path is None) == (module is None) or not isinstance(path or module, str) or not (path or module):
+            raise ValueError("provide exactly one nonempty path or module")
+
+
 class HierarchySourceService:
     def __init__(self, provider: HierarchySourceProvider):
         self.provider = provider
@@ -81,12 +104,8 @@ class HierarchySourceService:
         That observation contributes to the lower bound, never to an exact
         total. No native enumeration continues merely to fill a total field.
         """
-        _count_mode(count_mode)
-        _output_limit(max_nodes, "max_nodes")
-        if isinstance(depth, bool) or not isinstance(depth, int) or not -1 <= depth <= 256:
-            raise ValueError("depth must be an integer in [-1, 256]")
-        if not isinstance(root, str):
-            raise ValueError("root must be a string")
+        validate_hierarchy_query("get_tb_subtree", dict(root=root, depth=depth,
+                                 max_nodes=max_nodes, count_mode=count_mode))
         budget = budget or HierarchyQueryBudget()
         root = root or self.provider.top
         gaps, limits, seen = set(), set(), set()
@@ -184,10 +203,8 @@ class HierarchySourceService:
     def find_instances(self, *, path: str | None = None, module: str | None = None,
                        limit: int = 100, count_mode: str = "bounded",
                        budget: HierarchyQueryBudget | None = None):
-        _count_mode(count_mode)
-        _output_limit(limit, "limit")
-        if (path is None) == (module is None) or not isinstance(path or module, str) or not (path or module):
-            raise ValueError("provide exactly one nonempty path or module")
+        validate_hierarchy_query("find_tb_instance", dict(path=path, module=module,
+                                 limit=limit, count_mode=count_mode))
         budget = budget or HierarchyQueryBudget()
         gaps, limits, seen = set(), set(), set()
         hits, count, complete, truncated = [], 0, True, False

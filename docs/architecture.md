@@ -423,6 +423,19 @@ Verification
   are distinct, and generate scopes need not invent a module definition.
   This internal boundary does not yet route the public six tools; their legacy
   handles and exact counts continue through the existing adapter.
+  The prepared NPI backend's internal `query_hierarchy` implements subtree and
+  instance lookup through `npi_hierarchy_source`. It uses low-level Language
+  `InternalScope` iteration, preserving real generate scopes, array elements'
+  actual parents, and separate declaration/instantiation locations. It validates
+  the selected top and exact scope ancestry without a top/sibling enumeration.
+  Iterator exhaustion and early release have different cleanup paths. One
+  synchronous exclusive query owns all Language objects and releases them at
+  its end; nothing stores these objects in the design registry. Cleanup failure
+  rejects the result and invalidates that backend's loaded state. Native setup
+  allocation/latency and opaque KDB payload identity retain their limitations.
+  This does not introduce a persistent NPI worker or change Slang/disk defaults.
+  Type-parameter inventory remains unverified; definition IDs conservatively
+  include the instance path rather than merging unproved specializations.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
