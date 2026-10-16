@@ -37,6 +37,8 @@ class DivergenceDesigns:
         self.prepare_ms = 0.0
         self.final_ms = 0.0
         self.parser_generations = {}
+        self.parser_changes = set()
+        self.wave_ids = {}
         self.services = _TraceServices(self)
 
     def __enter__(self):
@@ -103,8 +105,18 @@ class DivergenceDesigns:
     def observe_parser(self, path, parser):
         token = (id(parser), getattr(parser, "_scope_epoch", None))
         if path in self.parser_generations and self.parser_generations[path] != token:
-            raise ContextUnavailable("parser_generation_changed")
+            if self.entries:
+                raise ContextUnavailable("parser_generation_changed")
+            # Legacy callers retain their cleared-comparison response shape.
+            # Final validation discards any graph produced across generations.
+            self.parser_changes.add(path)
         self.parser_generations[path] = token
+
+    def require_wave_file(self, path):
+        if self.entries:
+            for label, side in self.sides.items():
+                if side["wave_path"] == path and file_identity(path) != self.wave_ids[label]:
+                    raise ContextUnavailable("waveform_changed")
 
     async def validate_final(self, bounds, routes, wave_ids):
         """Content-validate each design once, then cross-check final metadata.
@@ -121,6 +133,8 @@ class DivergenceDesigns:
             for label, side in self.sides.items():
                 if wave_ids[label] is None or file_identity(side["wave_path"]) != wave_ids[label]:
                     changed.append((label, "waveform_changed"))
+                elif side["wave_path"] in self.parser_changes:
+                    changed.append((label, "parser_generation_changed"))
             for entry in self.entries.values():
                 if not entry.context.metadata_current():
                     raise ContextUnavailable("design_context_changed")
@@ -223,6 +237,7 @@ class _TraceServices:
         return getattr(self.designs.base, name)
 
     def _get_parser(self, path):
+        self.designs.require_wave_file(path)
         parser = self.designs.base._get_parser(path)
         self.designs.observe_parser(path, parser)
         return parser

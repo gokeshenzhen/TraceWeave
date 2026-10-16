@@ -172,6 +172,7 @@ async def _trace_divergence(services, request, budget, designs, *, route_factory
     budget.observations = observations
     result = _empty_result(request)
     wave_ids = {s: file_identity(side["wave_path"]) for s, side in sides.items()}
+    designs.wave_ids = wave_ids
     bounds = {}
     routes = {}
     comparison = None
