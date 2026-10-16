@@ -22,6 +22,7 @@ from .compile_input_capture import (
     CaptureAborted, CaptureLimits, CompileInputCapture, bind_compile_input_capture,
 )
 from .compile_log_parser import detect_simulator, merge_compile_results, parse_compile_log
+from .compile_environment import resolve_compile_environment
 from .design_context import DesignContext, IncludeResolution
 from .hdl_suffixes import VHDL_SOURCE_SUFFIXES
 from .sv_preprocessor import SystemVerilogPreprocessor, extract_preprocessor_options
@@ -30,6 +31,10 @@ from .sv_preprocessor import SystemVerilogPreprocessor, extract_preprocessor_opt
 _SIMULATORS = {"vcs", "xcelium", "verilator"}
 _ENV_REF = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 _PARTIAL_LIMITS = {"byte_limit", "file_limit", "reference_limit", "dependency_work_limit"}
+_RECOVERABLE_ENV_WARNINGS = (
+    "VCS environment-dependent source unavailable:",
+    "VCS environment-dependent filelist unavailable:",
+)
 
 
 def _json(value) -> str:
@@ -196,12 +201,35 @@ def prepare_design_context(
             # cannot establish compilation-unit macro lifetime across phases.
             gaps.add("phase_local_compile_options_unmodeled")
         reader = None
+        replay_environment = ()
         dependencies_complete = True
         has_conditionals = False
         env_names: set[str] = set()
         for match in _ENV_REF.finditer(compile_result_json):
             env_names.add(match.group(1) or match.group(2))
         try:
+            resolved_environment = resolve_compile_environment(compile_result)
+            if resolved_environment.complete and resolved_environment.bindings:
+                replay_environment = tuple(sorted(resolved_environment.bindings.items()))
+                # The parser records unresolved spellings for a later replay.
+                # Once the existing replay validates the complete ordered
+                # project-unit sequence, capture its actual filelists instead
+                # of opening fabricated paths containing literal $VAR text.
+                unresolved_filelists = {
+                    str(item["path"])
+                    for item in evidence.get("filelists", [])
+                    if item.get("path") and _ENV_REF.search(str(item.get("raw_path", "")))
+                }
+                support = list(dict.fromkeys(
+                    [path for path in support if path not in unresolved_filelists]
+                    + list(resolved_environment.filelists)
+                ))
+                warnings = compile_result.get("parse_warnings") or []
+                if units and warnings and all(
+                    str(warning).startswith(_RECOVERABLE_ENV_WARNINGS)
+                    for warning in warnings
+                ):
+                    gaps.discard("compile_inputs_incomplete")
             for path in dict.fromkeys([*support, *sources]):
                 capture.checkpoint()
                 try:
@@ -269,7 +297,8 @@ def prepare_design_context(
             "content": [(r.path, r.size, r.sha256) for r in snapshot.records],
             "aliases": capture.aliases, "unavailable": capture.unavailable_observations,
             "includes": [(r.candidates, r.selected, r.selected_spelling) for r in resolutions],
-            "environment": environment, "gaps": sorted(gaps),
+            "environment": environment, "replay_environment": replay_environment,
+            "gaps": sorted(gaps),
         }
         identity = hashlib.sha256(_json(payload).encode()).hexdigest()
         metrics = (
@@ -282,7 +311,7 @@ def prepare_design_context(
             logs, results[0]["simulator"], selected_top, backend_preference,
             compile_result_json, snapshot, capture.aliases, capture.unavailable_observations,
             resolutions, environment, identity, tuple(sorted(gaps)),
-            bool(dependencies_complete), metrics,
+            bool(dependencies_complete), metrics, replay_environment,
         )
         capture.checkpoint()
         if not context.metadata_current(checkpoint=capture.checkpoint):

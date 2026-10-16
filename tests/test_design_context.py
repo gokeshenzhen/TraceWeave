@@ -609,3 +609,66 @@ def test_store_byte_budget_cannot_be_bypassed_by_first_registration(tmp_path):
     with pytest.raises(ContextUnavailable) as raised:
         store.register(context)
     assert raised.value.code == "context_capacity"
+
+
+def _log_anchored_filelist_context(tmp_path, monkeypatch, ambient, *, matching_order=True):
+    """The log, rather than the parent's environment, fixes this build root."""
+    root = tmp_path / "compiled_design"
+    variable = "TW_CONTEXT_REPLAY_ROOT"
+    top = _write(root / "rtl" / "top.sv", "module top; leaf u_leaf(); endmodule\n")
+    leaf = _write(root / "rtl" / "leaf.sv", "module leaf; endmodule\n")
+    outer = root / "lists" / "outer.f"
+    nested = _write(root / "lists" / "nested.f", f"${variable}/rtl/leaf.sv\n")
+    entries = [f"${variable}/rtl/top.sv\n", f"-f ${variable}/lists/nested.f\n"]
+    _write(outer, "".join(entries if matching_order else reversed(entries)))
+    log = _write(
+        root / "tb" / "comp.log",
+        "Chronologic VCS simulator\n"
+        f"Command: vcs -sverilog -f ${variable}/lists/outer.f -top top\n"
+        f"Parsing design file '{top}'\n"
+        f"Parsing design file '{leaf}'\n"
+        "Top Level Modules:\n       top\n",
+    )
+    if ambient == "unset":
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, str(tmp_path / "unrelated_previous_design"))
+    return root, variable, log, outer, nested, top, leaf
+
+
+@pytest.mark.parametrize("ambient", ["unset", "stale"])
+def test_validated_replay_environment_captures_real_nested_filelists(tmp_path, monkeypatch, ambient):
+    root, variable, log, outer, nested, top, leaf = _log_anchored_filelist_context(
+        tmp_path, monkeypatch, ambient,
+    )
+    original_ambient = os.environ.get(variable)
+    context = prepare_design_context(str(log))
+    assert _units(context) == [str(top), str(leaf)]
+    assert dict(context.replay_environment)[variable] == str(root)
+    assert dict(context.environment)[variable] == original_ambient
+    assert os.environ.get(variable) == original_ambient
+    assert context.snapshot.complete
+    assert context.include_resolution_complete
+    assert not {"compile_input_unavailable", "compile_inputs_incomplete", "compile_options_incomplete"}.intersection(context.gaps)
+    assert context.unavailable == ()
+    assert set(_record_map(context)) == {str(path) for path in (log, outer, nested, top, leaf)}
+    for path in (outer, nested):
+        assert _record_map(context)[str(path)].sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert all("$" not in record.path for record in context.snapshot.records)
+    assert context.current()
+    nested.write_text(nested.read_text() + "// changed nested compile dependency\n")
+    assert context.current() is False
+
+
+@pytest.mark.parametrize("ambient", ["unset", "stale"])
+def test_filelist_order_mismatch_cannot_authorize_replay_binding_or_clear_gaps(tmp_path, monkeypatch, ambient):
+    _, variable, log, _, _, top, leaf = _log_anchored_filelist_context(
+        tmp_path, monkeypatch, ambient, matching_order=False,
+    )
+    original_ambient = os.environ.get(variable)
+    context = prepare_design_context(str(log))
+    assert _units(context) == [str(top), str(leaf)]
+    assert variable not in dict(context.replay_environment)
+    assert {"compile_inputs_incomplete", "compile_options_incomplete"} <= set(context.gaps)
+    assert context.include_resolution_complete is False
+    assert os.environ.get(variable) == original_ambient

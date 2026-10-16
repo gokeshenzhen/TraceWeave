@@ -378,6 +378,10 @@ Verification
   preprocessor dependencies without materializing expanded HDL or scanning
   instances. It records include search candidates and original path aliases;
   content, environment, selection or alias changes invalidate the context.
+  Log-proven environment replay must validate the ordered project-unit sequence
+  before its resolved filelists replace unresolved parser spellings. Proven
+  bindings are retained explicitly; unrelated parse warnings and unverified
+  replay continue to block complete input claims.
   Cross-unit macro lifetime, phase-local options, unexpanded dependency macros,
   opaque/protected inputs and missing inputs stay explicit gaps. Source-stage
   budget exhaustion may return a partial context; parse failure, cancellation,
