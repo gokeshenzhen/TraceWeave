@@ -9,6 +9,8 @@ from dataclasses import asdict
 import re
 
 from .cancellation import check_cancelled, OperationCancelled
+from .compile_input_capture import CaptureAborted
+from .kdb_anchor import KdbBindingChanged
 from .dynamic_evidence import DYNAMIC_VERSION, Expr, TRUE, expression_gaps, unsupported_step
 from .dynamic_selection import select_expression
 
@@ -267,7 +269,7 @@ def query_step(backend, signal: str, *, include_dependency_candidates: bool = Fa
         if backend.kdb_load_quality != "clean":
             result["gaps"].append("driver_set_incomplete")
         result["complete"] = not result["gaps"]
-    except OperationCancelled:
+    except (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError):
         raise
     except ProjectionGap as exc:
         result["gaps"].append(str(exc))

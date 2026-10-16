@@ -3301,6 +3301,9 @@ async def _route_public_connectivity(
         )
         try:
             npi_backend = select_backend(backend_status, fallback=deferred)
+        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                design_context_runtime.ContextUnavailable, TimeoutError):
+            raise
         except Exception:  # noqa: BLE001
             npi_backend = deferred
             npi_selection_reason = "npi_backend_initialization_failed"
@@ -3324,7 +3327,7 @@ async def _route_public_connectivity(
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
-        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, TimeoutError, design_context_runtime.ContextUnavailable):
             raise
         except Exception:  # noqa: BLE001
             npi_result = None
@@ -3783,6 +3786,9 @@ async def _route_public_connectivity(
                                 )
                             except OperationCancelled as exc:
                                 raise asyncio.CancelledError from exc
+                            except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                                    design_context_runtime.ContextUnavailable, TimeoutError):
+                                raise
                             except Exception:  # noqa: BLE001
                                 expanded = None
                             current_adapter_ms = (
@@ -4129,6 +4135,9 @@ async def _route_public_signal_path(
         backend_status = _safe_probe_backend(args["compile_log"], simulator)
         try:
             npi_backend = select_backend(backend_status, fallback=deferred)
+        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                design_context_runtime.ContextUnavailable, TimeoutError):
+            raise
         except Exception:  # noqa: BLE001
             npi_backend = deferred
             npi_selection_reason = "npi_backend_initialization_failed"
@@ -4149,7 +4158,7 @@ async def _route_public_signal_path(
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
-        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, TimeoutError, design_context_runtime.ContextUnavailable):
             raise
         except Exception:  # noqa: BLE001
             npi_result = None
@@ -4345,6 +4354,9 @@ async def _route_public_signal_path(
                         )
                     except OperationCancelled as exc:
                         raise asyncio.CancelledError from exc
+                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                            design_context_runtime.ContextUnavailable, TimeoutError):
+                        raise
                     except RuntimeError:
                         outcome = None
                         source_graph_reason = "source_graph_runtime_config_changed"
@@ -4434,6 +4446,9 @@ async def _route_public_signal_path(
                                 )
                             except OperationCancelled as exc:
                                 raise asyncio.CancelledError from exc
+                            except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                                    design_context_runtime.ContextUnavailable, TimeoutError):
+                                raise
                             except SourceGraphQueryBlocked as exc:
                                 source_graph_reason = f"source_graph_{exc.code}"
                             except (KeyError, ValueError):
@@ -4827,7 +4842,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                 if supports_injected_fallback
                 else select_backend(backend_status)
             )
-        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, TimeoutError, design_context_runtime.ContextUnavailable):
             raise
         except Exception:  # noqa: BLE001
             npi_backend = deferred
@@ -4906,7 +4921,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
-        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable):
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable, TimeoutError):
             raise
         except _TraceBackendFallback as exc:
             npi_reason = _sanitize_npi_fallback_reason(exc.reason)
@@ -5059,6 +5074,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         )
                     except OperationCancelled as exc:
                         raise asyncio.CancelledError from exc
+                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                            design_context_runtime.ContextUnavailable, TimeoutError):
+                        raise
                     except Exception:  # noqa: BLE001
                         plan = None
                     adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
@@ -5116,6 +5134,9 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         )
                     except OperationCancelled as exc:
                         raise asyncio.CancelledError from exc
+                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                            design_context_runtime.ContextUnavailable, TimeoutError):
+                        raise
                     except RuntimeError:
                         outcome = None
                         source_graph_reason = "source_graph_runtime_config_changed"
@@ -5219,7 +5240,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         )
                     except OperationCancelled as exc:
                         raise asyncio.CancelledError from exc
-                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable):
+                    except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted, design_context_runtime.ContextUnavailable, TimeoutError):
                         raise
                     except SourceGraphTraceScopeExpansion as exc:
                         attempted_query_count += len(

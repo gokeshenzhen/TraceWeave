@@ -96,7 +96,7 @@ async def trace_x_source(
                     time_ps,
                 )
             )
-        except OperationCancelled:
+        except (OperationCancelled, TimeoutError):
             raise
         except propagate_value_errors:
             # The composition layer may mark an identity/ownership failure as
@@ -341,7 +341,7 @@ def inspect_upstream_values(
             continue
         try:
             upstream_value = parser.get_value_at_time(full_path, time_ps)
-        except OperationCancelled:
+        except (OperationCancelled, TimeoutError):
             raise
         except Exception:
             upstream_value = None
@@ -371,7 +371,7 @@ def _resolve_signal_full_path(
         try:
             parser.get_value_at_time(candidate, 0)
             return candidate
-        except OperationCancelled:
+        except (OperationCancelled, TimeoutError):
             raise
         except Exception:
             pass
@@ -380,7 +380,7 @@ def _resolve_signal_full_path(
         return None  # A clipped fuzzy search cannot establish a unique declaration.
     try:
         results = parser.search_signals(signal_name, max_results=10)
-    except OperationCancelled:
+    except (OperationCancelled, TimeoutError):
         raise
     except Exception:
         return None
