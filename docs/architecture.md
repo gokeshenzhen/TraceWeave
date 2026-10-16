@@ -445,6 +445,15 @@ Verification
   Basename/path filtering and the three compile-record exports can use this
   layer without loading a frontend. Semantic file filters, file symbols,
   classes and the remaining exports still require the shared provider work.
+  `hierarchy_source_files` supplies the internal file query contract: an exact
+  compile-member miss returns basename suggestions before semantic work, and
+  metadata-only lookup leaves semantic fields null. Declaration streams bind
+  exact file identities/aliases; a same basename never establishes ownership.
+  Module/type/UVM predicates preserve unknown separately from a proved false,
+  and count modes distinguish a positive prefix from exact matching totals.
+  UVM import and UVM usage are separate facts; no import does not prove no UVM.
+  File, declaration and byte budgets cover semantic work independently of the
+  displayed page. Native/Slang file stream projection remains subsequent work.
   `hierarchy_source_symbols` defines copied source declarations and class-base
   bindings by semantic ID. Its internal class renderer keeps same-name classes
   separate, exposes unresolved/external bases and inheritance cycles, and never
