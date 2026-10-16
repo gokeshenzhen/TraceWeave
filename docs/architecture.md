@@ -502,6 +502,13 @@ Verification
   touching a provider. Cancellation/typed failures propagate, and a preparation
   limit reports partial/not-run without selecting another backend. The plan
   retains no source bodies or frontend state and is not a registry cache.
+  Prepared local NPI `query_source` executes all six plans through the same
+  exclusive Language owner used by the internal instance API. Metadata-only
+  work returns before KDB binding, SDK initialization or owner acquisition.
+  Semantic work requires matching captured compile metadata and the selected
+  top; its receipt separates KDB load evidence from the unverified association
+  with current source bytes. The caller still owns context pinning and final
+  validation. Public routing and the LSF protocol remain subsequent work.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

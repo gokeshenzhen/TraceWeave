@@ -386,18 +386,67 @@ class VerdiNpiBackend:
         KDB and ensures no Language handle survives the operation.
         """
         from .hierarchy_source_ir import HierarchyQueryBudget
-        from .hierarchy_source_service import (
-            HierarchySourceService, finish_hierarchy_query, validate_hierarchy_query,
-        )
-        from .npi_hierarchy_source import NpiHierarchyUnavailable, language_query_owner
+        from .hierarchy_source_service import HierarchySourceService, validate_hierarchy_query
 
         validate_hierarchy_query(operation, arguments)
+        budget = budget if budget is not None else HierarchyQueryBudget()
+
+        def execute(provider):
+            service = HierarchySourceService(provider)
+            method = {"get_tb_subtree": service.subtree,
+                      "find_tb_instance": service.find_instances,
+                      "get_tb_class_hierarchy": service.class_hierarchy}[operation]
+            return method(**arguments, budget=budget)
+
+        return self._query_language(execute, top=top, budget=budget)
+
+    def query_source(self, request) -> dict:
+        """Execute a six-tool plan in one owner, or metadata without any owner.
+
+        The caller pins and validates request.context before and after this
+        synchronous operation. Compile ownership is not proof that the KDB was
+        compiled from those source bytes; the separate binding receipt retains
+        that limitation. No fallback, discovery or source parsing occurs here.
+        """
+        from .hierarchy_source_ir import HierarchyBudgetExceeded
+        from .hierarchy_source_request import HierarchySourceRequest
+        from .npi_hierarchy_source import NpiHierarchyUnavailable
+
+        check_cancelled()
+        if not isinstance(request, HierarchySourceRequest):
+            raise TypeError("a prepared hierarchy/source request is required")
+        request.validate()
+        self._last_query_kdb_status = None
+        if not request.needs_provider or request.preparation_limit is not None:
+            return request.execute()
+        try:
+            request.budget.checkpoint()
+        except HierarchyBudgetExceeded as exc:
+            return request._unstarted(exc.reason)
+        if request.context.backend_preference == "source":
+            raise NpiHierarchyUnavailable("npi_source_only_context")
+        if getattr(self, "_bound_compile_result", None) != request.context.compile_result():
+            raise NpiHierarchyUnavailable("npi_compile_context_mismatch")
+        result = self._query_language(request.execute, top=request.context.selected_top,
+                                      budget=request.budget)
+        result["context_identity_sha256"] = request.context.identity_sha256
+        result["kdb_binding"] = dict(self._bound_kdb_anchor.receipt(), load_status="loaded",
+                                      load_quality=self.kdb_load_quality)
+        return result
+
+    def _query_language(self, execute, *, top, budget) -> dict:
+        """Common exclusive owner for instance, class, file and export work."""
+        from .hierarchy_source_ir import HierarchyQueryBudget
+        from .hierarchy_source_service import finish_hierarchy_query
+        from .npi_hierarchy_source import NpiHierarchyUnavailable, language_query_owner
+
         if not isinstance(top, str) or not top:
             raise ValueError("an explicit selected top is required")
+        if not isinstance(budget, HierarchyQueryBudget):
+            raise TypeError("a hierarchy query budget is required")
         anchor = getattr(self, "_bound_kdb_anchor", None)
         if anchor is None or getattr(self, "_bound_compile_result", None) is None:
             raise NpiHierarchyUnavailable("npi_prepared_context_required")
-        budget = budget or HierarchyQueryBudget()
         budget.checkpoint()
         self._last_query_kdb_status = None
         started = time.monotonic()
@@ -437,11 +486,7 @@ class VerdiNpiBackend:
                                       require_owner=require_owner, cleanup_failed=cleanup_failed,
                                       prepare_owner=prepare_owner,
                                       degraded=lambda: self._loaded_degraded) as provider:
-                service = HierarchySourceService(provider)
-                method = {"get_tb_subtree": service.subtree,
-                          "find_tb_instance": service.find_instances,
-                          "get_tb_class_hierarchy": service.class_hierarchy}[operation]
-                result = method(**arguments, budget=budget)
+                result = execute(provider)
         require_owner()
         self._finish_bound_query(None)
         finish_hierarchy_query(result, budget)

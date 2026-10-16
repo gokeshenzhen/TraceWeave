@@ -47,6 +47,17 @@ class HierarchySourceRequest:
     needs_provider: bool
     preparation_limit: str | None = None
 
+    def validate(self):
+        """Recheck plan invariants before a caller acquires a backend."""
+        if not isinstance(self.context, DesignContext) or not isinstance(self.budget, HierarchyQueryBudget):
+            raise TypeError("a prepared context and hierarchy budget are required")
+        validate_source_query(self.operation, json.loads(self.arguments_json))
+        if self.catalog is not None:
+            if not isinstance(self.catalog, CompileSourceCatalog):
+                raise TypeError("a captured compile source catalog is required")
+            if self.catalog.context_identity != self.context.identity_sha256:
+                raise ValueError("file catalog belongs to a different context")
+
     def _unstarted(self, reason):
         return {
             "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "hierarchy_query_incomplete",
@@ -59,11 +70,7 @@ class HierarchySourceRequest:
     def execute(self, provider=None):
         """Query only the selected provider; no implicit fallback or loading."""
         check_cancelled()
-        if self.catalog is not None:
-            if not isinstance(self.catalog, CompileSourceCatalog):
-                raise TypeError("a captured compile source catalog is required")
-            if self.catalog.context_identity != self.context.identity_sha256:
-                raise ValueError("file catalog belongs to a different context")
+        self.validate()
         if self.preparation_limit is not None:
             return self._unstarted(self.preparation_limit)
         try:
