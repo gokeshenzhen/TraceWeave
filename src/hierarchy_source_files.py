@@ -106,17 +106,31 @@ def query_file_detail(catalog: CompileSourceCatalog, provider=None, *, path,
     if not isinstance(path, str) or not path:
         raise ValueError("a nonempty source path is required")
     budget = _budget(provider, budget)
-    entry = catalog.find_file(path, checkpoint=budget.checkpoint)
-    if entry is None:
+    try:
+        entry = catalog.find_file(path, checkpoint=budget.checkpoint)
+        if entry is None:
+            suggestions = catalog.suggest_files(path, checkpoint=budget.checkpoint)
+            budget.checkpoint()
+            return {
+                "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "file_not_in_compile_set",
+                "path": path, "did_you_mean": suggestions,
+                "facts_origin": "compile_metadata", "artifact_identity": catalog.context_identity,
+                "coverage_domain": "reported_compile_members", "semantic_status": "not_run",
+                "coverage_status": "partial" if catalog.gaps else "complete",
+                "coverage_gaps": list(catalog.gaps), "analysis_limits": [], "query_metrics": budget.metrics(),
+            }
+        budget.admit_file(entry)
+    except HierarchyBudgetExceeded as exc:
+        # Failure to finish ownership lookup/admission is neither a complete
+        # compile-set miss nor a reason to start another semantic backend.
         return {
-            "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "file_not_in_compile_set",
-            "path": path, "did_you_mean": catalog.suggest_files(path, checkpoint=budget.checkpoint),
+            "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "file_query_incomplete",
+            "path": path,
             "facts_origin": "compile_metadata", "artifact_identity": catalog.context_identity,
             "coverage_domain": "reported_compile_members", "semantic_status": "not_run",
-            "coverage_status": "partial" if catalog.gaps else "complete",
-            "coverage_gaps": list(catalog.gaps), "analysis_limits": [], "query_metrics": budget.metrics(),
+            "coverage_status": "partial", "coverage_gaps": list(catalog.gaps),
+            "analysis_limits": [exc.reason], "query_metrics": budget.metrics(),
         }
-    budget.admit_file(entry)
     row = (_collect_file(provider, entry, budget) if provider is not None
            else _metadata_row(entry, unavailable=True))
     gaps = sorted(set(catalog.gaps) | set(row["semantic_gaps"]))
