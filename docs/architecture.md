@@ -372,7 +372,7 @@ Verification
   snapshot completeness describes captured inputs, not semantic include
   closure. This primitive does not build a hierarchy, run a frontend or load
   a KDB.
-  The internal `prepare_design_context` core uses this capture independently
+  The `prepare_design_context` core and MCP entry use this capture independently
   of `build_tb_hierarchy`. It preserves ordered primary/supplementary evidence,
   captures simulator-library units and recorded support files, and follows
   preprocessor dependencies without materializing expanded HDL or scanning
@@ -390,10 +390,21 @@ Verification
   `DesignContextStore` owns immutable metadata under process-specific `dc_`
   handles, with entry/byte limits and leases protecting busy entries from
   eviction. Registration and acquisition revalidate content; neither registry
-  entries nor released captures retain source bodies. This internal API does
-  not yet change public MCP handle routing or either optional Slang cache
-  default. Its preparation, validation and later query costs must be measured
-  together before claiming a speedup.
+  entries nor released captures retain source bodies. Preparation and content
+  validation run in a cancellable non-wave thread. A validated registration
+  ticket is published on the event loop only after a cancellation checkpoint;
+  an abandoned worker owns no registry entry and cannot evict an existing one.
+  Queue wait, capture and registration share the request deadline. Session
+  reset replaces the registry generation, preventing an older pending request
+  from publishing into the new session. Explicit contexts survive ordinary
+  discovery changes; each acquisition revalidates its own inputs.
+  The MCP receipt separates captured-input completeness, include resolution,
+  and unexecuted semantic/KDB checks. It returns full identity and ordered
+  recovery inputs without promising semantic capabilities. At this stage
+  six-tool and connectivity routing still use the existing hierarchy handles;
+  this entry does not satisfy their legacy prerequisite gates. Neither optional
+  Slang cache default changes. Preparation, registration validation and later
+  query costs must be measured together before claiming a speedup.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first

@@ -89,6 +89,13 @@ Hierarchy handles live only in the server process. An explicit driver
 tokens are revalidated; without a historical source fingerprint, recovery
 establishes current sources only. Structural scanning remains a separate step.
 
+`prepare_design_context(compile_log=..., backend_preference="source")` can
+independently capture compile inputs and source identities under file, byte and
+time budgets. Its `design_handle` expires on process restart or registry eviction;
+the receipt separates input capture from include resolution and semantic coverage.
+This initial entry prepares metadata only. The six hierarchy/source queries and
+connectivity queries still use their existing hierarchy workflow and handles.
+
 Capabilities for large designs, with selected examples of validated scale:
 
 - **Hierarchy and source browsing on demand**: the server builds and retains hierarchy and file indexes, then returns local results by instance, subtree, or file to keep large SoC queries manageable in the assistant's context. Hierarchy construction and local queries have been verified on a synthetic design with **50,500 logical instances**; the initial build still scans compilation records and sources.
@@ -345,7 +352,11 @@ Usually, you describe the debugging goal and let the assistant select the tools.
       <td>Review collected debugging information and outstanding steps</td>
     </tr>
     <tr>
-      <td rowspan="7">Hierarchy and source</td>
+      <td rowspan="8">Hierarchy and source</td>
+      <td><code>prepare_design_context</code></td>
+      <td>Capture compile/source identity and coverage gaps without building a hierarchy; returns a process-local design handle</td>
+    </tr>
+    <tr>
       <td><code>build_tb_hierarchy</code></td>
       <td>Build an RTL / testbench hierarchy view from compile records</td>
     </tr>

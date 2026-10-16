@@ -260,6 +260,65 @@ class FormalPathsResult(SchemaModel):
     hints: list[str] = Field(default_factory=list)
 
 
+class PrepareDesignContextOptions(SchemaModel):
+    """Independent preparation budgets; no discovery or semantic work."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    compile_log: str = Field(min_length=1, pattern=r"\S")
+    supplementary_compile_logs: list[Annotated[str, Field(min_length=1, pattern=r"\S")]] = Field(
+        default_factory=list, max_length=16,
+        description="Complementary compile logs in compilation order.",
+    )
+    simulator: Literal["auto", "vcs", "xcelium", "verilator"] = "auto"
+    top_hint: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = None
+    backend_preference: Literal["auto", "source"] = "auto"
+    timeout_sec: float = Field(default=30.0, gt=0, le=300, allow_inf_nan=False)
+    max_files: int = Field(default=32768, ge=1, le=32768)
+    max_bytes: int = Field(default=128 * 1024 * 1024, ge=1, le=128 * 1024 * 1024)
+    max_references: int = Field(default=65536, ge=1, le=65536)
+    max_include_depth: int = Field(default=64, ge=0, le=64)
+
+
+class DesignContextRecovery(SchemaModel):
+    compile_log: str
+    supplementary_compile_logs: list[str]
+    simulator: Literal["vcs", "xcelium", "verilator"]
+    top_hint: str | None = None
+    backend_preference: Literal["auto", "source"]
+    context_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class DesignContextPreparationMetrics(SchemaModel):
+    parse_ms: float = Field(ge=0)
+    prepare_ms: float = Field(ge=0)
+    input_file_count: int = Field(ge=0)
+    captured_bytes: int = Field(ge=0)
+    read_bytes: int = Field(ge=0, description="Raw bytes read during capture and its validation.")
+    dependency_file_visits: int = Field(ge=0)
+    registration_ms: float = Field(ge=0, description="Additional content revalidation and metadata accounting.")
+    total_ms: float = Field(ge=0, description="Preparation, admission wait and registration through receipt construction.")
+    retained_metadata_bytes: int = Field(ge=0, description="Conservative registry capacity charge; no source bodies.")
+
+
+class PrepareDesignContextResult(SchemaModel):
+    design_handle: str
+    handle_lifetime: Literal["process"] = "process"
+    context_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    simulator: Literal["vcs", "xcelium", "verilator"]
+    selected_top: str | None = None
+    backend_preference: Literal["auto", "source"]
+    preparation_status: Literal["prepared", "partial"]
+    source_snapshot_status: Literal["complete", "partial"]
+    include_resolution_status: Literal["complete", "partial"]
+    semantic_status: Literal["not_run"] = "not_run"
+    kdb_status: Literal["not_checked"] = "not_checked"
+    capabilities: list[Literal["compile_metadata", "source_observations"]]
+    gaps: list[str]
+    metrics: DesignContextPreparationMetrics
+    recovery_context: DesignContextRecovery
+
+
 class BuildTbHierarchyResult(SchemaModel):
     """Slim LLM-facing payload for build_tb_hierarchy.
 

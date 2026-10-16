@@ -254,6 +254,12 @@ zero/partial coverage 不能排除 OBI 故障。源码查询使用实际 HDL top
 Verilator 合成 `TOP.` 前缀不是 HDL instance，只在确认后续段等于编译 top 后移除。
 Static/Source Graph 仍保留有界覆盖，不引入 Verilator NPI/KDB 后端。
 
+`prepare_design_context(compile_log=..., backend_preference="source")` 可在文件数、
+字节数和时间预算内独立捕获编译输入与源码身份。返回的 `design_handle` 在进程重启或
+登记项淘汰后失效；receipt 分别报告输入捕获、include 解析及语义覆盖状态。
+这一阶段的入口只准备元数据，六个层次/源码查询及连通性查询仍使用既有 hierarchy
+流程与 handle。
+
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 
 如果日志使用同一个标签，后面的内容每次不同，只匹配标签就够了：
@@ -323,7 +329,11 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
       <td>查看当前已收集的调试信息与待完成步骤</td>
     </tr>
     <tr>
-      <td rowspan="7">层次与源码</td>
+      <td rowspan="8">层次与源码</td>
+      <td><code>prepare_design_context</code></td>
+      <td>独立捕获编译/源码身份及覆盖缺口，返回进程内设计 handle，不构建层次</td>
+    </tr>
+    <tr>
       <td><code>build_tb_hierarchy</code></td>
       <td>根据编译记录建立 RTL / testbench 层次视图</td>
     </tr>

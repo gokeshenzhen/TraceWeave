@@ -332,6 +332,23 @@ class _Entry:
     leases: int = 0
 
 
+@dataclass
+class PendingContextRegistration:
+    """Validated metadata awaiting its owner's non-blocking publication.
+
+    The registry does not retain this ticket. Abandoned workers therefore
+    cannot leak entries or evict a live caller's handle. Every later lease
+    revalidates the files, including changes after this validation boundary.
+    """
+
+    handle: str
+    context: DesignContext
+    size: int
+    owner: str
+    deadline: float
+    consumed: bool = False
+
+
 class DesignContextStore:
     """Bounded metadata registry. Busy contexts cannot be evicted or removed."""
 
@@ -344,12 +361,38 @@ class DesignContextStore:
         self._bytes = 0
         self._lock = threading.Lock()
 
-    def register(self, context: DesignContext) -> str:
+    def prepare_registration(
+        self, context: DesignContext, *, timeout_sec: float = 30.0,
+    ) -> PendingContextRegistration:
+        """Do all filesystem work before returning to the event loop."""
+        CaptureLimits(timeout_sec=timeout_sec)
+        deadline = time.monotonic() + timeout_sec
         check_cancelled()
-        if not context.current():
-            raise ContextUnavailable("design_context_changed")
         size = context.estimated_bytes
+        if size > self.max_bytes:
+            raise ContextUnavailable("context_capacity")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CaptureAborted("timeout")
+        if not context.current(timeout_sec=remaining):
+            raise ContextUnavailable("design_context_changed")
+        check_cancelled()
+        if time.monotonic() >= deadline:
+            raise CaptureAborted("timeout")
+        return PendingContextRegistration(
+            "dc_" + self._generation + "_" + uuid.uuid4().hex,
+            context, size, self._generation, deadline,
+        )
+
+    def publish(self, registration: PendingContextRegistration) -> str:
+        """Atomically publish one ticket without reading files or awaiting."""
         with self._lock:
+            check_cancelled()
+            if registration.owner != self._generation or registration.consumed:
+                raise ContextUnavailable("design_context_generation_changed")
+            if time.monotonic() >= registration.deadline:
+                raise CaptureAborted("timeout")
+            size = registration.size
             if size > self.max_bytes:
                 raise ContextUnavailable("context_capacity")
             victims = []
@@ -364,14 +407,16 @@ class DesignContextStore:
             if remaining_entries >= self.max_entries or remaining_bytes + size > self.max_bytes:
                 raise ContextUnavailable("context_capacity")
             check_cancelled()
-            if not context.metadata_current():
-                raise ContextUnavailable("design_context_changed")
             for victim in victims:
                 self._bytes -= self._entries.pop(victim).size
-            handle = "dc_" + self._generation + "_" + uuid.uuid4().hex
-            self._entries[handle] = _Entry(context, size)
+            handle = registration.handle
+            self._entries[handle] = _Entry(registration.context, size)
             self._bytes += size
+            registration.consumed = True
             return handle
+
+    def register(self, context: DesignContext, *, timeout_sec: float = 30.0) -> str:
+        return self.publish(self.prepare_registration(context, timeout_sec=timeout_sec))
 
     @contextmanager
     def lease(self, handle: str):

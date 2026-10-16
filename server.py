@@ -150,6 +150,8 @@ from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.structural_scan_runtime import StructuralScanRuntime
 from src.design_identity import DesignIdentity, DesignIdentityReader
+import src.design_context_runtime as design_context_runtime
+from src.compile_input_capture import CaptureAborted, CaptureLimits
 from src.structural_semantic_runtime import SemanticScanRuntime, validate_semantic_options
 from src.structural_semantics import SEMANTIC_CATEGORIES
 from src.x_trace import inspect_upstream_values, trace_x_source
@@ -160,7 +162,7 @@ from src.cycle_query import (
     annotate_center_transients,
     get_signals_by_cycle,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import src.schemas as schemas
 from src.evidence_output import serialize_compact_result
 from src.mcp_validation import recover_tool_input_errors
@@ -207,6 +209,10 @@ _log_snapshot_history: dict[tuple[str, ...], list[str]] = {}
 # tools resolve through this store. Lifetime is tied to build_tb_hierarchy's
 # cache entry - see _invalidate_downstream / _clear_simulation_result_state.
 _handle_store = HandleStore()
+
+# Explicit design handles have their own bounded process lifetime. Discovery
+# does not select, clear or silently rebind another caller's design context.
+_design_context_store = design_context_runtime.DesignContextStore()
 
 _hierarchy_recovery_runtime = HierarchyRecoveryRuntime()
 
@@ -1419,6 +1425,8 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
 
 
 def reset_session_state():
+    global _design_context_store
+    _design_context_store = design_context_runtime.DesignContextStore()
     _session_state["get_sim_paths"] = None
     _session_state["build_tb_hierarchy"] = None
     _clear_simulation_result_state()
@@ -1857,6 +1865,92 @@ async def _call_connectivity_backend(backend, fn: Callable):
     if getattr(backend, "uses_external_worker", False):
         return await _run_in_cancellable_thread(fn)
     return fn()
+
+
+async def _handle_prepare_design_context(args: dict):
+    """Read/validate in a worker, then publish only on the requesting loop."""
+    try:
+        options = schemas.PrepareDesignContextOptions.model_validate(args)
+    except ValidationError:
+        return schemas.ToolErrorResult(
+            error="Invalid design context arguments.",
+            error_code="invalid_design_context_arguments",
+        )
+    started = time.monotonic()
+    deadline = started + options.timeout_sec
+    store = _design_context_store
+
+    def remaining():
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise CaptureAborted("timeout")
+        return budget
+
+    def prepare():
+        context = design_context_runtime.prepare_design_context(
+            options.compile_log,
+            supplementary_compile_logs=options.supplementary_compile_logs,
+            simulator=options.simulator,
+            top_hint=options.top_hint,
+            backend_preference=options.backend_preference,
+            max_include_depth=options.max_include_depth,
+            limits=CaptureLimits(
+                max_files=options.max_files, max_bytes=options.max_bytes,
+                max_references=options.max_references, timeout_sec=remaining(),
+            ),
+        )
+        register_started = time.monotonic()
+        ticket = store.prepare_registration(context, timeout_sec=remaining())
+        return ticket, (time.monotonic() - register_started) * 1000
+
+    try:
+        with anyio.fail_after(remaining()):
+            ticket, registration_ms = await _run_in_cancellable_thread(prepare)
+            # Observe cancellation queued alongside worker completion before
+            # any shared state is changed. No await follows publication.
+            await anyio.lowlevel.checkpoint()
+            remaining()
+            if store is not _design_context_store:
+                raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
+            context = ticket.context
+            result = schemas.PrepareDesignContextResult(
+                design_handle=ticket.handle,
+                context_identity_sha256=context.identity_sha256,
+                simulator=context.simulator,
+                selected_top=context.selected_top,
+                backend_preference=context.backend_preference,
+                preparation_status="partial" if context.gaps else "prepared",
+                source_snapshot_status="complete" if context.snapshot.complete else "partial",
+                include_resolution_status="complete" if context.include_resolution_complete else "partial",
+                capabilities=["compile_metadata", "source_observations"],
+                gaps=list(context.gaps),
+                metrics={
+                    **dict(context.metrics), "registration_ms": registration_ms,
+                    "retained_metadata_bytes": ticket.size,
+                    "total_ms": (time.monotonic() - started) * 1000,
+                },
+                recovery_context={
+                    "compile_log": context.ordered_compile_logs[0],
+                    "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
+                    "simulator": context.simulator, "top_hint": context.selected_top,
+                    "backend_preference": context.backend_preference,
+                    "context_identity_sha256": context.identity_sha256,
+                },
+            )
+            remaining()
+            store.publish(ticket)
+            return result
+    except TimeoutError:
+        code = "design_context_timeout"
+    except CaptureAborted as exc:
+        code = "design_context_changed" if exc.code == "input_changed" else "design_context_" + exc.code
+    except design_context_runtime.ContextUnavailable as exc:
+        code = exc.code
+    except OSError:
+        code = "compile_log_unavailable"
+    except ValueError:
+        code = "invalid_design_context"
+    return schemas.ToolErrorResult(error="Design context preparation did not complete.", error_code=code)
 
 
 async def _structural_query_context(compile_log, simulator, scope, mode, config):
@@ -5496,6 +5590,18 @@ _SIGNAL_READBACK_HINT = (
 async def list_tools():
     _tools = [
         Tool(
+            name="prepare_design_context",
+            description=(
+                "Capture compile inputs, source content identities and include dependencies from "
+                "VCS, Xcelium or Verilator logs. Returns an explicit process-scoped design_handle, "
+                "coverage gaps, preparation costs and recovery identity. Does not build a hierarchy, "
+                "run Slang or check/load a KDB. Input capture completeness is separate from "
+                "include resolution and semantic coverage. The existing hierarchy tools still use "
+                "their build_tb_hierarchy handles."
+            ),
+            inputSchema=schemas.PrepareDesignContextOptions.model_json_schema(),
+        ),
+        Tool(
             name="get_sim_paths",
             description=(
                 "Discover compile logs, simulation logs, and waveform files under a verif directory. "
@@ -7624,7 +7730,10 @@ async def _dispatch(name: str, args: dict):
     if block is not None:
         return schemas.PrerequisiteBlockResult.model_validate(block)
 
-    if name == "get_sim_paths":
+    if name == "prepare_design_context":
+        return await _handle_prepare_design_context(args)
+
+    elif name == "get_sim_paths":
         result = discover_sim_paths(
             args["verif_root"],
             args.get("case_name"),
