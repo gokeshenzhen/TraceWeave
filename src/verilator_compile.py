@@ -11,7 +11,7 @@ import shlex
 from pathlib import Path
 
 from .cancellation import check_cancelled
-from .compile_input_capture import read_compile_text, sample_compile_bytes
+from .compile_input_capture import read_compile_text, resolve_compile_path, sample_compile_bytes
 from .filelist_tokenizer import tokenize_filelist
 from .hdl_suffixes import HDL_SOURCE_SUFFIXES
 
@@ -101,7 +101,7 @@ def parse(log_path: str) -> dict:
     def concrete(raw, base):
         if '$' in raw:
             warnings.append('Verilator unresolved environment-dependent input: ' + raw)
-        return str((Path(base) / os.path.expandvars(raw)).resolve())
+        return resolve_compile_path(Path(base) / os.path.expandvars(raw))
     def scan(tokens, base, depth=0, parent=None):
         nonlocal token_count
         token_count += len(tokens)

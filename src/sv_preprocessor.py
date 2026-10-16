@@ -21,7 +21,7 @@ import shlex
 from typing import Any, Callable, Mapping, Sequence
 
 from .cancellation import check_cancelled
-from .compile_input_capture import read_compile_text
+from .compile_input_capture import read_compile_text, resolve_compile_path
 from .compile_environment import (
     CompileEnvironment,
     _expand_with_environment,
@@ -64,6 +64,17 @@ class PreprocessorOptions:
 
     def macro_dict(self) -> dict[str, str]:
         return dict(self.macros)
+
+
+@dataclass(frozen=True)
+class DependencyRead:
+    """Preprocessor dependency facts, without expanded HDL or hierarchy facts."""
+
+    included_paths: tuple[str, ...]
+    ordered_includes: tuple[tuple[str, str], ...]
+    has_conditional_preprocessing: bool
+    complete: bool
+    issues: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -251,6 +262,7 @@ class _ExpansionState:
     has_conditionals: bool = False
     hierarchy_macro_expansions: int = 0
     hierarchy_tainted: bool = False
+    dependencies_only: bool = False
 
     def issue(
         self,
@@ -268,7 +280,7 @@ class _ExpansionState:
 
 
 def _canonical(path: str | os.PathLike[str]) -> str:
-    return os.path.realpath(os.fspath(path))
+    return resolve_compile_path(path)
 
 
 def _render_path(
@@ -1073,7 +1085,18 @@ class SystemVerilogPreprocessor:
         self._include_resolution_cache[key] = resolved
         return resolved
 
+    def collect_dependencies(self, source_path: str) -> DependencyRead:
+        result = self._preprocess(source_path, dependencies_only=True)
+        return DependencyRead(
+            result.included_paths,
+            tuple((item["parent"], item["path"]) for item in result.ordered_includes),
+            result.has_conditional_preprocessing, result.complete, result.issues,
+        )
+
     def preprocess(self, source_path: str) -> PreprocessedSource:
+        return self._preprocess(source_path, dependencies_only=False)
+
+    def _preprocess(self, source_path: str, *, dependencies_only: bool) -> PreprocessedSource:
         root = self._canonical_path(source_path)
         contexts = self._context_index.contexts_for(root)
         options = self._options_cache.get(contexts)
@@ -1097,6 +1120,7 @@ class SystemVerilogPreprocessor:
             issues=[],
             visited_paths=set(),
             trusted_hierarchy_parts=[],
+            dependencies_only=dependencies_only,
         )
         raw = self._load(root)
         text = self._expand_file(
@@ -1125,7 +1149,7 @@ class SystemVerilogPreprocessor:
         trusted_hierarchy_text = "".join(state.trusted_hierarchy_parts)
         return PreprocessedSource(
             text=text,
-            root_text=raw,
+            root_text="" if dependencies_only else raw,
             included_paths=tuple(state.included_paths),
             include_tree=state.include_tree,
             ordered_includes=tuple(state.ordered_includes),
@@ -1181,6 +1205,8 @@ class SystemVerilogPreprocessor:
             # text is equivalent to the line-wise expansion and avoids a
             # full comment-masking pass for ordinary RTL files.
             check_cancelled()
+            if state.dependencies_only:
+                return ""
             if not state.hierarchy_tainted:
                 state.trusted_hierarchy_parts.append(raw)
             return raw
@@ -1188,6 +1214,8 @@ class SystemVerilogPreprocessor:
         output: list[str] = []
 
         def emit(piece: str) -> None:
+            if state.dependencies_only:
+                return
             output.append(piece)
             if not state.hierarchy_tainted:
                 state.trusted_hierarchy_parts.append(piece)
@@ -1252,6 +1280,18 @@ class SystemVerilogPreprocessor:
                     continued_define_active = False
                 continue
             if not match:
+                if state.dependencies_only:
+                    # General macro expansion can introduce directives. Do
+                    # not run the hierarchy macro recognizer or mistake an
+                    # unexpanded macro for proof of a closed input set.
+                    neutral = re.match(
+                        r"^\s*`(?:timescale|default_nettype|resetall|line|"
+                        r"begin_keywords|end_keywords|celldefine|endcelldefine|"
+                        r"unconnected_drive|nounconnected_drive)\b", masked,
+                    )
+                    if active and "`" in masked and not neutral:
+                        state.issue("dependency_macro_unexpanded")
+                    continue
                 emit(
                     _expand_hierarchy_macro_line(line, masked, state)
                     if active
@@ -1380,7 +1420,8 @@ class SystemVerilogPreprocessor:
                 # The child records its trusted pieces directly in expansion
                 # order. Append only to the full local text here so the trusted
                 # stream is not duplicated.
-                output.append(child_text)
+                if not state.dependencies_only:
+                    output.append(child_text)
                 if child_text and not child_text.endswith("\n") and newline:
                     emit("\n")
                 continue

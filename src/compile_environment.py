@@ -14,7 +14,7 @@ import re
 import shlex
 
 from .cancellation import check_cancelled
-from .compile_input_capture import read_compile_text
+from .compile_input_capture import read_compile_text, resolve_compile_path
 from .filelist_tokenizer import tokenize_filelist
 
 _ENV_REF_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})")
@@ -384,7 +384,7 @@ def _infer_compile_environment(
             path = Path(rendered)
             if not path.is_absolute():
                 path = base / path
-            path = path.resolve(strict=False)
+            path = Path(resolve_compile_path(path))
             if path in visited_filelists or not path.is_file():
                 continue
             if len(visited_filelists) >= _MAX_ENV_INFERENCE_FILELISTS:

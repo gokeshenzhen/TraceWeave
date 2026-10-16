@@ -10,7 +10,7 @@ import shlex
 from copy import deepcopy
 from pathlib import Path
 
-from .compile_input_capture import open_compile_text, read_compile_text
+from .compile_input_capture import open_compile_text, read_compile_text, resolve_compile_path
 from .filelist_tokenizer import tokenize_filelist
 from .hdl_suffixes import (
     FRONTEND_HDL_SUFFIXES,
@@ -106,7 +106,7 @@ def _normalize_path(path: str, parent: str | None = None) -> str:
     path = os.path.expandvars(path)
     if parent and not os.path.isabs(path):
         path = os.path.join(parent, path)
-    return os.path.normpath(os.path.realpath(path))
+    return os.path.normpath(resolve_compile_path(path))
 
 
 def _normalize_reported_path(path: str, parent: str | None = None) -> str:

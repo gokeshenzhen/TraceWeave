@@ -371,7 +371,25 @@ Verification
   past parser warning handlers. Closing the capture clears all source bodies;
   snapshot completeness describes captured inputs, not semantic include
   closure. This primitive does not build a hierarchy, run a frontend or load
-  a KDB, and does not yet change public handle routing.
+  a KDB.
+  The internal `prepare_design_context` core uses this capture independently
+  of `build_tb_hierarchy`. It preserves ordered primary/supplementary evidence,
+  captures simulator-library units and recorded support files, and follows
+  preprocessor dependencies without materializing expanded HDL or scanning
+  instances. It records include search candidates and original path aliases;
+  content, environment, selection or alias changes invalidate the context.
+  Cross-unit macro lifetime, phase-local options, unexpanded dependency macros,
+  opaque/protected inputs and missing inputs stay explicit gaps. Source-stage
+  budget exhaustion may return a partial context; parse failure, cancellation,
+  timeout or changing inputs cannot publish one. Compilation replay, semantic
+  coverage and KDB association still require their own validation.
+  `DesignContextStore` owns immutable metadata under process-specific `dc_`
+  handles, with entry/byte limits and leases protecting busy entries from
+  eviction. Registration and acquisition revalidate content; neither registry
+  entries nor released captures retain source bodies. This internal API does
+  not yet change public MCP handle routing or either optional Slang cache
+  default. Its preparation, validation and later query costs must be measured
+  together before claiming a speedup.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first

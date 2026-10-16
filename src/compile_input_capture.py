@@ -116,6 +116,10 @@ class CompileInputCapture:
     def unavailable(self) -> tuple[str, ...]:
         return tuple(self._unavailable)
 
+    @property
+    def unavailable_observations(self) -> tuple[tuple[str, tuple], ...]:
+        return tuple(self._unavailable.items())
+
     def checkpoint(self) -> None:
         check_cancelled()
         if self._closed:
@@ -171,7 +175,8 @@ class CompileInputCapture:
             raise CaptureAborted("input_changed")
         return (digest.hexdigest() if digest_only else b"".join(chunks)), after
 
-    def read_bytes(self, path: str | os.PathLike) -> bytes:
+    def observe_path(self, path: str | os.PathLike) -> str:
+        """Keep spelling-to-target evidence before a parser normalizes a path."""
         self.checkpoint()
         spelling = os.path.abspath(path)
         canonical = os.path.realpath(spelling)
@@ -181,6 +186,11 @@ class CompileInputCapture:
         if prior is None and len(self._aliases) >= self.limits.max_references:
             raise CaptureAborted("reference_limit")
         self._aliases[spelling] = canonical
+        return canonical
+
+    def read_bytes(self, path: str | os.PathLike) -> bytes:
+        spelling = os.path.abspath(path)
+        canonical = self.observe_path(spelling)
         if canonical in self._records:
             if not self._records[canonical].current():
                 raise CaptureAborted("input_changed")
@@ -271,6 +281,29 @@ class CompileInputCapture:
 
 
 _capture: ContextVar[CompileInputCapture | None] = ContextVar("compile_input_capture", default=None)
+
+
+def resolve_compile_path(path: str | os.PathLike) -> str:
+    capture = _capture.get()
+    return capture.observe_path(path) if capture is not None else os.path.realpath(path)
+
+
+def validate_captured_inputs(
+    snapshot: CompileSessionSnapshot,
+    aliases: tuple[tuple[str, str], ...],
+    unavailable: tuple[tuple[str, tuple], ...] = (),
+    *, timeout_sec: float = 30.0,
+) -> bool:
+    """Revalidate private snapshot facts without retaining source bodies.
+
+    This validates observations even for an incomplete snapshot; it does not
+    upgrade missing-input or dependency coverage into a complete identity.
+    """
+    with CompileInputCapture(CaptureLimits(timeout_sec=timeout_sec)) as capture:
+        capture._records = {r.path: r for r in snapshot.records}
+        capture._aliases = dict(aliases)
+        capture._unavailable = dict(unavailable)
+        return capture.validate()
 
 
 @contextmanager
