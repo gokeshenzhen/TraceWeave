@@ -373,7 +373,9 @@ class VerdiNpiBackend:
         KDB and ensures no Language handle survives the operation.
         """
         from .hierarchy_source_ir import HierarchyQueryBudget
-        from .hierarchy_source_service import HierarchySourceService, validate_hierarchy_query
+        from .hierarchy_source_service import (
+            HierarchySourceService, finish_hierarchy_query, validate_hierarchy_query,
+        )
         from .npi_hierarchy_source import NpiHierarchyUnavailable, language_query_owner
 
         validate_hierarchy_query(operation, arguments)
@@ -427,6 +429,7 @@ class VerdiNpiBackend:
                 result = method(**arguments, budget=budget)
         require_owner()
         self._finish_bound_query(None)
+        finish_hierarchy_query(result, budget)
         # Native cleanup and final map validation are mandatory even after an
         # analysis limit; expose their cost rather than hiding it in a cache hit.
         result["query_metrics"].update(

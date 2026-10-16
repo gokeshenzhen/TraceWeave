@@ -71,6 +71,28 @@ def validate_hierarchy_query(operation: str, arguments: dict):
             raise ValueError("provide exactly one nonempty path or module")
 
 
+def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
+    """Account for mandatory provider cleanup and final identity validation.
+
+    Cleanup runs even after the deadline. A late finish may retain observed
+    positive facts, but cannot publish complete coverage or a negative proof.
+    Cancellation and an operation's own TimeoutError still propagate.
+    """
+    try:
+        budget.checkpoint()
+    except HierarchyBudgetExceeded as exc:
+        result["coverage_status"] = "partial"
+        result["count_status"] = "lower_bound"
+        result["analysis_limits"] = sorted(set(result["analysis_limits"]) | {exc.reason})
+        for key in ("total", "total_descendants"):
+            if key in result:
+                result[key] = None
+        if result.get("error") == "instance_not_found":
+            result["error"] = "instance_unresolved"
+    result["query_metrics"].update(budget.metrics())
+    return result
+
+
 class HierarchySourceService:
     def __init__(self, provider: HierarchySourceProvider):
         self.provider = provider
@@ -197,7 +219,7 @@ class HierarchySourceService:
         result.update(root=root, node=rendered, total_descendants=count if complete else None,
                       truncated=truncated)
         if error is not None:
-            result["error"] = error
+            result["error"] = "instance_unresolved" if not complete else error
         return result
 
     def find_instances(self, *, path: str | None = None, module: str | None = None,
