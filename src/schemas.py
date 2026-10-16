@@ -1274,10 +1274,14 @@ class SourceGraphClaimSemanticsReceipt(SchemaModel):
 
 
 class HierarchyRecoveryReceipt(SchemaModel):
-    status: Literal["hit_existing", "rebuilt", "blocked"]
+    status: Literal["hit_existing", "rebuilt", "prepared_design", "hit_design_context", "blocked"]
     attempted: bool = False
     coalesced: bool = False
     hierarchy_handle: str | None = None
+    design_handle: str | None = None
+    hierarchy_available: bool | None = None
+    preparation_metrics: dict[str, int | float] | None = None
+    context_gaps: list[str] | None = None
     handle_lifetime: Literal["process"] = "process"
     identity_basis: Literal["validated_historical_source", "current_sources"] | None = None
     compile_context: dict[str, Any] | None = None
@@ -2040,6 +2044,7 @@ class PrerequisiteBlockResult(SchemaModel):
 class ToolErrorResult(SchemaModel):
     error: str
     error_code: str | None = None
+    hierarchy_recovery: HierarchyRecoveryReceipt | None = None
     fsdb_runtime: dict[str, Any] | None = None
     fst_runtime: FstRuntimeInfo | None = None
     fallback: dict[str, Any] | None = None

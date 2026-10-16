@@ -344,6 +344,7 @@ class _Entry:
     binding: object | None = None
     npi_failure: str | None = None
     binding_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    recovery_key: str | None = None
 
 
 @dataclass
@@ -398,15 +399,30 @@ class DesignContextStore:
             context, size, self._generation, deadline,
         )
 
-    def publish(self, registration: PendingContextRegistration) -> str:
-        """Atomically publish one ticket without reading files or awaiting."""
+    def publish(self, registration: PendingContextRegistration, *, binding=None,
+                recovery_key: str | None = None) -> str:
+        """Publish metadata and an optional validated binding in one transaction.
+
+        Recovery callers validate the binding in a worker before publication.
+        Capacity failure cannot leave a half-published context or evict entries.
+        """
+        from .design_backend_binding import DesignBackendBinding
+        if binding is not None and (
+            not isinstance(binding, DesignBackendBinding)
+            or binding.context_identity_sha256 != registration.context.identity_sha256
+            or binding.backend_preference != registration.context.backend_preference
+        ):
+            raise ContextUnavailable("design_context_changed")
+        if recovery_key is not None and not re.fullmatch(r"[0-9a-f]{64}", recovery_key):
+            raise ValueError("invalid recovery key")
         with self._lock:
             check_cancelled()
             if registration.owner != self._generation or registration.consumed:
                 raise ContextUnavailable("design_context_generation_changed")
             if time.monotonic() >= registration.deadline:
                 raise CaptureAborted("timeout")
-            size = registration.size
+            size = (registration.size + (binding.estimated_bytes if binding is not None else 0)
+                    + (256 if recovery_key is not None else 0))
             if size > self.max_bytes:
                 raise ContextUnavailable("context_capacity")
             victims = []
@@ -424,10 +440,17 @@ class DesignContextStore:
             for victim in victims:
                 self._bytes -= self._entries.pop(victim).size
             handle = registration.handle
-            self._entries[handle] = _Entry(registration.context, size)
+            self._entries[handle] = _Entry(registration.context, size, binding=binding,
+                                           recovery_key=recovery_key)
             self._bytes += size
             registration.consumed = True
             return handle
+
+    def find_recovery(self, key: str) -> str | None:
+        """Find an exact live alias; callers must pin and validate its context."""
+        with self._lock:
+            return next((handle for handle, entry in self._entries.items()
+                         if entry.recovery_key == key), None)
 
     def register(self, context: DesignContext, *, timeout_sec: float = 30.0) -> str:
         return self.publish(self.prepare_registration(context, timeout_sec=timeout_sec))

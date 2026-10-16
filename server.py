@@ -13,6 +13,7 @@ This server provides waveform-debug workflow tools, including:
 
 import asyncio
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 import hashlib
 import inspect
 import json
@@ -97,6 +98,7 @@ from src.hierarchy_handles import (
 from src.hierarchy_recovery import (
     BoundedSourceReader, HierarchyRecoveryRuntime, RecoveryBlocked, RecoveryLimits,
 )
+from src.legacy_context_observations import verify_legacy_source_observations
 from src.source_graph_adapter import (
     AdapterStatus,
     build_source_graph_frontier_plan,
@@ -1092,20 +1094,23 @@ def get_hierarchy_recovery_limits() -> RecoveryLimits:
     )
 
 
-def _build_recovery_context(ctx: dict, limits: RecoveryLimits):
+def _build_recovery_context(ctx: dict, limits: RecoveryLimits, *, prepared=None):
     """Pure worker: build and revalidate; never publish shared session state."""
     from src.divergence_compare import file_identity
     paths = [ctx["compile_log"], *ctx["supplementary_compile_logs"]]
     if any(file_identity(path) is None for path in paths):
         raise RecoveryBlocked("hierarchy_recovery_log_unavailable")
     logs_id = log_identity(ctx)
-    detected = detect_simulator(ctx["compile_log"])
+    detected = prepared.simulator if prepared is not None else detect_simulator(ctx["compile_log"])
     if (detected in {"vcs", "xcelium", "verilator"}
             and ctx["simulator"] not in {"auto", detected}):
         raise RecoveryBlocked("compile_context_changed")
-    compile_result, simulator = _parse_merged_compile_context(
-        compile_log=ctx["compile_log"], simulator=ctx["simulator"],
-        supplementary_compile_logs=ctx["supplementary_compile_logs"])
+    if prepared is not None:
+        compile_result, simulator = prepared.compile_result(), prepared.simulator
+    else:
+        compile_result, simulator = _parse_merged_compile_context(
+            compile_log=ctx["compile_log"], simulator=ctx["simulator"],
+            supplementary_compile_logs=ctx["supplementary_compile_logs"])
     if simulator not in {"vcs", "xcelium", "verilator"}:
         raise RecoveryBlocked("compile_context_ambiguous")
     if ctx["simulator"] not in {"auto", simulator}:
@@ -1147,6 +1152,95 @@ def _build_recovery_context(ctx: dict, limits: RecoveryLimits):
     return bound
 
 
+@dataclass(frozen=True)
+class _DesignRecoveryReference:
+    design_handle: str
+    context: dict
+    metrics: dict
+    gaps: tuple[str, ...]
+
+
+def _recovered_compile_context(ctx, context, logs_id):
+    """Retain historical tokens, verifying their original meaning."""
+    if ctx["simulator"] not in ("auto", context.simulator):
+        raise RecoveryBlocked("compile_context_changed")
+    result = context.compile_result()
+    evidence = result.get("compile_evidence") or {}
+    tops = tuple(dict.fromkeys(result.get("top_modules") or ()))
+    top = result.get("primary_top") or (tops[0] if len(tops) == 1 else None)
+    if (evidence.get("merge_conflicts") or evidence.get("merge_status") == "conflict"
+            or not top or (not ctx.get("top_hint") and len(tops) != 1)):
+        raise RecoveryBlocked("compile_context_ambiguous")
+    if ctx.get("top_hint") not in (None, top) or context.selected_top != top:
+        raise RecoveryBlocked("compile_context_changed")
+    exact = {**ctx, "simulator": context.simulator, "top_hint": top,
+             "compile_log_identity_sha256": logs_id,
+             "snapshot_sha256": compute_snapshot_fingerprint(
+                 ctx["compile_log"], context.simulator, ctx["supplementary_compile_logs"]),
+             "hierarchy_handle": compute_handle(
+                 ctx["compile_log"], context.simulator, ctx["supplementary_compile_logs"])}
+    for field in ("compile_log_identity_sha256", "snapshot_sha256", "hierarchy_handle"):
+        if ctx.get(field) not in (None, exact[field]):
+            raise RecoveryBlocked("compile_context_changed")
+    if log_identity(ctx) != logs_id:
+        raise RecoveryBlocked("compile_context_changed")
+    return exact
+
+
+def _prepare_driver_recovery(ctx, limits, store):
+    """Worker returns an unpublished design ticket, or source compatibility tree."""
+    deadline = time.monotonic() + limits.timeout_sec
+
+    def remaining():
+        cancellation.check_cancelled()
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise CaptureAborted("timeout")
+        return value
+
+    def capture_limits():
+        return CaptureLimits(max_files=limits.max_source_files,
+                             max_bytes=limits.max_source_bytes, timeout_sec=remaining())
+
+    from src.divergence_compare import file_identity
+    if any(file_identity(path) is None for path in
+           (ctx["compile_log"], *ctx["supplementary_compile_logs"])):
+        raise RecoveryBlocked("hierarchy_recovery_log_unavailable")
+    logs_id = log_identity(ctx)
+    # Auto-detection is bounded by the capture too; a FIFO log cannot block
+    # an unguarded preliminary simulator probe.
+    context = design_context_runtime.prepare_design_context(
+        ctx["compile_log"], supplementary_compile_logs=ctx["supplementary_compile_logs"],
+        simulator="auto", limits=capture_limits())
+    exact = _recovered_compile_context(ctx, context, logs_id)
+    for code in ("file_limit", "byte_limit", "reference_limit", "dependency_work_limit"):
+        if "source_capture_" + code in context.gaps:
+            raise CaptureAborted(code)
+    binding = prepare_backend_binding(context, timeout_sec=remaining())
+    if not binding.npi_candidate:
+        # Source compatibility still uses the old full hierarchy until the
+        # semantic planner migration. No native query has been attempted.
+        bound = _build_recovery_context(ctx, replace(limits, timeout_sec=remaining()), prepared=context)
+        if not context.current(timeout_sec=remaining()):
+            raise RecoveryBlocked("compile_context_changed")
+        bound.hierarchy["_hierarchy_recovery_preparation_metrics"] = {
+            **dict(context.metrics), **dict(binding.metrics)}
+        return bound
+    if ctx.get("source_snapshot_sha256") is not None:
+        context = verify_legacy_source_observations(
+            context, ctx["source_snapshot_sha256"], limits=capture_limits())
+        # The additional historical observations change only identity, not
+        # compilation or KDB selection. Do not discover the same KDB again.
+        binding = replace(binding, context_identity_sha256=context.identity_sha256)
+    ticket = store.prepare_registration(context, timeout_sec=remaining())
+    binding.require_current(timeout_sec=min(5, remaining()))
+    exact = _recovered_compile_context(ctx, context, logs_id)
+    if not context.metadata_current():
+        raise RecoveryBlocked("compile_context_changed")
+    remaining()
+    return ticket, binding, exact
+
+
 async def _resolve_explicit_driver_context(raw: dict):
     """Recover only an unavailable explicit context, once, under hard bounds."""
     started = time.perf_counter()
@@ -1155,6 +1249,15 @@ async def _resolve_explicit_driver_context(raw: dict):
     ctx["compile_log"] = os.path.abspath(ctx["compile_log"])
     ctx["supplementary_compile_logs"] = [os.path.abspath(p) for p in ctx["supplementary_compile_logs"]]
     store = _handle_store
+    design_store = _design_context_store
+    runtime = _hierarchy_recovery_runtime
+    recovery_key = hashlib.sha256(json.dumps(ctx, sort_keys=True).encode()).hexdigest()
+
+    def ensure_owner():
+        if (store is not _handle_store or design_store is not _design_context_store
+                or runtime is not _hierarchy_recovery_runtime):
+            raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
+
     try:
         limits = get_hierarchy_recovery_limits()
         receipt.update(timeout_sec=limits.timeout_sec, max_source_files=limits.max_source_files,
@@ -1162,28 +1265,61 @@ async def _resolve_explicit_driver_context(raw: dict):
         with anyio.fail_after(limits.timeout_sec):
             bound, reason = await _run_in_cancellable_thread(
                 lambda: resolve_divergence_context(ctx, store))
+            ensure_owner()
             if bound is None and reason != "hierarchy_unavailable":
                 raise RecoveryBlocked(reason)
             if bound is not None:
                 receipt["status"] = "hit_existing"
+            elif (handle := design_store.find_recovery(recovery_key)) is not None:
+                with design_store.pin(handle) as entry:
+                    exact = await _run_in_cancellable_thread(
+                        lambda: _recovered_compile_context(ctx, entry.context, log_identity(ctx)))
+                    ensure_owner()
+                    bound = _DesignRecoveryReference(handle, exact, {}, entry.context.gaps)
+                receipt["status"] = "hit_design_context"
             else:
                 receipt["attempted"] = True
                 # All explicit tokens, ordered logs, top, current log identity
                 # and limits participate in live sharing. No recent-case state.
-                key = json.dumps([ctx, log_identity(ctx), limits.__dict__], sort_keys=True)
+                logs_id = await _run_in_cancellable_thread(lambda: log_identity(ctx))
+                ensure_owner()
+                key = json.dumps([ctx, logs_id, limits.__dict__, id(design_store)], sort_keys=True)
 
                 async def build():
-                    recovered = await _run_in_cancellable_thread(lambda: _build_recovery_context(ctx, limits))
-                    # No await between successful identity validation and this
-                    # event-loop-owned publication. Cancelled workers never land.
+                    recovered = await _run_in_cancellable_thread(
+                        lambda: _prepare_driver_recovery(ctx, limits, design_store))
+                    await anyio.lowlevel.checkpoint()
+                    ensure_owner()
+                    if isinstance(recovered, tuple):
+                        ticket, binding, exact = recovered
+                        handle = design_store.publish(ticket, binding=binding, recovery_key=recovery_key)
+                        return _DesignRecoveryReference(
+                            handle, exact, {**dict(ticket.context.metrics), **dict(binding.metrics)},
+                            ticket.context.gaps)
                     store.register(recovered.context["hierarchy_handle"], recovered.hierarchy)
                     return recovered
 
-                bound, coalesced = await _hierarchy_recovery_runtime.run(key, build, timeout_sec=limits.timeout_sec)
-                receipt.update(status="rebuilt", coalesced=coalesced,
-                    **bound.hierarchy.get("_hierarchy_recovery_reads", {}))
-            receipt.update(hierarchy_handle=bound.context["hierarchy_handle"],
-                compile_context=bound.context,
+                remaining = limits.timeout_sec - (time.perf_counter() - started)
+                if remaining <= 0:
+                    raise TimeoutError
+                bound, coalesced = await runtime.run(key, build, timeout_sec=remaining)
+                ensure_owner()
+                receipt.update(coalesced=coalesced)
+                if isinstance(bound, _DesignRecoveryReference):
+                    receipt["status"] = "prepared_design"
+                else:
+                    receipt.update(status="rebuilt", **bound.hierarchy.get("_hierarchy_recovery_reads", {}),
+                                   preparation_metrics=bound.hierarchy.get("_hierarchy_recovery_preparation_metrics"))
+            if isinstance(bound, _DesignRecoveryReference):
+                receipt.update(design_handle=bound.design_handle, hierarchy_available=False,
+                               preparation_metrics=bound.metrics, context_gaps=list(bound.gaps))
+            else:
+                receipt.update(hierarchy_handle=bound.context["hierarchy_handle"], hierarchy_available=True)
+            receipt.update(
+                # Keep the exact request as the legacy replay key. The new
+                # design_handle is the current process identity; do not invent
+                # a historical source token when none was supplied.
+                compile_context=ctx if isinstance(bound, _DesignRecoveryReference) else bound.context,
                 identity_basis="validated_historical_source" if ctx.get("source_snapshot_sha256") else "current_sources",
                 note=("Source identity matches the supplied historical fingerprint; this does not establish waveform/source correspondence."
                       if ctx.get("source_snapshot_sha256") else
@@ -1192,6 +1328,17 @@ async def _resolve_explicit_driver_context(raw: dict):
     except TimeoutError:
         reason = "hierarchy_recovery_timeout"
     except RecoveryBlocked as exc:
+        reason = exc.code
+    except CaptureAborted as exc:
+        reason = {"input_changed": "compile_context_changed", "timeout": "hierarchy_recovery_timeout",
+                  "file_limit": "hierarchy_recovery_source_file_limit",
+                  "byte_limit": "hierarchy_recovery_source_byte_limit"}.get(
+                      exc.code, "hierarchy_recovery_" + exc.code)
+    except KdbBindingChanged:
+        reason = "kdb_identity_changed"
+    except ExecutionBindingChanged:
+        reason = "design_context_execution_changed"
+    except design_context_runtime.ContextUnavailable as exc:
         reason = exc.code
     except OperationCancelled as exc:
         raise asyncio.CancelledError from exc
@@ -6422,6 +6569,8 @@ async def list_tools():
                 "Pass design_handle from prepare_design_context to query a fixed design without "
                 "a full hierarchy prerequisite. compile_log may then be omitted; supplied compile "
                 "arguments must match. Source fallback uses bounded bootstrap by default. "
+                "An expired explicit compile_context can also recover a bound design when a KDB "
+                "candidate is available; inspect hierarchy_recovery.design_handle and status. "
                 "Trace a waveform signal to its RTL driver and file:line (assignments, "
                 "procedural blocks, module outputs); recursive=true crosses instances.\n\n"
                 "Default traceweave.driver.compact.v1 is lossless: all retained evidence is in "
@@ -8043,6 +8192,17 @@ async def _dispatch_inner(name: str, args: dict):
             raise ValueError("compile_context does not match compile_log")
         if args.get("top_hint") not in (None, bound.context.get("top_hint")):
             raise ValueError("compile_context does not match top_hint")
+        if isinstance(bound, _DesignRecoveryReference):
+            resolved = {key: value for key, value in args.items() if key != "compile_context"}
+            resolved.update(design_handle=bound.design_handle, simulator=bound.context["simulator"],
+                            top_hint=bound.context.get("top_hint"))
+            result = await _dispatch_design_query(name, resolved)
+            if isinstance(result, schemas.ToolErrorResult):
+                hierarchy_recovery = {**hierarchy_recovery, "status": "blocked",
+                                      "blocker": result.error_code or "design_query_failed"}
+            if hasattr(result, "hierarchy_recovery"):
+                result.hierarchy_recovery = schemas.HierarchyRecoveryReceipt.model_validate(hierarchy_recovery)
+            return result
         args = {**args, "_bound_context": bound, "simulator": bound.context["simulator"],
                 "top_hint": bound.context.get("top_hint")}
     block = None if bound is not None or args.get("_prepared_design") is not None else _check_prerequisites(name, args)

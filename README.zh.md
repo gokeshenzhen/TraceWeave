@@ -77,8 +77,11 @@ print(driver["driver_chain"])
 保证任意客户端都不转储文件。
 
 层次 handle 仅在服务器进程内有效。驱动查询的显式 `compile_context` 可对丢失的
-handle 尝试一次恢复，受 30 秒、4,096 个源文件和 128 MiB 读取预算约束（已有更严格
-的层次配置优先）。`hierarchy_recovery` 报告复用、重建或阻塞原因。恢复重新校验
+handle 尝试一次恢复，受 30 秒、4,096 个输入文件和 128 MiB 输入捕获预算约束（已有更严格
+的层次配置优先）。发现 KDB 候选后会独立准备设计，不重建完整层次；
+`hierarchy_recovery` 返回 `prepared_design` / `hit_design_context` 和 `design_handle`，
+该 handle 可用于上述四种追踪工具。现存完整 handle 和纯源码恢复保留既有层次路径。
+身份复核可能重复读取输入，preparation metrics 单独报告这些成本。恢复重新校验
 调用方身份；没有历史源码指纹时只建立当前源码上下文，结构扫描仍需单独执行。
 
 面向大型设计的能力与已验证的部分规模：
@@ -278,7 +281,7 @@ KDB generation 及历史波形与源码的对应关系仍需各自的证据。
 X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
 接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
 history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。
-六个层次/源码工具及旧 `compile_context` 恢复仍使用既有流程与 handle。
+六个层次/源码工具仍使用既有流程与 handle。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 

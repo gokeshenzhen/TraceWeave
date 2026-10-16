@@ -84,8 +84,14 @@ responses; this format does not guarantee inline delivery by every client.
 
 Hierarchy handles live only in the server process. An explicit driver
 `compile_context` can recover a missing handle once under a 30-second,
-4,096-source-file, 128-MiB read budget (stricter hierarchy settings apply).
-`hierarchy_recovery` reports reuse, rebuilding or a blocker. Supplied identity
+4,096-input-file, 128-MiB input capture budget (stricter hierarchy settings apply).
+With a KDB candidate it prepares an independent design, without rebuilding the
+hierarchy, and returns `hierarchy_recovery.design_handle` with status
+`prepared_design` or `hit_design_context`. That handle can be used by the same
+four tracing tools. Existing full handles and source-only recovery retain the
+legacy hierarchy path. `hierarchy_recovery` reports reuse, preparation, rebuilding
+or a blocker. Input verification can reread captured bytes; preparation metrics
+report that work separately from query time. Supplied identity
 tokens are revalidated; without a historical source fingerprint, recovery
 establishes current sources only. Structural scanning remains a separate step.
 
@@ -120,8 +126,7 @@ NPI route without a hierarchy; its source fallback currently reports unavailable
 semantic trace planning and recomputes with bound Static metadata. History keeps
 its dynamic-evidence limitations and includes context validation in the request
 deadline. A clean waveform target does not establish that NPI loaded a KDB.
-The six hierarchy/source tools and legacy `compile_context` recovery still
-use their existing workflow and handles.
+The six hierarchy/source tools still use their existing workflow and handles.
 
 Capabilities for large designs, with selected examples of validated scale:
 

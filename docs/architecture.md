@@ -411,7 +411,8 @@ Verification
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
   of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  Six-tool and legacy `compile_context` recovery migration remains separate work.
+  Six-tool migration remains separate work. Expired explicit `compile_context`
+  recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
   existing dynamic route without a hierarchy or legacy-handle lookup. Snapshot
   attempts retain waveform file/parser generation across whole-chain restarts;
@@ -1662,25 +1663,52 @@ client spill behavior, or query acceleration.
 
 Explicit driver `compile_context` recovery is orchestrated by the server; the
 context resolver stays read-only. Only `hierarchy_unavailable` can trigger one
-lexical hierarchy rebuild. Changed or ambiguous identities return a prerequisite
+bounded recovery. A usable KDB candidate now selects independent preparation,
+historical identity verification and atomic context/binding publication. No full
+hierarchy, structural scan, Slang session or native load runs during that
+preparation; the following query uses the normal bound local/explicit-LSF route.
+Existing full handles stay compatible. A source-policy or unavailable candidate
+still uses a lexical hierarchy rebuild until semantic planning is migrated.
+Ordinary NPI query/load failure after selecting a candidate uses bound fallback,
+never another full recovery build. Changed or ambiguous identities return a prerequisite
 block with an executable build call. Primary log identity, supplementary log
 order, simulator, compile-selected top, supplied snapshots and historical source
 fingerprints are validated again on the private candidate before publication.
+The old source fingerprint is the stat/raw-digest identity of the old
+preprocessor's observed files, not the new capture of logs, filelists and sources.
+`legacy_context_observations` reproduces that read set with dependency-only
+preprocessing, preserving the old exact-log include policy without materializing
+HDL or enumerating definitions. Additional inputs, aliases and positive/negative
+lookup observations are retained in the new context for subsequent validation.
+Matching an incomplete preprocessor observation does not upgrade its coverage;
+gaps remain explicit. Its composite identity is recovered through the returned
+legacy `compile_context`, not the plain `prepare_design_context` recovery token.
 Recovery without a historical source token establishes current source context,
 not the sources of a past simulation. A top that cannot be selected unambiguously
 from the compile evidence is a blocker; recent session state never fills it in.
 
 `HierarchyRecoveryRuntime` shares only exact live requests, with one admitted
 build, at most four live flights and an independent per-flight deadline. The
-default hard bounds are 30 seconds including admission, 4,096 source files and
-128 MiB of source reads, counting preprocessor includes; nonzero
+default hard bounds are 30 seconds including admission, 4,096 input files and
+128 MiB of unique raw input bytes per capture (also applied to the merged
+historical/current observation set). Logical dependency expansion is separately
+bounded, including repeated includes. Source compatibility retains its bounded
+lexical reader. Identity rehashes add I/O; preparation metrics expose captured
+bytes, actual read bytes, historical verification and discovery cost, and the
+receipt's wall time includes all preparation phases. This is not an acceleration
+claim; source compatibility currently pays both preparation and rebuilding.
+Nonzero
 `TRACEWEAVE_HIERARCHY_TIMEOUT` and `TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES` can make
 these stricter. Bounded reads prevent a growing include from bypassing preflight.
 One waiter cancellation preserves other waiters; final-waiter cancellation arms
 the existing cooperative worker cancellation. No result is published on failure
-or cancellation before completion. Workers hold no waveform lock and invoke no
-NPI overlay, LSF job or Slang session. Only the event loop registers a validated
-handle; other handles, result caches and workflow/scan state remain intact.
+or cancellation before completion. Preparation workers hold no waveform lock and
+invoke no NPI overlay, LSF job or Slang session. Only the event loop registers a
+validated context plus binding; generation changes prevent late publication
+after reset. Exact recovery aliases live in the bounded context registry and
+expire with their entries. A later call validates the same binding without
+repeating discovery; changed source, KDB or execution policy requires explicit
+new preparation. Result caches and workflow/scan state remain intact.
 
 `build_tb_hierarchy.handle_lifetime="process"` is explicit. Driver results and
 prerequisite blockers carry an optional `hierarchy_recovery` receipt with status,
