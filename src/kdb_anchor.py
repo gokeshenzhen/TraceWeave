@@ -22,6 +22,21 @@ _MAP_NAMES = ("_libFileMap", "_nstnElabDB", "_smElabDBMap", "_stnElabDB", ".hasE
 _BASE_GAPS = ("kdb_identity_bounded", "kdb_source_association_unverified")
 
 
+class KdbBindingChanged(RuntimeError):
+    """A query must discard its result instead of switching design generations."""
+
+    def __init__(self):
+        super().__init__("kdb_identity_changed")
+
+
+def validate_query_anchor(anchor: KdbAnchor) -> None:
+    """Admit bounded candidate evidence, without claiming NPI loadability."""
+    if (not isinstance(anchor, KdbAnchor) or not anchor.identity_complete
+            or anchor.artifact_status not in {"elaborated_candidate", "elaboration_error"}
+            or anchor.max_bytes > 16 * 1024 * 1024):
+        raise ValueError("a complete bounded elaborated KDB candidate is required")
+
+
 def _stat_identity(info):
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
@@ -70,6 +85,10 @@ class KdbAnchor:
             "source_association": "unverified",
             "gaps": list(self.gaps),
         }
+
+    def require_current(self) -> None:
+        if not self.current():
+            raise KdbBindingChanged()
 
 
 def _read_map(path, name, remaining, checkpoint):

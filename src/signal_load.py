@@ -57,6 +57,7 @@ def find_signal_loads(
     include_expr: bool = True,
     kind_filter: list[str] | None = None,
     simulator: str = "auto",
+    compile_result: dict | None = None,
 ) -> dict[str, Any]:
     """Return a shallow_only list of loads consuming ``signal_path``.
 
@@ -71,6 +72,7 @@ def find_signal_loads(
 
     module_index, top_module = _build_module_index(
         compile_log, top_hint, simulator, signal_path=signal_path,
+        **({"compile_result": compile_result} if compile_result is not None else {}),
     )
     resolved = _resolve_instance_module(signal_path, top_module, module_index)
     rtl_name = _rtl_leaf_name(signal_path)

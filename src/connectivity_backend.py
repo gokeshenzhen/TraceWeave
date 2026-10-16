@@ -74,7 +74,8 @@ class StaticConnectivityBackend:
     name = "static"
 
     def bind_compile_context(self, compile_result: dict) -> None:
-        self._bound_compile_result = compile_result
+        from copy import deepcopy
+        self._bound_compile_result = deepcopy(compile_result)
 
     def find_driver(
         self,
@@ -118,6 +119,8 @@ class StaticConnectivityBackend:
             include_expr=include_expr,
             kind_filter=kind_filter,
             simulator=simulator,
+            **({"compile_result": self._bound_compile_result}
+               if hasattr(self, "_bound_compile_result") else {}),
         )
 
     def find_path(

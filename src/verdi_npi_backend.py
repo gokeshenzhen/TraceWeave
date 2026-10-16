@@ -31,9 +31,11 @@ from typing import Any
 
 from config import NPI_ALLOW_DEGRADED_KDB
 from .cancellation import OperationCancelled, check_cancelled
+from .compile_input_capture import CaptureAborted
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
 from .kdb_identity import kdb_identity
+from .kdb_anchor import KdbAnchor, KdbBindingChanged, validate_query_anchor
 from .connectivity_limits import (
     DEFAULT_DRIVER_OUTPUT_LIMIT,
     DEFAULT_LOAD_OUTPUT_LIMIT,
@@ -339,7 +341,24 @@ class VerdiNpiBackend:
 
     def bind_compile_context(self, compile_result: dict) -> None:
         """Bind one immutable caller-validated compile context to this instance."""
-        self._bound_compile_result = compile_result
+        from copy import deepcopy
+        self._bound_compile_result = deepcopy(compile_result)
+        if hasattr(self._fallback, "bind_compile_context"):
+            self._fallback.bind_compile_context(compile_result)
+
+    def bind_kdb_anchor(self, anchor: KdbAnchor) -> None:
+        validate_query_anchor(anchor)
+        previous = getattr(self, "_bound_kdb_anchor", None)
+        if previous is not None and previous.identity_sha256 != anchor.identity_sha256:
+            self._clear_loaded_state(failed=False)
+        self._bound_kdb_anchor = anchor
+
+    def _finish_bound_query(self, result):
+        check_cancelled()
+        anchor = getattr(self, "_bound_kdb_anchor", None)
+        if anchor is not None:
+            anchor.require_current()
+        return result
 
     def get_dynamic_step(self, signal_path: str, compile_log: str, *,
                          top_hint: str | None = None, simulator: str = "auto",
@@ -353,13 +372,15 @@ class VerdiNpiBackend:
             kdb = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
             if not kdb or not top or not self._ensure_loaded(kdb, top):
-                return unsupported_step(signal_path, self.name, "npi_load_failed")
+                return self._finish_bound_query(unsupported_step(signal_path, self.name, "npi_load_failed"))
             with _silence_native_stdio():
-                return query_step(self, signal_path,
-                                  include_dependency_candidates=include_dependency_candidates)
-        except OperationCancelled:
+                result = query_step(self, signal_path,
+                                    include_dependency_candidates=include_dependency_candidates)
+            return self._finish_bound_query(result)
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
             raise
         except Exception:
+            self._finish_bound_query(None)
             return unsupported_step(signal_path, self.name, "npi_dynamic_query_failed")
 
     def find_driver(
@@ -387,7 +408,7 @@ class VerdiNpiBackend:
                     simulator=simulator,
                 )
                 result.setdefault("_npi_fallback_reason", "kdb_or_top_missing")
-                return result
+                return self._finish_bound_query(result)
             if not self._ensure_loaded(kdb_path, top):
                 result = self._fallback.find_driver(
                     signal_path, wave_path, compile_log,
@@ -395,25 +416,27 @@ class VerdiNpiBackend:
                     simulator=simulator,
                 )
                 result.setdefault("_npi_fallback_reason", "npi_load_failed")
-                return result
+                return self._finish_bound_query(result)
             self._record_query_kdb_status()
-            return self._npi_find_driver(
+            result = self._npi_find_driver(
                 signal_path,
                 wave_path,
                 top,
                 recursive=recursive,
             )
-        except OperationCancelled:
+            return self._finish_bound_query(result)
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
             raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
+            self._finish_bound_query(None)
             result = self._fallback.find_driver(
                 signal_path, wave_path, compile_log,
                 top_hint=top_hint, recursive=recursive, max_depth=max_depth,
                 simulator=simulator,
             )
             result.setdefault("_npi_fallback_reason", f"exception: {exc}")
-            return result
+            return self._finish_bound_query(result)
 
     def find_loads(
         self,
@@ -428,7 +451,9 @@ class VerdiNpiBackend:
     ) -> dict[str, Any]:
         self._last_query_kdb_status = None
         try:
-            compile_result = parse_compile_log(compile_log, simulator)
+            compile_result = getattr(self, "_bound_compile_result", None)
+            if compile_result is None:
+                compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:
@@ -442,14 +467,16 @@ class VerdiNpiBackend:
                     include_expr, kind_filter, simulator, "npi_load_failed"
                 )
             self._record_query_kdb_status()
-            return self._npi_find_loads(
+            result = self._npi_find_loads(
                 signal_path, compile_result, kdb_path, top,
                 include_expr, kind_filter,
             )
-        except OperationCancelled:
+            return self._finish_bound_query(result)
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
             raise
         except Exception as exc:  # noqa: BLE001 - never crash the MCP server
             _LOG.warning("VerdiNpiBackend.find_loads failed: %s", exc)
+            self._finish_bound_query(None)
             return self._fallback_with_reason(
                 signal_path, compile_log, top_hint, max_depth,
                 include_expr, kind_filter, simulator, f"exception: {exc}"
@@ -467,7 +494,9 @@ class VerdiNpiBackend:
     ) -> dict[str, Any]:
         self._last_query_kdb_status = None
         try:
-            compile_result = parse_compile_log(compile_log, simulator)
+            compile_result = getattr(self, "_bound_compile_result", None)
+            if compile_result is None:
+                compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:
@@ -481,11 +510,15 @@ class VerdiNpiBackend:
                     reason="npi_load_failed",
                 )
             self._record_query_kdb_status()
-            return self._npi_find_path(
+            result = self._npi_find_path(
                 from_signal, to_signal, expand_assigns=expand_assigns,
             )
+            return self._finish_bound_query(result)
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_path failed: %s", exc)
+            self._finish_bound_query(None)
             return self._path_fallback(
                 from_signal, to_signal, expand_assigns,
                 reason=f"exception: {exc}",
@@ -509,7 +542,7 @@ class VerdiNpiBackend:
             expand_assigns=expand_assigns,
         )
         result.setdefault("_npi_fallback_reason", reason)
-        return result
+        return self._finish_bound_query(result)
 
     def _npi_find_path(
         self,
@@ -994,7 +1027,12 @@ class VerdiNpiBackend:
     # ── lifecycle ─────────────────────────────────────────────────────
 
     def _ensure_loaded(self, kdb_path: str, top: str) -> bool:
-        identity = kdb_identity(kdb_path)
+        anchor = getattr(self, "_bound_kdb_anchor", None)
+        if anchor is not None:
+            if os.path.abspath(kdb_path) != anchor.path:
+                raise KdbBindingChanged()
+            anchor.require_current()
+        identity = ("bounded_maps", anchor.identity_sha256) if anchor is not None else kdb_identity(kdb_path)
         if (self._state == "ready" and self._loaded_kdb == kdb_path and self._loaded_top == top
                 and self._npi_modules is not None
                 and _NPI_ACTIVE_DESIGNS.get(id(self._npi_modules[0])) == (kdb_path, top, identity)):
@@ -1030,7 +1068,7 @@ class VerdiNpiBackend:
                 old_degraded = self._loaded_degraded
                 old_error_count = self._degraded_error_count
                 old_error_log = self._degraded_error_log
-                _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
+                old_active = _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
                 rc = npisys.load_design([
                     "traceweave_npi",
                     "-simflow", "-dbdir", dbdir,
@@ -1057,7 +1095,10 @@ class VerdiNpiBackend:
                             and self._netlist_usable(netlist, old_top)
                         )
                         if restored:
-                            _NPI_ACTIVE_DESIGNS[npisys_id] = (old_kdb, old_top, kdb_identity(old_kdb))
+                            # Restore only the identity already owned by this
+                            # backend; never bless a fresh stat as its old load.
+                            if old_active is not None and old_active[:2] == (old_kdb, old_top):
+                                _NPI_ACTIVE_DESIGNS[npisys_id] = old_active
                             self._state = old_state
                             self._loaded_kdb = old_kdb
                             self._loaded_top = old_top
@@ -1067,6 +1108,7 @@ class VerdiNpiBackend:
                         else:
                             _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
                             self._clear_loaded_state(failed=True)
+                    self._finish_bound_query(None)
                     return False
             self._state = "ready"
             _NPI_ACTIVE_DESIGNS[npisys_id] = (kdb_path, top, identity)
@@ -1081,10 +1123,16 @@ class VerdiNpiBackend:
             else:
                 self._degraded_error_count = None
                 self._degraded_error_log = None
+            self._finish_bound_query(None)
             return True
+        except (OperationCancelled, CaptureAborted, KdbBindingChanged):
+            _NPI_ACTIVE_DESIGNS.pop(id(npisys), None)
+            self._clear_loaded_state(failed=True)
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("npisys.load_design crashed: %s", exc)
             self._clear_loaded_state(failed=True)
+            self._finish_bound_query(None)
             return False
 
     def _netlist_usable(self, netlist: Any, top: str) -> bool:
@@ -2061,10 +2109,13 @@ class VerdiNpiBackend:
         # Tag the reason; the dispatch layer surfaces it through
         # backend_status.fallback_reason / actual_backend.
         result.setdefault("_npi_fallback_reason", reason)
-        return result
+        return self._finish_bound_query(result)
 
-    @staticmethod
-    def _kdb_path_from(compile_result: dict[str, Any], compile_log: str) -> str | None:
+    def _kdb_path_from(self, compile_result: dict[str, Any], compile_log: str) -> str | None:
+        anchor = getattr(self, "_bound_kdb_anchor", None)
+        if anchor is not None:
+            anchor.require_current()
+            return anchor.path
         status = probe_verdi_backend(compile_result, compile_log_path=compile_log)
         return status.get("kdb_path")
 

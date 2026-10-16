@@ -415,7 +415,17 @@ Verification
   A complete map observation is neither a successful NPI load nor proof that
   compiled sources match current files. Unmapped database payloads are outside
   this identity, and every receipt preserves that limitation. This primitive
-  does not yet replace legacy KDB selection or bind a public design handle.
+  does not yet bind a public design handle. Internal local and LSF connectivity
+  backends accept a validated anchor, use its fixed path, and reject changing
+  generations before loading and after querying. Bound compile metadata is
+  copied and shared with driver/load/path and source fallback; it is not
+  reparsed from a different log. Local loaded-design identity includes the raw
+  map fingerprint for these bound calls. The LSF protocol (3.0) carries the
+  expected map fingerprint and budget; the worker validates before load and
+  after query, and reports fixed identity-change/timeout failures to the parent.
+  These failures and cancellation propagate without starting Static fallback.
+  Unbound library callers retain automatic candidate selection. Candidate
+  binding is an identity boundary, not NPI session pooling or source matching.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first
@@ -2080,7 +2090,8 @@ ordered declared bits. Typed arithmetic, variable shifts, vector bitwise,
 logical and reduction cells use the shared evaluator. Ambiguous EqComp cells
 (`==` versus `===`), generic OpCells and unproven operand order explicitly
 restart the whole trace on Source Graph. NPI facts are never relabeled as
-Slang evidence. The LSF worker and dynamic step protocols are 2.0.
+Slang evidence. The LSF worker protocol is 3.0; the dynamic step fact protocol
+remains 2.0.
 
 Slang preserves pure SV operators, casts, packed dimensions, fixed-array leaf
 types, packed fields and net declaration initializers. It samples selected
