@@ -195,7 +195,7 @@ def test_reads_are_chunked_and_growth_during_read_is_rejected(tmp_path, monkeypa
         assert requests and all(0 < size <= 1024 * 1024 for size in requests)
 
 
-def test_same_length_mutation_between_read_and_stat_is_rejected(tmp_path, monkeypatch):
+def test_same_length_mutation_during_read_cannot_publish_snapshot(tmp_path, monkeypatch):
     path = tmp_path / "changed.f"
     path.write_bytes(b"before")
     changed = False
@@ -210,6 +210,10 @@ def test_same_length_mutation_between_read_and_stat_is_rejected(tmp_path, monkey
     with CompileInputCapture() as capture:
         with pytest.raises(CaptureAborted) as raised:
             capture.read_bytes(str(path))
+            # Some local filesystems coarsen both mtime and ctime to a tick.
+            # Stat can reject immediately; raw-byte validation must reject
+            # before publication even when that first check cannot see it.
+            capture.snapshot()
         assert raised.value.code == "input_changed"
 
 
@@ -426,7 +430,13 @@ def _parser_case(tmp_path, simulator):
     if simulator == "vcs":
         log.write_text(f"Chronologic VCS simulator\nCommand: vcs -sverilog -f {outer} -top top\n")
     elif simulator == "xcelium":
-        log.write_text(f"xrun\n  -f {outer}\n  -top top\nfile: {source}\n  module worklib.top:v\n")
+        # Wrapper commands must replay the filelist. A native indented xrun
+        # transcript already contains its expansion and deliberately avoids
+        # refeeding -f (covered separately below).
+        log.write_text(
+            f"cd {tmp_path} && xrun -f {outer} -top top\n"
+            f"file: {source}\n  module worklib.top:v\n"
+        )
     else:
         log.write_text(f"make: Entering directory '{tmp_path}'\nverilator --cc -f design.f --top-module top\n")
     return source, log, outer, nested
@@ -479,6 +489,7 @@ def _environment_context(tmp_path):
         "compile_cwd": str(tmp_path),
         "compile_command": f"vcs -f {outer} -top top",
         "compile_evidence": {
+            "schema_version": 1,
             "unit_order_source": "simulator_log",
             "ordered_compilation_units": [{"path": str(source), "role": "project"}],
         },
@@ -501,3 +512,24 @@ def test_compile_environment_does_not_swallow_capture_abort(tmp_path):
             with pytest.raises(CaptureAborted) as raised:
                 resolve_compile_environment(context)
             assert raised.value.code == "file_limit"
+
+
+def test_native_xcelium_expansion_does_not_replay_filelist(tmp_path):
+    source, log, outer, nested = _parser_case(tmp_path, "xcelium")
+    log.write_text(
+        f"xrun\n  -f {outer}\n    -F {nested}\n"
+        f"      +define+FROM_NATIVE=23\n      {source}\n"
+        f"  -top top\nfile: {source}\n  module worklib.top:v\n"
+    )
+    with CompileInputCapture() as capture, bind_compile_input_capture(capture):
+        result = parse_compile_log(str(log), "xcelium")
+        options = extract_preprocessor_options(result, str(source))
+        assert options.complete
+        assert options.macro_dict()["FROM_NATIVE"] == "23"
+        assert "FROM_NESTED" not in options.macro_dict()
+        assert set(_records(capture)) == {str(log.resolve())}
+        # Preparation must separately capture these recorded support files;
+        # parser I/O alone cannot prove the full compile-input closure.
+        assert {item["path"] for item in result["compile_evidence"]["filelists"]} == {
+            str(outer.resolve()), str(nested.resolve()),
+        }
