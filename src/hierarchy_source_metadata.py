@@ -28,6 +28,7 @@ class CompileSourceFile:
     includes: tuple[str, ...]
     is_compilation_unit: bool
     is_reported_include: bool
+    is_dependency_include: bool
     source_status: str
 
     def row(self) -> dict:
@@ -37,7 +38,8 @@ class CompileSourceFile:
             "compiler_file_types": list(self.compiler_types), "compilation_roles": list(self.roles),
             "includes": list(self.includes), "include_origin": "compile_log",
             "is_compilation_unit": self.is_compilation_unit,
-            "is_reported_include": self.is_reported_include, "source_status": self.source_status,
+            "is_reported_include": self.is_reported_include,
+            "is_dependency_include": self.is_dependency_include, "source_status": self.source_status,
         }
 
 
@@ -149,7 +151,8 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
             return None
         return spelling
 
-    def add(spelling, *, category=None, compiler_type=None, role=None, unit=False, included=False):
+    def add(spelling, *, category=None, compiler_type=None, role=None, unit=False,
+            included=False, dependency=False):
         checkpoint()
         path = canonical(spelling)
         if path is None:
@@ -159,7 +162,8 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
                 raise HierarchyBudgetExceeded("metadata_file_limit")
             charge(("file", path, context.identity_sha256))
             records[path] = {"aliases": set(), "categories": set(), "types": set(),
-                             "roles": set(), "includes": [], "unit": False, "included": False}
+                             "roles": set(), "includes": [], "unit": False,
+                             "included": False, "dependency": False}
         record = records[path]
         for key, value in (("aliases", spelling), ("categories", category),
                            ("types", compiler_type), ("roles", role)):
@@ -168,6 +172,7 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
                 record[key].add(value)
         record["unit"] |= unit
         record["included"] |= included
+        record["dependency"] |= dependency
         return path
 
     for item in result.get("files", {}).get("user", []):
@@ -190,7 +195,7 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
         include_edge(item.get("parent"), item.get("path"))
     for item in context.include_resolutions:
         if item.selected is not None:
-            add(item.selected_spelling or item.selected, included=True)
+            add(item.selected_spelling or item.selected, dependency=True)
     for spelling, path in context.aliases:
         checkpoint()
         if path in records and spelling not in records[path]["aliases"]:
@@ -206,7 +211,7 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
             semantic_fact_id("compile_metadata", context.identity_sha256, "file", path), path,
             tuple(sorted(item["aliases"])), tuple(sorted(item["categories"])),
             tuple(sorted(item["types"])), tuple(sorted(item["roles"])), tuple(item["includes"]),
-            item["unit"], item["included"],
+            item["unit"], item["included"], item["dependency"],
             "captured" if path in available else "unavailable" if path in unavailable else "not_captured",
         ))
     if "compile_inputs_incomplete" in context.gaps:
