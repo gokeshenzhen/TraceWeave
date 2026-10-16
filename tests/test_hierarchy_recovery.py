@@ -278,11 +278,11 @@ async def test_ambiguous_top_and_wrong_simulator_stop_before_build(monkeypatch, 
     assert wrong_sim.error_code == "compile_context_changed"
     wrong_top = await query({**ctx, "top_hint":"other"})
     assert wrong_top.error_code == "compile_context_changed"
-    original = server._parse_merged_compile_context
-    def ambiguous(**kwargs):
-        parsed, sim = original(**kwargs)
-        return {**parsed, "top_modules":["top","other"]}, sim
-    monkeypatch.setattr(server, "_parse_merged_compile_context", ambiguous)
+    # Exercise actual compile evidence, independent of which parser adapter
+    # performs recovery. Both tops must be present in the command itself.
+    log = Path(ctx["compile_log"])
+    log.write_text(log.read_text().replace("-top top\n", "-top top -top other\n")
+                   + "       other\n")
     r = await query({k:v for k,v in ctx.items() if k != "top_hint"})
     assert r.error_code == "compile_context_ambiguous"
     assert len(server._handle_store) == 0
