@@ -76,7 +76,7 @@ def _design(root, *, supplements=False, environment=False, include=False):
         header.write_text("`define TEST_RECOVERY_VALUE 1\n")
     option = "+define+RECOVERY_VALUE=$TW_RECOVERY_VALUE " if environment else "+define+RECOVERY_VALUE=1 "
     log.write_text("Chronologic VCS simulator\n"
-        f"Command: vcs -sverilog {option}{source} -top top\n"
+        f"Command: vcs -sverilog {option}{source} -top top -top alternate\n"
         f"Parsing design file '{source}'\nTop Level Modules:\n       top\n       alternate\n")
     logs = []
     if supplements:
