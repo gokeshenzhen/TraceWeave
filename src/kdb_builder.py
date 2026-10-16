@@ -264,6 +264,7 @@ def _extract_build_inputs(
     compile_result: dict[str, Any],
     *,
     top_hint: str | None,
+    source_reader=None,
 ) -> dict[str, Any]:
     records = _compilation_unit_records(compile_result)
     # files.user is a browsing inventory: it also contains class/header and
@@ -350,14 +351,22 @@ def _extract_build_inputs(
         h.update(b"\0")
         try:
             before = os.stat(f)
-            with open(f, "rb") as stream:
-                while block := stream.read(1024 * 1024):
-                    check_cancelled()
-                    h.update(block)
+            if source_reader is not None:
+                # Independent context discovery supplies a bounded call-local
+                # capture. The normal builder retains its streaming behavior.
+                h.update(source_reader(f))
+            else:
+                with open(f, "rb") as stream:
+                    while block := stream.read(1024 * 1024):
+                        check_cancelled()
+                        h.update(block)
             after = os.stat(f)
             if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
             ):
+                if source_reader is not None:
+                    from .compile_input_capture import CaptureAborted
+                    raise CaptureAborted("input_changed")
                 return {"error": "Compile inputs changed during KDB identity validation; retry with stable inputs."}
         except OSError:
             return {"error": f"KDB compile dependency is unavailable: {f}"}

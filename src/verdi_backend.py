@@ -25,7 +25,12 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+from .cancellation import OperationCancelled
+from .compile_input_capture import CaptureAborted, bind_compile_input_capture
 
 
 _KDB_DIRNAME = "kdb.elab++"
@@ -34,6 +39,42 @@ _SETUP_FILENAME = "synopsys_sim.setup"
 _MAX_KDB_MARKER_BYTES = 64 * 1024
 _MAX_KDB_ERROR_LOG_BYTES = 4 * 1024 * 1024
 _ELAB_ERROR_COUNT_RE = re.compile(r"Total\s+(\d+)\s+error\(s\)", re.IGNORECASE)
+_discovery_capture = ContextVar("kdb_discovery_capture", default=None)
+
+
+@contextmanager
+def bounded_kdb_discovery(capture, *, max_entries: int = 4096):
+    """Bound the existing filesystem probe without changing legacy callers.
+
+    Directory entries share one call-local cap. Compile replay/cache hashing
+    uses the supplied raw-byte capture, whose bodies are released by its owner.
+    This scope never initializes NPI or runs a KDB builder.
+    """
+    if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
+        raise ValueError("discovery entry limit must be positive")
+    state = {"capture": capture, "max_entries": max_entries, "entries": 0}
+    token = _discovery_capture.set(state)
+    try:
+        with bind_compile_input_capture(capture):
+            yield state
+            capture.checkpoint()
+    finally:
+        _discovery_capture.reset(token)
+
+
+def _directory_entries(directory):
+    state = _discovery_capture.get()
+    if state is None:
+        return os.listdir(directory)
+    entries = []
+    with os.scandir(directory) as iterator:
+        for entry in iterator:
+            state["capture"].checkpoint()
+            state["entries"] += 1
+            if state["entries"] > state["max_entries"]:
+                raise CaptureAborted("kdb_discovery_entry_limit")
+            entries.append(entry.name)
+    return entries
 
 
 def probe_verdi_backend(
@@ -50,6 +91,9 @@ def probe_verdi_backend(
     Returns a BackendStatus-shape dict suitable for direct injection
     into the tool response.
     """
+    discovery = _discovery_capture.get()
+    if discovery is not None:
+        discovery["capture"].checkpoint()
     simulator_raw = (compile_result.get("simulator") or "unknown").lower()
     simulator = simulator_raw if simulator_raw in ("vcs", "xcelium", "verilator") else "unknown"
 
@@ -158,6 +202,8 @@ def probe_verdi_backend(
     else:
         kdb_hint = _build_kdb_hint(simulator, compile_result, verdi_home, license_env)
 
+    if discovery is not None:
+        discovery["capture"].checkpoint()
     return {
         "simulator": simulator,
         "backend": "static",
@@ -264,7 +310,13 @@ def _probe_traceweave_cached_kdb(
     except Exception:
         return None
     try:
-        inputs = _extract_build_inputs(compile_result, top_hint=None)
+        state = _discovery_capture.get()
+        inputs = _extract_build_inputs(
+            compile_result, top_hint=None,
+            **({"source_reader": state["capture"].read_bytes} if state else {}),
+        )
+    except (OperationCancelled, CaptureAborted):
+        raise
     except Exception:
         return None
     if "error" in inputs:
@@ -299,7 +351,7 @@ def _elab_kdb_candidates(directory: str | None) -> list[str]:
         return []
     candidates = [os.path.join(directory, _KDB_DIRNAME)]
     try:
-        entries = os.listdir(directory)
+        entries = _directory_entries(directory)
     except OSError:
         return candidates
     candidates.extend(
@@ -349,6 +401,10 @@ def read_kdb_elab_error_metadata(
     """
 
     marker_path = os.path.join(kdb_path, _KDB_ELAB_ERROR_MARKER)
+    if _discovery_capture.get() is not None:
+        # Error-log text is optional diagnostic data, not generation evidence.
+        # Keep independent first-query discovery out of arbitrary vendor logs.
+        return None, None
     try:
         marker_text = _read_bounded_text(marker_path, _MAX_KDB_MARKER_BYTES)
         marker_line = next(
@@ -392,7 +448,16 @@ def _read_synopsys_sim_setup(path: str, case_dir: str) -> str | None:
     if not os.path.exists(path):
         return None
     try:
-        with open(path, "r", errors="replace") as f:
+        state = _discovery_capture.get()
+        if state is not None:
+            from .compile_input_capture import open_compile_text
+            state["capture"].checkpoint()
+            if os.stat(path).st_size > 64 * 1024:
+                raise CaptureAborted("kdb_setup_byte_limit")
+            stream = open_compile_text(path)
+        else:
+            stream = open(path, "r", errors="replace")
+        with stream as f:
             for line in f:
                 line = line.split("--", 1)[0].split("//", 1)[0].strip()
                 if not line or ":" not in line:
@@ -415,7 +480,7 @@ def _read_synopsys_sim_setup(path: str, case_dir: str) -> str | None:
 def _find_libpp_under(directory: str) -> str | None:
     if not os.path.isdir(directory):
         return None
-    for entry in os.listdir(directory):
+    for entry in _directory_entries(directory):
         if entry.endswith(".lib++"):
             full = os.path.join(directory, entry)
             if os.path.isdir(full):

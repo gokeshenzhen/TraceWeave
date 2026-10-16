@@ -426,6 +426,14 @@ Verification
   These failures and cancellation propagate without starting Static fallback.
   Unbound library callers retain automatic candidate selection. Candidate
   binding is an identity boundary, not NPI session pooling or source matching.
+  The optional `bounded_kdb_discovery` scope reuses that filesystem probe with
+  one directory-entry budget (4,096 by default) and a caller-owned input
+  capture. Setup files have a 64-KiB size precheck; compile option/filelist
+  replay and managed-cache hashing share the capture's file/byte/time limits.
+  It omits optional vendor error-log reads and propagates cancellation, budget
+  and changed-input failures. The ordinary probe and explicit KDB builder keep
+  their existing behavior outside this scope. The owner must close the capture
+  and account for its reads; this does not eliminate first-query discovery cost.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first
