@@ -436,6 +436,15 @@ Verification
   This does not introduce a persistent NPI worker or change Slang/disk defaults.
   Type-parameter inventory remains unverified; definition IDs conservatively
   include the instance path rather than merging unproved specializations.
+  `hierarchy_source_metadata` builds a separate bounded compile-file ownership
+  index from the immutable context, including captured aliases and selected
+  include dependencies. It performs no filesystem reads or live symlink
+  resolution, lexical scanning or semantic loading. Compiler file-type hints
+  and reported include edges retain their compile-metadata provenance; they
+  are not semantic declarations or a complete preprocessor include tree.
+  Basename/path filtering and the three compile-record exports can use this
+  layer without loading a frontend. Semantic file filters, file symbols,
+  classes and the remaining exports still require the shared provider work.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
