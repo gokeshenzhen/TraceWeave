@@ -405,6 +405,17 @@ Verification
   this entry does not satisfy their legacy prerequisite gates. Neither optional
   Slang cache default changes. Preparation, registration validation and later
   query costs must be measured together before claiming a speedup.
+  `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:
+  two observations of five fixed elaboration maps, including raw hashes and
+  aliases, must agree. It distinguishes missing, empty, source-only and
+  elaborated candidates from error-marked or unrecognized artifacts without
+  loading NPI. Directory mtime/size changes from temporary locks are ignored;
+  root replacement and map changes invalidate the anchor. Read budgets,
+  cancellation, unreadable/non-regular maps and changing inputs remain explicit.
+  A complete map observation is neither a successful NPI load nor proof that
+  compiled sources match current files. Unmapped database payloads are outside
+  this identity, and every receipt preserves that limitation. This primitive
+  does not yet replace legacy KDB selection or bind a public design handle.
   While hierarchy preprocessing already has source/include bytes open, it
   captures a private immutable compile-session snapshot of digest, stat, size,
   and fixed-label marker facts; source bodies are not retained. On the first
