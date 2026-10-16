@@ -411,7 +411,19 @@ Verification
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
   of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  Six-tool migration remains separate work. Expired explicit `compile_context`
+  Six-tool migration remains separate work. The internal
+  `hierarchy_source_service` instance-query engine consumes immutable
+  `HierarchyScope` facts and provider-owned child streams. Exact path lookup
+  does not enumerate siblings; bounded subtree browsing stops at display
+  frontiers and returns a lower bound instead of an invented exact total.
+  Explicit exact counting can traverse undisplayed scopes under separate
+  scope/call/depth/byte/time budgets. Output truncation and incomplete analysis
+  have separate receipts. Every opened stream is closed on normal completion,
+  early stop, cancellation or failure. Definition and instantiation locations
+  are distinct, and generate scopes need not invent a module definition.
+  This internal boundary does not yet route the public six tools; their legacy
+  handles and exact counts continue through the existing adapter.
+  Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the
   existing dynamic route without a hierarchy or legacy-handle lookup. Snapshot
