@@ -67,6 +67,9 @@ _LOG = logging.getLogger(__name__)
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
 _NPI_ACTIVE_DESIGNS: dict[int, tuple] = {}
+# A reload can invalidate native handles without changing the design identity.
+# Increment before every load attempt, including restoration after a failure.
+_NPI_LOAD_GENERATIONS: dict[int, int] = {}
 _BANNER_SILENCER_INSTALLED = False
 _NPI_FAN_IN_CALLBACK_LOCK = threading.Lock()
 
@@ -383,12 +386,12 @@ class VerdiNpiBackend:
         budget.checkpoint()
         self._last_query_kdb_status = None
         started = time.monotonic()
-        npisys_id, load_ms = None, 0.0
+        npisys_id, load_generation, load_ms = None, None, 0.0
         expected = (anchor.path, top, ("bounded_maps", anchor.identity_sha256))
         owner_thread = threading.get_ident()
 
         def prepare_owner():
-            nonlocal npisys_id, load_ms
+            nonlocal npisys_id, load_generation, load_ms
             load_started = time.monotonic()
             if not self._ensure_loaded(anchor.path, top):
                 raise NpiHierarchyUnavailable("npi_load_failed")
@@ -396,18 +399,22 @@ class VerdiNpiBackend:
             budget.checkpoint()
             self._record_query_kdb_status()
             npisys_id = id(self._npi_modules[0])
+            load_generation = _NPI_LOAD_GENERATIONS.get(npisys_id, 0)
 
         def require_owner():
             # Identity-only: cleanup must still run when the caller cancelled.
             if (threading.get_ident() != owner_thread or self._state != "ready"
                     or self._npi_modules is None or id(self._npi_modules[0]) != npisys_id
+                    or _NPI_LOAD_GENERATIONS.get(npisys_id, 0) != load_generation
                     or _NPI_ACTIVE_DESIGNS.get(npisys_id) != expected):
                 raise NpiHierarchyUnavailable("npi_loaded_generation_changed")
 
         def cleanup_failed():
-            if _NPI_ACTIVE_DESIGNS.get(npisys_id) == expected:
+            if (_NPI_LOAD_GENERATIONS.get(npisys_id, 0) == load_generation
+                    and _NPI_ACTIVE_DESIGNS.get(npisys_id) == expected):
                 _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
-            self._clear_loaded_state(failed=True)
+                if self._npi_modules is not None and id(self._npi_modules[0]) == npisys_id:
+                    self._clear_loaded_state(failed=True)
 
         identity = hashlib.sha256((anchor.identity_sha256 + "\0" + top).encode()).hexdigest()
         with _silence_native_stdio():
@@ -1141,6 +1148,7 @@ class VerdiNpiBackend:
                 old_error_count = self._degraded_error_count
                 old_error_log = self._degraded_error_log
                 old_active = _NPI_ACTIVE_DESIGNS.pop(npisys_id, None)
+                _NPI_LOAD_GENERATIONS[npisys_id] = _NPI_LOAD_GENERATIONS.get(npisys_id, 0) + 1
                 rc = npisys.load_design([
                     "traceweave_npi",
                     "-simflow", "-dbdir", dbdir,
@@ -1156,6 +1164,7 @@ class VerdiNpiBackend:
                     # Failed load wipes the previously loaded case in NPI.
                     # Best-effort restore so subsequent calls can still hit cache.
                     if old_kdb and old_top:
+                        _NPI_LOAD_GENERATIONS[npisys_id] += 1
                         restore_rc = npisys.load_design([
                             "traceweave_npi",
                             "-simflow", "-dbdir", _simflow_dbdir(old_kdb),
