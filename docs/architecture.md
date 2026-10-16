@@ -486,7 +486,9 @@ Verification
   Slang class projection and public six-tool routing are subsequent work.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
-  against the byte budget. Semantic exports reuse the instance, class and file
+  against the byte budget. `record_export_complete` describes a successful
+  captured-record copy; reported coverage gaps still make `export_complete`
+  false. Semantic exports reuse the instance, class and file
   engines with one cumulative budget. `export_complete` also requires that
   output is not truncated; an exact count alone cannot make a partial export
   complete. Version 2 data keeps semantic identities and separate locations;
@@ -496,7 +498,8 @@ Verification
   selection. Its request-local plan uses only captured compile ownership to
   detect metadata-only work, nonmember files and empty file selections. Those
   requests need no NPI/Slang acquisition. Catalog preparation and execution
-  share one budget; cancellation/typed failures propagate, and a preparation
+  share one budget; execution rejects a catalog from another context before
+  touching a provider. Cancellation/typed failures propagate, and a preparation
   limit reports partial/not-run without selecting another backend. The plan
   retains no source bodies or frontend state and is not a registry cache.
   Expired explicit `compile_context`

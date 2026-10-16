@@ -120,10 +120,12 @@ def _export_section(context, provider, section, max_items, catalog, budget):
     if section in METADATA_SECTIONS:
         result = export_compile_metadata(context, section, checkpoint=budget.checkpoint)
         budget.admit_payload(result["data"])
-        # Completeness here concerns the captured record, not the compilation
-        # or semantic design. Keep the record's independent coverage gaps.
+        # record_export_complete reports an exact copy of the captured record.
+        # The common export flag also requires complete reported coverage.
+        complete = result["coverage_status"] == "complete" and not result["coverage_gaps"]
         return dict(result, schema_version=HIERARCHY_TOOL_SCHEMA_VERSION,
-                    export_complete=True, output_truncated=False, analysis_limits=[],
+                    export_complete=complete, output_truncated=False, analysis_limits=[],
+                    warning="" if complete else "section export is incomplete; inspect coverage and output limits",
                     query_metrics=budget.metrics())
     if section in {"files_full", "interfaces"}:
         if catalog is None:

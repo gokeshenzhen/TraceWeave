@@ -59,6 +59,11 @@ class HierarchySourceRequest:
     def execute(self, provider=None):
         """Query only the selected provider; no implicit fallback or loading."""
         check_cancelled()
+        if self.catalog is not None:
+            if not isinstance(self.catalog, CompileSourceCatalog):
+                raise TypeError("a captured compile source catalog is required")
+            if self.catalog.context_identity != self.context.identity_sha256:
+                raise ValueError("file catalog belongs to a different context")
         if self.preparation_limit is not None:
             return self._unstarted(self.preparation_limit)
         try:
