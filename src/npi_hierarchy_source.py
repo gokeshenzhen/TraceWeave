@@ -108,27 +108,20 @@ class _Children:
             return fact
 
 
-class _Classes:
-    """Bounded global static declaration walk, with no eager SDK list calls.
+class _Namespaces:
+    """One bounded explicit namespace walk; never builds an instance tree."""
 
-    Derived-class lookup requires examining compilation scopes, including
-    packages outside the selected top's instance subtree. This walk is paid
-    only by an explicit class query. The verified relation does not yet prove
-    visibility of uninstantiated definitions or every class specialization.
-    """
-
-    def __init__(self, provider):
+    def __init__(self, provider, *, gaps=(), root_gap="npi_namespace_roots_unavailable"):
         self.provider = provider
         self.complete = False
-        self.gaps = ("npi_uninstantiated_declaration_inventory_unverified",
-                     "npi_class_specialization_inventory_unverified")
+        self.gaps = tuple(gaps)
         if provider.degraded:
             self.add_gap("npi_degraded_design")
         self.seen, self.pending = set(), None
         iterator = _LanguageIterator(provider, provider.low.Instance, None)
         self.stack = [(iterator, None, 0)]
         if iterator.raw is None:
-            self.add_gap("npi_class_roots_unavailable")
+            self.add_gap(root_gap)
 
     def add_gap(self, gap):
         self.gaps = tuple(sorted(set(self.gaps) | {gap}))
@@ -175,8 +168,7 @@ class _Classes:
                 self.add_gap("npi_array_container_children_unavailable")
                 continue
             self.pending = handle, path, depth
-            if kind == "npiClassDefn":
-                return provider.project_class(handle)
+            return handle, kind, path
 
     def close(self):
         self.pending = None
@@ -190,6 +182,22 @@ class _Classes:
                     first_error = exc
         if first_error is not None:
             raise first_error
+
+
+class _Classes(_Namespaces):
+    """Explicit class inventory over observed compilation namespaces."""
+
+    def __init__(self, provider):
+        super().__init__(provider,
+                         gaps=("npi_uninstantiated_declaration_inventory_unverified",
+                               "npi_class_specialization_inventory_unverified"),
+                         root_gap="npi_class_roots_unavailable")
+
+    def __next__(self):
+        while True:
+            handle, kind, _ = super().__next__()
+            if kind == "npiClassDefn":
+                return self.provider.project_class(handle)
 
 
 class NpiHierarchySourceProvider:
@@ -208,6 +216,7 @@ class NpiHierarchySourceProvider:
         self.cleanup_ms = 0.0
         self.cleanup_error = None
         self._top_handle = None
+        self._file_inventory = None
 
     def check(self):
         if not self.active or threading.get_ident() != self.thread:
@@ -442,6 +451,31 @@ class NpiHierarchySourceProvider:
         finally:
             stream.close()
 
+    @contextmanager
+    def open_file_symbols(self, entry, budget):
+        if budget is not self.budget:
+            raise ValueError("a native owner uses one query budget")
+        self._require_top()
+        from .npi_hierarchy_files import FileInventory, FileSymbols
+        if self._file_inventory is None:
+            self._file_inventory = FileInventory(self)
+        stream = FileSymbols(self._file_inventory, entry)
+        try:
+            yield stream
+        finally:
+            # An interrupted consumer cannot leave a suspended native walk.
+            # Exhausted inventories contain copied facts only and are reusable
+            # by subsequent files in this same exclusive query owner.
+            if not self._file_inventory.exhausted:
+                active_error = sys.exc_info()[1]
+                try:
+                    self._file_inventory.close()
+                except BaseException as exc:
+                    if self.cleanup_error is None:
+                        self.cleanup_error = exc
+                    if active_error is None:
+                        raise
+
     def close_iterator(self, iterator):
         active_error = sys.exc_info()[1]
         try:
@@ -468,11 +502,28 @@ class NpiHierarchySourceProvider:
             for iterator in self.iterators:
                 iterator.raw = None
             self.iterators.clear()
-            self._top_handle = None
-            self.active = False
-            self.cleanup_ms = (time.monotonic() - started) * 1000
+            try:
+                if self._file_inventory is not None:
+                    self._file_inventory.close()
+            except BaseException as exc:
+                # Preserve the ownership failure. No invalid native handle
+                # may be released, and secondary cleanup cannot replace it.
+                if self.cleanup_error is None:
+                    self.cleanup_error = exc
+            finally:
+                self._file_inventory = None
+                self._top_handle = None
+                self.active = False
+                self.cleanup_ms = (time.monotonic() - started) * 1000
             raise
         try:
+            if self._file_inventory is not None:
+                try:
+                    self._file_inventory.close()
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+                self._file_inventory = None
             for iterator in tuple(self.iterators):
                 try:
                     iterator.close()
@@ -489,6 +540,7 @@ class NpiHierarchySourceProvider:
         finally:
             self.active = False
             self.iterators.clear()
+            first_error = first_error or self.cleanup_error
             self.cleanup_ms = (time.monotonic() - started) * 1000
         if first_error is not None:
             raise first_error

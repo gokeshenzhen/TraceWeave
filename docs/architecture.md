@@ -453,7 +453,18 @@ Verification
   and count modes distinguish a positive prefix from exact matching totals.
   UVM import and UVM usage are separate facts; no import does not prove no UVM.
   File, declaration and byte budgets cover semantic work independently of the
-  displayed page. Native/Slang file stream projection remains subsequent work.
+  displayed page. The internal NPI file adapter maps observed namespaces and
+  typedef relations to exact captured files. It charges the bounded global
+  namespace walk and retained copies explicitly as `global_namespaces_bounded`;
+  requesting one file does not prove that native work is local to that file.
+  Copied inventory is shared across files only within the same Language owner.
+  No source parse, Text-token inference or eager SDK list supplies declarations.
+  Uninstantiated declarations, variables, imports and UVM usage keep explicit
+  inventory gaps. Synthetic namespace observations and instance-qualified
+  specializations carry separate declaration statuses. Typedef identity uses
+  the actual scope/name relation; packed layout remains unprojected. This
+  adapter still needs independent product validation. Slang file projection
+  and public routing remain subsequent work.
   `hierarchy_source_symbols` defines copied source declarations and class-base
   bindings by semantic ID. Its internal class renderer keeps same-name classes
   separate, exposes unresolved/external bases and inheritance cycles, and never

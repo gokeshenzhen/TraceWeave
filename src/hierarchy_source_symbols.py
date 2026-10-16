@@ -42,6 +42,7 @@ class SourceSymbol:
     parameterization: tuple[tuple[str, str], ...] = ()
     external: bool = False
     gaps: tuple[str, ...] = ()
+    declaration_status: str = "declaration"
 
     def __post_init__(self):
         if not all(isinstance(value, str) and value
@@ -49,6 +50,8 @@ class SourceSymbol:
             raise ValueError("symbol identity and names must be nonempty")
         if self.kind not in _SYMBOL_KINDS:
             raise ValueError("unsupported declaration kind")
+        if self.declaration_status not in {"declaration", "specialization", "namespace_observation"}:
+            raise ValueError("unsupported declaration status")
         if self.location is not None and not isinstance(self.location, SourceLocation):
             raise ValueError("symbol locations must be immutable")
         if any(value is not None and (not isinstance(value, str) or not value)
@@ -73,7 +76,7 @@ class SourceSymbol:
             "source_line": self.location.line if self.location else None,
             "source_column": self.location.column if self.location else None,
             "parameterization": dict(self.parameterization), "external": self.external,
-            "gaps": list(self.gaps),
+            "gaps": list(self.gaps), "declaration_status": self.declaration_status,
         }
 
 

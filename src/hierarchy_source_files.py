@@ -55,6 +55,7 @@ def _metadata_row(entry, *, unavailable=False):
     return dict(entry.row(), file_type=None, modules=None, classes=None, interfaces=None,
                 symbols=None, has_uvm_import=None, contains_uvm=None,
                 semantic_status="unavailable" if unavailable else "not_run",
+                semantic_work_scope="not_run",
                 symbol_inventory_complete=False, symbol_count=None, symbol_count_lower_bound=0,
                 semantic_gaps=["semantic_provider_unavailable"] if unavailable else [],
                 analysis_limits=[])
@@ -71,9 +72,13 @@ def _collect_file(provider, entry, budget):
     """
     declarations, seen, gaps, limits = [], set(), set(), set()
     complete, imported, used, stream = False, None, None, None
+    work_scope = "provider_defined"
     try:
         budget.checkpoint()
         with provider.open_file_symbols(entry, budget) as stream:
+            work_scope = getattr(stream, "work_scope", "provider_defined")
+            if work_scope not in {"provider_defined", "file_declarations", "global_namespaces_bounded"}:
+                raise ValueError("file semantic work scope must be a fixed label")
             for symbol in stream:
                 budget.checkpoint()
                 if not isinstance(symbol, SourceSymbol):
@@ -104,10 +109,17 @@ def _collect_file(provider, entry, budget):
         limits.add(exc.reason)
         if stream is not None:
             gaps.update(_gaps(stream.gaps))
+            # A provider may already have copied positive import/usage facts
+            # before its declaration inventory stopped. Unknown/false cannot
+            # survive this stop as a proved negative.
+            imported = True if getattr(stream, "has_uvm_import", None) is True else imported
+            used = True if getattr(stream, "uses_uvm", None) is True else used
         # Budget stops cannot manufacture a negative semantic filter result.
         imported = True if imported is True else None
         used = True if used is True else None
 
+    if imported is True and used is not True:
+        raise ValueError("a proved UVM import must imply UVM usage")
     kinds = {symbol.kind for symbol in declarations}
     # Preserve the legacy classification priority, while not declaring class
     # or interface in the presence of an unexamined higher-priority kind.
@@ -121,6 +133,7 @@ def _collect_file(provider, entry, budget):
                 symbols=[symbol.row() for symbol in declarations],
                 has_uvm_import=imported, contains_uvm=used,
                 semantic_status="complete" if complete and not gaps and not limits else "partial",
+                semantic_work_scope=work_scope,
                 symbol_inventory_complete=complete,
                 symbol_count=len(declarations) if complete else None,
                 symbol_count_lower_bound=len(declarations),
