@@ -89,7 +89,8 @@ class DynamicRoute:
                 self.backend = select_backend(
                     self.probe, fallback=DeferredConnectivityFallbackBackend()
                 )
-            except (OperationCancelled, CaptureAborted, KdbBindingChanged, ExecutionBindingChanged, ContextUnavailable):
+            except (OperationCancelled, CaptureAborted, KdbBindingChanged, ExecutionBindingChanged,
+                    ContextUnavailable, TimeoutError):
                 raise
             except Exception:
                 self.backend = None
@@ -184,7 +185,7 @@ class DynamicRoute:
                         outcome.status, "source_graph_prepare_failed"
                     )
             except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
-                    ExecutionBindingChanged, ContextUnavailable):
+                    ExecutionBindingChanged, ContextUnavailable, TimeoutError):
                 raise
             except Exception:
                 reason = "source_graph_prepare_failed"
@@ -273,7 +274,7 @@ class DynamicRoute:
             except SourceGraphTraceScopeExpansion as exc:
                 self._expand(exc.signal_paths)
             except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
-                    ExecutionBindingChanged, ContextUnavailable):
+                    ExecutionBindingChanged, ContextUnavailable, TimeoutError):
                 raise
             except Exception:
                 result = unsupported_step(

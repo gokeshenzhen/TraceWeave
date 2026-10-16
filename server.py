@@ -3263,7 +3263,8 @@ def _select_prepared_backend(entry, deferred):
         return deferred, status, None
     try:
         backend = select_backend(status, fallback=deferred)
-    except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+    except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+            design_context_runtime.ContextUnavailable, TimeoutError):
         raise
     except Exception:
         return deferred, status, "npi_backend_initialization_failed"

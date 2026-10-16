@@ -46,11 +46,14 @@ class Budget:
 
     async def run(self, fn):
         self.check()
-        try:
-            with anyio.fail_after(self.remaining):
-                result = await fn()
-        except TimeoutError as exc:
-            raise BudgetExceeded("timeout_sec") from exc
+        # Only our own deadline is budget exhaustion. An explicit timeout
+        # reported by a backend/identity operation must retain its typed
+        # failure boundary, rather than preserving a partial graph or falling
+        # through to another backend.
+        with anyio.move_on_after(self.remaining) as scope:
+            result = await fn()
+        if scope.cancel_called:
+            raise BudgetExceeded("timeout_sec")
         self.check()
         return result
 
