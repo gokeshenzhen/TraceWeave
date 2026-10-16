@@ -266,14 +266,14 @@ def test_build_kdb_happy_path(tmp_path, monkeypatch):
     build_sh = Path(result["build_script_path"])
     assert build_sh.is_file()
     # build.sh content reflects what we ran.
-    script = build_sh.read_text()
+    script = build_sh.read_text(encoding="utf-8")
     assert "vericom" in script
     assert "elabcom" in script
     assert "-top 'tb_top'" in script or "-top tb_top" in script
     # vericom got called before elabcom.
     phases = [Path(c[0]).name for c in calls]
     assert phases == ["vericom", "elabcom"]
-    state = json.loads((Path(result["cache_dir"]) / "state.json").read_text())
+    state = json.loads((Path(result["cache_dir"]) / "state.json").read_text(encoding="utf-8"))
     assert state["status"] == "ok"
 
 
