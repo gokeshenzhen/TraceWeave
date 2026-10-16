@@ -1,12 +1,13 @@
 import os
 import sys
+import threading
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import schemas
-from src.cancellation import OperationCancelled
+from src.cancellation import OperationCancelled, push_cancel_event, pop_cancel_event
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
     _classify_driver_kind,
@@ -1306,25 +1307,33 @@ def test_driver_cancellation_inside_native_callback_resets_and_propagates(
     backend, _, _ = _make_backend_with_mock_npi(
         monkeypatch, netlist_obj=netlist_obj
     )
-    calls = 0
+    event = threading.Event()
+    original_register = netlist_obj.register_cb
+    callback_calls = 0
 
-    def cancel_on_callback():
-        nonlocal calls
-        calls += 1
-        if calls >= 3:
-            raise OperationCancelled("cancelled in callback")
+    def register_cancelling_callback(func_type, callback, data):
+        def cancelling_callback(handle, state):
+            nonlocal callback_calls
+            callback_calls += 1
+            event.set()
+            return callback(handle, state)
+        return original_register(func_type, cancelling_callback, data)
 
-    monkeypatch.setattr("src.verdi_npi_backend.check_cancelled", cancel_on_callback)
+    monkeypatch.setattr(netlist_obj, "register_cb", register_cancelling_callback)
+    token = push_cancel_event(event)
+    try:
+        with pytest.raises(OperationCancelled):
+            backend.find_driver(
+                signal_path="top_tb.dut.q",
+                wave_path="x.fsdb",
+                compile_log=log,
+                recursive=True,
+                simulator="vcs",
+            )
+    finally:
+        pop_cancel_event(token)
 
-    with pytest.raises(OperationCancelled):
-        backend.find_driver(
-            signal_path="top_tb.dut.q",
-            wave_path="x.fsdb",
-            compile_log=log,
-            recursive=True,
-            simulator="vcs",
-        )
-
+    assert callback_calls == 1
     assert net.fan_in_calls == 1
     assert netlist_obj.reset_calls == 1
     assert netlist_obj._fan_in_callback is None
@@ -1345,16 +1354,23 @@ def test_driver_cancellation_while_waiting_for_callback_lock_propagates(
         monkeypatch,
         netlist_obj=_MockNetlist({"top_tb.dut.q": net}),
     )
-    calls = 0
+    event = threading.Event()
 
-    def cancel_after_first_wait():
-        nonlocal calls
-        calls += 1
-        if calls >= 2:
-            raise OperationCancelled("cancelled while waiting")
+    class BusyLock:
+        attempts = 0
 
-    monkeypatch.setattr("src.verdi_npi_backend.check_cancelled", cancel_after_first_wait)
-    npi_module._NPI_FAN_IN_CALLBACK_LOCK.acquire()
+        def acquire(self, *, timeout):
+            assert 0 < timeout <= 0.05
+            self.attempts += 1
+            event.set()
+            return False
+
+        def release(self):
+            pytest.fail("cancelled waiter must not release a lock it never acquired")
+
+    lock = BusyLock()
+    monkeypatch.setattr(npi_module, "_NPI_FAN_IN_CALLBACK_LOCK", lock)
+    token = push_cancel_event(event)
     try:
         with pytest.raises(OperationCancelled):
             backend.find_driver(
@@ -1365,8 +1381,9 @@ def test_driver_cancellation_while_waiting_for_callback_lock_propagates(
                 simulator="vcs",
             )
     finally:
-        npi_module._NPI_FAN_IN_CALLBACK_LOCK.release()
+        pop_cancel_event(token)
 
+    assert lock.attempts == 1
     assert net.fan_in_calls == 0
 
 
