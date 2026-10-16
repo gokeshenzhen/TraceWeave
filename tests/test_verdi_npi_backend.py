@@ -883,22 +883,21 @@ def test_backend_kind_filter_passed_through(monkeypatch, tmp_path):
 _CC20_LOG = "/home/robin/Projects/mcp_practise/uvm_demo_cc20/tb/comp.log"
 
 
-def _verdi_available() -> bool:
-    if not os.environ.get("VERDI_HOME"):
-        return False
-    if not os.path.exists(_CC20_LOG):
-        return False
-    try:
-        from src.verdi_npi_backend import _import_pynpi
-        return _import_pynpi() is not None
-    except Exception:
-        return False
+@pytest.fixture
+def real_verdi_runtime():
+    # Collection and ordinary unit regressions must not import the installed
+    # SDK or checkout a license just because a local case happens to exist.
+    if os.environ.get("TRACEWEAVE_RUN_EDA_INTEGRATION") != "1":
+        pytest.skip("set TRACEWEAVE_RUN_EDA_INTEGRATION=1 for real NPI queries")
+    if not os.environ.get("VERDI_HOME") or not os.path.isfile(_CC20_LOG):
+        pytest.fail("explicit real NPI run requires VERDI_HOME and the cc20 compile log")
+    from src.verdi_npi_backend import _import_pynpi
+    if _import_pynpi() is None:
+        pytest.fail("explicit real NPI run requires an importable pynpi SDK")
 
 
-requires_verdi = pytest.mark.skipif(
-    not _verdi_available(),
-    reason="VERDI_HOME unset, cc20 case missing, or pynpi unimportable",
-)
+def requires_verdi(test):
+    return pytest.mark.eda_integration(pytest.mark.usefixtures("real_verdi_runtime")(test))
 
 
 @requires_verdi
