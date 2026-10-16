@@ -97,6 +97,18 @@ class HierarchySourceService:
     def __init__(self, provider: HierarchySourceProvider):
         self.provider = provider
 
+    def _query_budget(self, requested):
+        # A native provider's owner budget starts before loading/importing.
+        # Omitting the service argument must not reset that deadline or create
+        # a second incompatible budget. Stateless IR providers can use a fresh
+        # budget; an explicitly supplied budget remains the caller's choice.
+        budget = requested if requested is not None else getattr(self.provider, "budget", None)
+        if budget is None:
+            return HierarchyQueryBudget()
+        if not isinstance(budget, HierarchyQueryBudget):
+            raise TypeError("a hierarchy query budget is required")
+        return budget
+
     def _envelope(self, *, count_mode, domain, count, complete, gaps, limits,
                   output_truncated, budget):
         return {
@@ -128,7 +140,7 @@ class HierarchySourceService:
         """
         validate_hierarchy_query("get_tb_subtree", dict(root=root, depth=depth,
                                  max_nodes=max_nodes, count_mode=count_mode))
-        budget = budget or HierarchyQueryBudget()
+        budget = self._query_budget(budget)
         root = root or self.provider.top
         gaps, limits, seen = set(), set(), set()
         count = emitted = 0
@@ -227,7 +239,7 @@ class HierarchySourceService:
                        budget: HierarchyQueryBudget | None = None):
         validate_hierarchy_query("find_tb_instance", dict(path=path, module=module,
                                  limit=limit, count_mode=count_mode))
-        budget = budget or HierarchyQueryBudget()
+        budget = self._query_budget(budget)
         gaps, limits, seen = set(), set(), set()
         hits, count, complete, truncated = [], 0, True, False
 
