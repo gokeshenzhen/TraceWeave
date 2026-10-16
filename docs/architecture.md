@@ -473,6 +473,14 @@ Verification
   inventory gaps, not complete negative results. All iterators and handles
   share the same exclusive Language owner and cleanup deadline as instances.
   Slang class projection and public six-tool routing are subsequent work.
+  `hierarchy_source_export` composes the seven internal section exports.
+  Compile-record exports never touch a provider and charge their copied payload
+  against the byte budget. Semantic exports reuse the instance, class and file
+  engines with one cumulative budget. `export_complete` also requires that
+  output is not truncated; an exact count alone cannot make a partial export
+  complete. Version 2 data keeps semantic identities and separate locations;
+  legacy handles keep their raw scan dictionaries. These internal exports do
+  not yet replace the public six-tool route or its static UVM inference view.
   Expired explicit `compile_context`
   recovery can prepare a bound design on the KDB candidate route (see below).
   `PreparedTraceContext` supplies source identity and compile metadata to the

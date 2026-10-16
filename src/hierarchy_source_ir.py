@@ -214,3 +214,12 @@ class HierarchyQueryBudget:
             raise HierarchyBudgetExceeded("fact_byte_limit")
         self.file_count += 1
         self.fact_bytes += size
+
+    def admit_payload(self, value):
+        """Charge a copied metadata export without inventing semantic facts."""
+        self.checkpoint()
+        size = 512 + 4 * len(json.dumps(value, ensure_ascii=True))
+        self.checkpoint()
+        if self.fact_bytes + size > self.max_bytes:
+            raise HierarchyBudgetExceeded("fact_byte_limit")
+        self.fact_bytes += size

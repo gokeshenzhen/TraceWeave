@@ -87,19 +87,30 @@ def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
     except HierarchyBudgetExceeded as exc:
         result["coverage_status"] = "partial"
         result["analysis_limits"] = sorted(set(result["analysis_limits"]) | {exc.reason})
+        if "export_complete" in result:
+            result["export_complete"] = False
+            result["warning"] = "section export is incomplete; inspect coverage and output limits"
+        if result.get("semantic_status") == "complete":
+            result["semantic_status"] = "partial"
         if result.get("view") == "static_class_inheritance":
             # Class total is the number rendered, not a global exact count.
             result["class_inventory_count"] = None
             result["class_inventory_complete"] = False
             if result.get("error") == "class_not_found":
                 result["error"] = "class_unresolved"
+        elif "symbol_inventory_complete" in result:
+            result["symbol_inventory_complete"] = False
+            result["symbol_count"] = None
         else:
-            result["count_status"] = "lower_bound"
+            if "count_status" in result:
+                result["count_status"] = "lower_bound"
             for key in ("total", "total_descendants"):
                 if key in result:
                     result[key] = None
             if result.get("error") == "instance_not_found":
                 result["error"] = "instance_unresolved"
+            if result.get("error") == "file_not_in_compile_set":
+                result["error"] = "file_query_incomplete"
     result["query_metrics"].update(budget.metrics())
     return result
 
