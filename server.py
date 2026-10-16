@@ -151,6 +151,8 @@ from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.structural_scan_runtime import StructuralScanRuntime
 from src.design_identity import DesignIdentity, DesignIdentityReader
 import src.design_context_runtime as design_context_runtime
+from src.design_backend_binding import prepare_backend_binding, ExecutionBindingChanged
+from src.kdb_anchor import KdbBindingChanged
 from src.compile_input_capture import CaptureAborted, CaptureLimits
 from src.structural_semantic_runtime import SemanticScanRuntime, validate_semantic_options
 from src.structural_semantics import SEMANTIC_CATEGORIES
@@ -817,12 +819,14 @@ async def _resolve_connectivity_hierarchy_context(
 ) -> tuple[dict | None, str, dict | None, str | None]:
     """Prefer a full hierarchy, then optionally prove a bounded one."""
 
+    prepared = args.get("_prepared_design")
     bound = args.get("_bound_context")
     if bound is not None:
         return bound.hierarchy, bound.snapshot, None, None
 
-    hierarchy_result, snapshot = _resolve_hierarchy_context(
-        args["compile_log"], simulator
+    hierarchy_result, snapshot = (
+        (None, prepared.context.identity_sha256) if prepared is not None
+        else _resolve_hierarchy_context(args["compile_log"], simulator)
     )
     if hierarchy_result is not None or args.get("allow_bounded_bootstrap") is not True:
         return hierarchy_result, snapshot, None, None
@@ -851,11 +855,14 @@ async def _resolve_connectivity_hierarchy_context(
             code,
         )
 
-    cached = _resolve_cached_compile_context(
-        compile_log=args["compile_log"],
-        simulator=simulator,
+    cached = ({
+        "compile_result": prepared.context.compile_result(),
+        "simulator": prepared.context.simulator,
+        "snapshot_sha256": prepared.context.identity_sha256,
+    } if prepared is not None else _resolve_cached_compile_context(
+        compile_log=args["compile_log"], simulator=simulator,
         supplementary_compile_logs=supplementary_logs,
-    )
+    ))
     if cached is not None:
         compile_result = cached["compile_result"]
         context_simulator = str(cached.get("simulator") or simulator)
@@ -1893,6 +1900,7 @@ async def _handle_prepare_design_context(args: dict):
             simulator=options.simulator,
             top_hint=options.top_hint,
             backend_preference=options.backend_preference,
+            kdb_path=options.kdb_path,
             max_include_depth=options.max_include_depth,
             limits=CaptureLimits(
                 max_files=options.max_files, max_bytes=options.max_bytes,
@@ -1934,6 +1942,7 @@ async def _handle_prepare_design_context(args: dict):
                     "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
                     "simulator": context.simulator, "top_hint": context.selected_top,
                     "backend_preference": context.backend_preference,
+                    "kdb_path": context.requested_kdb_path,
                     "context_identity_sha256": context.identity_sha256,
                 },
             )
@@ -2821,6 +2830,11 @@ def _finalize_public_connectivity_status(
                 status["kdb_error_count"] = npi_kdb_status["error_count"]
             if "error_log" in npi_kdb_status:
                 status["kdb_error_log"] = npi_kdb_status["error_log"]
+    if "kdb_load_status" in status:
+        if npi_kdb_status is not None or actual_backend == "verdi_npi":
+            status["kdb_load_status"] = "loaded"
+        elif any(a.get("reason") in {"npi_load_failed", "npi_lsf_npi_unavailable"} for a in attempts):
+            status["kdb_load_status"] = "failed"
     if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
         status["parser_match"] = "exact"
     return status
@@ -3022,13 +3036,18 @@ async def _bind_wave_design_root(args, simulator, signal_key="signal_path"):
     from src.wave_design_binding import bind_root
     if not args.get("wave_path") or not str(args.get(signal_key, "")).startswith("TOP."):
         return None
-    bound = args.get("_bound_context")
-    hierarchy, _ = ((bound.hierarchy, bound.snapshot) if bound is not None
-                    else _resolve_hierarchy_context(args["compile_log"], simulator))
-    if hierarchy is None:
-        return None
+    prepared = args.get("_prepared_design")
+    if prepared is not None:
+        compile_result = prepared.context.compile_result()
+    else:
+        bound = args.get("_bound_context")
+        hierarchy, _ = ((bound.hierarchy, bound.snapshot) if bound is not None
+                        else _resolve_hierarchy_context(args["compile_log"], simulator))
+        if hierarchy is None:
+            return None
+        compile_result = hierarchy["compile_result"]
     return await _run_in_wave_thread(args["wave_path"], lambda: bind_root(
-        _get_parser(args["wave_path"]), args[signal_key], hierarchy["compile_result"],
+        _get_parser(args["wave_path"]), args[signal_key], compile_result,
         top_hint=args.get("top_hint")))
 
 
@@ -3065,7 +3084,7 @@ async def _attach_driver_dependencies(result, backend, args, simulator):
                 context = await _run_in_wave_thread(args['wave_path'], lambda: inventory(
                     step, _get_parser(args['wave_path']), binding=args.get('_wave_design_binding'),
                     engine=entry.query_engine if entry else None, deadline=deadline))
-    except OperationCancelled:
+    except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
         raise
     except TimeoutError:
         context = unavailable(backend.name, 'dependency_timeout')
@@ -3075,6 +3094,31 @@ async def _attach_driver_dependencies(result, backend, args, simulator):
         context['complete'] = False
         context['gaps'] = sorted(set(context['gaps']) | {'driver_set_incomplete'})
     result['dependency_context'] = context
+
+
+def _select_prepared_backend(entry, deferred):
+    """Use the handle's fixed candidate and policy without a new probe."""
+    from src.connectivity_backend import select_backend
+    binding = entry.binding
+    binding.require_policy_current()
+    status = binding.backend_status(npi_failure=entry.npi_failure)
+    status["connectivity_route"] = (
+        "source_graph" if entry.context.backend_preference == "source" else binding.route.mode
+    )
+    if binding.route.error_code:
+        status["connectivity_route_error"] = binding.route.error_code
+    if not binding.npi_candidate or entry.npi_failure is not None:
+        return deferred, status, None
+    try:
+        backend = select_backend(status, fallback=deferred)
+    except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+        raise
+    except Exception:
+        return deferred, status, "npi_backend_initialization_failed"
+    if getattr(backend, "name", None) == "verdi_npi":
+        backend.bind_compile_context(entry.context.compile_result())
+        backend.bind_kdb_anchor(binding.anchor)
+    return backend, status, None
 
 
 async def _route_public_connectivity(
@@ -3092,19 +3136,21 @@ async def _route_public_connectivity(
     )
 
     bound = args.get("_bound_context")
-    backend_status = await _run_in_cancellable_thread(
-        lambda: (probe_verdi_backend(bound.compile_result, compile_log_path=args["compile_log"])
-                 if bound is not None else _safe_probe_backend(args["compile_log"], simulator))
-    )
+    prepared = args.get("_prepared_design")
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
-    try:
-        npi_backend = select_backend(backend_status, fallback=deferred)
-    except Exception:  # noqa: BLE001
-        # Backend construction must not deny Source Graph its fallback slot.
-        # Keep exception text out of both public receipts and metrics.
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    if prepared is not None:
+        npi_backend, backend_status, npi_selection_reason = _select_prepared_backend(prepared, deferred)
+    else:
+        backend_status = await _run_in_cancellable_thread(
+            lambda: (probe_verdi_backend(bound.compile_result, compile_log_path=args["compile_log"])
+                     if bound is not None else _safe_probe_backend(args["compile_log"], simulator))
+        )
+        try:
+            npi_backend = select_backend(backend_status, fallback=deferred)
+        except Exception:  # noqa: BLE001
+            npi_backend = deferred
+            npi_selection_reason = "npi_backend_initialization_failed"
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     if bound is not None and hasattr(npi_backend, "bind_compile_context"):
         npi_backend.bind_compile_context(bound.compile_result)
@@ -3125,6 +3171,8 @@ async def _route_public_connectivity(
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+            raise
         except Exception:  # noqa: BLE001
             npi_result = None
             fallback_reason = "npi_query_failed"
@@ -3205,7 +3253,10 @@ async def _route_public_connectivity(
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                "failed" if npi_selection_reason else (
+                    "skipped" if fallback_reason in {"source_backend_requested", "npi_previous_load_failure"}
+                    else "unavailable"
+                ),
                 reason=fallback_reason,
             )
         )
@@ -3217,9 +3268,9 @@ async def _route_public_connectivity(
     bootstrap_active = False
     inconclusive_source: dict | None = None
     if args.get("allow_bounded_bootstrap") is True:
-        existing_hierarchy, _ = _resolve_hierarchy_context(
+        existing_hierarchy, _ = ((None, "") if prepared is not None else _resolve_hierarchy_context(
             args["compile_log"], simulator
-        )
+        ))
         bootstrap_active = existing_hierarchy is None
     if not config.enabled:
         source_graph_reason = "source_graph_disabled"
@@ -3786,7 +3837,9 @@ async def _route_public_connectivity(
     source_graph_receipt["fallback_used"] = True
     final_reason = source_graph_reason
     static_backend = StaticConnectivityBackend()
-    if bound is not None:
+    if prepared is not None:
+        static_backend.bind_compile_context(prepared.context.compile_result())
+    elif bound is not None:
         static_backend.bind_compile_context(bound.compile_result)
     static_result = await _call_public_connectivity_operation(
         static_backend,
@@ -3914,14 +3967,18 @@ async def _route_public_signal_path(
         select_backend,
     )
 
-    backend_status = _safe_probe_backend(args["compile_log"], simulator)
+    prepared = args.get("_prepared_design")
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
-    try:
-        npi_backend = select_backend(backend_status, fallback=deferred)
-    except Exception:  # noqa: BLE001
-        npi_backend = deferred
-        npi_selection_reason = "npi_backend_initialization_failed"
+    if prepared is not None:
+        npi_backend, backend_status, npi_selection_reason = _select_prepared_backend(prepared, deferred)
+    else:
+        backend_status = _safe_probe_backend(args["compile_log"], simulator)
+        try:
+            npi_backend = select_backend(backend_status, fallback=deferred)
+        except Exception:  # noqa: BLE001
+            npi_backend = deferred
+            npi_selection_reason = "npi_backend_initialization_failed"
     npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
     selected_backend = "verdi_npi" if npi_selected else "source_graph"
     attempts: list[dict] = []
@@ -3939,6 +3996,8 @@ async def _route_public_signal_path(
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
+        except (KdbBindingChanged, ExecutionBindingChanged, CaptureAborted):
+            raise
         except Exception:  # noqa: BLE001
             npi_result = None
             fallback_reason = "npi_query_failed"
@@ -4015,7 +4074,10 @@ async def _route_public_signal_path(
         attempts.append(
             _backend_attempt(
                 "verdi_npi",
-                "failed" if npi_selection_reason else "unavailable",
+                "failed" if npi_selection_reason else (
+                    "skipped" if fallback_reason in {"source_backend_requested", "npi_previous_load_failure"}
+                    else "unavailable"
+                ),
                 reason=fallback_reason,
             )
         )
@@ -4046,8 +4108,9 @@ async def _route_public_signal_path(
     else:
         operation_metrics.set_value("source_graph_phase", "adapter")
         adapter_started = time.perf_counter()
-        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
-            args["compile_log"], simulator
+        hierarchy_result, hierarchy_snapshot_sha256 = (
+            (None, prepared.context.identity_sha256) if prepared is not None
+            else _resolve_hierarchy_context(args["compile_log"], simulator)
         )
         if hierarchy_result is None:
             adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
@@ -4325,6 +4388,8 @@ async def _route_public_signal_path(
     operation_metrics.set_value("source_graph_phase", "fallback")
     source_graph_receipt["fallback_used"] = True
     static_backend = StaticConnectivityBackend()
+    if prepared is not None:
+        static_backend.bind_compile_context(prepared.context.compile_result())
     try:
         static_result = await _call_signal_path_backend(
             static_backend,
@@ -5596,7 +5661,9 @@ async def list_tools():
                 "VCS, Xcelium or Verilator logs. Returns an explicit process-scoped design_handle, "
                 "coverage gaps, preparation costs and recovery identity. Does not build a hierarchy, "
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
-                "include resolution and semantic coverage. The existing hierarchy tools still use "
+                "include resolution and semantic coverage. Driver/load/path accept design_handle; "
+                "their first query fixes a KDB candidate and reports validation costs. An optional "
+                "kdb_path declares a candidate without asserting source association. The hierarchy tools still use "
                 "their build_tb_hierarchy handles."
             ),
             inputSchema=schemas.PrepareDesignContextOptions.model_json_schema(),
@@ -6286,6 +6353,9 @@ async def list_tools():
         Tool(
             name="explain_signal_driver",
             description=(
+                "Pass design_handle from prepare_design_context to query a fixed design without "
+                "a full hierarchy prerequisite. compile_log may then be omitted; supplied compile "
+                "arguments must match. Source fallback uses bounded bootstrap by default. "
                 "Trace a waveform signal to its RTL driver and file:line (assignments, "
                 "procedural blocks, module outputs); recursive=true crosses instances.\n\n"
                 "Default traceweave.driver.compact.v1 is lossless: all retained evidence is in "
@@ -6319,6 +6389,7 @@ async def list_tools():
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
                     "compile_context": schemas.DivergenceContext.model_json_schema(),
+                    "design_handle": {"type": "string", "minLength": 1},
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
@@ -6340,12 +6411,15 @@ async def list_tools():
                         "description": "Maximum recursive depth when recursive=true",
                     },
                 },
-                "required": ["signal_path", "wave_path", "compile_log"],
+                "required": ["signal_path", "wave_path"],
+                "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
             name="find_signal_loads",
             description=(
+                "An explicit design_handle permits a fixed-design query without a full hierarchy "
+                "prerequisite; compile_log may be omitted. Source fallback uses bounded bootstrap by default. "
                 "List places that consume (load) a signal: child instance input ports, "
                 "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and "
@@ -6377,6 +6451,7 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "wave_path": {"type": "string", "description": "Optional waveform for an evidence-checked wave/design root binding."},
                     "compile_log": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
@@ -6406,12 +6481,15 @@ async def list_tools():
                         "description": "Restrict result to a subset of load kinds.",
                     },
                 },
-                "required": ["signal_path", "compile_log"],
+                "required": ["signal_path"],
+                "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
             name="trace_signal_path",
             description=(
+                "An explicit design_handle permits a fixed-design NPI query without a full hierarchy "
+                "prerequisite; compile_log may be omitted. Read backend_status for fallback coverage. "
                 "Find a structural connectivity path between two signals. A "
                 "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
                 "bounded, dual-endpoint Source Graph before Legacy Static. "
@@ -6431,6 +6509,7 @@ async def list_tools():
                     "wave_path": {"type": "string", "description": "Optional waveform for an evidence-checked wave/design root binding."},
                     "to_signal": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / verilator / auto; session default.",
@@ -6447,7 +6526,8 @@ async def list_tools():
                         ),
                     },
                 },
-                "required": ["from_signal", "to_signal", "compile_log"],
+                "required": ["from_signal", "to_signal"],
+                "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -7686,7 +7766,143 @@ async def call_tool(name: str, arguments: dict):
             operation_metrics.pop(metrics_token)
 
 
+async def _dispatch_design_query(name: str, args: dict):
+    """Own one independent context across binding, query and publication.
+
+    All source/KDB validation runs outside wave locks. Abandoned preparation
+    workers cannot publish registry state. NPI placement remains the existing
+    local/explicit-LSF policy; this boundary does not pool native sessions.
+    """
+    handle = args.get("design_handle")
+    if not isinstance(handle, str) or not handle:
+        return schemas.ToolErrorResult(error="Invalid design handle.", error_code="invalid_design_handle")
+    store = _design_context_store
+    started = time.monotonic()
+    metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
+
+    def ensure_owner():
+        if store is not _design_context_store:
+            raise design_context_runtime.ContextUnavailable("design_context_generation_changed")
+
+    async def validate_source(context):
+        with anyio.fail_after(30):
+            current = await _run_in_cancellable_thread(context.current)
+        if not current:
+            raise design_context_runtime.ContextUnavailable("design_context_changed")
+
+    async def validate_binding(binding):
+        with anyio.fail_after(5):
+            await _run_in_cancellable_thread(binding.require_current)
+
+    try:
+        with store.pin(handle) as entry:
+            context = entry.context
+            supplied_logs = args.get("supplementary_compile_logs")
+            if (args.get("compile_context") is not None or args.get("kdb_path") is not None
+                    or (args.get("compile_log") is not None and not _same_realpath(
+                        args["compile_log"], context.ordered_compile_logs[0]))
+                    or args.get("simulator") not in (None, "auto", context.simulator)
+                    or args.get("top_hint") not in (None, context.selected_top)
+                    or args.get("backend_preference") not in (None, context.backend_preference)):
+                raise design_context_runtime.ContextUnavailable("design_context_arguments_mismatch")
+            if supplied_logs is not None and (
+                not isinstance(supplied_logs, list)
+                or len(supplied_logs) != len(context.ordered_compile_logs) - 1
+                or any(not isinstance(path, str) or not _same_realpath(path, expected)
+                       for path, expected in zip(supplied_logs, context.ordered_compile_logs[1:]))
+            ):
+                raise design_context_runtime.ContextUnavailable("design_context_arguments_mismatch")
+            phase = time.monotonic()
+            await validate_source(context)
+            metrics["source_validation_ms"] = (time.monotonic() - phase) * 1000
+            phase = time.monotonic()
+            with anyio.fail_after(30):
+                async with entry.binding_lock:
+                    metrics["binding_wait_ms"] = (time.monotonic() - phase) * 1000
+                    reused = entry.binding is not None
+                    if reused:
+                        binding = entry.binding
+                    else:
+                        binding = await _run_in_cancellable_thread(lambda: prepare_backend_binding(context))
+                        validation_started = time.monotonic()
+                        await validate_source(context)
+                        metrics["source_validation_ms"] += (time.monotonic() - validation_started) * 1000
+                        validation_started = time.monotonic()
+                        await validate_binding(binding)
+                        metrics["binding_validation_ms"] += (time.monotonic() - validation_started) * 1000
+                        await anyio.lowlevel.checkpoint()
+                        ensure_owner()
+                        store.publish_binding(handle, binding)
+                        metrics.update(dict(binding.metrics))
+            phase = time.monotonic()
+            await validate_binding(binding)
+            metrics["binding_validation_ms"] += (time.monotonic() - phase) * 1000
+            await anyio.lowlevel.checkpoint()
+            ensure_owner()
+            resolved = {
+                **args, "compile_log": context.ordered_compile_logs[0],
+                "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
+                "simulator": context.simulator, "top_hint": context.selected_top,
+                "_prepared_design": entry,
+            }
+            if name in {"explain_signal_driver", "find_signal_loads"}:
+                resolved.setdefault("allow_bounded_bootstrap", True)
+            phase = time.monotonic()
+            previous_failure = entry.npi_failure
+            result = await _dispatch_inner(name, resolved)
+            metrics["query_ms"] = (time.monotonic() - phase) * 1000
+            phase = time.monotonic()
+            await validate_source(context)
+            await validate_binding(binding)
+            metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
+            await anyio.lowlevel.checkpoint()
+            ensure_owner()
+            status = getattr(result, "backend_status", None)
+            if status is not None:
+                for attempt in status.attempted_backends:
+                    if attempt.backend == "verdi_npi":
+                        store.note_npi_failure(handle, attempt.reason)
+                receipt = binding.receipt()
+                receipt["gaps"] = sorted(set(receipt["gaps"]) | set(context.gaps))
+                if receipt["artifact"] is not None:
+                    receipt["artifact"]["load_status"] = status.kdb_load_status or "not_checked"
+                metrics["total_ms"] = (time.monotonic() - started) * 1000
+                status.design_context = schemas.DesignQueryReceipt(
+                    **receipt, design_handle=handle, context_identity_sha256=context.identity_sha256,
+                    backend_preference=context.backend_preference, binding_reused=reused,
+                    source_snapshot_status="complete" if context.snapshot.complete else "partial",
+                    include_resolution_status="complete" if context.include_resolution_complete else "partial",
+                    previous_npi_failure=previous_failure, metrics=metrics,
+                )
+            return result
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except KdbBindingChanged:
+        code = "kdb_identity_changed"
+    except ExecutionBindingChanged:
+        code = "design_context_execution_changed"
+    except (TimeoutError, CaptureAborted) as exc:
+        code = ("design_context_changed" if isinstance(exc, CaptureAborted) and exc.code == "input_changed"
+                else "design_context_" + exc.code if isinstance(exc, CaptureAborted) else "design_context_timeout")
+    except design_context_runtime.ContextUnavailable as exc:
+        code = exc.code
+    return schemas.ToolErrorResult(
+        error="Design query did not complete; prepare a new context when its identity or policy changes.",
+        error_code=code,
+    )
+
+
 async def _dispatch(name: str, args: dict):
+    if "_prepared_design" in args:
+        return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
+    if "design_handle" in args:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path"}:
+            return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
+        return await _dispatch_design_query(name, args)
+    return await _dispatch_inner(name, args)
+
+
+async def _dispatch_inner(name: str, args: dict):
     fst_paths = [args[key] for key in ("wave_path", "wave_path_a", "wave_path_b")
                  if isinstance(args.get(key), str) and args[key].lower().endswith(".fst")]
     if fst_paths and name not in FST_SUPPORTED_TOOLS:
@@ -7726,7 +7942,7 @@ async def _dispatch(name: str, args: dict):
             raise ValueError("compile_context does not match top_hint")
         args = {**args, "_bound_context": bound, "simulator": bound.context["simulator"],
                 "top_hint": bound.context.get("top_hint")}
-    block = None if bound is not None else _check_prerequisites(name, args)
+    block = None if bound is not None or args.get("_prepared_design") is not None else _check_prerequisites(name, args)
     if block is not None:
         return schemas.PrerequisiteBlockResult.model_validate(block)
 

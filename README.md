@@ -93,8 +93,21 @@ establishes current sources only. Structural scanning remains a separate step.
 independently capture compile inputs and source identities under file, byte and
 time budgets. Its `design_handle` expires on process restart or registry eviction;
 the receipt separates input capture from include resolution and semantic coverage.
-This initial entry prepares metadata only. The six hierarchy/source queries and
-connectivity queries still use their existing hierarchy workflow and handles.
+Preparation does not build a hierarchy, run Slang or probe/load KDB. Pass its
+`design_handle` to `explain_signal_driver`, `find_signal_loads` or
+`trace_signal_path`; `compile_log` can then be omitted. With the default `auto`
+preference, the first query fixes a candidate KDB (optional `kdb_path` declares
+one explicitly). Later queries validate that binding and source context; a
+change or restart requires a new handle. `source` avoids NPI, and a recorded NPI
+load failure suppresses repeated attempts until a new context is prepared.
+Read `backend_status.design_context`: candidate identity, actual load and source
+association are separate, and validation/discovery costs are reported. External
+KDB source association remains unverified.
+
+New-handle driver/load source fallback uses bounded bootstrap by default. The
+new-handle path route currently needs NPI; use the existing hierarchy workflow
+for a Source Graph path fallback. The six hierarchy/source tools, X-trace and
+historical context recovery still use their existing workflow and handles.
 
 Capabilities for large designs, with selected examples of validated scale:
 
@@ -280,7 +293,9 @@ with waveforms require `sweep_handshakes`; zero/partial coverage does not exclud
 OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
 synthetic waveform `TOP.` prefix is not an HDL instance (remove it only after
 confirming the following segment is the compiled top). Static/Source Graph
-coverage remains bounded; no Verilator NPI/KDB backend is introduced.
+coverage remains bounded. An existing external KDB can be declared through
+`prepare_design_context(kdb_path=...)`, including for Verilator inputs; it must
+pass the same candidate/load checks and is not assumed to match current sources.
 
 `parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
 

@@ -43,7 +43,7 @@ _discovery_capture = ContextVar("kdb_discovery_capture", default=None)
 
 
 @contextmanager
-def bounded_kdb_discovery(capture, *, max_entries: int = 4096):
+def bounded_kdb_discovery(capture, *, max_entries: int = 4096, top_hint: str | None = None):
     """Bound the existing filesystem probe without changing legacy callers.
 
     Directory entries share one call-local cap. Compile replay/cache hashing
@@ -52,7 +52,7 @@ def bounded_kdb_discovery(capture, *, max_entries: int = 4096):
     """
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
         raise ValueError("discovery entry limit must be positive")
-    state = {"capture": capture, "max_entries": max_entries, "entries": 0}
+    state = {"capture": capture, "max_entries": max_entries, "entries": 0, "top_hint": top_hint}
     token = _discovery_capture.set(state)
     try:
         with bind_compile_input_capture(capture):
@@ -312,7 +312,7 @@ def _probe_traceweave_cached_kdb(
     try:
         state = _discovery_capture.get()
         inputs = _extract_build_inputs(
-            compile_result, top_hint=None,
+            compile_result, top_hint=state["top_hint"] if state else None,
             **({"source_reader": state["capture"].read_bytes} if state else {}),
         )
     except (OperationCancelled, CaptureAborted):

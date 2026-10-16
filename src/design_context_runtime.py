@@ -7,8 +7,9 @@ NPI. Frontend replay and KDB association remain separate validation steps.
 from __future__ import annotations
 
 from collections import OrderedDict
+import asyncio
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -139,6 +140,7 @@ def prepare_design_context(
     compile_log: str,
     *, supplementary_compile_logs=(), simulator: str = "auto",
     top_hint: str | None = None, backend_preference: str = "auto",
+    kdb_path: str | None = None,
     limits: CaptureLimits | None = None, max_include_depth: int = 64,
 ) -> DesignContext:
     """Capture one exact compile observation without a full lexical tree.
@@ -159,6 +161,11 @@ def prepare_design_context(
         raise ValueError("include depth must be between 0 and 64")
     if top_hint is not None and (not isinstance(top_hint, str) or not top_hint.strip()):
         raise ValueError("top hint must be nonempty")
+    if kdb_path is not None and (
+        not isinstance(kdb_path, str) or not kdb_path.strip() or "\x00" in kdb_path
+    ):
+        raise ValueError("KDB candidate path must be nonempty")
+    requested_kdb_path = os.path.abspath(kdb_path) if kdb_path is not None else None
     started = time.monotonic()
     environment_before = dict(os.environ)
     logs = tuple(os.path.abspath(path) for path in (compile_log, *supplementary_compile_logs))
@@ -300,6 +307,10 @@ def prepare_design_context(
             "environment": environment, "replay_environment": replay_environment,
             "gaps": sorted(gaps),
         }
+        if requested_kdb_path is not None:
+            # A declared candidate is part of the recovery identity. Its
+            # filesystem generation is captured only on the first query.
+            payload["requested_kdb_path"] = requested_kdb_path
         identity = hashlib.sha256(_json(payload).encode()).hexdigest()
         metrics = (
             ("parse_ms", parsed_ms), ("prepare_ms", (time.monotonic() - started) * 1000),
@@ -311,7 +322,7 @@ def prepare_design_context(
             logs, results[0]["simulator"], selected_top, backend_preference,
             compile_result_json, snapshot, capture.aliases, capture.unavailable_observations,
             resolutions, environment, identity, tuple(sorted(gaps)),
-            bool(dependencies_complete), metrics, replay_environment,
+            bool(dependencies_complete), metrics, replay_environment, requested_kdb_path,
         )
         capture.checkpoint()
         if not context.metadata_current(checkpoint=capture.checkpoint):
@@ -330,6 +341,9 @@ class _Entry:
     context: DesignContext
     size: int
     leases: int = 0
+    binding: object | None = None
+    npi_failure: str | None = None
+    binding_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 @dataclass
@@ -419,7 +433,12 @@ class DesignContextStore:
         return self.publish(self.prepare_registration(context, timeout_sec=timeout_sec))
 
     @contextmanager
-    def lease(self, handle: str):
+    def pin(self, handle: str):
+        """Pin metadata without filesystem I/O; async owners validate in workers.
+
+        Only the event-loop owner may publish binding/failure state. A caller
+        must hold this pin across validation, query and final validation.
+        """
         check_cancelled()
         with self._lock:
             entry = self._entries.get(handle)
@@ -428,13 +447,52 @@ class DesignContextStore:
             entry.leases += 1
             self._entries.move_to_end(handle)
         try:
+            yield entry
+        finally:
+            with self._lock:
+                entry.leases -= 1
+
+    @contextmanager
+    def lease(self, handle: str):
+        with self.pin(handle) as entry:
             if not entry.context.current():
                 raise ContextUnavailable("design_context_changed")
             check_cancelled()
             yield entry.context
-        finally:
-            with self._lock:
-                entry.leases -= 1
+
+    def publish_binding(self, handle: str, binding):
+        """Publish one immutable first-query selection, without I/O or await."""
+        from .design_backend_binding import DesignBackendBinding
+        if not isinstance(binding, DesignBackendBinding):
+            raise ValueError("invalid design backend binding")
+        with self._lock:
+            check_cancelled()
+            entry = self._entries.get(handle)
+            if entry is None or not entry.leases:
+                raise ContextUnavailable("handle_expired")
+            if (binding.context_identity_sha256 != entry.context.identity_sha256
+                    or binding.backend_preference != entry.context.backend_preference):
+                raise ContextUnavailable("design_context_changed")
+            if entry.binding is not None:
+                if entry.binding != binding:
+                    raise ContextUnavailable("design_context_binding_conflict")
+                return entry.binding
+            cost = binding.estimated_bytes
+            if self._bytes + cost > self.max_bytes:
+                raise ContextUnavailable("context_capacity")
+            entry.binding = binding
+            entry.size += cost
+            self._bytes += cost
+            return binding
+
+    def note_npi_failure(self, handle: str, reason: str) -> None:
+        """Remember availability failure; ordinary query gaps remain retryable."""
+        if reason not in {"npi_load_failed", "npi_lsf_npi_unavailable"}:
+            return
+        with self._lock:
+            entry = self._entries.get(handle)
+            if entry is not None and entry.leases and entry.binding is not None:
+                entry.npi_failure = reason
 
     def remove(self, handle: str) -> bool:
         with self._lock:

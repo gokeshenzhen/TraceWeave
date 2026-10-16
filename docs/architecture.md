@@ -400,10 +400,12 @@ Verification
   discovery changes; each acquisition revalidates its own inputs.
   The MCP receipt separates captured-input completeness, include resolution,
   and unexecuted semantic/KDB checks. It returns full identity and ordered
-  recovery inputs without promising semantic capabilities. At this stage
-  six-tool and connectivity routing still use the existing hierarchy handles;
-  this entry does not satisfy their legacy prerequisite gates. Neither optional
-  Slang cache default changes. Preparation, registration validation and later
+  recovery inputs without promising semantic capabilities. The optional
+  `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
+  of source association. Driver/load/path accept `design_handle` and derive
+  compile arguments from it; supplied conflicting arguments are rejected.
+  Six-tool, X-trace and historical recovery migration remains separate work.
+  Neither optional Slang cache default changes. Preparation, registration validation and later
   query costs must be measured together before claiming a speedup.
   `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:
   two observations of five fixed elaboration maps, including raw hashes and
@@ -414,8 +416,7 @@ Verification
   cancellation, unreadable/non-regular maps and changing inputs remain explicit.
   A complete map observation is neither a successful NPI load nor proof that
   compiled sources match current files. Unmapped database payloads are outside
-  this identity, and every receipt preserves that limitation. This primitive
-  does not yet bind a public design handle. Internal local and LSF connectivity
+  this identity, and every receipt preserves that limitation. Local and LSF connectivity
   backends accept a validated anchor, use its fixed path, and reject changing
   generations before loading and after querying. Bound compile metadata is
   copied and shared with driver/load/path and source fallback; it is not
@@ -426,6 +427,24 @@ Verification
   These failures and cancellation propagate without starting Static fallback.
   Unbound library callers retain automatic candidate selection. Candidate
   binding is an identity boundary, not NPI session pooling or source matching.
+  `design_backend_binding` fixes one candidate, absence, or source policy on the
+  handle's first connectivity query. A no-I/O pin protects registry capacity
+  across the full asynchronous call; a per-entry lock coalesces first discovery.
+  Preparation/validation workers never publish state. The event loop publishes
+  after a cancellation checkpoint and checks its registry generation again
+  before returning a result. Source content, KDB maps and relevant execution
+  policy are checked before and after querying, outside waveform locks; TOP
+  wave binding consumes captured compile metadata without a hierarchy lookup.
+  Source-only policy performs no probe or NPI selection. Confirmed NPI load
+  unavailability is remembered until a new context is prepared; ordinary query
+  gaps remain retryable. Binding metadata is charged against registry capacity.
+  Receipts distinguish a candidate, successful load, and unverified source
+  association, with first-discovery and repeated-validation costs. New-handle
+  driver/load fallback uses the existing bounded bootstrap over its captured
+  metadata; it cannot borrow another session's lexical hierarchy. Independent
+  dual-endpoint source planning is pending, so a new-handle path without a
+  usable NPI result reports unavailable Source Graph context and the existing
+  Static unsupported result. Ordinary compile-log/old-handle routing is retained.
   The optional `bounded_kdb_discovery` scope reuses that filesystem probe with
   one directory-entry budget (4,096 by default) and a caller-owned input
   capture. Setup files have a 64-KiB size precheck; compile option/filelist

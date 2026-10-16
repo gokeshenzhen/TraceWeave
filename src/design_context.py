@@ -47,6 +47,7 @@ class DesignContext:
     include_resolution_complete: bool
     metrics: tuple[tuple[str, int | float], ...]
     replay_environment: tuple[tuple[str, str], ...] = ()
+    requested_kdb_path: str | None = None
 
     def compile_result(self) -> dict:
         """A mutable caller copy; nested metadata cannot alter this context."""
@@ -100,6 +101,6 @@ class DesignContext:
             tuple(r.identity_record() for r in self.snapshot.records),
             self.aliases, self.unavailable,
             tuple((r.candidates, r.selected, r.selected_spelling) for r in self.include_resolutions),
-            self.environment, self.replay_environment, self.gaps,
+            self.environment, self.replay_environment, self.gaps, self.requested_kdb_path,
         )
         return 4096 + 4 * len(json.dumps(payload, ensure_ascii=False).encode())

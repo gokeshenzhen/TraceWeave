@@ -273,6 +273,9 @@ class PrepareDesignContextOptions(SchemaModel):
     simulator: Literal["auto", "vcs", "xcelium", "verilator"] = "auto"
     top_hint: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = None
     backend_preference: Literal["auto", "source"] = "auto"
+    kdb_path: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = Field(
+        default=None, description="Explicit candidate, captured on first query; does not prove source association.",
+    )
     timeout_sec: float = Field(default=30.0, gt=0, le=300, allow_inf_nan=False)
     max_files: int = Field(default=32768, ge=1, le=32768)
     max_bytes: int = Field(default=128 * 1024 * 1024, ge=1, le=128 * 1024 * 1024)
@@ -286,6 +289,7 @@ class DesignContextRecovery(SchemaModel):
     simulator: Literal["vcs", "xcelium", "verilator"]
     top_hint: str | None = None
     backend_preference: Literal["auto", "source"]
+    kdb_path: str | None = None
     context_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -1709,7 +1713,47 @@ class SourceGraphBackendReceipt(SchemaModel):
         return data
 
 
+class KdbArtifactEvidence(SchemaModel):
+    artifact_status: Literal["missing", "empty", "source_only_candidate", "elaborated_candidate", "elaboration_error", "unrecognized"]
+    identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    identity_basis: Literal["bounded_elaboration_maps"]
+    identity_status: Literal["complete", "partial"]
+    load_status: Literal["not_checked", "loaded", "failed"]
+    source_association: Literal["unverified"]
+    gaps: list[str]
+
+
+class DesignQueryMetrics(SchemaModel):
+    source_validation_ms: float = Field(ge=0)
+    binding_wait_ms: float = Field(ge=0)
+    discovery_ms: float = Field(ge=0)
+    discovery_read_bytes: int = Field(ge=0)
+    discovery_file_count: int = Field(ge=0)
+    discovery_entry_count: int = Field(ge=0)
+    anchor_ms: float = Field(ge=0)
+    binding_ms: float = Field(ge=0)
+    binding_validation_ms: float = Field(ge=0)
+    query_ms: float = Field(ge=0)
+    final_validation_ms: float = Field(ge=0)
+    total_ms: float = Field(ge=0)
+
+
+class DesignQueryReceipt(SchemaModel):
+    design_handle: str
+    context_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    backend_preference: Literal["auto", "source"]
+    binding_reused: bool
+    selection: Literal["candidate", "unavailable", "source_policy", "probe_partial", "unusable_candidate"]
+    artifact: KdbArtifactEvidence | None = None
+    source_snapshot_status: Literal["complete", "partial"]
+    include_resolution_status: Literal["complete", "partial"]
+    previous_npi_failure: Literal["npi_load_failed", "npi_lsf_npi_unavailable"] | None = None
+    gaps: list[str]
+    metrics: DesignQueryMetrics
+
+
 class BackendStatus(SchemaModel):
+    design_context: DesignQueryReceipt | None = None
     simulator: Literal["vcs", "xcelium", "verilator", "unknown"] = "unknown"
     # ``backend`` retains its legacy meaning (policy-selected backend).  The
     # additive fields make a multi-attempt NPI -> Source Graph -> Static route
@@ -1777,6 +1821,7 @@ class BackendStatus(SchemaModel):
         "vericom_standalone",
         "vericom_import_from_file",
         "traceweave_cached",
+        "explicit",
         "none",
     ] = "none"
     kdb_validation_status: Literal[
@@ -1788,6 +1833,7 @@ class BackendStatus(SchemaModel):
     # stronger: it becomes true only after NPI actually loaded that partial
     # netlist and passed the top-instance self-check.
     kdb_degraded: bool = False
+    kdb_load_status: Literal["not_checked", "loaded", "failed"] | None = None
     kdb_error_count: int | None = Field(default=None, ge=0)
     kdb_error_log: str | None = None
     kdb_hint: str | None = None

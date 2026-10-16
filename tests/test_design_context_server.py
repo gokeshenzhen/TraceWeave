@@ -112,7 +112,8 @@ async def test_public_prepare_is_listed_with_strict_bounded_schema():
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["compile_log"]
     fields = schema["properties"]
-    assert "kdb_path" not in fields and "design_handle" not in fields
+    assert "kdb_path" in fields and "design_handle" not in fields
+    assert fields["kdb_path"]["default"] is None
     assert fields["simulator"]["enum"] == ["auto", "vcs", "xcelium", "verilator"]
     assert fields["backend_preference"]["enum"] == ["auto", "source"]
     assert fields["supplementary_compile_logs"]["maxItems"] == 16
@@ -273,7 +274,8 @@ INVALID_ARGUMENTS = [
     {"max_references": 0}, {"max_references": 65537}, {"max_references": True},
     {"max_include_depth": -1}, {"max_include_depth": 65}, {"max_include_depth": False},
     {"max_include_depth": 0.5}, {"max_include_depth": "0"},
-    {"kdb_path": "/unverified/kdb"}, {"unknown_option": 1},
+    {"kdb_path": ""}, {"kdb_path": "   "}, {"kdb_path": False}, {"kdb_path": 12},
+    {"unknown_option": 1},
     {"context_identity_sha256": "0" * 64},
 ]
 
