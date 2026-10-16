@@ -58,6 +58,9 @@ from .verdi_backend import (
 
 
 _LOG = logging.getLogger(__name__)
+# Best-effort native getters may omit ordinary missing data, never lifecycle
+# failures. These errors must reach dispatch without advancing fallback.
+_FATAL_QUERY_ERRORS = (OperationCancelled, CaptureAborted, KdbBindingChanged, TimeoutError)
 
 # Process-level guard: NPI's npisys.init is non-reentrant. The native
 # library prints "Repeated npi_init ... ignored until npi_end" and
@@ -194,12 +197,16 @@ def _module_of(hdl: Any) -> str | None:
         return None
     try:
         scope = hdl.scope_inst() if hasattr(hdl, "scope_inst") else None
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return None
     if scope is None:
         return None
     try:
         name = scope.def_name() if hasattr(scope, "def_name") else None
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return None
     return name or None
@@ -211,6 +218,8 @@ def _npi_handle_key(hdl: Any) -> tuple[str, str] | tuple[str, int]:
     try:
         kind = str(hdl.type()) if hasattr(hdl, "type") else type(hdl).__name__
         name = hdl.full_name() if hasattr(hdl, "full_name") else None
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return ("object", id(hdl))
     if isinstance(name, str) and name:
@@ -226,6 +235,8 @@ def _is_output_boundary_load(hdl: Any) -> bool:
     try:
         kind = str(hdl.type())
         direction = str(hdl.direction())
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return False
     return kind in {"npiNlPort", "npiNlPseudoPort"} and direction in {
@@ -245,6 +256,8 @@ def _is_boundary_driver(hdl: Any) -> bool:
     """
     try:
         raw = hdl.full_name() if hasattr(hdl, "full_name") else None
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return False
     if not raw:
@@ -670,6 +683,8 @@ class VerdiNpiBackend:
                 hdl_list = netlist.sig_to_sig_conn_list(
                     from_hdl, to_hdl, assign_cell=expand_assigns,
                 ) or []
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("sig_to_sig_conn_list failed: %s", exc)
             base["unsupported_reason"] = "npi_call_failed"
@@ -700,6 +715,8 @@ class VerdiNpiBackend:
     ) -> dict[str, Any]:
         try:
             net_path = net_hdl.full_name() if hasattr(net_hdl, "full_name") else None
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:  # noqa: BLE001
             net_path = None
         scope_inst = _scope_inst_of(net_hdl)
@@ -710,6 +727,8 @@ class VerdiNpiBackend:
                     scope_inst.full_name()
                     if hasattr(scope_inst, "full_name") else None
                 )
+            except _FATAL_QUERY_ERRORS:
+                raise
             except Exception:  # noqa: BLE001
                 scope_path = None
         file_val, line_val = _inst_src_info(scope_inst)
@@ -836,6 +855,8 @@ class VerdiNpiBackend:
                 3,
             )
             metrics["rss_after_load_kib"] = _sample_rss()
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("collect_instance_src_map setup failed: %s", exc)
             _finish("setup_failed")
@@ -864,6 +885,8 @@ class VerdiNpiBackend:
                     metrics["instance_visited_count"] += 1
                     try:
                         inst = netlist.get_inst(path)
+                    except _FATAL_QUERY_ERRORS:
+                        raise
                     except Exception:  # noqa: BLE001
                         metrics["lookup_error_count"] += 1
                         continue
@@ -912,6 +935,8 @@ class VerdiNpiBackend:
                 (time.perf_counter() - phase_started) * 1000.0,
                 3,
             )
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("get_top_inst_list failed: %s", exc)
             _finish("top_list_failed")
@@ -1013,6 +1038,8 @@ class VerdiNpiBackend:
                     compile_log, simulator
                 )
                 top = self._top_from(compile_result)
+            except _FATAL_QUERY_ERRORS:
+                raise
             except Exception:  # noqa: BLE001
                 _finish("top_unresolved")
                 return None
@@ -1229,6 +1256,8 @@ class VerdiNpiBackend:
         try:
             with _silence_native_stdio():
                 top_list = netlist.get_top_inst_list() or []
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("degraded KDB top-instance self-check failed: %s", exc)
             return False
@@ -1246,6 +1275,8 @@ class VerdiNpiBackend:
                     continue
                 try:
                     value = member() if callable(member) else member
+                except _FATAL_QUERY_ERRORS:
+                    raise
                 except Exception:  # noqa: BLE001
                     continue
                 if isinstance(value, str) and value:
@@ -1323,6 +1354,8 @@ class VerdiNpiBackend:
         try:
             with _silence_native_stdio():
                 raw_loads = net.load_list() or []
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.load_list crashed for %s: %s", signal_path, exc)
             result["stopped_at"] = "npi_load_list_failed"
@@ -1420,6 +1453,8 @@ class VerdiNpiBackend:
                 try:
                     with _silence_native_stdio():
                         handles = current.load_list() or []
+                except _FATAL_QUERY_ERRORS:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     _LOG.warning("NPI boundary load_list failed: %s", exc)
                     recovery_failed = True
@@ -1445,6 +1480,8 @@ class VerdiNpiBackend:
                     with _silence_native_stdio():
                         peer = hdl.connected_pin()
                         parent_net = peer.connected_net() if peer is not None else None
+                except _FATAL_QUERY_ERRORS:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     _LOG.warning("NPI output-boundary recovery failed: %s", exc)
                     recovery_failed = True
@@ -1533,6 +1570,8 @@ class VerdiNpiBackend:
         try:
             with _silence_native_stdio():
                 drivers = net.driver_list() or []
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.driver_list crashed for %s: %s", signal_path, exc)
             base["driver_status"] = "unsupported"
@@ -1857,13 +1896,21 @@ class VerdiNpiBackend:
                     pins = []
             finally:
                 if registration_attempted:
+                    active_error = sys.exc_info()[1]
                     try:
                         with _silence_native_stdio():
                             netlist.reset_cb()
+                    except _FATAL_QUERY_ERRORS:
+                        # Cleanup cannot replace an earlier cancellation or
+                        # identity/timeout failure with a later reset failure.
+                        if isinstance(active_error, _FATAL_QUERY_ERRORS):
+                            raise active_error
+                        check_cancelled()
+                        raise
                     except Exception as exc:  # noqa: BLE001
                         reset_failed = True
                         _LOG.warning("NPI fan-in callback reset failed: %s", exc)
-        except OperationCancelled:
+        except _FATAL_QUERY_ERRORS:
             raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.fan_in_reg_list failed for %s: %s", signal_path, exc)
@@ -1926,6 +1973,8 @@ class VerdiNpiBackend:
         try:
             with _silence_native_stdio():
                 raw_loads = net.load_list() or []
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("cross-check load_list failed: %s", exc)
             return None
@@ -1933,6 +1982,8 @@ class VerdiNpiBackend:
         for hdl in raw_loads:
             try:
                 name = hdl.full_name() if hasattr(hdl, "full_name") else None
+            except _FATAL_QUERY_ERRORS:
+                raise
             except Exception:  # noqa: BLE001
                 name = None
             if name:
@@ -2062,6 +2113,8 @@ class VerdiNpiBackend:
         try:
             raw = hdl.full_name() if hasattr(hdl, "full_name") else None
             t = hdl.type() if hasattr(hdl, "type") else None
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:
             return None
         if not raw:
@@ -2095,6 +2148,8 @@ class VerdiNpiBackend:
     def _format_driver(self, hdl: Any) -> dict[str, Any] | None:
         try:
             raw = hdl.full_name() if hasattr(hdl, "full_name") else None
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:
             return None
         if not raw:
@@ -2118,6 +2173,8 @@ class VerdiNpiBackend:
         try:
             raw = hdl.full_name() if hasattr(hdl, "full_name") else None
             t = hdl.type() if hasattr(hdl, "type") else None
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:
             return None
         if not raw:
@@ -2160,12 +2217,16 @@ class VerdiNpiBackend:
                 net = netlist.get_net(signal_path)
             if net is not None:
                 return net
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:
             pass
         if "[" in signal_path:
             try:
                 with _silence_native_stdio():
                     return netlist.get_actual_net(signal_path)
+            except _FATAL_QUERY_ERRORS:
+                raise
             except Exception:
                 return None
         return None
@@ -2468,6 +2529,8 @@ def _walk_inst_src(
         return
     try:
         path = inst.full_name() if hasattr(inst, "full_name") else None
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:  # noqa: BLE001
         path = None
         if stats is not None:
@@ -2480,6 +2543,8 @@ def _walk_inst_src(
                 stats["source_entry_count"] += 1
     try:
         children = inst.inst_list() if hasattr(inst, "inst_list") else []
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:  # noqa: BLE001
         children = []
         if stats is not None:
@@ -2494,6 +2559,8 @@ def _scope_inst_of(hdl: Any) -> Any:
         return None
     try:
         return hdl.scope_inst()
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:  # noqa: BLE001
         return None
 
@@ -2503,6 +2570,8 @@ def _inst_full_name(inst_hdl: Any) -> str | None:
         return None
     try:
         value = inst_hdl.full_name()
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:  # noqa: BLE001
         return None
     return str(value) if value else None
@@ -2515,6 +2584,8 @@ def _inst_definition_name(inst_hdl: Any) -> str | None:
         return None
     try:
         value = inst_hdl.def_name()
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:  # noqa: BLE001
         return None
     return str(value) if value else None
@@ -2542,6 +2613,8 @@ def _inst_src_info(inst_hdl: Any) -> tuple[str | None, int | None]:
             raw = inst_hdl.file()
             if raw:
                 file_val = str(raw)
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:  # noqa: BLE001
             pass
     if hasattr(inst_hdl, "begin_line_no"):
@@ -2549,6 +2622,8 @@ def _inst_src_info(inst_hdl: Any) -> tuple[str | None, int | None]:
             raw = inst_hdl.begin_line_no()
             if raw is not None:
                 line_val = int(raw)
+        except _FATAL_QUERY_ERRORS:
+            raise
         except Exception:  # noqa: BLE001
             pass
 
@@ -2566,6 +2641,8 @@ def _safe_src_info(hdl: Any) -> dict[str, Any]:
         return {}
     try:
         info = hdl.src_info()
+    except _FATAL_QUERY_ERRORS:
+        raise
     except Exception:
         return {}
     if info is None:
