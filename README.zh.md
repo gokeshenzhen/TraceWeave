@@ -271,6 +271,15 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 上下文才重试。`backend_status.design_context` 分别报告候选身份、实际加载、源码
 关联及发现/校验成本；外部 KDB 的源码关联仍为未验证。
 
+`find_tb_instance(design_handle=..., path="top_tb.u0")` 也可使用默认 `auto`
+策略独立准备的上下文，直接读取 NPI 实例事实，无需完整 hierarchy；精确路径查询
+不枚举子节点。模块名查询支持 `count_mode="bounded"`（默认）或 `"exact"`，
+`timeout_sec` 包含绑定与最终校验。此路线返回 schema version 2，区分实例/定义位置
+以及计数限制。位置字段保留 NPI 原始观察；行内的 `npi_instance_location_unbound`
+或 `npi_definition_location_unbound` 表示该路径未绑定捕获输入，不能作为已验证的
+源码定位。独立 Slang 层级回退和其他五工具的 `design_handle` 路由仍待接入；
+旧 `handle` 调用形状保持兼容。目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
+
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`
 的参数。其 `context_identity_sha256` 是待匹配的身份；输入变化时拒绝发布 handle，
 成功则返回新 handle 和 `identity_verification="matched_recovery_identity"`。

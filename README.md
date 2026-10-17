@@ -113,6 +113,19 @@ Read `backend_status.design_context`: candidate identity, actual load and source
 association are separate, and validation/discovery costs are reported. External
 KDB source association remains unverified.
 
+`find_tb_instance(design_handle=..., path="top_tb.u0")` also accepts an
+independently prepared context with the default `auto` preference. It reads
+NPI instance facts without building the full hierarchy; exact path lookup does
+not enumerate children. Module searches accept `count_mode="bounded"` (default)
+or `"exact"`, and `timeout_sec` includes binding and final validation. This route
+returns schema version 2 with separate instance/definition locations and count
+limits. Location fields preserve raw NPI observations: a row's
+`npi_instance_location_unbound` or `npi_definition_location_unbound` gap means
+that path is not a verified locator in the captured inputs. Independent Slang
+hierarchy fallback and the other five tools' `design_handle` routes remain
+pending. Existing `handle` calls retain their output shape. Reusing a design
+handle currently reuses the binding; it does not yet avoid repeated KDB loads.
+
 After eviction or restart, pass the returned `recovery_context` unchanged as
 the arguments to `prepare_design_context`. Its `context_identity_sha256` is an
 expected identity: changed inputs are rejected before publishing a handle.
