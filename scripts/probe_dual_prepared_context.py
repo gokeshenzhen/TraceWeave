@@ -103,6 +103,20 @@ async def run(args, report):
 
     def reject(code):
         denied[code] += 1
+        if args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'):
+            report['native_fence_failed'] = True
+            record = dict(code=code, phase=phase, monotonic_ns=time.monotonic_ns())
+            report.setdefault('native_fence_failures', []).append(record)
+            path = Path(args.mutation_evidence_dir) / ('fence_failure_' + str(len(report['native_fence_failures'])) + '.json')
+            with path.open('x') as stream:
+                json.dump(record, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         raise GuardFailure(code)
 
     def profile(frame, event, arg):
@@ -142,6 +156,8 @@ async def run(args, report):
                     [case['wave_path'] for case in cases.values()])):
                 reject('source_under_wave_lock')
         if module == 'verdi_npi_backend.py' and name in {'find_driver', 'get_dynamic_step', 'query_source'}:
+            if args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'):
+                reject('native_entry_during_kdb_mutation')
             counts[name] += 1
         if module in {'compile_log_parser.py', 'design_backend_binding.py', 'verdi_backend.py'} and name in {
                 'parse_compile_log', 'prepare_backend_binding', 'probe_verdi_backend'}:
@@ -178,6 +194,8 @@ async def run(args, report):
                 for name in ('init', 'load_design', 'end'):
                     original = getattr(sdk, name)
                     def counted(*a, _name=name, _fn=original, **kw):
+                        if args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'):
+                            reject('sdk_call_during_kdb_mutation')
                         counts['sdk_' + _name] += 1
                         require(threading.get_ident() == main_thread, 'native_not_main_thread')
                         require(not any(lock.locked() for lock in server._wave_locks_for(
@@ -185,7 +203,7 @@ async def run(args, report):
                         if _name == 'load_design':
                             loads.append(dict(phase=phase, arguments=a, kwargs=kw))
                             argv = a[0]
-                            if args.mode == 'source-mutation' or (args.mode == 'trace' and phase.startswith('trace_')):
+                            if args.mode in {'source-mutation', 'kdb-mutation'} or (args.mode == 'trace' and phase.startswith('trace_')):
                                 labels = [label for label, case in cases.items()
                                           if case['top_hint'] == argv[argv.index('-top') + 1]]
                                 require(len(labels) == 1, 'unknown_trace_load_top')
@@ -203,6 +221,8 @@ async def run(args, report):
                 from pynpi import lang
                 original_release = lang.release_all_handles
                 def released(*a, _fn=original_release, **kw):
+                    if args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'):
+                        reject('lang_release_during_kdb_mutation')
                     counts['lang_release_all_handles'] += 1
                     return _fn(*a, **kw)
                 patches.append((lang, 'release_all_handles', original_release))
@@ -218,7 +238,7 @@ async def run(args, report):
         patches.extend(((npi, '_import_pynpi', original_import),
                         (server, '_select_prepared_backend', original_select)))
         npi._import_pynpi, server._select_prepared_backend = imported, select
-        if args.mode in {'trace', 'source-mutation'}:
+        if args.mode in {'trace', 'source-mutation', 'kdb-mutation'}:
             original_step = npi.VerdiNpiBackend.get_dynamic_step
 
             def observed_step(backend, *a, **kw):
@@ -259,14 +279,18 @@ async def run(args, report):
             require(len(blocks) == 1 and blocks[0].type == 'text', 'unexpected_public_envelope')
             return json.loads(blocks[0].text)
 
-        if args.mode == 'source-mutation':
-            from dual_source_mutation_probe import source_mutation_chain
-            await source_mutation_chain(args, report, cases, inventory, server, counts,
-                                        measured, public, require, baseline_files)
+        if args.mode in {'source-mutation', 'kdb-mutation'}:
+            if args.mode == 'source-mutation':
+                from dual_source_mutation_probe import source_mutation_chain as mutation_chain
+            else:
+                from dual_kdb_mutation_probe import kdb_mutation_chain as mutation_chain
+            await mutation_chain(args, report, cases, inventory, server, counts,
+                                 measured, public, require, baseline_files)
             require(all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
                         for p, digest in baseline_files.items()), 'final_actual_file_changed')
             report['final_actual_file_count'] = len(baseline_files)
-            report['status'] = 'source_mutation_recovery_verified'
+            report['status'] = ('source_mutation_recovery_verified' if args.mode == 'source-mutation'
+                                else 'kdb_mutation_recovery_verified')
             return
 
         for label, case in cases.items():
@@ -332,7 +356,7 @@ async def run(args, report):
         report['product_completion_counts'] = dict(counts)
         phase = 'diagnostic_cleanup'
         cleanup_started = sample()
-        if runtime_server is not None and args.mode in {'chain', 'trace', 'source-mutation'}:
+        if runtime_server is not None and args.mode in {'chain', 'trace', 'source-mutation', 'kdb-mutation'}:
             for case in cases.values():
                 path = case['wave_path']
                 cached = runtime_server._parser_cache.get(path)
@@ -349,6 +373,9 @@ async def run(args, report):
                 except Exception as exc:
                     report.setdefault('cleanup_errors', []).append(type(exc).__name__)
         for sdk in systems.values():
+            if args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'):
+                report.setdefault('cleanup_errors', []).append('native_cleanup_skipped_unrestored_kdb')
+                continue
             try:
                 report.setdefault('diagnostic_end_returns', []).append(sdk.end())
             except Exception as exc:
@@ -576,14 +603,14 @@ def main():
     parser.add_argument('--mcp-evidence', required=True)
     parser.add_argument('--inventory', required=True,
                         help='Reviewed private JSON with cases A/B, file paths and KDB identities')
-    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation'), default='boundary')
+    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation', 'kdb-mutation'), default='boundary')
     parser.add_argument('--boundary-evidence', help='Reviewed real boundary JSON; required for chain mode')
     parser.add_argument('--mutation-side', choices=('a', 'b'))
     parser.add_argument('--mutation-root', help='Explicitly authorized isolated fixture root; never sealed inputs')
     parser.add_argument('--mutation-evidence-dir', help='New private directory for durable recovery journal and raw responses')
     args = parser.parse_args()
-    if args.mode == 'source-mutation' and not all((args.mutation_side, args.mutation_root, args.mutation_evidence_dir)):
-        parser.error('source-mutation requires side, root and evidence directory')
+    if args.mode in {'source-mutation', 'kdb-mutation'} and not all((args.mutation_side, args.mutation_root, args.mutation_evidence_dir)):
+        parser.error('mutation probes require side, root and evidence directory')
     report = dict(status='failed', scope='bounded real dual identity or combinational trace; no LSF/license release',
                   mode=args.mode,
                   expected_head=args.expected_head, python=sys.version,
@@ -594,6 +621,17 @@ def main():
     code, started = 0, sample()
     try:
         asyncio.run(run(args, report))
+        if args.mode == 'kdb-mutation':
+            # AnyIO schedules worker stop at root-task completion; give that
+            # already-requested shutdown a bounded join before checking it.
+            report['post_asyncio_threads_before_join'] = [thread.name for thread in threading.enumerate()]
+            report['thread_join_budget_sec'] = 5
+            deadline = time.monotonic() + 5
+            for thread in threading.enumerate():
+                if thread is not threading.current_thread():
+                    thread.join(max(0, deadline - time.monotonic()))
+            report['post_asyncio_threads'] = [thread.name for thread in threading.enumerate()]
+            require(len(threading.enumerate()) == 1, 'threads_remain_after_asyncio_shutdown')
     except BaseException as exc:
         report['error'] = dict(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
         code = 1
