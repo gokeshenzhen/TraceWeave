@@ -15,12 +15,10 @@ from config import (
     DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_WAVE_WINDOW_PS,
 )
-from .compile_log_parser import parse_compile_log
-from .cancellation import OperationCancelled
+from .cancellation import OperationCancelled, check_cancelled
 from .log_parser import SimLogParser
 from .problem_hints import problem_hints_from_event
 from .schemas import ProblemHints
-from .tb_hierarchy_builder import build_hierarchy
 
 
 _STOPWORDS = {
@@ -121,9 +119,16 @@ class WaveformAnalyzer:
         wave_path: str,
         compile_log: str | None = None,
         top_hint: str | None = None,
+        *,
+        hierarchy: dict[str, Any] | None = None,
+        instance_candidates: list[dict[str, Any]] | None = None,
+        source_correlation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        hierarchy = _load_hierarchy(compile_log, self.simulator) if compile_log else None
-        likely_instances = _rank_likely_instances(failure_event, hierarchy, top_hint)
+        # Source preparation belongs to the caller, outside waveform locks.
+        # compile_log remains accepted for compatibility but never triggers a
+        # hidden hierarchy build in this log/wave analysis core.
+        likely_instances = _rank_likely_instances(
+            failure_event, hierarchy, top_hint, instance_candidates)
         related_source_files = _rank_related_source_files(failure_event, hierarchy, likely_instances)
         recommended_signals = _recommend_signals(
             self.parser,
@@ -147,7 +152,7 @@ class WaveformAnalyzer:
         if recommended_signals:
             reasoning.append("Signal suggestions were ranked to prefer DUT-visible paths over checker internals.")
 
-        return {
+        result = {
             "failure_event": failure_event,
             "time_anchor": time_anchor,
             "likely_instances": likely_instances,
@@ -155,6 +160,14 @@ class WaveformAnalyzer:
             "related_source_files": related_source_files,
             "reasoning_summary": reasoning,
         }
+        if source_correlation is not None:
+            result["source_correlation"] = source_correlation
+        elif compile_log and hierarchy is None and instance_candidates is None:
+            result["source_correlation"] = {
+                "facts_origin": "log_only", "coverage_status": "partial",
+                "coverage_gaps": ["source_context_not_supplied"],
+            }
+        return result
 
     def recommend_debug_next_steps(
         self,
@@ -164,9 +177,14 @@ class WaveformAnalyzer:
         structural_risks: list[dict[str, Any]] | None = None,
         problem_hints: dict[str, Any] | ProblemHints | None = None,
         handshake_sweep: dict[str, Any] | None = None,
+        *,
+        hierarchy: dict[str, Any] | None = None,
+        instance_candidates: list[dict[str, Any]] | None = None,
+        source_correlation: dict[str, Any] | None = None,
+        failure_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        log_parser = SimLogParser(self.log_path, self.simulator, self.native_time_unit)
-        events = log_parser.parse_failure_events()
+        events = (failure_events if failure_events is not None else
+                  SimLogParser(self.log_path, self.simulator, self.native_time_unit).parse_failure_events())
         if not events:
             runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)
             why = ["No normalized failure events were found in the simulation log."]
@@ -190,9 +208,11 @@ class WaveformAnalyzer:
                 "why": why,
             }
 
-        ranked_events = sorted(events, key=_failure_priority_key)
-        primary = ranked_events[0]
-        event_analysis = self.analyze_failure_event(primary, wave_path, compile_log=compile_log, top_hint=top_hint)
+        primary = select_primary_failure(events)
+        event_analysis = self.analyze_failure_event(
+            primary, wave_path, compile_log=compile_log, top_hint=top_hint,
+            hierarchy=hierarchy, instance_candidates=instance_candidates,
+            source_correlation=source_correlation)
         failure_class = _classify_failure(primary)
         normalized_hints = _normalize_problem_hints(problem_hints)
         primary_for_risk = dict(primary)
@@ -224,7 +244,7 @@ class WaveformAnalyzer:
             )
             why.append(f"Runtime protocol coverage remains inconclusive: {warning_text}")
 
-        return {
+        result = {
             "primary_failure_target": primary,
             "recommended_signals": event_analysis["recommended_signals"],
             "recommended_instances": event_analysis["likely_instances"],
@@ -251,6 +271,9 @@ class WaveformAnalyzer:
                 },
             },
         }
+        if "source_correlation" in event_analysis:
+            result["source_correlation"] = event_analysis["source_correlation"]
+        return result
 
 
 def _find_group_event(events: list[dict[str, Any]], event_id: str | None) -> dict[str, Any] | None:
@@ -258,8 +281,9 @@ def _find_group_event(events: list[dict[str, Any]], event_id: str | None) -> dic
         if event["event_id"] == event_id:
             return event
     return None
-def _load_hierarchy(compile_log: str, simulator: str = 'auto') -> dict[str, Any]:
-    return build_hierarchy(parse_compile_log(compile_log, simulator))
+
+def select_primary_failure(events):
+    return min(events, key=_failure_priority_key) if events else None
 
 
 def _failure_priority_key(event: dict[str, Any]) -> tuple[int, int, int]:
@@ -290,6 +314,7 @@ def _classify_failure(event: dict[str, Any]) -> str:
 def _flatten_component_tree(tree: dict[str, Any], prefix: str = "") -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
     for name, payload in tree.items():
+        check_cancelled()
         instance_path = f"{prefix}.{name}" if prefix else name
         node = dict(payload)
         node["instance_path"] = instance_path
@@ -304,17 +329,20 @@ def _rank_likely_instances(
     failure_event: dict[str, Any],
     hierarchy: dict[str, Any] | None,
     top_hint: str | None,
+    instance_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    if hierarchy is None:
+    if hierarchy is None and instance_candidates is None:
         if failure_event.get("instance_path"):
             return [{"instance_path": failure_event["instance_path"], "score": 10, "reason": "exact log instance"}]
         return []
 
-    nodes = _flatten_component_tree(hierarchy.get("component_tree", {}))
+    nodes = (instance_candidates if instance_candidates is not None else
+             _flatten_component_tree(hierarchy.get("component_tree", {})))
     event_path = failure_event.get("instance_path") or ""
-    top_module = top_hint or hierarchy.get("project", {}).get("top_module") or ""
+    top_module = top_hint or (hierarchy or {}).get("project", {}).get("top_module") or ""
     ranked = []
     for node in nodes:
+        check_cancelled()
         path = node["instance_path"]
         score = 0
         reasons = []
@@ -342,6 +370,7 @@ def _rank_likely_instances(
                     "src": src,
                     "score": score,
                     "reason": ", ".join(reasons),
+                    **({"source_evidence": node["source_evidence"]} if "source_evidence" in node else {}),
                 }
             )
     ranked.sort(key=lambda item: (-item["score"], item["instance_path"]))
@@ -406,6 +435,7 @@ def _recommend_signals(
 
     suggestions: dict[str, dict[str, Any]] = {}
     for keyword in dedup_keywords[:8]:
+        check_cancelled()
         try:
             result = parser.search_signals(keyword, 10)
         except OperationCancelled:

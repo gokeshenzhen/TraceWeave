@@ -1064,6 +1064,8 @@ class AnalyzeFailureEventResult(SchemaModel):
     recommended_signals: list[dict[str, Any]] = Field(default_factory=list)
     related_source_files: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_summary: list[str] = Field(default_factory=list)
+    source_correlation: dict[str, Any] | None = None
+    backend_status: BackendStatus | None = None
 
 
 class StructuralRiskCorrelation(SchemaModel):
@@ -1107,6 +1109,8 @@ class RecommendNextStepsResult(SchemaModel):
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
     next_iteration_hint: dict[str, Any] | None = None
+    source_correlation: dict[str, Any] | None = None
+    backend_status: BackendStatus | None = None
 
 
 RecommendFailureDebugNextStepsResult = RecommendNextStepsResult

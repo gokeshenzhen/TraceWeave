@@ -448,6 +448,16 @@ Verification
   backend binding. Semantic exports may do global work within the original
   budget; `max_items` only caps output, and an exact count does not prove a full
   export. Legacy handles retain their raw sections and static UVM inference.
+  Failure-event analysis and next-step recommendations consume copied candidates
+  from these same source queries: exact log instance plus a depth-one selected
+  top subtree, with one cumulative 256-scope/8192-call/1-MiB budget. Partial or
+  empty native results never trigger a full tree to improve heuristic ranking.
+  The analyzer core no longer prepares hierarchy. Only native unavailability
+  permits the explicitly reported bounded legacy source fallback; source and
+  native facts are not merged. Semantic preparation is outside waveform locks,
+  wave access uses the normal request worker/lock, and recommendation cache
+  publication follows final context/binding validation. Legacy compile-log
+  calls independently prepare a context within the same request deadline.
   Independent Slang hierarchy fallback remains pending. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup

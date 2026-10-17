@@ -301,6 +301,13 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 独立 Slang 层级回退仍待接入；旧 `handle` 的调用形状和静态 UVM 推断视图保持兼容。
 目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
 
+`analyze_failure_event` 与 `recommend_failure_debug_next_steps` 接受同一个
+`design_handle`，在波形锁外查询日志中的精确实例和有界顶层直接子实例，再进行波形
+关联。建议仍是启发式结果，`source_correlation` 明示候选范围不完整。只提供
+`compile_log` 时自动独立准备上下文；NPI 不可用时保留有预算的旧源码回退，可能完整
+构建词法层级，并标明 `full_hierarchy_fallback=true`。未提供编译上下文的日志/波形
+分析，以及 `analyze_failures`，不要求层级。结构扫描和 handshake sweep 的建议仍保留。
+
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`
 的参数。其 `context_identity_sha256` 是待匹配的身份；输入变化时拒绝发布 handle，
 成功则返回新 handle 和 `identity_verification="matched_recovery_identity"`。

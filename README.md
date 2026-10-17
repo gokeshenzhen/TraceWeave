@@ -153,6 +153,16 @@ Independent Slang hierarchy fallback remains pending. Existing `handle` calls
 retain their output shape and static UVM inference view. Reusing a design
 handle currently reuses the binding; it does not yet avoid repeated KDB loads.
 
+`analyze_failure_event` and `recommend_failure_debug_next_steps` accept the same
+`design_handle`. Source correlation queries the exact log instance and a bounded
+set of top-level children before waveform work acquires its lock. Suggestions
+remain heuristic and `source_correlation` reports their limited scope. Supplying
+only `compile_log` prepares an independent context automatically. If NPI is
+unavailable, the bounded legacy source fallback may build a lexical hierarchy;
+this is explicitly reported as `full_hierarchy_fallback=true`. Log/wave analysis
+without a compile context, including `analyze_failures`, requires no hierarchy.
+Structural-scan and handshake-sweep recommendations remain separate.
+
 After eviction or restart, pass the returned `recovery_context` unchanged as
 the arguments to `prepare_design_context`. Its `context_identity_sha256` is an
 expected identity: changed inputs are rejected before publishing a handle.
