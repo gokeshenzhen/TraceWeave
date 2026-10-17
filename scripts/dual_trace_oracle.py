@@ -16,7 +16,7 @@ def evaluate_binary(expr, inputs):
         raise ValueError('oracle_unreviewed_type')
     if op == 'signal':
         value, declared = inputs[expr['signal']]
-        if expr['declared_bits'] != declared or len(expr['bits']) != width:
+        if tuple(expr['declared_bits']) != tuple(declared) or len(expr['bits']) != width:
             raise ValueError('oracle_wrong_declaration')
         return ''.join(value[declared.index(bit)] for bit in expr['bits'])
     if op == 'const':
