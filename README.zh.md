@@ -277,7 +277,12 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 `timeout_sec` 包含绑定与最终校验。此路线返回 schema version 2，区分实例/定义位置
 以及计数限制。位置字段保留 NPI 原始观察；行内的 `npi_instance_location_unbound`
 或 `npi_definition_location_unbound` 表示该路径未绑定捕获输入，不能作为已验证的
-源码定位。独立 Slang 层级回退和其他五工具的 `design_handle` 路由仍待接入；
+源码定位。
+`get_tb_subtree(design_handle=..., root="top_tb.u0.u0", depth=1)` 使用同一服务，
+对返回的每个节点检查位置绑定。默认 bounded 计数在显示边界停止；只知道下界时，
+`total_descendants` 为 null。`count_mode="exact"` 显式请求在工作量/时间预算内
+遍历未显示的后代；`max_nodes` 包括根节点。
+独立 Slang 层级回退和其他四工具的 `design_handle` 路由仍待接入；
 旧 `handle` 调用形状保持兼容。目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
 
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`

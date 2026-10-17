@@ -28,7 +28,16 @@ def mark_unbound_instance_locations(result: dict, context: DesignContext) -> Non
     """
     roles = (("source_file", "npi_instance_location_unbound"),
              ("definition_file", "npi_definition_location_unbound"))
-    wanted = {row[key] for row in result.get("hits", []) for key, _ in roles if row[key] is not None}
+    # Only inspect validated, already bounded output rows. Do not enumerate
+    # native children to bind locations, including undisplayed descendants.
+    rows = list(result.get("hits", []))
+    pending = [result["node"]] if result.get("node") is not None else []
+    while pending:
+        check_cancelled()
+        row = pending.pop()
+        rows.append(row)
+        pending.extend(row["children"])
+    wanted = {row[key] for row in rows for key, _ in roles if row[key] is not None}
     resolved = {path: path for path in wanted}
     for spelling, canonical in context.aliases:
         check_cancelled()
@@ -39,7 +48,7 @@ def mark_unbound_instance_locations(result: dict, context: DesignContext) -> Non
         check_cancelled()
         if record.path in targets:
             captured.add(record.path)
-    for row in result.get("hits", []):
+    for row in rows:
         check_cancelled()
         gaps = set(row["gaps"])
         for key, gap in roles:

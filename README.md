@@ -121,8 +121,13 @@ or `"exact"`, and `timeout_sec` includes binding and final validation. This rout
 returns schema version 2 with separate instance/definition locations and count
 limits. Location fields preserve raw NPI observations: a row's
 `npi_instance_location_unbound` or `npi_definition_location_unbound` gap means
-that path is not a verified locator in the captured inputs. Independent Slang
-hierarchy fallback and the other five tools' `design_handle` routes remain
+that path is not a verified locator in the captured inputs.
+`get_tb_subtree(design_handle=..., root="top_tb.u0.u0", depth=1)` uses the same
+service and location checks for every returned node. Its default bounded count
+stops at display frontiers; `total_descendants` is null when only a lower bound
+is known. `count_mode="exact"` explicitly requests traversal of undisplayed
+descendants within the work/time budget. `max_nodes` includes the root.
+Independent Slang hierarchy fallback and the other four tools' `design_handle` routes remain
 pending. Existing `handle` calls retain their output shape. Reusing a design
 handle currently reuses the binding; it does not yet avoid repeated KDB loads.
 

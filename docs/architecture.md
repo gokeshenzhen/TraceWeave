@@ -411,16 +411,17 @@ Verification
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
   of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  `find_tb_instance` also accepts an independently prepared `design_handle`:
-  exact path lookup and bounded/exact module search use the existing NPI source
+  `find_tb_instance` and `get_tb_subtree` also accept an independently prepared `design_handle`:
+  exact path lookup, bounded/exact module search and subtree browsing use the existing NPI source
   query service without building the full lexical hierarchy. This route returns
   schema version 2; legacy `handle` queries retain their existing shape. The
   context stays pinned through source/KDB validation, native cleanup and final
   validation. Explicit null counts/locations survive public serialization.
   Instance and definition locations retain raw NPI paths. Each role gains a
   `npi_instance_location_unbound` / `npi_definition_location_unbound` row gap
-  when its exact spelling or captured alias is absent from captured inputs;
-  such paths are vendor observations, not verified source locators. No basename
+  when its exact spelling or captured alias is absent from captured inputs.
+  This check includes every returned subtree node without enumerating more nodes.
+  Such paths are vendor observations, not verified source locators. No basename
   inference or live path probing repairs them. A bound path alone still does
   not prove that the KDB was built from the current source bytes.
   Its deadline includes context validation and KDB binding; late completion
@@ -428,11 +429,17 @@ Verification
   Local native queries remain synchronous; explicit LSF uses the existing
   worker. This does not yet reuse NPI backend instances across public queries.
   Unavailable NPI reports a capability gap: independent Slang hierarchy fallback
-  and the other five public tools remain pending. The internal
+  and the other four public tools remain pending. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display
   frontiers and returns a lower bound instead of an invented exact total.
+  Subtree `max_nodes` includes the root; descendant counts exclude it. At each
+  visible depth frontier a single omitted child can establish truncation;
+  `count_mode=exact` explicitly permits traversal beyond the displayed tree,
+  still within the request's work/depth/time budgets. Deep trees use the
+  iterative source codec and JSON payload, preserving nulls without Pydantic's
+  recursive `Any` serialization limit.
   Explicit exact counting can traverse undisplayed scopes under separate
   scope/call/depth/byte/time budgets. Output truncation and incomplete analysis
   have separate receipts. Every opened stream is closed on normal completion,

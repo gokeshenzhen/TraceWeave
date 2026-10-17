@@ -5897,7 +5897,7 @@ async def list_tools():
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
                 "include resolution and semantic coverage. Replay recovery_context as this tool's "
                 "arguments to require the same compile/source identity after eviction or restart; "
-                "identity mismatch publishes no handle. Driver/load/path, X-trace and find_tb_instance accept design_handle; "
+                "identity mismatch publishes no handle. Driver/load/path, X-trace, find_tb_instance and get_tb_subtree accept design_handle; "
                 "their first query fixes a KDB candidate and reports validation costs. An optional "
                 "kdb_path declares a candidate without asserting source association. The other hierarchy tools use "
                 "their build_tb_hierarchy handles."
@@ -6877,14 +6877,21 @@ async def list_tools():
             },
         ),
         # ── Hierarchy handle tools (phase 4) ────────────────────────────
-        # Legacy handles resolve through HandleStore. find_tb_instance also
-        # accepts an independently prepared design_handle for semantic lookup.
+        # Legacy handles resolve through HandleStore. Instance lookup and
+        # subtree browsing also accept an independently prepared design_handle.
         Tool(
             name="get_tb_subtree",
             description=(
                 "Return a slice of the component_tree starting at `root` (dotted instance path) "
-                "with up to `depth` levels. Use after build_tb_hierarchy to drill into a branch "
-                "without pulling the whole tree into context."
+                "with up to `depth` levels. Use a legacy handle for the compiled-source tree, or "
+                "design_handle from prepare_design_context for on-demand NPI hierarchy facts without "
+                "a full hierarchy build. The design_handle route returns schema_version=2; default "
+                "count_mode=bounded stops at display frontiers and returns a lower bound when descendants "
+                "remain unvisited. count_mode=exact explicitly traverses undisplayed descendants within "
+                "the query budget. max_nodes includes the root. Locations retain raw NPI paths; "
+                "*_location_unbound row gaps identify paths not bound to captured inputs. "
+                "Independent Slang hierarchy fallback is pending; unavailable NPI returns an explicit "
+                "capability gap. Legacy handles retain their existing result shape."
             ),
             inputSchema={
                 "type": "object",
@@ -6893,6 +6900,7 @@ async def list_tools():
                         "type": "string",
                         "description": "hierarchy_handle from build_tb_hierarchy",
                     },
+                    "design_handle": {"type": "string", "minLength": 1},
                     "root": {
                         "type": "string",
                         "default": "",
@@ -6908,8 +6916,12 @@ async def list_tools():
                         "default": 500,
                         "description": "hard cap on emitted nodes",
                     },
+                    "count_mode": {"type": "string", "enum": ["bounded", "exact"], "default": "bounded",
+                                   "description": "design_handle only; exact counting may traverse undisplayed descendants."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and query."},
                 },
-                "required": ["handle"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -8088,8 +8100,8 @@ async def _prepare_pinned_design_entry(store, handle, entry, *, metrics,
     return binding, reused
 
 
-async def _query_prepared_instance(entry, arguments, budget):
-    """First public source tool over the existing prepared NPI query service.
+async def _query_prepared_hierarchy(entry, operation, arguments, budget):
+    """Public instance/subtree queries over the prepared NPI query service.
 
     Keep local native work synchronous, like driver/load/path. Only explicit
     LSF placement uses a worker; this does not introduce a second local native
@@ -8102,7 +8114,7 @@ async def _query_prepared_instance(entry, arguments, budget):
     from src.npi_hierarchy_source import NpiHierarchyUnavailable
 
     context = entry.context
-    plan = prepare_source_query(context, "find_tb_instance", arguments, budget=budget)
+    plan = prepare_source_query(context, operation, arguments, budget=budget)
     backend, status, selection_reason = _select_prepared_backend(entry, DeferredConnectivityFallbackBackend())
     selected = getattr(backend, "name", None) == "verdi_npi"
     reason = selection_reason or status.pop("_npi_selection_reason", None) or "npi_kdb_unavailable"
@@ -8124,7 +8136,7 @@ async def _query_prepared_instance(entry, arguments, budget):
         kdb_status = _npi_kdb_status(backend)
         if raw is not None:
             execution = raw.pop("_npi_execution_status", None)
-            raw = validate_source_result("find_tb_instance", raw)
+            raw = validate_source_result(operation, raw)
             origin = raw["facts_origin"]
             if origin == "verdi_npi":
                 anchor = entry.binding.anchor
@@ -8160,9 +8172,9 @@ async def _query_prepared_instance(entry, arguments, budget):
         npi_backend=backend if selected else None, npi_execution=execution,
         source_graph_receipt=None, npi_kdb_status=kdb_status,
     )
-    payload = validate_source_result("find_tb_instance", raw)
-    model = schemas.SourceInstanceResult if "hits" in payload else schemas.SourceQueryEnvelope
-    return model.model_validate(payload)
+    # The codec validates trees iteratively. Do not round-trip a valid deep
+    # subtree through Pydantic's recursive Any serializer or discard nulls.
+    return validate_source_result(operation, raw)
 
 
 async def _dispatch_design_query(name: str, args: dict):
@@ -8180,12 +8192,12 @@ async def _dispatch_design_query(name: str, args: dict):
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
     source_budget, source_arguments = None, None
-    if name == "find_tb_instance":
+    if name in {"find_tb_instance", "get_tb_subtree"}:
         from src.hierarchy_source_ir import HierarchyQueryBudget
         from src.hierarchy_source_request import validate_source_query
         try:
-            if set(args) - {"design_handle", "path", "module", "limit", "count_mode", "timeout_sec"}:
-                raise ValueError("design_handle instance queries accept no legacy handle or context overrides")
+            if "handle" in args:
+                raise ValueError("provide exactly one handle or design_handle")
             source_arguments = {key: value for key, value in args.items() if key not in {"design_handle", "timeout_sec"}}
             validate_source_query(name, source_arguments)
             source_budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
@@ -8193,7 +8205,8 @@ async def _dispatch_design_query(name: str, args: dict):
             source_budget.deadline -= source_budget.started - started
             source_budget.started = started
         except (TypeError, ValueError) as exc:
-            return schemas.ToolErrorResult(error=str(exc), error_code="invalid_design_instance_arguments")
+            code = "invalid_design_instance_arguments" if name == "find_tb_instance" else "invalid_design_subtree_arguments"
+            return schemas.ToolErrorResult(error=str(exc), error_code=code)
 
     def remaining(limit):
         deadline = source_budget.deadline if source_budget is not None else history_deadline
@@ -8246,7 +8259,7 @@ async def _dispatch_design_query(name: str, args: dict):
                 resolved["_design_query_started"] = started
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            result = (await _query_prepared_instance(entry, source_arguments, source_budget)
+            result = (await _query_prepared_hierarchy(entry, name, source_arguments, source_budget)
                       if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
@@ -8255,7 +8268,8 @@ async def _dispatch_design_query(name: str, args: dict):
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             _require_design_store_owner(store)
-            status = getattr(result, "backend_status", None)
+            status = (schemas.BackendStatus.model_validate(result["backend_status"])
+                      if source_budget is not None else getattr(result, "backend_status", None))
             if status is not None:
                 for attempt in status.attempted_backends:
                     if attempt.backend == "verdi_npi":
@@ -8280,7 +8294,8 @@ async def _dispatch_design_query(name: str, args: dict):
             if source_budget is not None:
                 from src.hierarchy_source_codec import validate_source_result
                 from src.hierarchy_source_service import finish_hierarchy_query
-                raw = result.model_dump(mode="json", exclude_unset=True)
+                raw = result
+                raw["backend_status"] = status.model_dump(mode="json", exclude_unset=True)
                 raw["design_handle"] = handle
                 finish_hierarchy_query(raw, source_budget)
                 raw = validate_source_result(name, raw)
@@ -8312,7 +8327,7 @@ async def _dispatch(name: str, args: dict):
     if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance"}:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance", "get_tb_subtree"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
     return await _dispatch_inner(name, args)
