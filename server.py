@@ -8634,6 +8634,13 @@ async def _dispatch(name: str, args: dict):
                         "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
+    if name == "resolve_packed_fields" and args.get("compile_log"):
+        # Preserve an explicitly built legacy view, including its historical
+        # source-change rejection. Only a caller without that view is prepared
+        # automatically; an explicit design_handle never borrows this cache.
+        hierarchy, _ = _resolve_hierarchy_context(args["compile_log"], _resolve_session_simulator(args))
+        if hierarchy is not None:
+            return await _dispatch_inner(name, args)
     if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"} and args.get("compile_log"):
         started = time.monotonic()
         prepared = await _handle_prepare_design_context({key: args[key] for key in (
