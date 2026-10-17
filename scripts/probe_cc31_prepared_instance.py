@@ -27,6 +27,7 @@ import time
 
 MAIN = Path(__file__).resolve().parents[1]
 TARGET = 'top_tb.u0'
+SUBTREE_TARGET = 'top_tb.u0.u0'
 ENV = {'PYTHONDONTWRITEBYTECODE': '1', 'TRACEWEAVE_NPI_EXECUTION': 'local',
        'TRACEWEAVE_CONNECTIVITY_ROUTE': 'auto', 'TRACEWEAVE_AUTO_KDB': '0',
        'TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY': 'off', 'TRACEWEAVE_TELEMETRY': '0',
@@ -73,6 +74,16 @@ def costs(start):
             'ru_maxrss_kib': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
 
 
+def queries(args):
+    if args.subtree:
+        common = {'root': SUBTREE_TARGET, 'depth': 1, 'max_nodes': 16, 'count_mode': 'bounded'}
+        return [('first_subtree', 'get_tb_subtree', dict(common)),
+                ('repeat_subtree', 'get_tb_subtree', dict(common)),
+                ('frontier_subtree', 'get_tb_subtree', dict(common, depth=0, max_nodes=1))]
+    return [('first_instance', 'find_tb_instance', {'path': TARGET}),
+            ('repeat_instance', 'find_tb_instance', {'path': TARGET})]
+
+
 class Guards:
     profile_counters = frozenset({
         'parse_compile_log', 'prepare_design_context', 'probe_verdi_backend',
@@ -80,8 +91,10 @@ class Guards:
         'query_source', 'lookup_scope', 'open_children',
     })
 
-    def __init__(self, repo, report_path):
+    def __init__(self, repo, report_path, *, subtree=False):
         self.repo, self.report_path, self.phase = str(repo), str(report_path), 'load_server'
+        self.subtree = subtree
+        self.child_streams = []
         # fdopen of the protocol's duplicated stdout does not open a user file.
         # Permit only descriptors pointing to our inherited output channels.
         self.output_fd_identities = {
@@ -89,7 +102,7 @@ class Guards:
         }
         self.denied = Counter(dict.fromkeys(('full_build', 'lexical_bootstrap_or_scan', 'slang',
             'static_or_legacy_context', 'automatic_kdb_build', 'external_process', 'python_write',
-            'eager_language_list', 'waveform', 'repeat_parse_or_probe'), 0))
+            'eager_language_list', 'waveform', 'repeat_parse_or_probe', 'outside_requested_subtree'), 0))
         self.calls = Counter(dict.fromkeys(('init', 'load_design', 'end', 'parse_compile_log',
             'prepare_design_context', 'probe_verdi_backend', 'prepare_backend_binding',
             'capture_kdb_anchor', 'select_backend', 'query_source', 'lookup_scope', 'open_children',
@@ -150,7 +163,7 @@ class Guards:
                    and qualified.startswith(('SourceGraphRuntime.', 'IsolatedSourceGraphProcessRunner.', 'PersistentSourceGraphProcessRunner.'))):
             self.reject('slang')
         if ((module == 'connectivity_backend.py' and qualified.startswith('StaticConnectivityBackend.') and name.startswith('find_'))
-                or module == 'handle_tools.py' and name == 'find_tb_instance'
+                or module == 'handle_tools.py' and name in {'find_tb_instance', 'get_tb_subtree'}
                 or module in {'signal_driver.py', 'signal_load.py'} and name in {'explain_signal_driver', 'find_signal_loads'}
                 or module == 'divergence_context.py' and name == 'resolve_context'):
             self.reject('static_or_legacy_context')
@@ -159,19 +172,26 @@ class Guards:
         if name in {'parse_compile_log', 'prepare_design_context', 'probe_verdi_backend', 'prepare_backend_binding',
                     'capture_kdb_anchor', 'select_backend'}:
             self.calls[name] += 1
-            if self.phase == 'repeat_instance' and name in {'parse_compile_log', 'prepare_design_context',
+            if self.phase in {'repeat_instance', 'repeat_subtree', 'frontier_subtree'} and name in {'parse_compile_log', 'prepare_design_context',
                                                           'probe_verdi_backend', 'prepare_backend_binding'}:
                 self.reject('repeat_parse_or_probe')
         if module == 'verdi_npi_backend.py' and qualified == 'VerdiNpiBackend.query_source':
             self.calls['query_source'] += 1
         if module == 'npi_hierarchy_source.py' and qualified.startswith('NpiHierarchySourceProvider.') and name in {'lookup_scope', 'open_children'}:
             self.calls[name] += 1
+            if name == 'open_children' and self.subtree:
+                path = frame.f_locals['scope'].path
+                self.child_streams.append({'phase': self.phase, 'path': path})
+                if path not in {SUBTREE_TARGET, *(SUBTREE_TARGET + f'.u{i}' for i in range(8))}:
+                    self.reject('outside_requested_subtree')
 
 
 def server_process(args):
     repo, report_path = Path(args.repo).resolve(), Path(args.server_report).resolve()
     kdb = Path(args.project).resolve() / 'simv.daidir/kdb.elab++'
-    guard, captures, sdk = Guards(repo, report_path), [], None
+    guard, captures, sdk = Guards(repo, report_path, subtree=args.subtree), [], None
+    query_steps = queries(args)
+    phases = ['prepare', *(step[0] for step in query_steps)]
     context = binding = last_reply_finished = None
     report = {'status': 'failed', 'head': head_at(repo), 'phases': {}, 'calls': [],
               'environment': {k: os.environ.get(k) for k in ENV}}
@@ -223,7 +243,7 @@ def server_process(args):
     async def observed(req):
         nonlocal last_reply_finished
         index = len(report['calls'])
-        phase = ('prepare', 'first_instance', 'repeat_instance')[index] if index < 3 else 'unexpected_call'
+        phase = phases[index] if index < len(phases) else 'unexpected_call'
         guard.phase, started, before = phase, sample(), guard.calls.copy()
         try:
             response = await original_handler(req)
@@ -233,7 +253,7 @@ def server_process(args):
             return response
         finally:
             report['phases'][phase] = dict(costs(started), api_counts={k: guard.calls[k] - before[k] for k in guard.calls})
-            if phase == 'repeat_instance':
+            if phase == phases[-1]:
                 last_reply_finished = sample()
     server.app.request_handlers[types.CallToolRequest] = observed
     try:
@@ -241,18 +261,23 @@ def server_process(args):
         require(Path(sys.modules['src.hierarchy_source_service'].__file__).resolve().is_relative_to(repo),
                 'wrong_lazy_service_import')
         if last_reply_finished is not None:
-            report['phases']['post_repeat_reply_to_product_stdio_close'] = costs(last_reply_finished)
+            close_key = 'post_last_reply_to_product_stdio_close' if args.subtree else 'post_repeat_reply_to_product_stdio_close'
+            report['phases'][close_key] = costs(last_reply_finished)
         report['product_stdio_close'] = {'api_counts': dict(guard.calls),
             'note': 'Actual product transport-close counters before any diagnostic SDK oracle or harness end; no claim of native-session release.'}
-        require([row['tool'] for row in report['calls']] == ['prepare_design_context', 'find_tb_instance', 'find_tb_instance'], 'public_sequence_incomplete')
-        prepared, first, repeat = [row['result'] for row in report['calls']]
+        require([row['tool'] for row in report['calls']] == ['prepare_design_context', *(step[1] for step in query_steps)], 'public_sequence_incomplete')
+        prepared, first, repeat, *extra = [row['result'] for row in report['calls']]
         server.schemas.PrepareDesignContextResult.model_validate(prepared)
-        for result in (first, repeat):
-            server.schemas.SourceInstanceResult.model_validate(result)
+        for result in (first, repeat, *extra):
+            from src.hierarchy_source_codec import validate_source_result
+            validate_source_result(query_steps[0][1], result)
             require(result['facts_origin'] == 'verdi_npi' and result['backend_status']['actual_backend'] == 'verdi_npi', 'not_real_npi')
-            require(len(result['hits']) == 1 and result['hits'][0]['path'] == TARGET, 'exact_target_missing')
+            if args.subtree:
+                require(result['root'] == SUBTREE_TARGET and result['node']['path'] == SUBTREE_TARGET, 'subtree_target_missing')
+            else:
+                require(len(result['hits']) == 1 and result['hits'][0]['path'] == TARGET, 'exact_target_missing')
         handle = prepared['design_handle']
-        for index, result in enumerate((first, repeat)):
+        for index, result in enumerate((first, repeat, *extra)):
             receipt = result['backend_status']['design_context']
             require(result['design_handle'] == handle and receipt['binding_reused'] is bool(index), 'binding_receipt_mismatch')
             require(receipt['context_identity_sha256'] == prepared['context_identity_sha256'], 'context_identity_mismatch')
@@ -273,19 +298,80 @@ def server_process(args):
                                      'source_gaps': list(context.gaps), 'include_resolution_complete': context.include_resolution_complete}
             # Separate diagnostic oracle after both public requests. No reload,
             # eager list, product projector, retained Language handle or timing blend.
-            guard.phase, started = 'independent_exact_sdk_oracle', sample()
+            guard.phase, started = ('independent_subtree_sdk_oracle' if args.subtree else 'independent_exact_sdk_oracle'), sample()
             before = guard.calls.copy()
             require(npi_hierarchy_source._OWNER_LOCK.acquire(blocking=False), 'oracle_owner_busy')
             try:
-                from pynpi import lang
-                def copied_oracle():
-                    target = lang.handle_by_name(TARGET, None)
-                    require(target is not None, 'oracle_target_missing')
+                from pynpi import lang, lang_l0, lang_l0_util
+                def scope_fact(target):
                     parent = target.scope_handle()
                     return {'path': target.full_name(), 'kind': target.type(),
                             'parent': parent.full_name() if parent is not None else None,
                             'module': target.def_name(), 'source_file': target.file(), 'source_line': target.line_no(),
                             'definition_file': target.def_file(), 'definition_line': target.def_line_no()}
+                def direct_children(target):
+                    # Independent low-level SDK walk, never a product provider
+                    # or eager SDK list. At most 16 raw scopes per iterator.
+                    iterator = lang_l0.iterate(lang_l0.InternalScope, target.cps_obj)
+                    children = []
+                    observation = {'scope': target.full_name(), 'raw_scopes': [], 'exhausted': False}
+                    report.setdefault('oracle_scope_scans', []).append(observation)
+                    primary = None
+                    try:
+                        if iterator is None:
+                            observation['exhausted'] = True
+                            return children
+                        for _ in range(16):
+                            try:
+                                raw = lang_l0.scan(iterator)
+                            except BaseException:
+                                # Failed scan leaves validity unknown; global
+                                # SDK cleanup owns recovery, not a second free.
+                                iterator = None
+                                raise
+                            if raw is None:
+                                iterator = None  # exhausted iterator is freed by SDK
+                                observation['exhausted'] = True
+                                return children
+                            child = lang_l0_util.handle(raw)
+                            observation['raw_scopes'].append({'path': child.full_name(), 'kind': child.type()})
+                            children.append(child)
+                        raise ProbeFailure('oracle_child_scan_cap')
+                    except BaseException as exc:
+                        primary = exc
+                        raise
+                    finally:
+                        if iterator is not None:
+                            try:
+                                require(lang_l0.release_handle(iterator) == 1, 'oracle_iterator_cleanup_unconfirmed')
+                            except BaseException as exc:
+                                report.setdefault('oracle_iterator_cleanup_failures', []).append(type(exc).__name__)
+                                if primary is None:
+                                    raise
+                def copied_oracle():
+                    target = lang.handle_by_name(SUBTREE_TARGET if args.subtree else TARGET, None)
+                    require(target is not None, 'oracle_target_missing')
+                    fact = scope_fact(target)
+                    report['independent_sdk_oracle'] = fact
+                    if args.subtree:
+                        require((fact['path'], fact['parent'], fact['module'], fact['kind'])
+                                == (SUBTREE_TARGET, TARGET, 'crp', 'npiModule'), 'oracle_root_scope_mismatch')
+                        children = direct_children(target)
+                        fact['children'] = []
+                        for child in children:
+                            require(child.type() == 'npiModule', 'oracle_unexpected_child_kind')
+                            item = scope_fact(child)
+                            fact['children'].append(item)
+                        expected = {SUBTREE_TARGET + f'.u{i}': f'sbox{i + 1}' for i in range(8)}
+                        observed = {item['path']: item['module'] for item in fact['children']}
+                        require(len(children) == 8 and observed == expected
+                                and all(item['parent'] == SUBTREE_TARGET for item in fact['children']),
+                                'oracle_child_inventory_mismatch')
+                        # Only confirmed modules use InternalScope. Preserve
+                        # copied facts if the bounded leaf check later fails.
+                        for child, item in zip(children, fact['children']):
+                            item['children'] = [scope_fact(grandchild) for grandchild in direct_children(child)]
+                    return fact
                 primary = None
                 try:
                     oracle = copied_oracle()
@@ -304,16 +390,59 @@ def server_process(args):
                 npi_hierarchy_source._OWNER_LOCK.release()
             report['phases'][guard.phase] = dict(costs(started), api_counts={k: guard.calls[k] - before[k] for k in guard.calls})
             report['independent_sdk_oracle'] = oracle
-            require(oracle['path'] == TARGET and oracle['parent'] == 'top_tb' and oracle['module'] == 'des'
+            expected_root = (SUBTREE_TARGET, TARGET, 'crp') if args.subtree else (TARGET, 'top_tb', 'des')
+            require((oracle['path'], oracle['parent'], oracle['module']) == expected_root
                     and oracle['kind'] == 'npiModule', 'archived_positive_scope_mismatch')
-            hit = first['hits'][0]
-            for field in ('path', 'parent', 'module'):
-                require(hit[field] == oracle[field], 'native_scope_fact_mismatch')
-            for filename, line in (('source_file', 'source_line'), ('definition_file', 'definition_line')):
-                valid = isinstance(oracle[filename], str) and bool(oracle[filename]) and type(oracle[line]) is int and oracle[line] >= 1
-                require(hit[filename] == (oracle[filename] if valid else None)
-                        and hit[line] == (oracle[line] if valid else None), 'native_location_mismatch')
-            require(hit['definition_id'] and hit['definition_file'] and type(hit['definition_line']) is int, 'positive_definition_location_missing')
+            def compare_scope(hit, native):
+                for field in ('path', 'parent', 'module'):
+                    require(hit[field] == native[field], 'native_scope_fact_mismatch')
+                require(hit['kind'] == 'module' and native['kind'] == 'npiModule', 'native_kind_mismatch')
+                aliases = dict(context.aliases)
+                captured = {record.path for record in context.snapshot.records}
+                for filename, line, gap in (
+                    ('source_file', 'source_line', 'npi_instance_location_unbound'),
+                    ('definition_file', 'definition_line', 'npi_definition_location_unbound')):
+                    valid = isinstance(native[filename], str) and bool(native[filename]) and type(native[line]) is int and native[line] >= 1
+                    require(hit[filename] == (native[filename] if valid else None)
+                            and hit[line] == (native[line] if valid else None), 'native_location_mismatch')
+                    bound = valid and aliases.get(native[filename], native[filename]) in captured
+                    require((gap in hit['gaps']) is bool(valid and not bound), 'location_binding_gap_mismatch')
+                require(hit['definition_id'] and hit['definition_file'] and type(hit['definition_line']) is int,
+                        'positive_definition_location_missing')
+            if args.subtree:
+                expected = {SUBTREE_TARGET + f'.u{i}': f'sbox{i + 1}' for i in range(8)}
+                native_children = {item['path']: item for item in oracle['children']}
+                require(len(oracle['children']) == len(native_children) == 8 and set(native_children) == set(expected),
+                        'native_child_inventory_mismatch')
+                for path, native in native_children.items():
+                    require(native['module'] == expected[path] and native['parent'] == SUBTREE_TARGET
+                            and native['kind'] == 'npiModule' and native['children'] == [], 'native_leaf_mismatch')
+                for result in (first, repeat):
+                    compare_scope(result['node'], oracle)
+                    require(len(result['node']['children']) == 8
+                            and {child['path'] for child in result['node']['children']} == set(expected), 'public_child_inventory_mismatch')
+                    require(result['total_descendants'] == result['count_lower_bound'] == 8
+                            and result['count_status'] == 'exact' and result['coverage_status'] == 'complete'
+                            and result['analysis_limits'] == [] and not result['output_truncated'], 'public_subtree_count_mismatch')
+                    require(result['node']['child_count'] == result['node']['child_count_lower_bound'] == 8
+                            and result['query_metrics']['scope_count'] == 9, 'public_subtree_work_mismatch')
+                    for child in result['node']['children']:
+                        compare_scope(child, native_children[child['path']])
+                        require(child['children'] == [] and child['child_count'] == child['child_count_lower_bound'] == 0,
+                                'public_leaf_mismatch')
+                frontier = extra[0]
+                compare_scope(frontier['node'], oracle)
+                require(frontier['node']['children'] == [] and frontier['node']['child_count'] is None
+                        and frontier['node']['child_count_lower_bound'] == frontier['count_lower_bound'] == 1
+                        and frontier['query_metrics']['scope_count'] == 2 and frontier['total_descendants'] is None
+                        and frontier['count_status'] == 'lower_bound' and frontier['coverage_status'] == 'partial'
+                        and frontier['analysis_limits'] == [] and frontier['output_truncated'] is True,
+                        'bounded_frontier_mismatch')
+                if not args.timing_only:
+                    frontier_streams = [event['path'] for event in guard.child_streams if event['phase'] == 'frontier_subtree']
+                    require(frontier_streams and set(frontier_streams) == {SUBTREE_TARGET}, 'frontier_enumerated_descendants')
+            else:
+                compare_scope(first['hits'][0], oracle)
             guard.phase, started = 'final_identity_before_end', sample()
             report['final_context_current'] = context.current()
             report['final_anchor_current'] = binding.anchor.current()
@@ -325,8 +454,9 @@ def server_process(args):
         require(guard.calls['init'] > 0 and guard.calls['load_design'] > 0, 'native_calls_missing')
         if not args.timing_only:
             require(all(prepare_counts[k] == 0 for k in ('probe_verdi_backend', 'select_backend')), 'prepare_did_binding_work')
-            require(guard.calls['query_source'] == 2, 'native_queries_missing')
-            require(guard.calls['open_children'] == 0, 'exact_path_walked_siblings')
+            require(guard.calls['query_source'] == len(query_steps), 'native_queries_missing')
+            if not args.subtree:
+                require(guard.calls['open_children'] == 0, 'exact_path_walked_siblings')
         report['status'] = 'ok'
     except BaseException as exc:
         report['failure'] = {'type': type(exc).__name__, 'message': str(exc)}
@@ -360,6 +490,8 @@ def server_process(args):
         report['api_counts'], report['guard_counts'] = dict(guard.calls), dict(guard.denied)
         report['all_guard_counts_zero'] = not any(guard.denied.values())
         report['call_profiler_enabled'] = not args.timing_only
+        report['child_stream_profile_events'] = guard.child_streams if not args.timing_only else None
+        report['profile_counter_note'] = 'Python generator entries/resumptions are profile events, not SDK call or stream-open counts; SDK wrappers are counted separately.'
         if args.timing_only:
             # Disabled observers are unknown, never measured zeros. Audit hooks
             # and transparent SDK wrappers remain active in this timing mode.
@@ -384,18 +516,22 @@ async def client(args):
     require(all(os.environ.get(k) == v for k, v in ENV.items()), 'explicit_environment_required')
     repo = Path(args.repo).resolve()
     require(head_at(repo) == args.expected_head, 'unexpected_head')
-    report = {'probe': 'p3_cc31_real_stdio_instance_v1', 'status': 'failed', 'head': args.expected_head,
+    query_steps = queries(args)
+    tool_name = query_steps[0][1]
+    report = {'probe': 'p3_cc31_real_stdio_subtree_v1' if args.subtree else 'p3_cc31_real_stdio_instance_v1',
+              'status': 'failed', 'head': args.expected_head,
               'mode': 'timing_without_call_profiler' if args.timing_only else 'guarded',
               'client_phases': {}, 'calls': [], 'environment': {k: os.environ.get(k) for k in ENV},
-              'operations': ['MCP initialize/list_tools', 'prepare_design_context', 'exact instance',
-                             'repeat exact instance', 'stdio EOF', 'independent SDK oracle/final identity/end'],
+              'operations': ['MCP initialize/list_tools', 'prepare_design_context', *(step[0] for step in query_steps),
+                             'stdio EOF', 'independent SDK oracle/final identity/end'],
               'scope': {'timing': 'SDK wrappers/audit hooks remain in both modes; no acceleration/OS cold or checkout claim',
                         'rss': 'Linux per-process high-water KiB, not memory allocation deltas',
                         'native_io': 'Python writes blocked in server except private report; SDK-native lock I/O not intercepted',
-                        'not_tested': ['other five tools/consumers', 'source fallback', 'LSF', 'waveforms',
+                        'not_tested': ['other tools/consumers', 'source fallback', 'LSF', 'waveforms',
                                        'source/KDB association', 'license checkout counts', 'persistent session/concurrency'],
-                        'baseline': 'P0 archived cc31 top_tb.u0/module des/parent top_tb; old lexical instance line is not Native definition location',
-                        'oracle': 'separate exact SDK lookup after public sequence, counted/timed separately; no product projector used'}}
+                        'baseline': ('P0 archived positive candidate top_tb.u0.u0/crp with u0..u7/sbox1..sbox8; independently verified below'
+                                     if args.subtree else 'P0 archived cc31 top_tb.u0/module des/parent top_tb; old lexical instance line is not Native definition location'),
+                        'oracle': 'separate SDK lookup and optional bounded direct-child walk after public sequence, counted/timed separately; no product projector used'}}
     started_total = sample()
     # Preserve the child evidence even if protocol setup or a public call fails.
     # The runner archives this private directory; do not silently delete it.
@@ -412,6 +548,8 @@ async def client(args):
             cwd=str(repo), env=dict(os.environ))
         if args.timing_only:
             params.args.append('--timing-only')
+        if args.subtree:
+            params.args.append('--subtree')
         with stderr_path.open('w+') as errors:
             started_spawn = sample()
             try:
@@ -425,8 +563,8 @@ async def client(args):
                             report['client_phases']['initialize_and_list'] = costs(started)
                             report['protocol_version'] = initialized.protocolVersion
                             report['listed_tools'] = {t.name: t.model_dump(mode='json') for t in tools.tools
-                                                      if t.name in {'prepare_design_context', 'find_tb_instance'}}
-                            require(set(report['listed_tools']) == {'prepare_design_context', 'find_tb_instance'}, 'missing_public_tools')
+                                                      if t.name in {'prepare_design_context', tool_name}}
+                            require(set(report['listed_tools']) == {'prepare_design_context', tool_name}, 'missing_public_tools')
                             async def call(phase, name, arguments):
                                 started = sample()
                                 response = await session.call_tool(name, arguments)
@@ -441,9 +579,8 @@ async def client(args):
                             prepared = await call('prepare', 'prepare_design_context', {
                                 'compile_log': str(Path(args.project).resolve() / 'comp.log'), 'simulator': 'vcs'})
                             require(prepared['semantic_status'] == 'not_run' and prepared['kdb_status'] == 'not_checked', 'prepare_claim_invalid')
-                            arguments = {'design_handle': prepared['design_handle'], 'path': TARGET}
-                            await call('first_instance', 'find_tb_instance', arguments)
-                            await call('repeat_instance', 'find_tb_instance', arguments)
+                            for phase, name, arguments in query_steps:
+                                await call(phase, name, {'design_handle': prepared['design_handle'], **arguments})
                             close_started = sample()
                     finally:
                         if close_started is None:
@@ -478,6 +615,8 @@ if __name__ == '__main__':
     cli.add_argument('--project', required=True, help='Existing cc31 tb directory; never compiled or modified.')
     cli.add_argument('--timing-only', action='store_true',
                      help='Disable the call profiler; call-based guard counters become null, not passed zeros.')
+    cli.add_argument('--subtree', action='store_true',
+                     help='Query/repeat the small crp subtree, then test the root-only display frontier.')
     cli.add_argument('--server', action='store_true', help=argparse.SUPPRESS)
     cli.add_argument('--server-report', help=argparse.SUPPRESS)
     arguments = cli.parse_args()
