@@ -413,7 +413,7 @@ def _build_suggested_call(step: str) -> dict:
     if step == "get_sim_paths":
         return {"tool": "get_sim_paths", "arguments": {}}
     if step in {"build_tb_hierarchy", "prepare_design_context"}:
-        sim_state = _session_state.get("get_sim_paths")
+        sim_state = _session_state.get("get_sim_paths") or _result_provenance.get("get_sim_paths")
         if sim_state and sim_state.get("compile_log"):
             args: dict = {"compile_log": sim_state["compile_log"]}
             if sim_state.get("simulator"):
@@ -1708,7 +1708,8 @@ Simulation waveform debug workflow:
    - Derive keywords from on-demand hierarchy/source results, error messages, recommend_failure_debug_next_steps, or RTL source.
    - When reading RTL source, verify the path is in the compile set first —
      call get_tb_file_detail(path=...) or lookup_tb_files(...) with the
-     hierarchy_handle returned in step 2. The compile_log is the single
+      design_handle returned in step 2 (or an explicit legacy hierarchy_handle).
+      The compile_log is the single
      source of truth for which file version was actually compiled.
 
 7. Call analyze_failures with log_path, wave_path, simulator, and confirmed signal_paths.
@@ -10873,7 +10874,9 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             legacy = _result_provenance.get("build_tb_hierarchy") or {}
             legacy_logs = legacy.get("supplementary_compile_logs") or []
             current_logs = selected_design["supplementary_compile_logs"]
-            is_stale |= (hier_result.project.get("top_module") != selected_design["selected_top"]
+            is_stale |= (not _same_realpath(legacy.get("compile_log"), selected_design["compile_log"])
+                or legacy.get("simulator") != selected_design["simulator"]
+                or hier_result.project.get("top_module") != selected_design["selected_top"]
                 or len(legacy_logs) != len(current_logs)
                 or any(not _same_realpath(a, b) for a, b in zip(legacy_logs, current_logs)))
         sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
