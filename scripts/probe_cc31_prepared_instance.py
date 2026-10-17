@@ -15,6 +15,7 @@ from collections import Counter
 from contextlib import nullcontext
 from copy import deepcopy
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -114,6 +115,11 @@ class Guards:
         if event != 'call':
             return
         code = frame.f_code
+        # Python reports class-body execution as a call while importing model
+        # definitions. Only function frames represent the work guarded here;
+        # actual pyslang imports remain independently blocked by the audit hook.
+        if not code.co_flags & inspect.CO_NEWLOCALS:
+            return
         module, name, qualified = Path(code.co_filename).name, code.co_name, code.co_qualname
         if '/pynpi/' in code.co_filename.replace('\\', '/'):
             if name in {'get_1m_list', 'get_top_inst_list', 'list_all_module_define', 'mod_define_get_inst'}:
