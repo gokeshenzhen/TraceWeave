@@ -397,8 +397,10 @@ async def test_trace_failure_packed_diff_actions_and_diagnostic_share_only_expli
         signal_path='top.q', time_ps=36, mode='history', history_start_ps=0)
     semantic(history, a)
     nodes = history['history']['nodes']
+    # VCD vector declarations carry their full range into history selections.
     assert [(row['signal'], row['time_ps'], row['phase']) for row in nodes] == [
-        ('top.q', 36, 'after'), ('top.q', 35, 'before'), ('top.q', 25, 'before'), ('top.d', 15, 'before')]
+        ('top.q[7:0]', 36, 'after'), ('top.q[7:0]', 35, 'before'),
+        ('top.q[7:0]', 25, 'before'), ('top.d[7:0]', 15, 'before')]
     assert [row['relation'] for row in nodes[:3]] == ['hold', 'hold', 'register_sample']
     assert nodes[-1]['value'] == 'xxxxxxxx'
     assert history['history']['coverage']['true_origin_proven'] is False
