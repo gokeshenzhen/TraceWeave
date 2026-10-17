@@ -256,9 +256,11 @@ def main():
         report['error'] = dict(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
         code = 1
     finally:
-        os.dup2(output_fd, 1)
-        os.close(output_fd)
-        print(json.dumps(report, indent=2, default=str), flush=True)
+        # Native libraries can flush buffered banners after this function
+        # returns. Keep fd 1 on private stderr through process teardown and
+        # write the report only through the saved output descriptor.
+        with os.fdopen(output_fd, 'w') as report_stream:
+            print(json.dumps(report, indent=2, default=str), file=report_stream, flush=True)
     return code
 
 
