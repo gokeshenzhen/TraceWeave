@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 sys.dont_write_bytecode = True
 import argparse
+import atexit
 import asyncio
 from collections import Counter
 from contextlib import nullcontext
@@ -172,6 +173,12 @@ def server_process(args):
     require(all(os.environ.get(k) == v for k, v in ENV.items()), 'explicit_environment_required')
     sys.path.insert(0, str(repo))
     sys.addaudithook(guard.audit)
+    def stop_profiling():
+        sys.setprofile(None)
+        threading.setprofile(None)
+    # Module globals are cleared during interpreter teardown. Keep profiling
+    # through the observed sequence, then stop before that teardown begins.
+    atexit.register(stop_profiling)
     sys.setprofile(guard.profile)
     threading.setprofile(guard.profile)
     started = sample()
@@ -179,7 +186,7 @@ def server_process(args):
     from mcp import types
     from src import compile_input_capture, npi_hierarchy_source, verdi_npi_backend as npi
     require(Path(server.__file__).resolve() == repo / 'server.py', 'wrong_server_import')
-    for module_name in ('config', 'src.design_context_runtime', 'src.verdi_npi_backend', 'src.hierarchy_source_service'):
+    for module_name in ('config', 'src.design_context_runtime', 'src.verdi_npi_backend'):
         require(Path(sys.modules[module_name].__file__).resolve().is_relative_to(repo), 'wrong_checkout_import')
     report['phases']['load_server'] = costs(started)
     original_init = compile_input_capture.CompileInputCapture.__init__
@@ -224,6 +231,8 @@ def server_process(args):
     server.app.request_handlers[types.CallToolRequest] = observed
     try:
         asyncio.run(server.main())
+        require(Path(sys.modules['src.hierarchy_source_service'].__file__).resolve().is_relative_to(repo),
+                'wrong_lazy_service_import')
         if last_reply_finished is not None:
             report['phases']['post_repeat_reply_to_product_stdio_close'] = costs(last_reply_finished)
         report['product_stdio_close'] = {'api_counts': dict(guard.calls),
