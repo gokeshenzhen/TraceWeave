@@ -8274,6 +8274,13 @@ async def _failure_source_context(args, event):
         return {}, None
     from src.hierarchy_source_ir import HierarchyQueryBudget
     context = entry.context
+    if context.selected_top is None:
+        return {"source_correlation": {
+            "facts_origin": "log_only", "coverage_status": "partial",
+            "coverage_gaps": sorted(set(context.gaps) | {"compile_tops_unresolved"}),
+            "context_identity_sha256": context.identity_sha256,
+            "full_hierarchy_fallback": False, "queries": [],
+        }}, None
     budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30),
                                   max_scopes=256, max_calls=8192, max_bytes=1024 * 1024)
     budget.deadline = args.get("_design_query_started", budget.started) + args.get("timeout_sec", 30)
