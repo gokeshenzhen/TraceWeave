@@ -292,8 +292,9 @@ async def test_all_four_semantic_sections_execute_their_existing_engine_with_pos
         assert result['count_lower_bound'] == 2 and result['total'] is None
         assert result['export_complete'] is False
     else:
-        assert [r['path'] for r in result['data']] == list(controls.files)
-        assert result['data'][0]['modules'] == ['top'] and result['data'][0]['interfaces'] == ['bus_if']
+        rows = {r['path']: r for r in result['data']}
+        assert len(result['data']) == len(rows) == len(controls.files) and set(rows) == set(controls.files)
+        assert rows[str(controls.first)]['modules'] == ['top'] and rows[str(controls.first)]['interfaces'] == ['bus_if']
         assert all(r['semantic_work_scope'] == 'global_namespaces_bounded' for r in result['data'])
         assert result['export_complete'] is False
     if section in {'files_full', 'interfaces'}:
