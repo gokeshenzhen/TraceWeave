@@ -8137,6 +8137,9 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget):
         if raw is not None:
             execution = raw.pop("_npi_execution_status", None)
             raw = validate_source_result(operation, raw)
+            if (operation == "get_tb_subtree" and "node" in raw
+                    and raw["root"] != (arguments.get("root") or context.selected_top)):
+                raise ValueError("npi_source_result_root_mismatch")
             origin = raw["facts_origin"]
             if origin == "verdi_npi":
                 anchor = entry.binding.anchor

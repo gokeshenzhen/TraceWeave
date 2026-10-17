@@ -138,6 +138,8 @@ def validate_source_result(operation, result):
         return payload
     if operation == "get_tb_subtree":
         if payload["node"] is not None:
+            if payload["node"].get("path") != payload["root"]:
+                raise ValueError("subtree node does not match its root")
             if _tree([payload["node"]]) - 1 > payload["count_lower_bound"]:
                 raise ValueError("descendant count omits rendered scopes")
         _counts(payload, "total_descendants")
