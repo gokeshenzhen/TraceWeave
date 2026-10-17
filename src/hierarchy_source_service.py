@@ -87,6 +87,8 @@ def finish_hierarchy_query(result: dict, budget: HierarchyQueryBudget) -> dict:
     except HierarchyBudgetExceeded as exc:
         result["coverage_status"] = "partial"
         result["analysis_limits"] = sorted(set(result["analysis_limits"]) | {exc.reason})
+        if "field_bits" in result:
+            result.update(status="mapping_required", field_bits={}, declared_range=None)
         if "export_complete" in result:
             result["export_complete"] = False
             result["warning"] = "section export is incomplete; inspect coverage and output limits"

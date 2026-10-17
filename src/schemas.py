@@ -2745,6 +2745,7 @@ class PackedFieldsResult(SchemaModel):
     fields: dict[str, WaveformSelection] = Field(default_factory=dict)
     reasons: list[str] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
+    backend_status: BackendStatus | None = None
 
 
 class DistValueCount(SchemaModel):
@@ -3089,6 +3090,30 @@ class SourceQueryEnvelope(SourceFactModel):
         if self.error in {"hierarchy_query_incomplete", "semantic_provider_unavailable", "file_query_incomplete"}:
             if self.coverage_status != "partial":
                 raise ValueError("unavailable/incomplete queries must remain partial")
+        return self
+
+
+class SourcePackedLayoutResult(SourceQueryEnvelope):
+    source_signal: SourceFactName
+    status: Literal["resolved", "mapping_required"]
+    field_bits: dict[SourceFactName, list[SourceFactCount]]
+    declared_range: dict[str, SourceFactCount] | None
+
+    @model_validator(mode="after")
+    def consistent_layout(self):
+        if self.status == "mapping_required":
+            if self.field_bits or self.declared_range is not None:
+                raise ValueError("an unresolved layout cannot publish selections")
+        else:
+            bounds = self.declared_range
+            if (self.coverage_status != "complete" or self.analysis_limits or self.coverage_gaps
+                    or bounds is None or set(bounds) != {"left", "right"}
+                    or bounds["right"] != 0 or bounds["left"] >= 256
+                    or not 1 <= len(self.field_bits) <= 128):
+                raise ValueError("resolved layout requires complete bounded type evidence")
+            for bits in self.field_bits.values():
+                if not bits or len(bits) > 256 or len(set(bits)) != len(bits) or max(bits) > bounds["left"]:
+                    raise ValueError("invalid packed field selection")
         return self
 
 

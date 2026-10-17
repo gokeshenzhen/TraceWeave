@@ -49,6 +49,10 @@ def _require_context(context, *, timeout_sec=30.0):
 def validate_source_worker_result(request, result):
     """Reject foreign identities and other backends at both worker boundaries."""
     payload = validate_source_result(request.tool, result)
+    if request.tool == "resolve_packed_fields" and "source_signal" in payload:
+        if (payload["source_signal"] != request.arguments["source_signal"] or
+                payload["status"] == "resolved" and set(payload["field_bits"]) != set(request.arguments["fields"])):
+            raise ValueError("worker packed query mismatch")
     identity = request.context_payload["context"]["identity_sha256"]
     if payload.get("context_identity_sha256") != identity:
         raise ValueError("worker source context mismatch")

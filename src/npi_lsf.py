@@ -113,7 +113,7 @@ class HierarchySourceWorkerRequest(_ConnectivityWorkerRequestBase):
     operation: Literal["hierarchy_source"] = "hierarchy_source"
     kdb_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool: Literal["get_tb_subtree", "find_tb_instance", "lookup_tb_files",
-                  "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section"]
+                  "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section", "resolve_packed_fields"]
     arguments: dict[str, Any]
     context_payload: dict[str, Any]
     limits: SourceWorkerLimits

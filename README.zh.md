@@ -546,7 +546,7 @@ export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
     </tr>
     <tr>
       <td><code>resolve_packed_fields</code></td>
-      <td>识别打包总线中的字段位置，便于单独查看地址、数据和控制信号</td>
+      <td>通过独立设计上下文解析打包总线字段，并核对波形声明坐标</td>
     </tr>
     <tr>
       <td><code>inspect_tlul</code></td>

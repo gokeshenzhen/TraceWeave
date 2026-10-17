@@ -599,7 +599,7 @@ Usually, you describe the debugging goal and let the assistant select the tools.
     </tr>
     <tr>
       <td><code>resolve_packed_fields</code></td>
-      <td>Identify packed bus fields to inspect address, data, and control signals individually</td>
+      <td>Map packed bus fields through an independent design context and verify their dump coordinates</td>
     </tr>
     <tr>
       <td><code>inspect_tlul</code></td>

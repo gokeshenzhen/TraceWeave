@@ -2881,15 +2881,26 @@ Cycle results expose `transition_data_truncated` and affected signals; structure
 cycle queries reject an incomplete full-clock read. Window inspections can
 instead return partial evidence over a narrower interval.
 
-`resolve_packed_fields` exports named, including nested, members from the
-existing Source Graph runtime. It requires a reusable content-anchored build
+`resolve_packed_fields` accepts `design_handle`; a compile-log-only call prepares
+an independent context within the same total deadline. Healthy NPI queries use
+the shared exclusive Language owner, actual Typespec membership/ranges and
+native bit-object identity. The initial native mapping supports small packed
+structs (at most 256 flattened bits); it never infers offsets from member order
+or sums of widths. Unsupported types use the separate Source Graph fallback;
+native budget exhaustion does not advance fallback. Local/explicit LSF share
+the copied layout contract and context/KDB validation. NPI source association
+remains unverified, and signedness is not inferred by this mapping operation.
+
+The existing Source Graph runtime retains named, including nested, member
+support. Independent contexts use a bounded source seed without a full lexical
+tree; legacy callers may reuse their full hierarchy. It requires a reusable content-anchored build
 key, a current compile snapshot, active elaborated instance specialization,
 packed-member type facts, and matching dump/source declaration coordinates.
 Only explicitly projected instances can supply layouts; ancestor port-binding
 fragments cannot. A scoped hierarchy gap alone is acceptable for an explicitly
 projected instance with complete type facts; other semantic gaps and blocking
 diagnostics require an explicit mapping. Compile identity is checked again
-after worker preparation. Missing hierarchy, an unresolved generate edge,
+after worker preparation. Unavailable bounded context, an unresolved generate edge,
 inactive branches, stale source inputs, budget limits, or missing type evidence
 return `mapping_required`, never a guessed bus profile. Exported selections are
 a snapshot, not a live type handle or proof that a historical waveform was

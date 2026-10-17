@@ -116,6 +116,7 @@ def validate_source_result(operation, result):
         "get_tb_file_detail": schemas.SourceFileDetailResult,
         "get_tb_class_hierarchy": schemas.SourceClassResult,
         "dump_tb_section": schemas.SourceSectionResult,
+        "resolve_packed_fields": schemas.SourcePackedLayoutResult,
     }
     check_cancelled()
     if operation not in models or not isinstance(result, dict):

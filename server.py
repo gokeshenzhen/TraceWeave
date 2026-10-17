@@ -5784,50 +5784,50 @@ def _signal_selection_definitions() -> dict:
 
 async def _resolve_packed_fields(args):
     """Semantic work stays outside the wave lock; dump validation stays inside."""
+    from src.npi_packed_layout import validate_packed_query
+    from src.hierarchy_source_ir import HierarchyQueryBudget
+    validate_packed_query({key: args[key] for key in ("source_signal", "fields")})
+    status, native = None, None
     def blocked(reason):
-        return schemas.PackedFieldsResult(status="mapping_required", reasons=[reason])
+        return schemas.PackedFieldsResult(status="mapping_required", reasons=[reason],
+            evidence={"native_query": native} if native is not None else {}, backend_status=status)
     fields = args["fields"]
-    if not isinstance(fields, list) or not 1 <= len(fields) <= 128 or not all(isinstance(f, str) and f for f in fields):
-        raise ValueError("fields must contain 1..128 names")
     simulator = _resolve_session_simulator(args)
     root_binding = await _bind_wave_design_root(args, simulator)
     if root_binding:
         args = {**args, 'source_signal': root_binding.to_design(args['source_signal'])}
-    hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
-    if hierarchy is None:
-        return blocked("current_hierarchy_required")
-    config = get_source_graph_execution_config()
-    if not config.enabled or not config.valid:
-        return blocked("semantic_runtime_unavailable")
-    # Use the established identity/scope adapter, without an NPI driver query
-    # or a guessed layout from names, widths, or port-binding-only artifacts.
-    from src.source_graph_adapter import build_source_graph_plan as exact_plan
-    def plan_now():
-        return exact_plan(compile_log=args["compile_log"], compile_result=hierarchy["compile_result"],
-                          hierarchy_result=hierarchy, hierarchy_snapshot_sha256=snapshot,
-                          operation=QueryOperation.DRIVER, signal_path=args["source_signal"],
-                          top_hint=args.get("top_hint"), max_hops=0,
-                          frontend_version=config.frontend_version,
-                          runtime_plusarg_allowlist=config.runtime_plusarg_allowlist)
-    plan = await _run_in_cancellable_thread(plan_now)
-    if plan.status is AdapterStatus.BLOCKED:
-        return blocked(plan.receipt.blocker.code)
-    if not compute_source_graph_build_key(plan.request).cross_request_reusable:
-        return blocked("compile_identity_incomplete")
-    outcome = await get_source_graph_runtime(config).prepare(plan.request, timeout_seconds=config.timeout_sec)
-    if outcome.status is PrepareStatus.CANCELLED:
-        raise asyncio.CancelledError
-    if outcome.status is not PrepareStatus.READY:
-        return blocked("semantic_" + outcome.status.value)
-    # Revalidate current compile bytes after the worker/cache lookup as well.
-    current = await _run_in_cancellable_thread(plan_now)
-    if current.request != plan.request:
-        return blocked("compile_identity_changed")
-    try:
-        result = await _run_in_cancellable_thread(lambda: packed_field_selections(
-            outcome.entry, args["source_signal"], args["signal_path"], fields))
-    except (ValueError, KeyError) as exc:
-        return blocked(str(exc))
+    prepared, result = args.get("_prepared_design"), None
+    if prepared is not None:
+        budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
+        budget.deadline = args.get("_design_query_started", budget.started) + args.get("timeout_sec", 30)
+        if prepared.context.selected_top is None:
+            return blocked("compile_tops_unresolved")
+        native = await _query_prepared_hierarchy(prepared, "resolve_packed_fields",
+            {"source_signal": args["source_signal"], "fields": fields}, budget)
+        status = schemas.BackendStatus.model_validate(native.pop("backend_status"))
+        if native.get("status") == "resolved":
+            result = {"status": "resolved", "fields": {
+                name: {"path": args["signal_path"], "bits": bits} for name, bits in native["field_bits"].items()},
+                "evidence": {"source_signal": args["source_signal"], "declared_range": native["declared_range"],
+                    "layout_source": "verdi_npi_bit_identity", "artifact_identity": native["artifact_identity"],
+                    "native_query": native, "validity": "current_compile_snapshot; re-resolve after input changes"}}
+        elif native["analysis_limits"]:
+            return blocked(native["analysis_limits"][0])
+    if result is None:
+        result, reason = await _resolve_source_packed_fields(args, simulator)
+        if status is not None:
+            raw_status = status.model_dump(mode="json", exclude_unset=True)
+            raw_status.update(actual_backend="source_graph" if result is not None else None,
+                single_backend_provenance=True,
+                attempted_backends=[*raw_status.get("attempted_backends", []),
+                    _backend_attempt("source_graph", "success" if result is not None else "blocked",
+                        reason=reason, coverage_status="complete" if result is not None else None)])
+            status = schemas.BackendStatus.model_validate(raw_status)
+        if result is None:
+            return blocked(reason)
+        if native is not None:
+            result["evidence"]["native_query"] = native
+
     def validate_dump():
         if root_binding:
             from src.scope_metadata import file_identity
@@ -5842,7 +5842,53 @@ async def _resolve_packed_fields(args):
         await _run_in_wave_request(args["wave_path"], validate_dump)
     except (KeyError, ValueError) as exc:
         return blocked(str(exc))
-    return schemas.PackedFieldsResult.model_validate(result)
+    return schemas.PackedFieldsResult.model_validate({**result, "backend_status": status})
+
+
+async def _resolve_source_packed_fields(args, simulator):
+    """Keep the exact IR layout fallback, using a bounded independent seed."""
+    config = get_source_graph_execution_config()
+    if not config.enabled or not config.valid:
+        return None, "semantic_runtime_unavailable"
+    if args.get("_prepared_design") is not None:
+        hierarchy, snapshot, _, blocker = await _resolve_connectivity_hierarchy_context(
+            args={**args, "signal_path": args["source_signal"], "allow_bounded_bootstrap": True},
+            simulator=simulator)
+    else:
+        hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
+        blocker = "current_hierarchy_required"
+    if hierarchy is None:
+        return None, blocker or "source_context_unavailable"
+    # Use the established identity/scope adapter, without an NPI driver query
+    # or a guessed layout from names, widths, or port-binding-only artifacts.
+    from src.source_graph_adapter import build_source_graph_plan as exact_plan
+    def plan_now():
+        return exact_plan(compile_log=args["compile_log"], compile_result=hierarchy["compile_result"],
+                          hierarchy_result=hierarchy, hierarchy_snapshot_sha256=snapshot,
+                          operation=QueryOperation.DRIVER, signal_path=args["source_signal"],
+                          top_hint=args.get("top_hint"), max_hops=0,
+                          frontend_version=config.frontend_version,
+                          runtime_plusarg_allowlist=config.runtime_plusarg_allowlist)
+    plan = await _run_in_cancellable_thread(plan_now)
+    if plan.status is AdapterStatus.BLOCKED:
+        return None, plan.receipt.blocker.code
+    if not compute_source_graph_build_key(plan.request).cross_request_reusable:
+        return None, "compile_identity_incomplete"
+    outcome = await get_source_graph_runtime(config).prepare(plan.request, timeout_seconds=config.timeout_sec)
+    if outcome.status is PrepareStatus.CANCELLED:
+        raise asyncio.CancelledError
+    if outcome.status is not PrepareStatus.READY:
+        return None, "semantic_" + outcome.status.value
+    # Revalidate current compile bytes after the worker/cache lookup as well.
+    current = await _run_in_cancellable_thread(plan_now)
+    if current.request != plan.request:
+        return None, "compile_identity_changed"
+    try:
+        result = await _run_in_cancellable_thread(lambda: packed_field_selections(
+            outcome.entry, args["source_signal"], args["signal_path"], args["fields"]))
+    except (ValueError, KeyError) as exc:
+        return None, str(exc)
+    return result, None
 
 
 def _bounded_bootstrap_input_properties() -> dict:
@@ -7919,18 +7965,23 @@ async def list_tools():
                 "max_wait_cycles": {"type": "integer", "minimum": 0, "default": 16},
             }, "required": ["wave_path", "clock"]}),
         Tool(name="resolve_packed_fields", description=(
-            "Resolve requested named packed members from the current content-anchored Source Graph "
-            "artifact and an exact dump declaration. Requires current hierarchy and complete semantic "
-            "type evidence; may run the bounded license-free worker. Returns mapping_required when "
+            "Resolve requested packed members from a prepared design and exact dump declaration. "
+            "NPI uses actual type membership and bit identity; unsupported native layouts may use "
+            "the bounded Source Graph worker. design_handle avoids a full hierarchy prerequisite; "
+            "compile_log alone prepares an independent context. Returns mapping_required when "
             "identity, active instance specialization, type or range cannot be proved. Returned explicit "
             "selections are a compile snapshot: re-resolve after input changes. No waveform/source version inferred."),
             inputSchema={"type": "object", "properties": {
                 "wave_path": {"type": "string"}, "compile_log": {"type": "string"},
+                "design_handle": {"type": "string"},
+                "supplementary_compile_logs": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+                "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30},
                 "simulator": {"type": "string"}, "top_hint": {"type": "string"},
                 "signal_path": {"type": "string", "description": "Exact dump declaration path."},
                 "source_signal": {"type": "string", "description": "Exact whole aggregate in the compiled hierarchy."},
                 "fields": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 128},
-            }, "required": ["wave_path", "compile_log", "signal_path", "source_signal", "fields"]}),
+            }, "required": ["wave_path", "signal_path", "source_signal", "fields"],
+            "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}]}),
     ])
     for tool in _tools:
         properties = tool.inputSchema["properties"]
@@ -8187,6 +8238,10 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
         if raw is not None:
             execution = raw.pop("_npi_execution_status", None)
             raw = validate_source_result(operation, raw)
+            if operation == "resolve_packed_fields" and "source_signal" in raw:
+                if (raw["source_signal"] != arguments["source_signal"] or
+                        raw["status"] == "resolved" and set(raw["field_bits"]) != set(arguments["fields"])):
+                    raise ValueError("npi_packed_result_query_mismatch")
             if (operation == "get_tb_subtree" and "node" in raw
                     and raw["root"] != (arguments.get("root") or context.selected_top)):
                 raise ValueError("npi_source_result_root_mismatch")
@@ -8420,14 +8475,18 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
     try:
         with store.pin(handle) as entry:
             context = entry.context
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps"}:
+            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
                 from src.hierarchy_source_ir import HierarchyQueryBudget
                 # Validate the same finite deadline used by native work and
                 # final publication; local native calls remain synchronous.
                 try:
                     HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
+                    if name == "resolve_packed_fields":
+                        from src.npi_packed_layout import validate_packed_query
+                        validate_packed_query({key: args.get(key) for key in ("source_signal", "fields")})
                 except (TypeError, ValueError) as exc:
-                    return schemas.ToolErrorResult(error=str(exc), error_code="invalid_failure_analysis_arguments")
+                    return schemas.ToolErrorResult(error=str(exc), error_code=("invalid_packed_layout_arguments"
+                        if name == "resolve_packed_fields" else "invalid_failure_analysis_arguments"))
                 history_deadline = started + args.get("timeout_sec", 30)
             supplied_logs = args.get("supplementary_compile_logs")
             if (args.get("compile_context") is not None or args.get("kdb_path") is not None
@@ -8490,7 +8549,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 resolved["_design_query_started"] = started
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps"}:
+            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
                 with anyio.fail_after(remaining(300)):
                     result = await _dispatch_inner(name, resolved)
             else:
@@ -8498,14 +8557,14 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                           if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps"}:
+            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
                 remaining(30)
             await _validate_design_source(context)
             await _validate_design_binding(binding)
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             _require_design_store_owner(store)
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps"}:
+            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
                 remaining(30)
             status = (schemas.BackendStatus.model_validate(result["backend_status"])
                       if source_budget is not None else getattr(result, "backend_status", None))
@@ -8572,10 +8631,10 @@ async def _dispatch(name: str, args: dict):
         if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source",
                         "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
                         "get_tb_class_hierarchy", "dump_tb_section", "analyze_failure_event",
-                        "recommend_failure_debug_next_steps"}:
+                        "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
-    if name in {"analyze_failure_event", "recommend_failure_debug_next_steps"} and args.get("compile_log"):
+    if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"} and args.get("compile_log"):
         started = time.monotonic()
         prepared = await _handle_prepare_design_context({key: args[key] for key in (
             "compile_log", "supplementary_compile_logs", "simulator", "top_hint", "timeout_sec") if key in args})

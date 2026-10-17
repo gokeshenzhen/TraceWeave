@@ -22,12 +22,16 @@ HIERARCHY_SOURCE_TOOLS = frozenset({
     "get_tb_subtree", "find_tb_instance", "lookup_tb_files", "get_tb_file_detail",
     "get_tb_class_hierarchy", "dump_tb_section",
 })
+SOURCE_QUERY_OPERATIONS = HIERARCHY_SOURCE_TOOLS | {"resolve_packed_fields"}
 
 
 def validate_source_query(operation, arguments):
-    if not isinstance(operation, str) or operation not in HIERARCHY_SOURCE_TOOLS or not isinstance(arguments, dict):
+    if not isinstance(operation, str) or operation not in SOURCE_QUERY_OPERATIONS or not isinstance(arguments, dict):
         raise ValueError("unsupported hierarchy/source query")
-    if operation in {"get_tb_file_detail", "lookup_tb_files"}:
+    if operation == "resolve_packed_fields":
+        from .npi_packed_layout import validate_packed_query
+        validate_packed_query(arguments)
+    elif operation in {"get_tb_file_detail", "lookup_tb_files"}:
         validate_file_query(operation, arguments)
     elif operation == "dump_tb_section":
         if set(arguments) - {"section", "max_items"} or "section" not in arguments:
@@ -97,6 +101,9 @@ class HierarchySourceRequest:
                 "coverage_gaps": sorted(set(self.context.gaps) | {"semantic_provider_unavailable"}),
                 "analysis_limits": [], "query_metrics": self.budget.metrics(),
             }
+        if self.operation == "resolve_packed_fields":
+            from .npi_packed_layout import query_packed_layout
+            return query_packed_layout(provider, budget=self.budget, **arguments)
         method = {"get_tb_subtree": "subtree", "find_tb_instance": "find_instances",
                   "get_tb_class_hierarchy": "class_hierarchy"}[self.operation]
         return getattr(HierarchySourceService(provider), method)(budget=self.budget, **arguments)
