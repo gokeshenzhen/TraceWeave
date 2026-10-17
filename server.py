@@ -5897,11 +5897,10 @@ async def list_tools():
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
                 "include resolution and semantic coverage. Replay recovery_context as this tool's "
                 "arguments to require the same compile/source identity after eviction or restart; "
-                "identity mismatch publishes no handle. Driver/load/path, X-trace, find_tb_instance, get_tb_subtree, "
-                "lookup_tb_files and get_tb_file_detail accept design_handle; their first semantic query fixes "
-                "a KDB candidate and reports validation costs. Metadata-only file queries do not select a backend. An optional "
-                "kdb_path declares a candidate without asserting source association. Class and section tools use "
-                "their build_tb_hierarchy handles."
+                "identity mismatch publishes no handle. Driver/load/path, X-trace and all six hierarchy/source "
+                "tools accept design_handle; their first semantic query fixes a KDB candidate and reports validation costs. "
+                "Metadata-only queries do not select a backend. An optional kdb_path declares a candidate without "
+                "asserting source association. Legacy hierarchy handles retain their existing views."
             ),
             inputSchema=schemas.PrepareDesignContextOptions.model_json_schema(),
         ),
@@ -7034,29 +7033,47 @@ async def list_tools():
         Tool(
             name="get_tb_class_hierarchy",
             description=(
-                "Return UVM/class inheritance tree built from compiled-source scan results. "
-                "Use `root_class` to start from a specific class; empty = all roots."
+                "Return static class inheritance, including UVM bases, rather than runtime UVM objects. "
+                "Use handle for the legacy source-scan view, or design_handle from prepare_design_context "
+                "for schema_version=2 NPI declarations with qualified identities and actual base bindings. "
+                "root_class accepts a symbol ID, qualified name, or an unambiguous short name. "
+                "Discovering derived classes can require a budgeted namespace inventory even for one root. "
+                "total counts rendered nodes; class_inventory_* describes declaration coverage. "
+                "Reference-only external bases are not recovered declarations. Raw source paths outside "
+                "captured inputs carry npi_class_location_unbound. Independent Slang class fallback is pending."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     "root_class": {"type": "string"},
                     "depth": {"type": "integer", "default": -1},
+                    "max_nodes": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 5000,
+                                  "description": "design_handle only; output limit is separate from inventory work."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and query."},
                 },
-                "required": ["handle"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
             name="dump_tb_section",
             description=(
-                "Escape hatch: return a named raw section of the full hierarchy result. "
-                "Prefer targeted handle tools — this is intentionally heavy."
+                "Export one named hierarchy/source section. Use handle for the legacy raw section, or "
+                "design_handle from prepare_design_context for schema_version=2 captured metadata or NPI facts. "
+                "compile_result/include_tree/filelist_tree do not probe or load a backend. Semantic sections "
+                "may require global traversal within work/time budgets; max_items limits output only. "
+                "component_tree_full requests exact descendant counting within those budgets. "
+                "export_complete=false means the export is partial or truncated even if its count is exact. "
+                "Class sections describe static inheritance; file/interface sections retain declaration "
+                "coverage gaps. Independent Slang export fallback is pending."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     "section": {
                         "type": "string",
                         "enum": [
@@ -7069,8 +7086,13 @@ async def list_tools():
                             "class_hierarchy_full",
                         ],
                     },
+                    "max_items": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 5000,
+                                  "description": "design_handle only; hard output cap, not a guarantee of complete export."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and export."},
                 },
-                "required": ["handle", "section"],
+                "required": ["section"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -8162,13 +8184,25 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
             if (operation == "get_tb_subtree" and "node" in raw
                     and raw["root"] != (arguments.get("root") or context.selected_top)):
                 raise ValueError("npi_source_result_root_mismatch")
-            if operation in {"lookup_tb_files", "get_tb_file_detail"} and "error" not in raw:
+            section = arguments.get("section") if operation == "dump_tb_section" else None
+            if section is not None and "section" in raw and raw["section"] != section:
+                raise ValueError("npi_source_result_section_mismatch")
+            if section == "component_tree_full" and raw.get("data") is not None:
+                if raw.get("root") != context.selected_top or raw["data"].get("path") != context.selected_top:
+                    raise ValueError("npi_source_result_root_mismatch")
+            if (operation in {"lookup_tb_files", "get_tb_file_detail"}
+                    or section in {"files_full", "interfaces"}) and "error" not in raw:
                 if raw.get("ownership_identity") != context.identity_sha256:
                     raise ValueError("npi_source_result_ownership_mismatch")
                 expected_file = (plan.catalog.find_file(arguments["path"])
                                  if operation == "get_tb_file_detail" else None)
-                rows = [raw] if operation == "get_tb_file_detail" else raw["matches"]
+                rows = ([raw] if operation == "get_tb_file_detail" else
+                        raw["matches"] if operation == "lookup_tb_files" else raw["data"])
                 for row in rows:
+                    if section == "interfaces":
+                        if row["source_file"] is None or plan.catalog.find_file(row["source_file"]) is None:
+                            raise ValueError("npi_source_result_file_mismatch")
+                        continue
                     member = plan.catalog.find_file(row["path"])
                     if (member is None or row["path"] != member.path
                             or row["file_id"] != member.file_id
@@ -8185,8 +8219,8 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                         or evidence.get("identity_sha256") != anchor.identity_sha256
                         or evidence.get("load_status") != "loaded"):
                     raise ValueError("npi_source_result_identity_mismatch")
-                from src.hierarchy_source_metadata import mark_unbound_instance_locations
-                mark_unbound_instance_locations(raw, context)
+                from src.hierarchy_source_metadata import mark_unbound_source_locations
+                mark_unbound_source_locations(raw, context)
             elif (origin != "compile_metadata" or raw["artifact_identity"] != context.identity_sha256
                   or raw.get("context_identity_sha256") not in (None, context.identity_sha256)):
                 raise ValueError("npi_source_result_origin_mismatch")
@@ -8231,7 +8265,8 @@ async def _dispatch_design_query(name: str, args: dict):
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
     source_budget, source_arguments = None, None
-    if name in {"find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail"}:
+    if name in {"find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
+                "get_tb_class_hierarchy", "dump_tb_section"}:
         from src.hierarchy_source_ir import HierarchyQueryBudget
         from src.hierarchy_source_request import validate_source_query
         try:
@@ -8247,7 +8282,9 @@ async def _dispatch_design_query(name: str, args: dict):
             code = {"find_tb_instance": "invalid_design_instance_arguments",
                     "get_tb_subtree": "invalid_design_subtree_arguments",
                     "lookup_tb_files": "invalid_design_file_arguments",
-                    "get_tb_file_detail": "invalid_design_file_arguments"}[name]
+                    "get_tb_file_detail": "invalid_design_file_arguments",
+                    "get_tb_class_hierarchy": "invalid_design_class_arguments",
+                    "dump_tb_section": "invalid_design_section_arguments"}[name]
             return schemas.ToolErrorResult(error=str(exc), error_code=code)
 
     def remaining(limit):
@@ -8391,7 +8428,9 @@ async def _dispatch(name: str, args: dict):
     if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail"}:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source",
+                        "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
+                        "get_tb_class_hierarchy", "dump_tb_section"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
     return await _dispatch_inner(name, args)

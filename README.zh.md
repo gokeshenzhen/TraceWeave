@@ -290,8 +290,16 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 未实例化声明、import、变量和 UVM 使用的覆盖仍不完整。检查
 `symbol_inventory_complete`、`unknown_filter_files` 与 coverage gaps，未知不能作为负向匹配。
 纯元数据结果携带设计/上下文身份和查询成本，不附加后端或 KDB receipt。
-独立 Slang 层级回退和类/section 工具的 `design_handle` 路由仍待接入；
-旧 `handle` 调用形状保持兼容。目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
+`get_tb_class_hierarchy(design_handle=..., root_class=...)` 返回静态类继承，使用限定
+身份及实际基类绑定；短名称必须无歧义，只有引用的外部基类单独标明。`total` 是显示
+节点数，与 `class_inventory_*` 分开。指定根类仍可能需要遍历 namespace 才能找到
+派生类；未绑定捕获输入的原始类源码位置标记 `npi_class_location_unbound`。
+`dump_tb_section(design_handle=..., section=...)` 支持全部七种 section：三个编译
+元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
+`max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，
+需检查 `export_complete`。
+独立 Slang 层级回退仍待接入；旧 `handle` 的调用形状和静态 UVM 推断视图保持兼容。
+目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
 
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`
 的参数。其 `context_identity_sha256` 是待匹配的身份；输入变化时拒绝发布 handle，

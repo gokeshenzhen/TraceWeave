@@ -17,7 +17,7 @@ from .design_context import DesignContext
 from .hierarchy_source_ir import HierarchyBudgetExceeded, semantic_fact_id
 
 
-def mark_unbound_instance_locations(result: dict, context: DesignContext) -> None:
+def mark_unbound_source_locations(result: dict, context: DesignContext) -> None:
     """Retain raw provider locations, but flag paths outside captured inputs.
 
     Native File can be relative to the SDK's current directory even when
@@ -26,12 +26,20 @@ def mark_unbound_instance_locations(result: dict, context: DesignContext) -> Non
     neither opens paths nor upgrades the separate KDB/source association claim.
     Work is bounded by captured metadata plus the already bounded result rows.
     """
-    roles = (("source_file", "npi_instance_location_unbound"),
-             ("definition_file", "npi_definition_location_unbound"))
+    classes = "roots" in result or result.get("section") == "class_hierarchy_full"
+    roles = ((("source_file", "npi_class_location_unbound"),) if classes else
+             (("source_file", "npi_instance_location_unbound"),
+              ("definition_file", "npi_definition_location_unbound")))
     # Only inspect validated, already bounded output rows. Do not enumerate
     # native children to bind locations, including undisplayed descendants.
     rows = list(result.get("hits", []))
-    pending = [result["node"]] if result.get("node") is not None else []
+    if result.get("section") in {"component_tree_full", "class_hierarchy_full"}:
+        data = result.get("data")
+        pending = list(data or []) if classes else [data] if data is not None else []
+    elif classes:
+        pending = list(result["roots"])
+    else:
+        pending = [result["node"]] if result.get("node") is not None else []
     while pending:
         check_cancelled()
         row = pending.pop()
@@ -55,6 +63,11 @@ def mark_unbound_instance_locations(result: dict, context: DesignContext) -> Non
             if row[key] is not None and resolved[row[key]] not in captured:
                 gaps.add(gap)
         row["gaps"] = sorted(gaps)
+
+
+def mark_unbound_instance_locations(result: dict, context: DesignContext) -> None:
+    """Compatibility name for callers holding instance-only query results."""
+    mark_unbound_source_locations(result, context)
 
 
 @dataclass(frozen=True)

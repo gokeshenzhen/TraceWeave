@@ -138,8 +138,19 @@ Uninstantiated declarations, imports, variables and UVM usage are not proved
 complete. Read `symbol_inventory_complete`, `unknown_filter_files` and coverage
 gaps; an unknown filter is not a negative match. Metadata-only results carry
 the design/context identity and query costs, with no backend or KDB receipt.
-Independent Slang hierarchy fallback and the class/section `design_handle` routes remain
-pending. Existing `handle` calls retain their output shape. Reusing a design
+`get_tb_class_hierarchy(design_handle=..., root_class=...)` returns static class
+inheritance with qualified identities and actual base bindings. Short names
+must be unambiguous; external reference-only bases are labelled. `total` is the
+rendered node count, separate from `class_inventory_*`. A root filter does not
+avoid the namespace work needed to find derived classes. Raw class locations
+outside captured inputs carry `npi_class_location_unbound`.
+`dump_tb_section(design_handle=..., section=...)` supports all seven sections.
+The three compile metadata sections need no backend; the four semantic sections
+use the same NPI services and preserve their coverage gaps. `max_items` bounds
+output, while work/time budgets still bound global traversal. An exact count
+does not make a truncated export complete: inspect `export_complete`.
+Independent Slang hierarchy fallback remains pending. Existing `handle` calls
+retain their output shape and static UVM inference view. Reusing a design
 handle currently reuses the binding; it does not yet avoid repeated KDB loads.
 
 After eviction or restart, pass the returned `recovery_context` unchanged as

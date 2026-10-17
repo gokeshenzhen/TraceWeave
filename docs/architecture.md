@@ -438,8 +438,17 @@ Verification
   and ownership identities are validated before publication. Native file
   mapping currently walks bounded global namespaces; local output does not
   imply local-only work. Partial declaration inventories and unknown filters
-  cannot prove absence. Unavailable NPI reports a capability gap: independent
-  Slang hierarchy fallback and public class/section routes remain pending. The internal
+  cannot prove absence. `get_tb_class_hierarchy` and all seven `dump_tb_section`
+  sections also accept prepared contexts. Class results retain static inheritance,
+  qualified/base identities, reference-only external bases and separate rendered
+  versus declaration counts. Source locations are checked across class roots and
+  exported instance/class trees; unbound class paths use `npi_class_location_unbound`.
+  Exports validate the requested section, selected component root, and captured
+  file/interface ownership before publication. Compile metadata exports bypass
+  backend binding. Semantic exports may do global work within the original
+  budget; `max_items` only caps output, and an exact count does not prove a full
+  export. Legacy handles retain their raw sections and static UVM inference.
+  Independent Slang hierarchy fallback remains pending. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display
