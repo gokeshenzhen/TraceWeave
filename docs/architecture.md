@@ -411,7 +411,18 @@ Verification
   `kdb_path` is an identity-bound declaration, not eager KDB discovery or proof
   of source association. Driver/load/path and X snapshot/history accept `design_handle` and derive
   compile arguments from it; supplied conflicting arguments are rejected.
-  Six-tool migration remains separate work. The internal
+  `find_tb_instance` also accepts an independently prepared `design_handle`:
+  exact path lookup and bounded/exact module search use the existing NPI source
+  query service without building the full lexical hierarchy. This route returns
+  schema version 2; legacy `handle` queries retain their existing shape. The
+  context stays pinned through source/KDB validation, native cleanup and final
+  validation. Explicit null counts/locations survive public serialization.
+  Its deadline includes context validation and KDB binding; late completion
+  keeps positive facts partial and discards exact negative/count proofs.
+  Local native queries remain synchronous; explicit LSF uses the existing
+  worker. This does not yet reuse NPI backend instances across public queries.
+  Unavailable NPI reports a capability gap: independent Slang hierarchy fallback
+  and the other five public tools remain pending. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display
@@ -421,8 +432,7 @@ Verification
   have separate receipts. Every opened stream is closed on normal completion,
   early stop, cancellation or failure. Definition and instantiation locations
   are distinct, and generate scopes need not invent a module definition.
-  This internal boundary does not yet route the public six tools; their legacy
-  handles and exact counts continue through the existing adapter.
+  Legacy handles and their exact counts continue through the existing adapter.
   The prepared NPI backend's internal `query_hierarchy` implements subtree and
   instance lookup through `npi_hierarchy_source`. It uses low-level Language
   `InternalScope` iteration, preserving real generate scopes, array elements'

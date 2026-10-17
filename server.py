@@ -5897,9 +5897,9 @@ async def list_tools():
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
                 "include resolution and semantic coverage. Replay recovery_context as this tool's "
                 "arguments to require the same compile/source identity after eviction or restart; "
-                "identity mismatch publishes no handle. Driver/load/path and X-trace accept design_handle; "
+                "identity mismatch publishes no handle. Driver/load/path, X-trace and find_tb_instance accept design_handle; "
                 "their first query fixes a KDB candidate and reports validation costs. An optional "
-                "kdb_path declares a candidate without asserting source association. The hierarchy tools still use "
+                "kdb_path declares a candidate without asserting source association. The other hierarchy tools use "
                 "their build_tb_hierarchy handles."
             ),
             inputSchema=schemas.PrepareDesignContextOptions.model_json_schema(),
@@ -6877,9 +6877,8 @@ async def list_tools():
             },
         ),
         # ── Hierarchy handle tools (phase 4) ────────────────────────────
-        # All six share the same access pattern: resolve `handle` via the
-        # in-process HandleStore (registered by build_tb_hierarchy), then
-        # return a typed slice or a HandleErrorResult.
+        # Legacy handles resolve through HandleStore. find_tb_instance also
+        # accepts an independently prepared design_handle for semantic lookup.
         Tool(
             name="get_tb_subtree",
             description=(
@@ -6950,13 +6949,20 @@ async def list_tools():
         Tool(
             name="find_tb_instance",
             description=(
-                "Locate instance(s) in the component_tree by exact path OR by module name. "
-                "`path` and `module` are mutually exclusive."
+                "Locate instances by exact path OR module name; path and module are mutually exclusive. "
+                "Use a legacy handle for the compiled-source tree, or design_handle from prepare_design_context "
+                "for on-demand NPI facts without a full hierarchy build. The design_handle route returns "
+                "schema_version=2 with semantic identities, separate instance/definition locations and "
+                "coverage/count limits. Exact path queries do not enumerate children. Module searches "
+                "are bounded; count_mode=exact requests a complete count within the query budget. "
+                "Independent Slang hierarchy fallback is pending; unavailable NPI returns an explicit "
+                "capability gap. Legacy handles retain their existing result shape."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     "path": {
                         "type": "string",
                         "description": "exact dotted instance path",
@@ -6966,8 +6972,12 @@ async def list_tools():
                         "description": "module name; returns all instances",
                     },
                     "limit": {"type": "integer", "default": 100},
+                    "count_mode": {"type": "string", "enum": ["bounded", "exact"], "default": "bounded",
+                                   "description": "design_handle only; output limit is separate from work limits."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and query."},
                 },
-                "required": ["handle"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -8076,6 +8086,81 @@ async def _prepare_pinned_design_entry(store, handle, entry, *, metrics,
     return binding, reused
 
 
+async def _query_prepared_instance(entry, arguments, budget):
+    """First public source tool over the existing prepared NPI query service.
+
+    Keep local native work synchronous, like driver/load/path. Only explicit
+    LSF placement uses a worker; this does not introduce a second local native
+    thread or change session ownership. Missing source providers stay explicit.
+    """
+    from src.connectivity_backend import DeferredConnectivityFallbackBackend
+    from src.hierarchy_source_codec import validate_source_result
+    from src.hierarchy_source_ir import HierarchyBudgetExceeded
+    from src.hierarchy_source_request import prepare_source_query
+    from src.npi_hierarchy_source import NpiHierarchyUnavailable
+
+    context = entry.context
+    plan = prepare_source_query(context, "find_tb_instance", arguments, budget=budget)
+    backend, status, selection_reason = _select_prepared_backend(entry, DeferredConnectivityFallbackBackend())
+    selected = getattr(backend, "name", None) == "verdi_npi"
+    reason = selection_reason or status.pop("_npi_selection_reason", None) or "npi_kdb_unavailable"
+    raw, execution, attempts, kdb_status = None, None, [], None
+    if selected:
+        try:
+            entry.binding.require_policy_current()
+            raw = await _call_connectivity_backend(backend, lambda: backend.query_source(plan))
+        except HierarchyBudgetExceeded as exc:
+            raw = plan._unstarted(exc.reason)
+        except (OperationCancelled, KdbBindingChanged, ExecutionBindingChanged, CaptureAborted,
+                TimeoutError, design_context_runtime.ContextUnavailable):
+            raise
+        except NpiHierarchyUnavailable as exc:
+            reason = _sanitize_npi_fallback_reason(exc.reason)
+            execution = getattr(exc, "execution_status", None)
+        except Exception:
+            reason = "npi_query_failed"
+        kdb_status = _npi_kdb_status(backend)
+        if raw is not None:
+            execution = raw.pop("_npi_execution_status", None)
+            raw = validate_source_result("find_tb_instance", raw)
+            origin = raw["facts_origin"]
+            if origin == "verdi_npi":
+                anchor = entry.binding.anchor
+                expected = hashlib.sha256((anchor.identity_sha256 + "\0" + context.selected_top).encode()).hexdigest()
+                evidence = raw.get("kdb_binding") or {}
+                if (raw["artifact_identity"] != expected
+                        or raw.get("context_identity_sha256") != context.identity_sha256
+                        or evidence.get("identity_sha256") != anchor.identity_sha256
+                        or evidence.get("load_status") != "loaded"):
+                    raise ValueError("npi_source_result_identity_mismatch")
+            elif (origin != "compile_metadata" or raw["artifact_identity"] != context.identity_sha256
+                  or raw.get("context_identity_sha256") not in (None, context.identity_sha256)):
+                raise ValueError("npi_source_result_origin_mismatch")
+            attempts.append(_backend_attempt("verdi_npi", "success" if origin == "verdi_npi" else "inconclusive",
+                                             coverage_status=raw["coverage_status"]))
+        else:
+            attempts.append(_backend_attempt("verdi_npi", "failed", reason=reason))
+    else:
+        attempts.append(_backend_attempt("verdi_npi", "skipped" if reason in {
+            "source_backend_requested", "npi_previous_load_failure",
+        } else "unavailable", reason=reason))
+    if raw is None:
+        raw = plan.execute()
+        raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {"source_hierarchy_provider_unavailable"})
+        attempts.append(_backend_attempt("source_graph", "blocked", reason="source_hierarchy_provider_unavailable"))
+    actual = "verdi_npi" if raw["facts_origin"] == "verdi_npi" else None
+    raw["context_identity_sha256"] = context.identity_sha256
+    raw["backend_status"] = _finalize_public_connectivity_status(
+        backend_status=status, selected_backend="verdi_npi" if selected else "source_graph",
+        actual_backend=actual, attempts=attempts, fallback_reason=reason if raw.get("error") == "semantic_provider_unavailable" else None,
+        npi_backend=backend if selected else None, npi_execution=execution,
+        source_graph_receipt=None, npi_kdb_status=kdb_status,
+    )
+    payload = validate_source_result("find_tb_instance", raw)
+    model = schemas.SourceInstanceResult if "hits" in payload else schemas.SourceQueryEnvelope
+    return model.model_validate(payload)
+
+
 async def _dispatch_design_query(name: str, args: dict):
     """Own one independent context across binding, query and publication.
 
@@ -8090,11 +8175,27 @@ async def _dispatch_design_query(name: str, args: dict):
     started = time.monotonic()
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
+    source_budget, source_arguments = None, None
+    if name == "find_tb_instance":
+        from src.hierarchy_source_ir import HierarchyQueryBudget
+        from src.hierarchy_source_request import validate_source_query
+        try:
+            if set(args) - {"design_handle", "path", "module", "limit", "count_mode", "timeout_sec"}:
+                raise ValueError("design_handle instance queries accept no legacy handle or context overrides")
+            source_arguments = {key: value for key, value in args.items() if key not in {"design_handle", "timeout_sec"}}
+            validate_source_query(name, source_arguments)
+            source_budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
+            # Include parameter validation in the same start used by receipts.
+            source_budget.deadline -= source_budget.started - started
+            source_budget.started = started
+        except (TypeError, ValueError) as exc:
+            return schemas.ToolErrorResult(error=str(exc), error_code="invalid_design_instance_arguments")
 
     def remaining(limit):
-        if history_deadline is None:
+        deadline = source_budget.deadline if source_budget is not None else history_deadline
+        if deadline is None:
             return limit
-        value = history_deadline - time.monotonic()
+        value = deadline - time.monotonic()
         if value <= 0:
             raise TimeoutError
         return min(limit, value)
@@ -8128,7 +8229,7 @@ async def _dispatch_design_query(name: str, args: dict):
                 history_deadline = started + history_request.timeout_sec
             binding, reused = await _prepare_pinned_design_entry(
                 store, handle, entry, metrics=metrics, remaining=remaining,
-                budget_binding=history_deadline is not None)
+                budget_binding=history_deadline is not None or source_budget is not None)
             resolved = {
                 **args, "compile_log": context.ordered_compile_logs[0],
                 "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
@@ -8141,7 +8242,8 @@ async def _dispatch_design_query(name: str, args: dict):
                 resolved["_design_query_started"] = started
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            result = await _dispatch_inner(name, resolved)
+            result = (await _query_prepared_instance(entry, source_arguments, source_budget)
+                      if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
             await _validate_design_source(context)
@@ -8171,6 +8273,19 @@ async def _dispatch_design_query(name: str, args: dict):
                     history.context.setdefault("backend_status", {})["design_context"] = (
                         status.design_context.model_dump(mode="json", exclude_none=True)
                     )
+            if source_budget is not None:
+                from src.hierarchy_source_codec import validate_source_result
+                from src.hierarchy_source_service import finish_hierarchy_query
+                raw = result.model_dump(mode="json", exclude_unset=True)
+                raw["design_handle"] = handle
+                finish_hierarchy_query(raw, source_budget)
+                raw = validate_source_result(name, raw)
+                # Include validation in the original deadline, including an
+                # empty exact result whose final checks completed too late.
+                finish_hierarchy_query(raw, source_budget)
+                raw["backend_status"]["design_context"]["metrics"]["total_ms"] = (
+                    time.monotonic() - started) * 1000
+                return raw
             return result
     except OperationCancelled as exc:
         raise asyncio.CancelledError from exc
@@ -8193,7 +8308,7 @@ async def _dispatch(name: str, args: dict):
     if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source"}:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
     return await _dispatch_inner(name, args)
