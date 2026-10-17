@@ -312,11 +312,11 @@ def server_process(args):
                 def direct_children(target):
                     # Independent low-level SDK walk, never a product provider
                     # or eager SDK list. At most 16 raw scopes per iterator.
-                    iterator = lang_l0.iterate(lang_l0.InternalScope, target.cps_obj)
                     children = []
                     observation = {'scope': target.full_name(), 'raw_scopes': [], 'exhausted': False}
                     report.setdefault('oracle_scope_scans', []).append(observation)
                     primary = None
+                    iterator = lang_l0.iterate(lang_l0.InternalScope, target.cps_obj)
                     try:
                         if iterator is None:
                             observation['exhausted'] = True
