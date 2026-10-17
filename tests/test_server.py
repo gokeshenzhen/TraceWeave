@@ -3268,21 +3268,34 @@ class TestPrerequisiteGating:
         assert "schema_version" in result
         assert result.get("ok") is not False
 
-    async def test_analyze_failures_blocked_without_build_tb_hierarchy(self, tmp_path):
+    async def test_analyze_failures_reads_log_and_wave_without_hierarchy(self, tmp_path):
         _prefill_get_sim_paths_state()
+        log_path, wave_path = tmp_path / "run.log", tmp_path / "wave.vcd"
+        log_path.write_text("module_a ERROR issue @ 1 ns\n")
+        wave_path.write_text("""$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! sig $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#1000
+1!
+""")
         result = await server._dispatch(
             "analyze_failures",
             {
-                "log_path": "/tmp/run.log",
-                "wave_path": "/tmp/wave.vcd",
+                "log_path": str(log_path),
+                "wave_path": str(wave_path),
                 "signal_paths": ["top.sig"],
                 "simulator": "vcs",
             },
         )
-        assert result["ok"] is False
-        assert result["error_code"] == "missing_prerequisite"
-        assert result["missing_step"] == "build_tb_hierarchy"
-        assert result["required_before"] == "analyze_failures"
+        assert result.summary["runtime_total_errors"] == 1
+        assert result.focused_group["first_time_ps"] == 1000
+        assert "top.sig" in result.wave_context["signals"]
+        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._result_cache["build_tb_hierarchy"] is None
 
     async def test_search_signals_no_gate(self, tmp_path):
         wave_path = tmp_path / "wave.vcd"
@@ -3446,19 +3459,14 @@ $enddefinitions $end
         assert server._result_provenance["build_tb_hierarchy"] is None
         assert server._handle_store.resolve(handle) is None
 
-    async def test_suggested_call_includes_compile_log(self):
+    async def test_legacy_handle_prerequisite_includes_compile_log(self):
         _prefill_get_sim_paths_state(
             compile_log="/my/elab.log",
             simulator="xcelium",
         )
         result = await server._dispatch(
-            "analyze_failures",
-            {
-                "log_path": "/tmp/run.log",
-                "wave_path": "/tmp/wave.vcd",
-                "signal_paths": ["top.sig"],
-                "simulator": "vcs",
-            },
+            "find_tb_instance",
+            {"handle": "tbh_missing", "path": "top"},
         )
         assert result["ok"] is False
         suggested = result["suggested_call"]
