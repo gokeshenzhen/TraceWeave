@@ -17,6 +17,37 @@ from .design_context import DesignContext
 from .hierarchy_source_ir import HierarchyBudgetExceeded, semantic_fact_id
 
 
+def mark_unbound_instance_locations(result: dict, context: DesignContext) -> None:
+    """Retain raw provider locations, but flag paths outside captured inputs.
+
+    Native File can be relative to the SDK's current directory even when
+    DefFile identifies a captured input. Only exact captured spellings/aliases
+    establish a binding; existence or a unique basename does not. This check
+    neither opens paths nor upgrades the separate KDB/source association claim.
+    Work is bounded by captured metadata plus the already bounded result rows.
+    """
+    roles = (("source_file", "npi_instance_location_unbound"),
+             ("definition_file", "npi_definition_location_unbound"))
+    wanted = {row[key] for row in result.get("hits", []) for key, _ in roles if row[key] is not None}
+    resolved = {path: path for path in wanted}
+    for spelling, canonical in context.aliases:
+        check_cancelled()
+        if spelling in wanted:
+            resolved[spelling] = canonical
+    targets, captured = set(resolved.values()), set()
+    for record in context.snapshot.records:
+        check_cancelled()
+        if record.path in targets:
+            captured.add(record.path)
+    for row in result.get("hits", []):
+        check_cancelled()
+        gaps = set(row["gaps"])
+        for key, gap in roles:
+            if row[key] is not None and resolved[row[key]] not in captured:
+                gaps.add(gap)
+        row["gaps"] = sorted(gaps)
+
+
 @dataclass(frozen=True)
 class CompileSourceFile:
     file_id: str

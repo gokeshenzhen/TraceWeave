@@ -417,6 +417,12 @@ Verification
   schema version 2; legacy `handle` queries retain their existing shape. The
   context stays pinned through source/KDB validation, native cleanup and final
   validation. Explicit null counts/locations survive public serialization.
+  Instance and definition locations retain raw NPI paths. Each role gains a
+  `npi_instance_location_unbound` / `npi_definition_location_unbound` row gap
+  when its exact spelling or captured alias is absent from captured inputs;
+  such paths are vendor observations, not verified source locators. No basename
+  inference or live path probing repairs them. A bound path alone still does
+  not prove that the KDB was built from the current source bytes.
   Its deadline includes context validation and KDB binding; late completion
   keeps positive facts partial and discards exact negative/count proofs.
   Local native queries remain synchronous; explicit LSF uses the existing

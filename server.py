@@ -6953,7 +6953,9 @@ async def list_tools():
                 "Use a legacy handle for the compiled-source tree, or design_handle from prepare_design_context "
                 "for on-demand NPI facts without a full hierarchy build. The design_handle route returns "
                 "schema_version=2 with semantic identities, separate instance/definition locations and "
-                "coverage/count limits. Exact path queries do not enumerate children. Module searches "
+                "coverage/count limits. Locations retain raw NPI paths; *_location_unbound row gaps "
+                "mean the path is not bound to captured inputs and is not a verified source locator. "
+                "Exact path queries do not enumerate children. Module searches "
                 "are bounded; count_mode=exact requests a complete count within the query budget. "
                 "Independent Slang hierarchy fallback is pending; unavailable NPI returns an explicit "
                 "capability gap. Legacy handles retain their existing result shape."
@@ -8133,6 +8135,8 @@ async def _query_prepared_instance(entry, arguments, budget):
                         or evidence.get("identity_sha256") != anchor.identity_sha256
                         or evidence.get("load_status") != "loaded"):
                     raise ValueError("npi_source_result_identity_mismatch")
+                from src.hierarchy_source_metadata import mark_unbound_instance_locations
+                mark_unbound_instance_locations(raw, context)
             elif (origin != "compile_metadata" or raw["artifact_identity"] != context.identity_sha256
                   or raw.get("context_identity_sha256") not in (None, context.identity_sha256)):
                 raise ValueError("npi_source_result_origin_mismatch")

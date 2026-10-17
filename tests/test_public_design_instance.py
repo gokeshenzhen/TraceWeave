@@ -223,7 +223,8 @@ async def test_prepare_first_and_repeat_exact_query_without_legacy_tree(tmp_path
             "scope_id": "scope-a", "path": "top.a", "inst": "a", "kind": "module", "parent": "top",
             "definition_id": "def-leaf", "module": "leaf", "source_file": "/tb/instantiations.sv",
             "source_line": 23, "definition_file": "/rtl/leaf.sv", "definition_line": 4,
-            "parameterization": {"WIDTH": "8"}, "gaps": []}
+            "parameterization": {"WIDTH": "8"},
+            "gaps": ["npi_definition_location_unbound", "npi_instance_location_unbound"]}
         receipt = output["backend_status"]["design_context"]
         assert receipt["design_handle"] == handle and receipt["binding_reused"] is bool(index)
         assert receipt["artifact"]["load_status"] == "loaded"
