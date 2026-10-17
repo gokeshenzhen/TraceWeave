@@ -469,7 +469,8 @@ async def test_wave_or_parser_generation_change_cannot_publish_old_diff(tmp_path
         if number != 1: return
         if mutation == "epoch":
             parser = server._parser_cache[target][1]
-            parser._scope_epoch = (getattr(parser, "_scope_epoch", 0) or 0) + 1
+            # Parser generations are opaque identity tokens, not counters.
+            parser._scope_epoch = object()
         elif mutation == "file_content":
             with open(target, "a") as stream: stream.write("#21\nb0000 !\n")
         elif mutation == "file_replacement":
