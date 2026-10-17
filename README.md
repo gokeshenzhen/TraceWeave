@@ -105,7 +105,7 @@ Preparation does not build a hierarchy, run Slang or probe/load KDB. Pass its
 `design_handle` to `explain_signal_driver`, `find_signal_loads`,
 `trace_signal_path` or `trace_x_source` (snapshot and history); `compile_log`
 can then be omitted. With the default `auto`
-preference, the first query fixes a candidate KDB (optional `kdb_path` declares
+preference, the first semantic query fixes a candidate KDB (optional `kdb_path` declares
 one explicitly). Later queries validate that binding and source context; a
 change or restart requires a new handle. `source` avoids NPI, and a recorded NPI
 load failure suppresses repeated attempts until a new context is prepared.
@@ -127,7 +127,18 @@ service and location checks for every returned node. Its default bounded count
 stops at display frontiers; `total_descendants` is null when only a lower bound
 is known. `count_mode="exact"` explicitly requests traversal of undisplayed
 descendants within the work/time budget. `max_nodes` includes the root.
-Independent Slang hierarchy fallback and the other four tools' `design_handle` routes remain
+`lookup_tb_files(design_handle=..., basename="des.v")` filters captured compile
+ownership without probing or loading a backend. Its semantic fields stay null.
+`get_tb_file_detail(design_handle=..., path=...)` accepts only captured paths or
+aliases; a nonmember returns basename suggestions without semantic work.
+Member details and semantic file filters (`has_module`, `contains_uvm`,
+`file_type`) use NPI declarations. Their mapping currently walks global
+namespaces within the request budget; `semantic_work_scope` exposes this work.
+Uninstantiated declarations, imports, variables and UVM usage are not proved
+complete. Read `symbol_inventory_complete`, `unknown_filter_files` and coverage
+gaps; an unknown filter is not a negative match. Metadata-only results carry
+the design/context identity and query costs, with no backend or KDB receipt.
+Independent Slang hierarchy fallback and the class/section `design_handle` routes remain
 pending. Existing `handle` calls retain their output shape. Reusing a design
 handle currently reuses the binding; it does not yet avoid repeated KDB loads.
 

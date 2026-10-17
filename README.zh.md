@@ -282,7 +282,15 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 对返回的每个节点检查位置绑定。默认 bounded 计数在显示边界停止；只知道下界时，
 `total_descendants` 为 null。`count_mode="exact"` 显式请求在工作量/时间预算内
 遍历未显示的后代；`max_nodes` 包括根节点。
-独立 Slang 层级回退和其他四工具的 `design_handle` 路由仍待接入；
+`lookup_tb_files(design_handle=..., basename="des.v")` 直接过滤捕获的编译归属，
+不探测或加载后端，语义字段保持 null。`get_tb_file_detail(design_handle=..., path=...)`
+只接受捕获路径或别名；不在编译集时返回同 basename 建议，不启动语义查询。
+文件详情以及 `has_module`、`contains_uvm`、`file_type` 过滤使用 NPI 声明。
+当前文件映射会在预算内遍历全局 namespace，`semantic_work_scope` 明示这项工作；
+未实例化声明、import、变量和 UVM 使用的覆盖仍不完整。检查
+`symbol_inventory_complete`、`unknown_filter_files` 与 coverage gaps，未知不能作为负向匹配。
+纯元数据结果携带设计/上下文身份和查询成本，不附加后端或 KDB receipt。
+独立 Slang 层级回退和类/section 工具的 `design_handle` 路由仍待接入；
 旧 `handle` 调用形状保持兼容。目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
 
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`

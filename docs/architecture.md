@@ -428,8 +428,18 @@ Verification
   keeps positive facts partial and discards exact negative/count proofs.
   Local native queries remain synchronous; explicit LSF uses the existing
   worker. This does not yet reuse NPI backend instances across public queries.
-  Unavailable NPI reports a capability gap: independent Slang hierarchy fallback
-  and the other four public tools remain pending. The internal
+  `lookup_tb_files` and `get_tb_file_detail` also accept `design_handle`.
+  They plan captured ownership before backend binding. Metadata-only filters,
+  missing compile members and empty metadata candidate sets validate the pinned
+  source context before/after execution, without KDB probing, selection or
+  loading. These results omit optional backend/KDB receipts and retain context
+  identity, coverage and cumulative query costs. Semantic file queries use the
+  same NPI binding/cleanup boundary; their canonical members, captured aliases
+  and ownership identities are validated before publication. Native file
+  mapping currently walks bounded global namespaces; local output does not
+  imply local-only work. Partial declaration inventories and unknown filters
+  cannot prove absence. Unavailable NPI reports a capability gap: independent
+  Slang hierarchy fallback and public class/section routes remain pending. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display

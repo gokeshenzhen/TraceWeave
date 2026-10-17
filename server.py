@@ -5897,9 +5897,10 @@ async def list_tools():
                 "run Slang or check/load a KDB. Input capture completeness is separate from "
                 "include resolution and semantic coverage. Replay recovery_context as this tool's "
                 "arguments to require the same compile/source identity after eviction or restart; "
-                "identity mismatch publishes no handle. Driver/load/path, X-trace, find_tb_instance and get_tb_subtree accept design_handle; "
-                "their first query fixes a KDB candidate and reports validation costs. An optional "
-                "kdb_path declares a candidate without asserting source association. The other hierarchy tools use "
+                "identity mismatch publishes no handle. Driver/load/path, X-trace, find_tb_instance, get_tb_subtree, "
+                "lookup_tb_files and get_tb_file_detail accept design_handle; their first semantic query fixes "
+                "a KDB candidate and reports validation costs. Metadata-only file queries do not select a backend. An optional "
+                "kdb_path declares a candidate without asserting source association. Class and section tools use "
                 "their build_tb_hierarchy handles."
             ),
             inputSchema=schemas.PrepareDesignContextOptions.model_json_schema(),
@@ -6877,8 +6878,8 @@ async def list_tools():
             },
         ),
         # ── Hierarchy handle tools (phase 4) ────────────────────────────
-        # Legacy handles resolve through HandleStore. Instance lookup and
-        # subtree browsing also accept an independently prepared design_handle.
+        # Legacy handles resolve through HandleStore. Prepared queries keep
+        # compile ownership distinct from NPI semantic observations.
         Tool(
             name="get_tb_subtree",
             description=(
@@ -6927,14 +6928,21 @@ async def list_tools():
         Tool(
             name="lookup_tb_files",
             description=(
-                "Query the compiled file set by objective scan facts. At least one filter is "
-                "required. Use this to disambiguate multi-version files (basename collisions "
-                "are also reported via build_tb_hierarchy.ambiguous_basenames)."
+                "Query compiled files with AND filters; at least one filter is required. "
+                "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
+                "schema_version=2 captured file ownership and on-demand NPI symbols. Basename/name/path-only "
+                "filters never probe, select or load a semantic backend, and semantic fields remain null. "
+                "has_module/contains_uvm/file_type require semantic evidence; an unknown filter result "
+                "is not a negative match. NPI file mapping may walk global namespaces within the request "
+                "budget; inspect semantic_work_scope, coverage gaps and unknown_filter_files. "
+                "count_mode=bounded stops after an omitted match; exact requests all candidates within budgets. "
+                "Independent Slang file fallback is pending. Legacy handles retain their existing shape."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
                     "basename": {
                         "type": "string",
                         "description": "exact basename match",
@@ -6947,15 +6955,19 @@ async def list_tools():
                     },
                     "contains_uvm": {
                         "type": "boolean",
-                        "description": "scan saw `import uvm_pkg::` or `extends uvm_*`",
+                        "description": "proved UVM usage; unknown semantic coverage cannot prove false",
                     },
                     "file_type": {
                         "type": "string",
-                        "description": "module | interface | package | class | program (from SV scan)",
+                        "description": "classification from the selected source provider, not compiler file-type hints",
                     },
                     "limit": {"type": "integer", "default": 50},
+                    "count_mode": {"type": "string", "enum": ["bounded", "exact"], "default": "bounded",
+                                   "description": "design_handle only; exact counting may inspect all matching compile members."},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and query."},
                 },
-                "required": ["handle"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -6998,15 +7010,25 @@ async def list_tools():
             name="get_tb_file_detail",
             description=(
                 "Return symbols (modules/classes/interfaces) defined in a single compiled file. "
-                "If the path is not in the compile set, error includes basename-similar suggestions."
+                "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
+                "schema_version=2 captured file ownership and on-demand NPI declarations. Only an exact "
+                "captured path or alias binds a file; a nonmember returns basename suggestions without "
+                "probing or loading a backend. Native mapping may walk global namespaces within the query "
+                "budget and does not prove all uninstantiated declarations, imports or variables were recovered. "
+                "Inspect semantic_work_scope, symbol_inventory_complete and coverage gaps. Independent "
+                "Slang file fallback is pending. Legacy handles retain their existing shape."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
-                    "path": {"type": "string"},
+                    "design_handle": {"type": "string", "minLength": 1},
+                    "path": {"type": "string", "minLength": 1},
+                    "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30,
+                                    "description": "design_handle only; includes context validation, binding and query."},
                 },
-                "required": ["handle", "path"],
+                "required": ["path"],
+                "oneOf": [{"required": ["handle"]}, {"required": ["design_handle"]}],
             },
         ),
         Tool(
@@ -8100,8 +8122,8 @@ async def _prepare_pinned_design_entry(store, handle, entry, *, metrics,
     return binding, reused
 
 
-async def _query_prepared_hierarchy(entry, operation, arguments, budget):
-    """Public instance/subtree queries over the prepared NPI query service.
+async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan=None):
+    """Public semantic queries over the prepared NPI query service.
 
     Keep local native work synchronous, like driver/load/path. Only explicit
     LSF placement uses a worker; this does not introduce a second local native
@@ -8114,7 +8136,7 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget):
     from src.npi_hierarchy_source import NpiHierarchyUnavailable
 
     context = entry.context
-    plan = prepare_source_query(context, operation, arguments, budget=budget)
+    plan = plan if plan is not None else prepare_source_query(context, operation, arguments, budget=budget)
     backend, status, selection_reason = _select_prepared_backend(entry, DeferredConnectivityFallbackBackend())
     selected = getattr(backend, "name", None) == "verdi_npi"
     reason = selection_reason or status.pop("_npi_selection_reason", None) or "npi_kdb_unavailable"
@@ -8140,6 +8162,19 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget):
             if (operation == "get_tb_subtree" and "node" in raw
                     and raw["root"] != (arguments.get("root") or context.selected_top)):
                 raise ValueError("npi_source_result_root_mismatch")
+            if operation in {"lookup_tb_files", "get_tb_file_detail"} and "error" not in raw:
+                if raw.get("ownership_identity") != context.identity_sha256:
+                    raise ValueError("npi_source_result_ownership_mismatch")
+                expected_file = (plan.catalog.find_file(arguments["path"])
+                                 if operation == "get_tb_file_detail" else None)
+                rows = [raw] if operation == "get_tb_file_detail" else raw["matches"]
+                for row in rows:
+                    member = plan.catalog.find_file(row["path"])
+                    if (member is None or row["path"] != member.path
+                            or row["file_id"] != member.file_id
+                            or row["aliases"] != list(member.aliases)
+                            or expected_file is not None and member != expected_file):
+                        raise ValueError("npi_source_result_file_mismatch")
             origin = raw["facts_origin"]
             if origin == "verdi_npi":
                 anchor = entry.binding.anchor
@@ -8171,7 +8206,8 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget):
     raw["context_identity_sha256"] = context.identity_sha256
     raw["backend_status"] = _finalize_public_connectivity_status(
         backend_status=status, selected_backend="verdi_npi" if selected else "source_graph",
-        actual_backend=actual, attempts=attempts, fallback_reason=reason if raw.get("error") == "semantic_provider_unavailable" else None,
+        actual_backend=actual, attempts=attempts,
+        fallback_reason=reason if raw.get("semantic_status") == "unavailable" else None,
         npi_backend=backend if selected else None, npi_execution=execution,
         source_graph_receipt=None, npi_kdb_status=kdb_status,
     )
@@ -8195,7 +8231,7 @@ async def _dispatch_design_query(name: str, args: dict):
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
     source_budget, source_arguments = None, None
-    if name in {"find_tb_instance", "get_tb_subtree"}:
+    if name in {"find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail"}:
         from src.hierarchy_source_ir import HierarchyQueryBudget
         from src.hierarchy_source_request import validate_source_query
         try:
@@ -8208,7 +8244,10 @@ async def _dispatch_design_query(name: str, args: dict):
             source_budget.deadline -= source_budget.started - started
             source_budget.started = started
         except (TypeError, ValueError) as exc:
-            code = "invalid_design_instance_arguments" if name == "find_tb_instance" else "invalid_design_subtree_arguments"
+            code = {"find_tb_instance": "invalid_design_instance_arguments",
+                    "get_tb_subtree": "invalid_design_subtree_arguments",
+                    "lookup_tb_files": "invalid_design_file_arguments",
+                    "get_tb_file_detail": "invalid_design_file_arguments"}[name]
             return schemas.ToolErrorResult(error=str(exc), error_code=code)
 
     def remaining(limit):
@@ -8247,6 +8286,28 @@ async def _dispatch_design_query(name: str, args: dict):
                     "simulator": context.simulator, "top_hint": context.selected_top,
                 })
                 history_deadline = started + history_request.timeout_sec
+            source_plan = None
+            if source_budget is not None:
+                from src.hierarchy_source_request import prepare_source_query
+                source_plan = prepare_source_query(context, name, source_arguments, budget=source_budget)
+                if not source_plan.needs_provider:
+                    # Ownership/filter misses and metadata-only filters must
+                    # not depend on KDB availability, policy, or a native load.
+                    # The existing optional backend receipts remain absent.
+                    from src.hierarchy_source_codec import validate_source_result
+                    from src.hierarchy_source_service import finish_hierarchy_query
+                    await _validate_design_source(context, timeout_sec=remaining(30))
+                    _require_design_store_owner(store)
+                    raw = source_plan.execute()
+                    await _validate_design_source(context)
+                    await anyio.lowlevel.checkpoint()
+                    _require_design_store_owner(store)
+                    raw["design_handle"] = handle
+                    raw["context_identity_sha256"] = context.identity_sha256
+                    finish_hierarchy_query(raw, source_budget)
+                    raw = validate_source_result(name, raw)
+                    finish_hierarchy_query(raw, source_budget)
+                    return raw
             binding, reused = await _prepare_pinned_design_entry(
                 store, handle, entry, metrics=metrics, remaining=remaining,
                 budget_binding=history_deadline is not None or source_budget is not None)
@@ -8262,7 +8323,7 @@ async def _dispatch_design_query(name: str, args: dict):
                 resolved["_design_query_started"] = started
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            result = (await _query_prepared_hierarchy(entry, name, source_arguments, source_budget)
+            result = (await _query_prepared_hierarchy(entry, name, source_arguments, source_budget, plan=source_plan)
                       if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
@@ -8330,7 +8391,7 @@ async def _dispatch(name: str, args: dict):
     if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance", "get_tb_subtree"}:
+        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source", "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail"}:
             return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
         return await _dispatch_design_query(name, args)
     return await _dispatch_inner(name, args)
