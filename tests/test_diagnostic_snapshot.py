@@ -313,14 +313,17 @@ class TestDiagnosticSnapshot:
         assert result.structural_scan is None
         assert result.recommended_next.available is False
         assert result.simulator == "xcelium"
-        assert len(result.missing_steps) == 3
+        assert len(result.missing_steps) == 4
         assert {step["tool"] for step in result.missing_steps} == {
-            "build_tb_hierarchy",
+            "prepare_design_context",
+            "scan_structural_risks",
             "parse_sim_log",
             "recommend_failure_debug_next_steps",
         }
         assert result.log_analysis.suggested_call["arguments"]["log_path"] == sim.sim_logs[0].path
-        assert result.recommended_next.suggested_call is None
+        assert result.hierarchy.suggested_call is None
+        assert result.design_context.suggested_call["tool"] == "prepare_design_context"
+        assert result.recommended_next.suggested_call["arguments"]["compile_log"] == sim.compile_logs[0].path
 
     def test_all_available(self):
         _prefill_all()
@@ -582,10 +585,14 @@ class TestDiagnosticSnapshot:
         }
         result = server._handle_diagnostic_snapshot({})
 
-        assert result.hierarchy.suggested_call["arguments"]["compile_log"] == sim.compile_logs[0].path
+        assert result.hierarchy.suggested_call is None
+        assert result.design_context.suggested_call["arguments"] == {
+            "compile_log": sim.compile_logs[0].path, "simulator": "xcelium"}
         assert result.log_analysis.suggested_call["arguments"]["log_path"] == sim.sim_logs[0].path
         assert result.log_analysis.suggested_call["arguments"]["simulator"] == "xcelium"
-        assert result.recommended_next.suggested_call is None
+        assert result.recommended_next.suggested_call["arguments"] == {
+            "compile_log": sim.compile_logs[0].path, "simulator": "xcelium",
+            "log_path": sim.sim_logs[0].path, "wave_path": sim.wave_files[0].path}
 
     def test_fresh_sections_have_stale_false(self):
         _prefill_all()
@@ -1011,7 +1018,7 @@ class TestDiagnosticSnapshot:
             "recommend_failure_debug_next_steps",
         ]
 
-    def test_snapshot_does_not_request_scan_when_hierarchy_is_stale(self):
+    def test_snapshot_requests_scan_from_discovery_when_hierarchy_is_stale(self):
         _prefill_all()
         server._result_cache["scan_structural_risks"] = None
         server._result_provenance["scan_structural_risks"] = None
@@ -1023,7 +1030,11 @@ class TestDiagnosticSnapshot:
         result = server._handle_diagnostic_snapshot({})
 
         assert result.hierarchy.stale is True
-        assert all(step["tool"] != "scan_structural_risks" for step in result.missing_steps)
+        scans = [step for step in result.missing_steps if step["tool"] == "scan_structural_risks"]
+        assert len(scans) == 1
+        assert scans[0]["arguments"] == {
+            "compile_log": "/tmp/verif/work/elab.log", "simulator": "xcelium"}
+        assert all(step["tool"] != "build_tb_hierarchy" for step in result.missing_steps)
 
 
 class TestDiagnosticSnapshotCaseIdentity:

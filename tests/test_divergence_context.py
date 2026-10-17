@@ -65,8 +65,14 @@ def test_action_has_exact_tokens_and_valid_prerequisite_shapes(contexts):
     assert ready["arguments"]["compile_context"]["snapshot_sha256"] == bound.snapshot
     missing = driver_action(result=result, side="a", context=None)
     assert missing["status"] == "needs_context"
-    retry = driver_action(result=result, side="a", context=ca)
-    assert len(retry["prerequisite_calls"]) == 3
+    retry = driver_action(result=result, side="a", context=bound.context)
+    assert retry["status"] == "ready"
+    assert retry["evidence"]["context_recovery"] == "required_before_query"
+    assert retry["arguments"]["compile_context"] == bound.context
+    assert len(retry["prerequisite_calls"]) == 2
+    assert {c["tool"] for c in retry["prerequisite_calls"]} == {"scan_structural_risks"}
+    assert [c["arguments"]["compile_log"] for c in retry["prerequisite_calls"]] == [
+        ca["compile_log"], *ca["supplementary_compile_logs"]]
     assert all("supplementary_compile_logs" not in c["arguments"]
                for c in retry["prerequisite_calls"] if c["tool"] == "scan_structural_risks")
 

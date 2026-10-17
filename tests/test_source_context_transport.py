@@ -466,7 +466,12 @@ def test_late_worker_final_validation_cannot_publish_complete_proof(world, proof
     result = response.result
     assert result["coverage_status"] == "partial" and "timeout_sec" in result["analysis_limits"]
     if proof == "positive": assert result["hits"][0]["path"] == "top.g[0].u" and result["total"] is None
-    elif proof == "negative": assert result["error"] == "instance_unresolved" and result["total"] is None
+    elif proof == "negative":
+        # find returns a hit list; unlike subtree it has no not-found error.
+        # Late validation must remove the exact-zero proof, keeping only an
+        # empty observed prefix and its honest lower bound.
+        assert result["hits"] == [] and result["total"] is None
+        assert result["count_status"] == "lower_bound" and result["count_lower_bound"] == 0
     elif proof == "export": assert result["export_complete"] is False and result["total_descendants"] is None
     else: assert result["status"] == "mapping_required" and result["field_bits"] == {} and result["declared_range"] is None
 
