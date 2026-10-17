@@ -316,7 +316,10 @@ async def test_expired_handle_suggests_explicit_prepare_and_never_a_tree(tmp_pat
     _discarded(result, "handle_expired")
     assert controls.calls == controls.bindings == []
     prerequisites = [call for action in result["next_actions"] for call in action["prerequisite_calls"]]
-    assert prerequisites and all(call["tool"] == "prepare_design_context" for call in prerequisites)
+    assert [call["tool"] for call in prerequisites] == ["prepare_design_context", "scan_structural_risks"]
+    assert all(call["arguments"]["compile_log"] == str(a.log) for call in prerequisites)
+    assert all(call["depends_on"] == [] and call["parallel_group"] == "compile_a" for call in prerequisites)
+    assert result["next_actions"][0]["evidence"]["preparation_identity"] == "current_inputs_only"
 
 
 @pytest.mark.anyio
