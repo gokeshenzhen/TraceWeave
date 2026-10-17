@@ -453,7 +453,8 @@ Verification
   top subtree, with one cumulative 256-scope/8192-call/1-MiB budget. Partial or
   empty native results never trigger a full tree to improve heuristic ranking.
   The analyzer core no longer prepares hierarchy. Only native unavailability
-  permits the explicitly reported bounded legacy source fallback; source and
+  permits the explicitly reported legacy full-tree source fallback under
+  recovery limits; source and
   native facts are not merged. Semantic preparation is outside waveform locks,
   wave access uses the normal request worker/lock, and recommendation cache
   publication follows final context/binding validation. Legacy compile-log
@@ -514,9 +515,9 @@ Verification
   Uninstantiated declarations, variables, imports and UVM usage keep explicit
   inventory gaps. Synthetic namespace observations and instance-qualified
   specializations carry separate declaration statuses. Typedef identity uses
-  the actual scope/name relation; packed layout remains unprojected. This
-  adapter still needs independent product validation. Slang file projection
-  and public routing remain subsequent work.
+  the actual scope/name relation; file-inventory rows do not project packed
+  layout. Public file routing has control and limited real-KDB positive
+  validation; inventory gaps remain. Slang file projection is subsequent work.
   `hierarchy_source_symbols` defines copied source declarations and class-base
   bindings by semantic ID. Its internal class renderer keeps same-name classes
   separate, exposes unresolved/external bases and inheritance cycles, and never
@@ -535,7 +536,8 @@ Verification
   Uninstantiated declarations and class specializations remain unverified
   inventory gaps, not complete negative results. All iterators and handles
   share the same exclusive Language owner and cleanup deadline as instances.
-  Slang class projection and public six-tool routing are subsequent work.
+  Public class routing has control and limited real-KDB positive validation;
+  Slang class projection is subsequent work.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
   against the byte budget. `record_export_complete` describes a successful
@@ -544,8 +546,8 @@ Verification
   engines with one cumulative budget. `export_complete` also requires that
   output is not truncated; an exact count alone cannot make a partial export
   complete. Version 2 data keeps semantic identities and separate locations;
-  legacy handles keep their raw scan dictionaries. These internal exports do
-  not yet replace the public six-tool route or its static UVM inference view.
+  legacy handles keep their raw scan dictionaries and static UVM inference
+  view. Prepared public section exports use these same engines.
   `hierarchy_source_request` validates all six operations before backend
   selection. Its request-local plan uses only captured compile ownership to
   detect metadata-only work, nonmember files and empty file selections. Those
@@ -560,14 +562,14 @@ Verification
   Semantic work requires matching captured compile metadata and the selected
   top; its receipt separates KDB load evidence from the unverified association
   with current source bytes. The caller still owns context pinning and final
-  validation. Public routing remains subsequent work.
+  validation. All six public prepared-context tools use this boundary.
   The version 2 source schemas and `hierarchy_source_codec` preserve explicit
   unknown values instead of passing semantic facts through legacy defaults.
   The boundary validates shallow rows and iteratively checks scope/class trees,
   file ownership, count proofs and export completeness. This avoids a recursive
   model depth cap below the service's 256-level limit. Validation checks shape
-  and consistency, not the truth of an NPI/Slang fact. The source worker uses
-  this boundary; public routing and independent regression remain pending.
+  and consistency, not the truth of an NPI/Slang fact. The source worker and
+  public routes use this boundary, covered by independent control regressions.
   `design_context_codec` supplies a bounded private metadata transport for
   prepared workers. It preserves ordinary and explicit-recovery identities,
   snapshots and path observations without source bodies or native handles.
@@ -597,8 +599,9 @@ Verification
   Ordinary provider failures carry fixed placement status and never invoke
   licensed work locally. Typed identity/timeout/cancellation failures propagate.
   Common connectivity workers also preserve a native `TimeoutError` through the
-  fixed protocol code. Public six-tool routing and independent protocol/real-LSF
-  tests remain pending; shared paths alone do not prove matching stat/environment
+  fixed protocol code. Independent codec/worker/parent round-trip controls cover
+  all six tools, seven exports and packed requests. Real LSF acceptance remains
+  pending; shared paths alone do not prove matching stat/environment
   observations on another node. No persistent worker or verified checkout reuse
   is implied.
   Expired explicit `compile_context`
