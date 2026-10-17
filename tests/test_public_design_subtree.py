@@ -133,7 +133,7 @@ async def setup(tmp_path, controls, **kwargs):
     return await prepare(log, **kwargs), source, log, maps
 
 
-async def query(handle, **kwargs):
+async def query(handle, /, **kwargs):
     return await public('get_tb_subtree', design_handle=handle, **kwargs)
 
 
