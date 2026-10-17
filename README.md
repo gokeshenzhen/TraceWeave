@@ -195,7 +195,13 @@ with `metrics_owner_side` identifying the one copy of preparation metrics for
 each unique handle. Actual backend/load facts remain per side in
 `contexts.*.backend_status`; a no-difference comparison performs no NPI query.
 Independent source planning has the same limitation as X-trace above.
-The six hierarchy/source tools still use their existing workflow and handles.
+`diff_first_divergence` accepts `{"design_handle": "dc_..."}` in `context_a`
+and `context_b` to bind subsequent driver actions. The comparison creates no
+backend binding and loads no NPI design. Source, any existing binding, waveform
+and parser identities are checked before publishing actions and the cursor;
+changed identities return an error without a cursor. Context-free waveform
+comparison, exact legacy compile contexts and legacy hierarchy handles remain
+supported.
 
 Capabilities for large designs, with selected examples of validated scale:
 

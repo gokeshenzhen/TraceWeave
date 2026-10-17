@@ -635,6 +635,14 @@ Verification
   propagates. Registry ownership and cancellation are checked on the event
   loop immediately before cursor publication. No abandoned worker publishes
   registry state, and all request pins release on every exit.
+  `diff_first_divergence` accepts the same explicit identity choice in
+  `context_a` / `context_b`. Its `divergence_diff_context` wrapper pins unique
+  prepared handles before the first await and validates source plus any
+  existing binding outside waveform locks. It never creates a binding or
+  loads a semantic backend to generate driver actions. Final source/map,
+  waveform identity and parser-generation checks precede cursor publication,
+  including when the waveforms match. Typed failures return an error without
+  cursor/actions; legacy compile tokens remain intact for exact recovery.
   Neither optional Slang cache default changes. Preparation, registration validation and later
   query costs must be measured together before claiming a speedup.
   `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:

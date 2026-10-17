@@ -7218,6 +7218,8 @@ async def list_tools():
                 "Reports actual event-page capability and read volume in reading. "
                 "When present, first_divergence_time_fs is exact; the integer-ps cursor "
                 "rounds up and may observe a later value. "
+                "Optional context_a/context_b accept independent design_handle values or exact legacy compile contexts. "
+                "They bind later driver actions without loading a backend; changed identities publish no cursor. "
                 "Reads existing waveforms only — does NOT rerun simulation."
             ),
             inputSchema={
@@ -7239,8 +7241,8 @@ async def list_tools():
                         "type": "string",
                         "description": "Full hierarchical signal path in wave_path_b.",
                     },
-                    "context_a": schemas.DivergenceContext.model_json_schema(),
-                    "context_b": schemas.DivergenceContext.model_json_schema(),
+                    "context_a": schemas.DivergenceQueryContext.model_json_schema(),
+                    "context_b": schemas.DivergenceQueryContext.model_json_schema(),
                     "start_time_ps": {
                         **_integer_or_string_schema(),
                         "description": "Start of comparison window. Default 0."
@@ -9756,50 +9758,8 @@ async def _dispatch_inner(name: str, args: dict):
         return await trace_divergence(sys.modules[__name__], args)
 
     elif name == "diff_first_divergence":
-
-        contexts = {side: (schemas.DivergenceContext.model_validate(args[f"context_{side}"]).model_dump(exclude_none=True)
-                           if args.get(f"context_{side}") is not None else None)
-                    for side in ("a", "b")}
-
-        def _work():
-            result = diff_first_divergence(
-                get_parser=_get_parser,
-                wave_path_a=args["wave_path_a"],
-                signal_a=args["signal_a"],
-                wave_path_b=args["wave_path_b"],
-                signal_b=args["signal_b"],
-                start_ps=_resolve_time(args.get("start_time_ps", 0)),
-                end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
-                cursor_store=None,
-                cursor_name=args.get("cursor_name"),
-                cursor_note=args.get("cursor_note"),
-            )
-            return result
-
-        result = await _run_in_wave_request(
-            [args["wave_path_a"], args["wave_path_b"]], _work
-        )
-        if result["diverged"]:
-            for side, ctx in contexts.items():
-                resolved, reason = (await _run_in_cancellable_thread(
-                    lambda ctx=ctx: resolve_divergence_context(ctx, _handle_store)
-                )) if ctx is not None else (None, "context_missing")
-                expression = next((r for r in result.get('expressions',[]) if r.get('side')==side),None)
-                targets = expression['dependencies'][:16] if expression else [result[f'signal_{side}']]
-                for target in targets:
-                    action = driver_action(result={**result,f'signal_{side}':target}, side=side, context=ctx,
-                                           bound=resolved, reason=reason)
-                    if expression:
-                        action['reason'] = 'inspect_expression_dependency'
-                        action['evidence']['expression_key'] = expression['key']
-                    result['next_actions'].append(action)
-            from src.verify_condition import _attach_cursor
-            _attach_cursor(result, _cursor_store, result["first_divergence_time_ps"],
-                           result["value_a"], result["value_b"], args["wave_path_a"], result['signal_a'],
-                           args["wave_path_b"], result['signal_b'], args.get("cursor_name"), args.get("cursor_note"))
-            for action in result["next_actions"]:
-                action["evidence"]["cursor_name"] = result["cursor"]["name"]
-        return schemas.DiffFirstDivergenceResult.model_validate(result)
+        from src.divergence_diff_context import diff_with_context
+        return await diff_with_context(sys.modules[__name__], args)
 
     elif name == "period":
 

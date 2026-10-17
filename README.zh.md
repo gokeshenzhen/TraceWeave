@@ -337,7 +337,11 @@ history 的上下文校验计入请求期限；目标波形为已知值并不能
 `metrics_owner_side` 指定侧记录一份准备成本。各侧实际后端和加载事实分别保留在
 `contexts.*.backend_status`；无差异比较不会查询 NPI。独立源码范围规划仍保留上述
 X-trace 的当前限制。
-六个层次/源码工具仍使用既有流程与 handle。
+`diff_first_divergence` 的 `context_a` / `context_b` 同样接受
+`{"design_handle": "dc_..."}`，用于绑定两侧后续 driver 动作。纯波形比较不创建后端绑定
+或加载 NPI；已存在的绑定与源码、波形身份在发布动作和 cursor 前再次校验。
+失效时返回明确错误，不发布 cursor。省略上下文仍可独立比较波形；旧编译上下文及
+六工具的旧 hierarchy handle 兼容入口继续保留。
 
 `parse_sim_log` 已内置标准 `UVM_ERROR` / `UVM_FATAL` 和 VCS / Xcelium 断言失败的解析，并提供通用 `ERROR` 匹配。对于项目自定义的 checker、scoreboard 或 `$display` 输出，可以在 [custom_patterns.yaml](custom_patterns.yaml) 中添加 Python 正则表达式，无需修改 Python 代码。日志不必包含 `UVM_ERROR`，甚至不必包含 `ERROR`。
 
