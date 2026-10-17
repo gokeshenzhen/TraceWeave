@@ -8190,6 +8190,12 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
             if section == "component_tree_full" and raw.get("data") is not None:
                 if raw.get("root") != context.selected_top or raw["data"].get("path") != context.selected_top:
                     raise ValueError("npi_source_result_root_mismatch")
+            if (operation == "get_tb_class_hierarchy" and arguments.get("root_class") is not None
+                    and "roots" in raw and "error" not in raw and raw["roots"]):
+                root = raw["roots"][0]
+                if (len(raw["roots"]) != 1 or arguments["root_class"] not in
+                        (root["symbol_id"], root["qualified_name"], root["name"])):
+                    raise ValueError("npi_source_result_class_root_mismatch")
             if (operation in {"lookup_tb_files", "get_tb_file_detail"}
                     or section in {"files_full", "interfaces"}) and "error" not in raw:
                 if raw.get("ownership_identity") != context.identity_sha256:
