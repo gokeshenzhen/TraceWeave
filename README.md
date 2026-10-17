@@ -375,7 +375,7 @@ controls stay explicit coverage exclusions. Missing HDL commands, filelists,
 or tops remain gaps. A C++ build log alone does not provide HDL context; there
 is no automatic unrelated-sidecar or vendor-tree recovery.
 
-Run `get_sim_paths`, then `build_tb_hierarchy` and `scan_structural_risks` in
+Run `get_sim_paths`, then `prepare_design_context` and `scan_structural_risks` in
 parallel on that same compile log before parsing/analyzing the run. Failed runs
 with waveforms require `sweep_handshakes`; zero/partial coverage does not exclude
 OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
@@ -384,6 +384,15 @@ confirming the following segment is the compiled top). Static/Source Graph
 coverage remains bounded. An existing external KDB can be declared through
 `prepare_design_context(kdb_path=...)`, including for Verilator inputs; it must
 pass the same candidate/load checks and is not assumed to match current sources.
+
+Use the returned `design_handle` for on-demand source and tracing queries.
+`get_diagnostic_snapshot(design_handle=...)` reports observed context metadata;
+it does not revalidate source/KDB identity or imply complete semantic coverage.
+Multiple contexts for the same primary log require an explicit selection.
+`build_tb_hierarchy` remains the explicit legacy full-tree option; when used,
+run it alongside the same structural scan. Expired driver actions retain their
+historical identity tokens during recovery; preparing current inputs does not
+prove a historical source association.
 
 `parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
 

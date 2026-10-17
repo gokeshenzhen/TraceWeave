@@ -285,8 +285,8 @@ _PREREQUISITE_REASONS: dict[str, str] = {
         "file paths, and FSDB runtime status."
     ),
     "build_tb_hierarchy": (
-        "build_tb_hierarchy must be called first to build the testbench "
-        "hierarchy used for source-aware analysis."
+        "This legacy handle requires an explicit build_tb_hierarchy view. "
+        "Independent design_handle queries use prepare_design_context."
     ),
 }
 
@@ -386,6 +386,17 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
         if _session_state[step] is None and not _restore_prerequisite_state_from_cache(
             step, tool_name, args
         ):
+            if step == "build_tb_hierarchy" and tool_name not in _HANDLE_TOOL_NAMES:
+                suggested = _build_suggested_call("prepare_design_context")
+                supplied = {key: args[key] for key in (
+                    "compile_log", "simulator", "supplementary_compile_logs", "top_hint") if key in args}
+                if "compile_log" in supplied:
+                    suggested["arguments"] = supplied
+                return schemas.PrerequisiteBlockResult(
+                    ok=False, error_code="missing_prerequisite", missing_step="prepare_design_context",
+                    required_before=tool_name,
+                    reason="Prepare the requested compile context, then pass its design_handle to this query. Full hierarchy is optional.",
+                    suggested_call=suggested)
             block = {
                 "ok": False,
                 "error_code": "missing_prerequisite",
@@ -401,14 +412,14 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
 def _build_suggested_call(step: str) -> dict:
     if step == "get_sim_paths":
         return {"tool": "get_sim_paths", "arguments": {}}
-    if step == "build_tb_hierarchy":
+    if step in {"build_tb_hierarchy", "prepare_design_context"}:
         sim_state = _session_state.get("get_sim_paths")
         if sim_state and sim_state.get("compile_log"):
             args: dict = {"compile_log": sim_state["compile_log"]}
             if sim_state.get("simulator"):
                 args["simulator"] = sim_state["simulator"]
-            return {"tool": "build_tb_hierarchy", "arguments": args}
-        return {"tool": "build_tb_hierarchy", "arguments": {}}
+            return {"tool": step, "arguments": args}
+        return {"tool": step, "arguments": {}}
     if step == "parse_sim_log":
         sim_result = _result_cache.get("get_sim_paths")
         if sim_result and sim_result.sim_logs:
@@ -430,9 +441,9 @@ def _build_suggested_call(step: str) -> dict:
                 args["wave_path"] = sim_result.wave_files[0].path
             if sim_result.simulator:
                 args["simulator"] = sim_result.simulator
-        hier_state = _session_state.get("build_tb_hierarchy")
-        if hier_state and hier_state.get("compile_log"):
-            args["compile_log"] = hier_state["compile_log"]
+        sim_state = _session_state.get("get_sim_paths") or _result_provenance.get("get_sim_paths") or {}
+        if sim_state.get("compile_log"):
+            args["compile_log"] = sim_state["compile_log"]
         return {"tool": "recommend_failure_debug_next_steps", "arguments": args}
     if step == "sweep_handshakes":
         args: dict = {}
@@ -1619,9 +1630,13 @@ Simulation waveform debug workflow:
      identity, supported tools and recording gaps. Missing observations and
      partial coverage never establish a clean analysis.
 
-2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
-   Both independently parse the same compile_log — call them in parallel.
-   - build_tb_hierarchy: builds testbench hierarchy for source-aware analysis.
+2. Call prepare_design_context AND scan_structural_risks in parallel on the same
+   compile_log before analyzing failures. Preparation returns design_handle;
+   use it for the six hierarchy/source tools, tracing and failure consumers.
+   It captures inputs without a full hierarchy, Slang run or KDB load. Inspect
+   source/include coverage separately from each query's semantic coverage.
+   - build_tb_hierarchy remains an explicit compatibility/full-tree option.
+     If chosen, run it in parallel with scan_structural_risks on the same log.
      Use the selected primary compile_log and simulator from step 1. In a split
      VCS flow, pass complementary logs only through supplementary_compile_logs.
      Returns a slim payload (project, stats, tree_skeleton truncated to depth 2,
@@ -1690,7 +1705,7 @@ Simulation waveform debug workflow:
 5. Call recommend_failure_debug_next_steps to get a default target and role-ranked signals.
 
 6. Call search_signals to confirm full hierarchical signal paths when needed.
-   - Derive keywords from build_tb_hierarchy output, error messages, recommend_failure_debug_next_steps, or RTL source.
+   - Derive keywords from on-demand hierarchy/source results, error messages, recommend_failure_debug_next_steps, or RTL source.
    - When reading RTL source, verify the path is in the compile set first —
      call get_tb_file_detail(path=...) or lookup_tb_files(...) with the
      hierarchy_handle returned in step 2. The compile_log is the single
@@ -6606,17 +6621,20 @@ async def list_tools():
             name="get_diagnostic_snapshot",
             description=(
                 "Cold-start accelerator that aggregates cached tool results into a single summary view. "
-                "It never triggers sub-steps and only reads cache. "
+                "It never runs analysis sub-steps; an optional legacy Xcelium KDB hint reads compile metadata. "
                 "Returns availability status, compact summaries, and suggested calls for missing steps. "
                 "The result cache is process-global and survives across cases, so at the start of a new "
                 "session pass your target case (verif_root and/or case_dir): the snapshot validates the "
                 "cache against it and reports a clean cold start if the cache belongs to a different case. "
+                "Prepared design_context summaries are observed metadata, not revalidated source/KDB facts. "
+                "Pass design_handle to select one explicitly; multiple matching contexts remain ambiguous. "
                 "If you pass no target, a cached sim_paths is returned with summary.carried_over=true to "
                 "signal it may belong to a previous case — confirm it or re-run get_sim_paths."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "design_handle": {"type": "string", "description": "Explicit prepared context for this cache-only summary."},
                     "verif_root": {
                         "type": "string",
                         "description": (
@@ -8627,6 +8645,8 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
 async def _dispatch(name: str, args: dict):
     if any(key in args for key in ("_prepared_design", "_design_query_started")):
         return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
+    if name == "get_diagnostic_snapshot":
+        return await _dispatch_inner(name, args)
     if "design_handle" in args:
         if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source",
                         "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
@@ -8678,12 +8698,12 @@ async def _dispatch_inner(name: str, args: dict):
         bound, reason, hierarchy_recovery = await _resolve_explicit_driver_context(raw_context)
         if bound is None:
             return schemas.PrerequisiteBlockResult.model_validate({
-                "ok": False, "error_code": reason, "missing_step": "build_tb_hierarchy",
-                "required_before": name, "reason": reason,
+                "ok": False, "error_code": reason, "missing_step": "prepare_design_context",
+                "required_before": name, "reason": reason + "; historical identity was not recovered. A new preparation describes current inputs only; retain the old action tokens.",
                 "hierarchy_recovery": hierarchy_recovery,
-                "suggested_call": {"tool": "build_tb_hierarchy", "arguments": {
+                "suggested_call": {"tool": "prepare_design_context", "arguments": {
                     k: v for k, v in args["compile_context"].items()
-                    if k in {"compile_log", "simulator", "supplementary_compile_logs"}}},
+                    if k in {"compile_log", "simulator", "supplementary_compile_logs", "top_hint"}}},
             })
         if not _same_realpath(args["compile_log"], bound.context["compile_log"]):
             raise ValueError("compile_context does not match compile_log")
@@ -10228,7 +10248,6 @@ def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict
 
 
 def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
-    hier_state = _session_state.get("build_tb_hierarchy") or {}
     sim_state = _session_state.get("get_sim_paths") or {}
     return {
         "log_path": args.get("log_path"),
@@ -10236,7 +10255,6 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
         "wave_path": args.get("wave_path"),
         "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
         "compile_log": args.get("compile_log")
-        or hier_state.get("compile_log")
         or sim_state.get("compile_log"),
     }
 
@@ -10549,6 +10567,8 @@ def _build_result_provenance(
                 log_size = stat_result.st_size
             except OSError:
                 pass
+        prepared = args.get("_prepared_design")
+        correlation = getattr(result, "source_correlation", None) or {}
         return {
             "log_path": log_path,
             "wave_path": args.get("wave_path"),
@@ -10556,6 +10576,10 @@ def _build_result_provenance(
             "compile_log": args.get("compile_log"),
             "log_mtime": log_mtime,
             "log_size": log_size,
+            "design_handle": args.get("design_handle"),
+            "context_identity_sha256": prepared.context.identity_sha256 if prepared is not None else None,
+            "facts_origin": correlation.get("facts_origin"),
+            "source_coverage_status": correlation.get("coverage_status"),
         }
     return None
 
@@ -10616,7 +10640,6 @@ def _can_suggest_recommend(anchor: dict | None) -> bool:
         and sim_result
         and sim_result.sim_logs
         and sim_result.wave_files
-        and _session_state.get("build_tb_hierarchy") is not None
     )
 
 
@@ -10693,6 +10716,8 @@ def _matches_anchor(
         )
     if tool_name == "recommend_failure_debug_next_steps":
         return (
+            _cached_design_provenance_observed(provenance)
+            and
             provenance.get("simulator") == anchor.get("simulator")
             and provenance.get("compile_log") == anchor.get("compile_log")
             and _path_matches_session(provenance.get("log_path"), sim_logs, case_dir)
@@ -10700,6 +10725,36 @@ def _matches_anchor(
             and _file_unchanged(provenance, "log_path", "log_mtime", "log_size")
         )
     return False
+
+
+def _cached_design_provenance_observed(provenance):
+    """Check registry association only; diagnostics do not rehash sources."""
+    handle = provenance.get("design_handle")
+    if handle is None:
+        return True
+    return any(row["design_handle"] == handle and row["context_identity_sha256"] ==
+               provenance.get("context_identity_sha256") for row in _design_context_store.summaries())
+
+
+def _diagnostic_design_context(args, anchor, *, case_mismatch=False):
+    """Select observed metadata explicitly or by one unambiguous case match."""
+    explicit = args.get("design_handle")
+    rows = [] if case_mismatch else _design_context_store.summaries()
+    if explicit is not None:
+        rows = [row for row in rows if row["design_handle"] == explicit]
+    elif anchor is None or not anchor.get("compile_log"):
+        rows = []
+    if anchor is not None:
+        rows = [row for row in rows if _same_realpath(row["compile_log"], anchor.get("compile_log"))
+                and anchor.get("simulator") in (None, "auto", row["simulator"])]
+    if len(rows) == 1:
+        row = rows[0]
+        return schemas.DiagnosticSnapshotSection(available=True, summary=row), row
+    reason = ("case_mismatch" if case_mismatch else "ambiguous" if rows else
+              "handle_unavailable_or_mismatched" if explicit is not None else "not_prepared")
+    return schemas.DiagnosticSnapshotSection(available=False, summary={
+        "status": reason, "candidates": rows, "identity_validation": "not_revalidated",
+        "query_validation_required": True}), None
 
 
 def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
@@ -10729,6 +10784,10 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     if case_mismatch:
         sim_result = None
         anchor = None
+    sections["design_context"], selected_design = _diagnostic_design_context(
+        args, anchor, case_mismatch=case_mismatch)
+    if selected_design is not None:
+        quick_ref["top_module"] = selected_design["selected_top"]
 
     if sim_result is not None:
         summary = _extract_sim_paths_summary(sim_result)
@@ -10776,6 +10835,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         AUTO_KDB_BUILD
         and sim_result is not None
         and getattr(sim_result, "simulator", None) == "xcelium"
+        and selected_design is None
     ):
         cl_entries = getattr(sim_result, "compile_logs", []) or []
         compile_log_path = cl_entries[0].path if cl_entries else None
@@ -10807,28 +10867,36 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             anchor,
             _result_provenance.get("build_tb_hierarchy"),
         )
+        if args.get("design_handle") is not None and selected_design is None:
+            is_stale = True
+        if selected_design is not None:
+            legacy = _result_provenance.get("build_tb_hierarchy") or {}
+            legacy_logs = legacy.get("supplementary_compile_logs") or []
+            current_logs = selected_design["supplementary_compile_logs"]
+            is_stale |= (hier_result.project.get("top_module") != selected_design["selected_top"]
+                or len(legacy_logs) != len(current_logs)
+                or any(not _same_realpath(a, b) for a, b in zip(legacy_logs, current_logs)))
         sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
             available=True,
             stale=is_stale,
             summary=_extract_hierarchy_summary(hier_result),
         )
-        if not is_stale and anchor is not None:
+        if not is_stale and anchor is not None and selected_design is None:
             quick_ref["top_module"] = hier_result.project.get("top_module")
     else:
         sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
             available=False,
-            suggested_call=_build_suggested_call("build_tb_hierarchy")
-            if anchor is not None
-            else None,
+            summary={"view": "legacy_full_hierarchy", "optional": True},
         )
-    if anchor is not None and (hier_result is None or sections["hierarchy"].stale):
-        suggested = _build_suggested_call("build_tb_hierarchy")
-        sections["hierarchy"].suggested_call = suggested
+    if (anchor is not None and selected_design is None
+            and (hier_result is None or sections["hierarchy"].stale)):
+        suggested = _build_suggested_call("prepare_design_context")
+        sections["design_context"].suggested_call = suggested
         missing_steps.append(
             {
-                "tool": "build_tb_hierarchy",
+                "tool": "prepare_design_context",
                 "arguments": suggested["arguments"],
-                "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
+                "reason": "Select an explicit matching design_handle or prepare a current compile context for on-demand source queries.",
             }
         )
 
@@ -10867,11 +10935,6 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         )
 
     scan_result = None if case_mismatch else _result_cache.get("scan_structural_risks")
-    compatible_hierarchy = bool(
-        anchor is not None
-        and hier_result is not None
-        and not sections["hierarchy"].stale
-    )
     compatible_scan_result = (
         _get_compatible_scan_cache(anchor.get("compile_log"), anchor.get("simulator"))
         if anchor is not None
@@ -10890,7 +10953,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         )
     else:
         sections["structural_scan"] = None
-    if anchor is not None and compatible_hierarchy and compatible_scan_result is None:
+    if anchor is not None and anchor.get("compile_log") and compatible_scan_result is None:
         has_failure_context = bool(
             compatible_log_result is not None
             and compatible_log_result.runtime_total_errors > 0
@@ -10987,15 +11050,26 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         else _result_cache.get("recommend_failure_debug_next_steps")
     )
     if rec_result is not None:
-        is_stale = anchor is not None and not _matches_anchor(
+        rec_provenance = _result_provenance.get("recommend_failure_debug_next_steps") or {}
+        is_stale = (anchor is not None and not _matches_anchor(
             "recommend_failure_debug_next_steps",
             anchor,
-            _result_provenance.get("recommend_failure_debug_next_steps"),
-        )
+            rec_provenance,
+        )) or not _cached_design_provenance_observed(rec_provenance)
+        if args.get("design_handle") is not None or (anchor is not None and rec_provenance.get("design_handle") is not None):
+            is_stale |= (selected_design is None or rec_provenance.get("design_handle") !=
+                         selected_design["design_handle"] or rec_provenance.get("context_identity_sha256") !=
+                         selected_design["context_identity_sha256"])
+        rec_summary = _extract_recommend_summary(rec_result)
+        if rec_provenance.get("design_handle") is not None:
+            rec_summary = {**(rec_summary or {}), "design_handle": rec_provenance["design_handle"],
+                "context_identity_sha256": rec_provenance.get("context_identity_sha256"),
+                "identity_validation": "not_revalidated", "facts_origin": rec_provenance.get("facts_origin"),
+                "source_coverage_status": rec_provenance.get("source_coverage_status")}
         sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
             available=True,
             stale=is_stale,
-            summary=_extract_recommend_summary(rec_result),
+            summary=rec_summary,
         )
         if not is_stale and anchor is not None:
             quick_ref["primary_failure_target"] = rec_result.primary_failure_target
@@ -11019,6 +11093,8 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             if _can_suggest_recommend(anchor)
             else None
         )
+        if suggested is not None and selected_design is not None:
+            suggested["arguments"]["design_handle"] = selected_design["design_handle"]
         sections["recommended_next"].suggested_call = suggested
         missing_steps.append(
             {
@@ -11044,6 +11120,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         )
         workflow_order = {
             "get_sim_paths": 0,
+            "prepare_design_context": 1,
             "build_tb_hierarchy": 1,
             "scan_structural_risks": 2,
             "parse_sim_log": 3,
@@ -11066,6 +11143,7 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     return schemas.DiagnosticSnapshot(
         sim_paths=sections["sim_paths"],
         hierarchy=sections["hierarchy"],
+        design_context=sections["design_context"],
         log_analysis=sections["log_analysis"],
         structural_scan=sections["structural_scan"],
         protocol_health=sections["protocol_health"],

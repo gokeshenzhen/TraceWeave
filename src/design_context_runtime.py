@@ -452,6 +452,27 @@ class DesignContextStore:
             return next((handle for handle, entry in self._entries.items()
                          if entry.recovery_key == key), None)
 
+    def summaries(self) -> list[dict]:
+        """Copy bounded observed metadata without I/O, pins or LRU changes.
+
+        A diagnostic summary is not a current-source or loaded-KDB proof.
+        Only an actual query validates the retained observations again.
+        """
+        with self._lock:
+            return [{"design_handle": handle,
+                     "context_identity_sha256": entry.context.identity_sha256,
+                     "compile_log": entry.context.ordered_compile_logs[0],
+                     "supplementary_compile_logs": list(entry.context.ordered_compile_logs[1:]),
+                     "simulator": entry.context.simulator,
+                     "selected_top": entry.context.selected_top,
+                     "backend_preference": entry.context.backend_preference,
+                     "binding_observed": entry.binding is not None,
+                     "source_snapshot_status": "complete" if entry.context.snapshot.complete else "partial",
+                     "coverage_gaps": list(entry.context.gaps),
+                     "identity_validation": "not_revalidated",
+                     "query_validation_required": True}
+                    for handle, entry in self._entries.items()]
+
     def register(self, context: DesignContext, *, timeout_sec: float = 30.0) -> str:
         return self.publish(self.prepare_registration(context, timeout_sec=timeout_sec))
 

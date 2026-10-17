@@ -482,11 +482,11 @@ def _build_discovery_result(
     target_log = elaborate_log or (compile_logs[0] if compile_logs else None)
     if target_log:
         result["next_required_step"] = {
-            "tool": "build_tb_hierarchy",
+            "tool": "prepare_design_context",
             "compile_log": target_log["path"],
             "simulator": simulator or "auto",
-            "reason": "Must be called before reading any RTL/TB source files. "
-                      "Returns a slim payload with a hierarchy_handle; "
+            "reason": "Prepare an independent design_handle and run scan_structural_risks in parallel. "
+                      "Query hierarchy and source facts on demand; "
                       "verify any file path via lookup_tb_files / get_tb_file_detail "
                       "before reading source.",
         }

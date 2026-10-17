@@ -48,8 +48,9 @@ server first looks for the exact current hierarchy and may perform one bounded
 recovery. Read `hierarchy_recovery`: historical source tokens are checked again,
 and absence of such tokens means current-source context only. Changed or
 ambiguous identities, timeouts and source budgets return a prerequisite call.
-Recovery does not run or mark `scan_structural_risks` complete; the normal
-hierarchy/scan workflow still applies. Do not substitute the latest session's
+Recovery does not run or mark `scan_structural_risks` complete; the independent
+preparation/scan workflow still applies. A full hierarchy is an explicit option.
+Do not substitute the latest session's
 case or drop identity tokens to make a stale action appear valid.
 
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
@@ -75,21 +76,28 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │  - If hints contain warnings (empty log, missing wave) → inform user early
 │  - For a complete single-log flow, pick compile_log with phase="elaborate"
 │  - For split VCS source-compile/elaboration logs, use the source-compile log
-│    as primary and pass the other ordered logs to build_tb_hierarchy via
+│    as primary and pass the other ordered logs to prepare_design_context via
 │    supplementary_compile_logs; scan_structural_risks uses that same primary
 │  - Store simulator for all subsequent tool calls
 │  - If fsdb_runtime.enabled is false → ignore `.fsdb` when `.vcd` is available
 │  - Only proceed to step 3 when `sim_logs` is non-empty
 │
 ▼
-Step 2 (parallel): build_tb_hierarchy(compile_log, simulator,
+Step 2 (parallel): prepare_design_context(compile_log, simulator,
                                       supplementary_compile_logs?)
                    + scan_structural_risks(compile_log, simulator)
 │  Run both independently on the SAME primary compile log before analyzing
 │  failures. Do not wait for one before starting the other. In a split VCS
-│  flow only build_tb_hierarchy receives the supplementary logs.
+│  flow only context preparation receives the supplementary logs.
 │
-├─ build_tb_hierarchy builds project-level understanding.
+├─ prepare_design_context captures inputs and returns design_handle.
+│  It does not build a full tree, run Slang or load KDB. Use design_handle for
+│  the six hierarchy/source tools and tracing/failure consumers. Inspect each
+│  query's actual backend, partial coverage, limits and identity receipt.
+│  Before reading source, verify compile ownership through lookup_tb_files or
+│  get_tb_file_detail. Query an exact instance or shallow subtree first.
+│
+│  Explicit compatibility option: build_tb_hierarchy, alongside the same scan.
 │  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
 │    - project: top_module, source_root, simulator
 │    - stats: file_count, module_count, instance_count, tree_depth,
@@ -121,7 +129,7 @@ Step 2 (parallel): build_tb_hierarchy(compile_log, simulator,
 │  locations remain compile-log-derived in LSF mode.
 │
 └─ scan_structural_risks independently scans the compiled RTL/TB source set.
-   Its CPU-bound body runs in a lock-free cancellable worker, so the hierarchy
+   Its CPU-bound body runs in a lock-free cancellable worker, so preparation
    worker and lightweight MCP calls remain schedulable while this scan is in
    flight.
    Returns source-anchored structural risks (for example overlap, multi-drive,
@@ -424,7 +432,7 @@ two-hypothesis discipline above still applies.
 ```text
 get_sim_paths
   ├─ provides compile_log / simulator / log_path / wave_path to downstream tools
-  ├─ build_tb_hierarchy ────────┐
+  ├─ prepare_design_context ───┐
   └─ scan_structural_risks ─────┤  (parallel, same compile_log)
                                 └─ parse_sim_log
                                      └─ sweep_handshakes
@@ -442,8 +450,8 @@ get_sim_paths
 
 | Parameter | Source | Consumed by |
 |-----------|--------|-------------|
-| `compile_log` | `get_sim_paths → compile_logs[phase="elaborate"].path` | `build_tb_hierarchy`, `scan_structural_risks`, connectivity/X-trace tools, `build_kdb` |
-| `simulator` | `get_sim_paths → simulator` | `build_tb_hierarchy`, `parse_sim_log`, `analyze_failures` |
+| `compile_log` | `get_sim_paths → compile_logs[phase="elaborate"].path` | `prepare_design_context`, explicit `build_tb_hierarchy`, `scan_structural_risks`, connectivity/X-trace tools, `build_kdb` |
+| `simulator` | `get_sim_paths → simulator` | `prepare_design_context`, `build_tb_hierarchy`, `parse_sim_log`, `analyze_failures` |
 | `log_path` (sim) | `get_sim_paths → sim_logs[0].path` | `parse_sim_log`, `get_error_context`, `analyze_failures` |
 | `wave_path` | `get_sim_paths → chosen wave file (.vcd preferred when fsdb_runtime.enabled=false)` | `sweep_handshakes`, `search_signals`, `get_signal_*`, `analyze_failures` |
 | `failure_event` | `parse_sim_log → failure_events[]` | `analyze_failure_event` |

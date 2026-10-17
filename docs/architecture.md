@@ -2881,6 +2881,19 @@ Cycle results expose `transition_data_truncated` and affected signals; structure
 cycle queries reject an incomplete full-clock read. Window inspections can
 instead return partial evidence over a narrower interval.
 
+Discovery and missing-context trace gates suggest `prepare_design_context`.
+The diagnostic snapshot has separate prepared-context and legacy-hierarchy
+sections. It copies bounded registry metadata without source hashing, native
+loading, pins or LRU updates; all context identities are explicitly unvalidated
+observations until an actual query checks them. Multiple matching top/log/policy
+contexts remain ambiguous. Recommendations retain their context handle/identity,
+origin and partial coverage in cache provenance; expired or differently selected
+contexts cannot be presented as current recommendations. Structural scans are
+suggested independently of tree availability, and source-only policy suppresses
+the optional Xcelium KDB-build hint. Legacy divergence actions keep historical
+tokens and use exact recovery; changed/ambiguous identities require context
+resolution instead of dropping tokens or demanding a full tree.
+
 `resolve_packed_fields` accepts `design_handle`; a compile-log-only call prepares
 an independent context within the same total deadline. Healthy NPI queries use
 the shared exclusive Language owner, actual Typespec membership/ranges and

@@ -1126,6 +1126,7 @@ class DiagnosticSnapshotSection(SchemaModel):
 class DiagnosticSnapshot(SchemaModel):
     sim_paths: DiagnosticSnapshotSection
     hierarchy: DiagnosticSnapshotSection
+    design_context: DiagnosticSnapshotSection | None = None
     log_analysis: DiagnosticSnapshotSection
     structural_scan: DiagnosticSnapshotSection | None = None
     # Whole-design protocol health (sweep_handshakes). Same role as

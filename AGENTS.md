@@ -49,13 +49,13 @@ action.
 
 ## TraceWeave Usage
 
-When the task involves simulation logs or waveforms (VCS/Xcelium logs, FSDB/VCD), the default toolchain is:
+For simulation logs and waveforms, the default toolchain is:
 
-`get_sim_paths -> build_tb_hierarchy + scan_structural_risks -> parse_sim_log -> sweep_handshakes -> recommend_failure_debug_next_steps`
+`get_sim_paths -> prepare_design_context + scan_structural_risks -> parse_sim_log -> sweep_handshakes -> recommend_failure_debug_next_steps`
 
 Rules:
 
-- `build_tb_hierarchy` and `scan_structural_risks` must run in parallel on the same `compile_log`
+- Run preparation and scan in parallel on the same `compile_log`; use `design_handle` for queries. Explicit `build_tb_hierarchy` remains supported and must also run alongside that scan.
 - `scan_structural_risks` should not be skipped by default
 - It may only be skipped if the user explicitly asks to skip it
 - `scan_structural_risks.analysis_mode` is a per-call argument, not an environment setting. Omit it for `auto`: run/reuse lexical rules and reuse applicable semantic results or scoped query IR without a cold frontend build. `fast` runs/reuses lexical rules only. Use `deep` when semantic evidence is needed; it may reuse an exact result or launch the budgeted, license-free Slang worker. `semantic.status="not_run"` does not mean the lexical scan was skipped or the semantic checks passed.

@@ -252,13 +252,19 @@ Verilator 发现使用有界日志头尾采样，支持延后的 cocotb banner�
 覆盖缺口。缺少 HDL 命令、filelist 或 top 时不猜测；纯 C++ 构建日志不能代替 HDL
 上下文，不自动恢复无关侧车或遍历 vendor 全树。
 
-先 `get_sim_paths`，再对同一 compile log 并行执行 `build_tb_hierarchy` 与
+先 `get_sim_paths`，再对同一 compile log 并行执行 `prepare_design_context` 与
 `scan_structural_risks`，然后解析/分析运行日志。失败有波形时执行 `sweep_handshakes`；
 zero/partial coverage 不能排除 OBI 故障。源码查询使用实际 HDL top 路径；波形中的
 Verilator 合成 `TOP.` 前缀不是 HDL instance，只在确认后续段等于编译 top 后移除。
 Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上下文可通过
 `prepare_design_context(kdb_path=...)` 声明已有外部 KDB；候选与加载检查仍需通过，
 不能据此假定它与当前源码一致。
+
+按需源码和追踪查询使用返回的 `design_handle`。
+`get_diagnostic_snapshot(design_handle=...)` 只展示已登记上下文，不重新校验源码/KDB
+身份，也不表示语义覆盖完整。同一主日志有多个上下文时必须显式选择。
+`build_tb_hierarchy` 保留为显式完整树兼容入口，使用时仍与相同日志的结构扫描并行。
+过期 driver action 恢复时保留历史身份 token；重新准备当前输入不等于恢复了历史源码关联。
 
 `prepare_design_context(compile_log=..., backend_preference="source")` 可在文件数、
 字节数和时间预算内独立捕获编译输入与源码身份。返回的 `design_handle` 在进程重启或
