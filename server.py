@@ -8292,20 +8292,23 @@ async def _failure_source_context(args, event):
     queries.append(("get_tb_subtree", {"root": context.selected_top, "depth": 1,
                                       "max_nodes": 128, "count_mode": "bounded"}))
     candidates, receipts, gaps, status = {}, [], {"failure_candidate_scope_bounded"}, None
+    attempts = []
     native_observed = False
     for operation, arguments in queries:
         result = await _query_prepared_hierarchy(entry, operation, arguments, budget)
         status = result["backend_status"]
         receipts.append({"operation": operation, **{key: result[key] for key in (
             "facts_origin", "artifact_identity", "coverage_status", "coverage_gaps", "analysis_limits",
-            "query_metrics", "kdb_binding", "error") if key in result}})
+            "query_metrics", "kdb_binding", "backend_status", "error") if key in result}})
+        attempts.extend(status.get("attempted_backends", []))
+        status = {**status, "attempted_backends": list(attempts)}
         gaps.update(result["coverage_gaps"])
         gaps.update(result["analysis_limits"])
         if result["facts_origin"] != "verdi_npi":
             if native_observed:
                 gaps.add("failure_candidate_query_unavailable")
                 # Keep a single native artifact's candidates and its receipt.
-                status = previous_status
+                status = {**previous_status, "attempted_backends": list(attempts)}
                 break
             if result["analysis_limits"]:
                 # An exhausted native budget is not provider unavailability.
