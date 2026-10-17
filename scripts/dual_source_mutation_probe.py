@@ -202,7 +202,9 @@ async def source_mutation_chain(args, report, cases, inventory, server, counts,
             validate_step(raw['result'], case, str(paths[label]), mask, require)
             node = result['nodes'][0][label]
             structure, observation = node['structure'], node['observation']
-            require(node['bits'] == list(range(7, -1, -1)) and node['value'] == value
+            # The private walk retains tuple selections; public JSON uses lists.
+            # Compare the same ordered coordinates without changing the oracle.
+            require(tuple(node['bits']) == tuple(range(7, -1, -1)) and node['value'] == value
                     and structure['backend'] == 'verdi_npi' and structure['complete'] is True
                     and not structure['gaps'] and structure['boundary'] == 'combinational', 'structure_oracle')
             require(observation['value'] == value and observation['complete'] is True
