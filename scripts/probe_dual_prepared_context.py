@@ -85,7 +85,7 @@ async def run(args, report):
     counts, denied, selected, systems, loads = Counter(), Counter(), {}, {}, []
     baseline_files = {}
     for label, row in inventory.items():
-        for kind in ('compile_log', 'source', 'wave'):
+        for kind in ('compile_log', 'source', 'wave', *(['sim_log'] if 'sim_log' in row else [])):
             p = Path(row[kind]['path'])
             digest = hashlib.sha256(p.read_bytes()).hexdigest()
             require(digest == row[kind]['sha256'], 'inventory_file_changed_' + label + '_' + kind)
@@ -154,6 +154,7 @@ async def run(args, report):
             reject('semantic_frontend')
 
     runtime_server = None
+    patches = []
     sys.path.insert(0, str(repo))
     sys.addaudithook(audit)
     sys.setprofile(profile)
@@ -184,7 +185,7 @@ async def run(args, report):
                         if _name == 'load_design':
                             loads.append(dict(phase=phase, arguments=a, kwargs=kw))
                             argv = a[0]
-                            if args.mode == 'trace' and phase.startswith('trace_'):
+                            if args.mode == 'source-mutation' or (args.mode == 'trace' and phase.startswith('trace_')):
                                 labels = [label for label, case in cases.items()
                                           if case['top_hint'] == argv[argv.index('-top') + 1]]
                                 require(len(labels) == 1, 'unknown_trace_load_top')
@@ -197,12 +198,14 @@ async def run(args, report):
                                     == Path(cases[label]['kdb_path']).resolve().parent,
                                 'native_load_crossed_design')
                         return _fn(*a, **kw)
+                    patches.append((sdk, name, original))
                     setattr(sdk, name, counted)
                 from pynpi import lang
                 original_release = lang.release_all_handles
                 def released(*a, _fn=original_release, **kw):
                     counts['lang_release_all_handles'] += 1
                     return _fn(*a, **kw)
+                patches.append((lang, 'release_all_handles', original_release))
                 lang.release_all_handles = released
             return modules
 
@@ -212,8 +215,10 @@ async def run(args, report):
                 selected[entry.context.identity_sha256] = result[0]
             return result
 
+        patches.extend(((npi, '_import_pynpi', original_import),
+                        (server, '_select_prepared_backend', original_select)))
         npi._import_pynpi, server._select_prepared_backend = imported, select
-        if args.mode == 'trace':
+        if args.mode in {'trace', 'source-mutation'}:
             original_step = npi.VerdiNpiBackend.get_dynamic_step
 
             def observed_step(backend, *a, **kw):
@@ -231,6 +236,7 @@ async def run(args, report):
                     loaded_top=backend._loaded_top, loaded_kdb=backend._loaded_kdb))
                 return result
 
+            patches.append((npi.VerdiNpiBackend, 'get_dynamic_step', original_step))
             npi.VerdiNpiBackend.get_dynamic_step = observed_step
         handles, identities = {}, {}
 
@@ -252,6 +258,16 @@ async def run(args, report):
             blocks = await server.call_tool(name, arguments)
             require(len(blocks) == 1 and blocks[0].type == 'text', 'unexpected_public_envelope')
             return json.loads(blocks[0].text)
+
+        if args.mode == 'source-mutation':
+            from dual_source_mutation_probe import source_mutation_chain
+            await source_mutation_chain(args, report, cases, inventory, server, counts,
+                                        measured, public, require, baseline_files)
+            require(all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
+                        for p, digest in baseline_files.items()), 'final_actual_file_changed')
+            report['final_actual_file_count'] = len(baseline_files)
+            report['status'] = 'source_mutation_recovery_verified'
+            return
 
         for label, case in cases.items():
             prepared = await measured('prepare_' + label, lambda case=case: public(
@@ -316,7 +332,7 @@ async def run(args, report):
         report['product_completion_counts'] = dict(counts)
         phase = 'diagnostic_cleanup'
         cleanup_started = sample()
-        if runtime_server is not None and args.mode in {'chain', 'trace'}:
+        if runtime_server is not None and args.mode in {'chain', 'trace', 'source-mutation'}:
             for case in cases.values():
                 path = case['wave_path']
                 cached = runtime_server._parser_cache.get(path)
@@ -345,6 +361,9 @@ async def run(args, report):
         report['counts_note'] = 'SDK init/load/end are not license checkout/release counts; end is diagnostic only.'
         report['denied'] = dict(denied)
         report['final_head'] = head_at(repo)
+        for owner, name, original in reversed(patches):
+            setattr(owner, name, original)
+        report['native_observers_restored'] = True
         sys.setprofile(None)
         threading.setprofile(None)
         require(not report.get('cleanup_errors'), 'diagnostic_cleanup_failed')
@@ -557,9 +576,14 @@ def main():
     parser.add_argument('--mcp-evidence', required=True)
     parser.add_argument('--inventory', required=True,
                         help='Reviewed private JSON with cases A/B, file paths and KDB identities')
-    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace'), default='boundary')
+    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation'), default='boundary')
     parser.add_argument('--boundary-evidence', help='Reviewed real boundary JSON; required for chain mode')
+    parser.add_argument('--mutation-side', choices=('a', 'b'))
+    parser.add_argument('--mutation-root', help='Explicitly authorized isolated fixture root; never sealed inputs')
+    parser.add_argument('--mutation-evidence-dir', help='New private directory for durable recovery journal and raw responses')
     args = parser.parse_args()
+    if args.mode == 'source-mutation' and not all((args.mutation_side, args.mutation_root, args.mutation_evidence_dir)):
+        parser.error('source-mutation requires side, root and evidence directory')
     report = dict(status='failed', scope='bounded real dual identity or combinational trace; no LSF/license release',
                   mode=args.mode,
                   expected_head=args.expected_head, python=sys.version,
