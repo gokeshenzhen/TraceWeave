@@ -22,7 +22,7 @@ import config
 import server
 from src import connectivity_backend, divergence_context, divergence_routing, x_history
 from src.compile_input_capture import CompileInputCapture
-from tests.test_public_design_instance import anyio_backend, isolate, forbidden, prepare, public
+from tests.test_public_design_instance import anyio_backend, isolate, forbidden, prepare, public as _public
 from tests.test_public_design_files import project
 from tests.test_public_design_classes_exports import Controls, Provider, flatten, METADATA, SEMANTIC
 from tests.test_design_context_x_server import _step
@@ -30,6 +30,14 @@ from tests.test_design_context_x_server import _step
 
 ORIGINAL_GET_PARSER = server._get_parser
 VECTORS = {'d', 'q', 'y', 'packet'}
+
+
+async def public(name, **arguments):
+    # Driver defaults to the compact evidence envelope. This sequence checks
+    # the full contract; presentation equivalence has its own regression.
+    if name == 'explain_signal_driver':
+        arguments.setdefault('output_format', 'full')
+    return await _public(name, **arguments)
 
 
 def wave(path, label):
