@@ -74,6 +74,12 @@ def costs(start):
 
 
 class Guards:
+    profile_counters = frozenset({
+        'parse_compile_log', 'prepare_design_context', 'probe_verdi_backend',
+        'prepare_backend_binding', 'capture_kdb_anchor', 'select_backend',
+        'query_source', 'lookup_scope', 'open_children',
+    })
+
     def __init__(self, repo, report_path):
         self.repo, self.report_path, self.phase = str(repo), str(report_path), 'load_server'
         # fdopen of the protocol's duplicated stdout does not open a user file.
@@ -179,8 +185,9 @@ def server_process(args):
     # Module globals are cleared during interpreter teardown. Keep profiling
     # through the observed sequence, then stop before that teardown begins.
     atexit.register(stop_profiling)
-    sys.setprofile(guard.profile)
-    threading.setprofile(guard.profile)
+    if not args.timing_only:
+        sys.setprofile(guard.profile)
+        threading.setprofile(guard.profile)
     started = sample()
     import server
     from mcp import types
@@ -314,9 +321,12 @@ def server_process(args):
             report['phases'][guard.phase] = costs(started)
             require(report['final_context_current'] and report['final_anchor_current'], 'final_identity_changed')
         prepare_counts = report['phases']['prepare']['api_counts']
-        require(all(prepare_counts[k] == 0 for k in ('init', 'load_design', 'probe_verdi_backend', 'select_backend')), 'prepare_did_native_work')
-        require(guard.calls['init'] > 0 and guard.calls['load_design'] > 0 and guard.calls['query_source'] == 2, 'native_calls_missing')
-        require(guard.calls['open_children'] == 0, 'exact_path_walked_siblings')
+        require(all(prepare_counts[k] == 0 for k in ('init', 'load_design')), 'prepare_did_native_work')
+        require(guard.calls['init'] > 0 and guard.calls['load_design'] > 0, 'native_calls_missing')
+        if not args.timing_only:
+            require(all(prepare_counts[k] == 0 for k in ('probe_verdi_backend', 'select_backend')), 'prepare_did_binding_work')
+            require(guard.calls['query_source'] == 2, 'native_queries_missing')
+            require(guard.calls['open_children'] == 0, 'exact_path_walked_siblings')
         report['status'] = 'ok'
     except BaseException as exc:
         report['failure'] = {'type': type(exc).__name__, 'message': str(exc)}
@@ -349,6 +359,18 @@ def server_process(args):
             report['status'] = 'failed'
         report['api_counts'], report['guard_counts'] = dict(guard.calls), dict(guard.denied)
         report['all_guard_counts_zero'] = not any(guard.denied.values())
+        report['call_profiler_enabled'] = not args.timing_only
+        if args.timing_only:
+            # Disabled observers are unknown, never measured zeros. Audit hooks
+            # and transparent SDK wrappers remain active in this timing mode.
+            report['guard_counts'] = {key: (guard.denied[key] if key in {
+                'external_process', 'python_write'} else None) for key in guard.denied}
+            report['all_guard_counts_zero'] = None
+            for counts in [report['api_counts'], report.get('product_stdio_close', {}).get('api_counts', {}),
+                           *(phase.get('api_counts', {}) for phase in report['phases'].values())]:
+                for key in guard.profile_counters:
+                    if key in counts:
+                        counts[key] = None
         report['final_head'] = head_at(repo)
         if report['final_head'] != args.expected_head:
             report['status'] = 'failed'
@@ -363,10 +385,11 @@ async def client(args):
     repo = Path(args.repo).resolve()
     require(head_at(repo) == args.expected_head, 'unexpected_head')
     report = {'probe': 'p3_cc31_real_stdio_instance_v1', 'status': 'failed', 'head': args.expected_head,
+              'mode': 'timing_without_call_profiler' if args.timing_only else 'guarded',
               'client_phases': {}, 'calls': [], 'environment': {k: os.environ.get(k) for k in ENV},
               'operations': ['MCP initialize/list_tools', 'prepare_design_context', 'exact instance',
                              'repeat exact instance', 'stdio EOF', 'independent SDK oracle/final identity/end'],
-              'scope': {'timing': 'instrumented single sample; not acceleration/OS cold or checkout evidence',
+              'scope': {'timing': 'SDK wrappers/audit hooks remain in both modes; no acceleration/OS cold or checkout claim',
                         'rss': 'Linux per-process high-water KiB, not memory allocation deltas',
                         'native_io': 'Python writes blocked in server except private report; SDK-native lock I/O not intercepted',
                         'not_tested': ['other five tools/consumers', 'source fallback', 'LSF', 'waveforms',
@@ -387,6 +410,8 @@ async def client(args):
                   '--project', str(Path(args.project).resolve()),
                   '--expected-head', args.expected_head, '--server-report', str(server_report)],
             cwd=str(repo), env=dict(os.environ))
+        if args.timing_only:
+            params.args.append('--timing-only')
         with stderr_path.open('w+') as errors:
             started_spawn = sample()
             try:
@@ -451,6 +476,8 @@ if __name__ == '__main__':
     cli.add_argument('--repo', default=str(MAIN))
     cli.add_argument('--expected-head', required=True)
     cli.add_argument('--project', required=True, help='Existing cc31 tb directory; never compiled or modified.')
+    cli.add_argument('--timing-only', action='store_true',
+                     help='Disable the call profiler; call-based guard counters become null, not passed zeros.')
     cli.add_argument('--server', action='store_true', help=argparse.SUPPRESS)
     cli.add_argument('--server-report', help=argparse.SUPPRESS)
     arguments = cli.parse_args()
