@@ -8307,6 +8307,15 @@ async def _failure_source_context(args, event):
                 # Keep a single native artifact's candidates and its receipt.
                 status = previous_status
                 break
+            if result["analysis_limits"]:
+                # An exhausted native budget is not provider unavailability.
+                # Switching to a full lexical build would evade the bound.
+                return {"source_correlation": {
+                    "facts_origin": "log_only", "coverage_status": "partial",
+                    "coverage_gaps": sorted(gaps), "analysis_limits": result["analysis_limits"],
+                    "context_identity_sha256": context.identity_sha256,
+                    "full_hierarchy_fallback": False, "queries": receipts,
+                }}, status
             # Preserve the old source fallback only after native selection or
             # query failed. No native facts are mixed into this compatibility
             # view, and it never marks build_tb_hierarchy as already called.
