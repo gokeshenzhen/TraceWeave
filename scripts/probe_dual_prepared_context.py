@@ -183,8 +183,15 @@ async def run(args, report):
                             [case['wave_path'] for case in cases.values()])), 'native_under_wave_lock')
                         if _name == 'load_design':
                             loads.append(dict(phase=phase, arguments=a, kwargs=kw))
-                            label = phase.split('_')[1]
                             argv = a[0]
+                            if args.mode == 'trace' and phase.startswith('trace_'):
+                                labels = [label for label, case in cases.items()
+                                          if case['top_hint'] == argv[argv.index('-top') + 1]]
+                                require(len(labels) == 1, 'unknown_trace_load_top')
+                                label = labels[0]
+                            else:
+                                label = phase.split('_')[1]
+                            loads[-1]['side'] = label
                             require(argv[argv.index('-top') + 1] == cases[label]['top_hint']
                                 and Path(argv[argv.index('-dbdir') + 1]).resolve()
                                     == Path(cases[label]['kdb_path']).resolve().parent,
@@ -206,6 +213,25 @@ async def run(args, report):
             return result
 
         npi._import_pynpi, server._select_prepared_backend = imported, select
+        if args.mode == 'trace':
+            original_step = npi.VerdiNpiBackend.get_dynamic_step
+
+            def observed_step(backend, *a, **kw):
+                signal = kw.get('signal_path', a[0] if a else None)
+                labels = [label for label, case in cases.items() if case['signal_path'] == signal]
+                require(len(labels) == 1, 'unexpected_trace_dynamic_target')
+                label = labels[0]
+                require(kw.get('top_hint') == cases[label]['top_hint'], 'crossed_dynamic_top')
+                require(threading.get_ident() == main_thread, 'dynamic_not_main_thread')
+                require(not any(lock.locked() for lock in server._wave_locks_for(
+                    [case['wave_path'] for case in cases.values()])), 'dynamic_under_wave_lock')
+                result = original_step(backend, *a, **kw)
+                report.setdefault('dynamic_steps', []).append(dict(
+                    phase=phase, side=label, result=deepcopy(result),
+                    loaded_top=backend._loaded_top, loaded_kdb=backend._loaded_kdb))
+                return result
+
+            npi.VerdiNpiBackend.get_dynamic_step = observed_step
         handles, identities = {}, {}
 
         async def measured(name, operation):
@@ -237,6 +263,15 @@ async def run(args, report):
             require(counts['sdk_init'] == counts['sdk_load_design'] == 0, 'prepare_started_native')
             handles[label], identities[label] = prepared['design_handle'], prepared['context_identity_sha256']
         require(handles['a'] != handles['b'] and identities['a'] != identities['b'], 'aliased_contexts')
+        if args.mode == 'trace':
+            from dual_trace_oracle import trace_chain
+            await trace_chain(args, report, cases, inventory, server, counts, handles,
+                              identities, measured, public, require)
+            require(all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
+                        for p, digest in baseline_files.items()), 'final_actual_file_changed')
+            report['final_actual_file_count'] = len(baseline_files)
+            report['status'] = 'supported_dual_trace_verified'
+            return
         if args.mode == 'chain':
             await chain(args, report, cases, inventory, server, counts, handles, identities,
                         measured, public)
@@ -280,7 +315,8 @@ async def run(args, report):
     finally:
         report['product_completion_counts'] = dict(counts)
         phase = 'diagnostic_cleanup'
-        if runtime_server is not None and args.mode == 'chain':
+        cleanup_started = sample()
+        if runtime_server is not None and args.mode in {'chain', 'trace'}:
             for case in cases.values():
                 path = case['wave_path']
                 cached = runtime_server._parser_cache.get(path)
@@ -302,6 +338,10 @@ async def run(args, report):
             except Exception as exc:
                 report.setdefault('cleanup_errors', []).append(type(exc).__name__)
         report['counts'] = dict(counts)
+        report['phases']['diagnostic_cleanup'] = dict(
+            wall_ms=1000*(time.perf_counter()-cleanup_started[0]),
+            cpu_ms=1000*(time.process_time()-cleanup_started[1]),
+            ru_maxrss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
         report['counts_note'] = 'SDK init/load/end are not license checkout/release counts; end is diagnostic only.'
         report['denied'] = dict(denied)
         report['final_head'] = head_at(repo)
@@ -517,10 +557,10 @@ def main():
     parser.add_argument('--mcp-evidence', required=True)
     parser.add_argument('--inventory', required=True,
                         help='Reviewed private JSON with cases A/B, file paths and KDB identities')
-    parser.add_argument('--mode', choices=('boundary', 'chain'), default='boundary')
+    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace'), default='boundary')
     parser.add_argument('--boundary-evidence', help='Reviewed real boundary JSON; required for chain mode')
     args = parser.parse_args()
-    report = dict(status='failed', scope='bounded real dual identity chain, not deep trace/LSF/license release',
+    report = dict(status='failed', scope='bounded real dual identity or combinational trace; no LSF/license release',
                   mode=args.mode,
                   expected_head=args.expected_head, python=sys.version,
                   environment={key: os.environ.get(key) for key in ENV})
