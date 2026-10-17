@@ -26,7 +26,7 @@ async def diff_with_context(services, args):
     contexts = {side: (models[side].model_dump(exclude_none=True) if side in models else None)
                 for side in ("a", "b")}
     store, cursor_store = services._design_context_store, services._cursor_store
-    entries, bounds, waves = {}, {}, {}
+    entries, bounds, legacy_bounds, waves = {}, {}, {}, {}
     paths = [args["wave_path_a"], args["wave_path_b"]]
 
     def require_owner():
@@ -45,6 +45,14 @@ async def diff_with_context(services, args):
     def check_parsers():
         for path in waves:
             get_parser(path)
+
+    def check_legacy_actions():
+        # A mixed request may hash its prepared side after resolving the old
+        # side. Revalidate retained legacy tokens before publishing a ready
+        # action; never turn a late source change into a new current identity.
+        for bound in legacy_bounds.values():
+            if not bound.current():
+                raise ContextUnavailable("compile_context_changed")
 
     async def validate():
         for entry in entries.values():
@@ -112,6 +120,8 @@ async def diff_with_context(services, args):
                     elif ctx is not None:
                         resolved, reason = await services._run_in_cancellable_thread(
                             lambda ctx=ctx: services.resolve_divergence_context(ctx, services._handle_store))
+                        if resolved is not None:
+                            legacy_bounds[side] = resolved
                     else:
                         resolved, reason = None, "context_missing"
                     expression = next((row for row in result.get("expressions", []) if row.get("side") == side), None)
@@ -131,6 +141,8 @@ async def diff_with_context(services, args):
                 with anyio.fail_after(10):
                     await services._run_in_cancellable_thread(metadata)
                     await services._run_in_wave_request(paths, check_parsers)
+                    if legacy_bounds:
+                        await services._run_in_cancellable_thread(check_legacy_actions)
                     await services._run_in_cancellable_thread(metadata)
                 await anyio.lowlevel.checkpoint()
                 require_owner()
