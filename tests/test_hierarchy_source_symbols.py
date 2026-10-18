@@ -458,6 +458,22 @@ def test_rows_are_fresh_primitives_and_never_modify_provider_facts():
     json.dumps(second)
 
 
+def test_base_argument_observations_remain_separate_and_immutable():
+    parameters = [['W', '5']]
+    fact = ClassFact(symbol('Child', 'Child', 'pkg::Child'), 'resolved', 'Base', 'pkg::Base',
+                     base_value_parameters=parameters, base_parameter_status='observed')
+    parameters[0][1] = '3'
+    row = fact.row()
+    assert row['parameterization'] == {}
+    assert row['base_relation'] == 'declaration' and row['base_value_parameters'] == {'W': '5'}
+    row['base_value_parameters']['W'] = '9'
+    assert fact.row()['base_value_parameters'] == {'W': '5'}
+    for status in ['none', 'unresolved']:
+        with pytest.raises(ValueError):
+            ClassFact(symbol('Child', 'Child', 'pkg::Child'), status,
+                      base_value_parameters=(('W', '5'),), base_parameter_status='observed')
+
+
 @pytest.mark.parametrize('kwargs', [
     {'root_class': ''}, {'root_class': False}, {'depth': True}, {'depth': -2},
     {'depth': 257}, {'max_nodes': 0}, {'max_nodes': True}, {'max_nodes': 5001},

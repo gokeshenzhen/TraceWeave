@@ -87,6 +87,8 @@ class ClassFact:
     base_symbol_id: str | None = None
     base_qualified_name: str | None = None
     gaps: tuple[str, ...] = ()
+    base_value_parameters: tuple[tuple[str, str], ...] = ()
+    base_parameter_status: str = "not_observed"
 
     def __post_init__(self):
         if not isinstance(self.symbol, SourceSymbol) or self.symbol.kind != "class":
@@ -106,11 +108,28 @@ class ClassFact:
         ):
             raise ValueError("invalid base name")
         object.__setattr__(self, "gaps", _gaps(self.gaps))
+        if any(not isinstance(pair, (tuple, list)) for pair in self.base_value_parameters):
+            raise ValueError("invalid base value parameter observations")
+        parameters = tuple(tuple(pair) for pair in self.base_value_parameters)
+        if (len(parameters) > 128 or any(len(pair) != 2 or not all(isinstance(x, str) and x for x in pair)
+                                         for pair in parameters)
+                or len({pair[0] for pair in parameters}) != len(parameters)):
+            raise ValueError("invalid base value parameter observations")
+        if self.base_parameter_status not in {"not_observed", "observed", "partial"}:
+            raise ValueError("invalid base parameter status")
+        if parameters and (self.base_status != "resolved" or self.base_parameter_status == "not_observed"):
+            raise ValueError("base parameter observations require a resolved declaration")
+        if self.base_parameter_status == "observed" and not parameters:
+            raise ValueError("observed base parameters require positive facts")
+        object.__setattr__(self, "base_value_parameters", parameters)
 
     def row(self):
         return dict(self.symbol.row(), base_status=self.base_status,
                     base_symbol_id=self.base_symbol_id, base_qualified_name=self.base_qualified_name,
-                    binding_gaps=list(self.gaps))
+                    binding_gaps=list(self.gaps),
+                    base_relation="declaration" if self.base_status == "resolved" else None,
+                    base_value_parameters=dict(self.base_value_parameters),
+                    base_parameter_status=self.base_parameter_status)
 
 
 def validate_class_query(*, root_class=None, depth=-1, max_nodes=5000):

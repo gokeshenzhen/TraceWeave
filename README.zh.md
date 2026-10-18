@@ -300,6 +300,10 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 身份及实际基类绑定；短名称必须无歧义，只有引用的外部基类单独标明。`total` 是显示
 节点数，与 `class_inventory_*` 分开。指定根类仍可能需要遍历 namespace 才能找到
 派生类；未绑定捕获输入的原始类源码位置标记 `npi_class_location_unbound`。
+`base_relation="declaration"` 表示基类声明关系。基类声明的默认 `parameterization`
+不代表派生类实际传入的参数；继承边上的 `base_value_parameters` 单独记录原生观察到的
+常量实参，需同时检查 `base_parameter_status` 与 `binding_gaps`。这些事实仍不证明
+完整特化类型身份或全部类型参数。
 `dump_tb_section(design_handle=..., section=...)` 支持全部七种 section：三个编译
 元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
 `max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，

@@ -98,6 +98,9 @@ class Handle:
     def scope_handle(self): return self.reference('parent')
     def extends_handle(self): return self.reference('extends')
     def class_defn_handle(self): return self.reference('class_defn')
+    def lhs_handle(self): return self.reference('lhs')
+    def rhs_handle(self): return self.reference('rhs')
+    def actual_handle(self): return self.reference('actual')
 
 
 class Sdk:
@@ -299,6 +302,95 @@ def test_qualified_root_conflict_with_later_inventory_is_rejected(monkeypatch):
                 list(stream)
         finally:
             stream.close()
+    assert_closed(sdk)
+
+
+class BaseArgumentSdk(Sdk):
+    """Declared base W=3 and an independent extends Typespec actual W=5."""
+    def __init__(self):
+        super().__init__()
+        self.low.ParamAssign = 'ParamAssign'
+        self.nodes.update({
+            'arg-W': dict(full_name='arg-W', type='npiParamAssign', lhs='formal-W', rhs='actual-W'),
+            'formal-W': dict(full_name='formal-W', type='npiParameter', name='W', value=3),
+            'actual-W': dict(full_name='actual-W', type='npiConstant', value=5),
+        })
+        self.parameters['right.Base'] = [('W', 3)]
+        self.assignments = ['arg-W']
+
+    def iterate(self, relation, reference):
+        if relation != 'ParamAssign':
+            return super().iterate(relation, reference)
+        self.validate(reference)
+        path = reference.data['full_name']
+        items = self.assignments if path == 'base-spec' else []
+        raw = Raw(self, dict(relation=relation, path=path, items=list(items), index=0)) if items else None
+        if raw is not None:
+            self.iterators.append(raw)
+        self.emit(('iterate', relation, path))
+        return raw
+
+
+@pytest.mark.parametrize('reference', [False, True])
+def test_extends_actual_value_is_separate_from_default_declaration(monkeypatch, reference):
+    from src.schemas import SourceClassNode
+    sdk = BaseArgumentSdk()
+    if reference:
+        sdk.nodes['ref-W'] = dict(full_name='ref-W', type='npiRefObj', actual='formal-W')
+        sdk.nodes['arg-W']['lhs'] = 'ref-W'
+    with owned(monkeypatch, sdk) as provider:
+        result = HierarchySourceService(provider).class_hierarchy(root_class='right.Base')
+        base = result['roots'][0]
+        child = next(row for row in base['children'] if row['qualified_name'] == 'left.Child')
+        assert base['parameterization'] == {'W': '3'}
+        assert child['base_value_parameters'] == {'W': '5'}
+        assert child['base_parameter_status'] == 'observed'
+        assert child['base_relation'] == 'declaration'
+        assert child['base_symbol_id'] == base['symbol_id']
+        assert 'npi_class_base_specialization_unverified' in child['binding_gaps']
+        assert not result['class_inventory_complete']
+        assert SourceClassNode.model_validate(child).base_value_parameters == {'W': '5'}
+        with pytest.raises(ValueError):
+            SourceClassNode.model_validate(dict(child, base_parameter_status='not_observed'))
+    assert_closed(sdk)
+
+
+@pytest.mark.parametrize('mode', ['nonconstant', 'type_parameter', 'duplicate',
+                                 'invalid_first', 'invalid_last', 'limit', 'cancel'])
+def test_extends_actuals_do_not_invent_values_and_release_iterators(monkeypatch, mode):
+    sdk = BaseArgumentSdk()
+    if mode == 'nonconstant':
+        sdk.nodes['actual-W']['type'] = 'npiOperation'
+    elif mode == 'type_parameter':
+        sdk.nodes['formal-W']['type'] = 'npiTypeParameter'
+    elif mode == 'duplicate':
+        sdk.assignments *= 2
+    elif mode in {'invalid_first', 'invalid_last'}:
+        sdk.nodes['bad-value'] = dict(full_name='bad-value', type='npiOperation')
+        sdk.nodes['bad-arg'] = dict(full_name='bad-arg', type='npiParamAssign',
+                                   lhs='formal-W', rhs='bad-value')
+        sdk.assignments = ['bad-arg', 'arg-W'] if mode == 'invalid_first' else ['arg-W', 'bad-arg']
+    elif mode == 'limit':
+        # Unknown formal objects consume work without positive names/facts.
+        sdk.assignments *= 130
+        sdk.nodes['formal-W']['type'] = 'npiTypeParameter'
+    elif mode == 'cancel':
+        def cancel(event):
+            if event[:3] == ('scan', 'ParamAssign', 'base-spec'):
+                raise OperationCancelled()
+        sdk.hook = cancel
+    with owned(monkeypatch, sdk) as provider:
+        if mode in {'duplicate', 'invalid_first', 'invalid_last', 'cancel'}:
+            expected = OperationCancelled if mode == 'cancel' else native.NpiHierarchyUnavailable
+            with pytest.raises(expected):
+                observe(provider)
+        else:
+            facts, _, _ = observe(provider)
+            child = next(f for f in facts if f.symbol.qualified_name == 'left.Child')
+            assert child.base_value_parameters == ()
+            assert child.base_parameter_status == 'partial'
+            if mode == 'limit':
+                assert 'npi_class_base_parameter_limit' in child.gaps
     assert_closed(sdk)
 
 

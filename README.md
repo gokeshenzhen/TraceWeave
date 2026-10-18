@@ -144,6 +144,11 @@ must be unambiguous; external reference-only bases are labelled. `total` is the
 rendered node count, separate from `class_inventory_*`. A root filter does not
 avoid the namespace work needed to find derived classes. Raw class locations
 outside captured inputs carry `npi_class_location_unbound`.
+`base_relation="declaration"` identifies the declared base class. Its default
+`parameterization` does not describe a derived class's actual arguments.
+`base_value_parameters` records observed constant arguments on that inheritance
+edge; inspect `base_parameter_status` and `binding_gaps`. These observations do
+not establish a complete specialized type identity or type-parameter inventory.
 `dump_tb_section(design_handle=..., section=...)` supports all seven sections.
 The three compile metadata sections need no backend; the four semantic sections
 use the same NPI services and preserve their coverage gaps. `max_items` bounds

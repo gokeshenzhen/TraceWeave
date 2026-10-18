@@ -2963,6 +2963,9 @@ class SourceClassNode(SourceSymbolRow):
     base_symbol_id: SourceFactName | None = None
     base_qualified_name: SourceFactName | None = None
     binding_gaps: list[SourceFactLabel] = Field(default_factory=list)
+    base_relation: Literal["declaration"] | None = None
+    base_value_parameters: dict[str, str] = Field(default_factory=dict, max_length=128)
+    base_parameter_status: Literal["not_observed", "observed", "partial"] = "not_observed"
 
     @model_validator(mode="after")
     def consistent_binding(self):
@@ -2978,6 +2981,16 @@ class SourceClassNode(SourceSymbolRow):
             raise ValueError("an unresolved base cannot have a bound identity")
         if self.base_status == "none" and self.base_qualified_name is not None:
             raise ValueError("a class with no base cannot name one")
+        if self.base_relation is not None and self.base_status != "resolved":
+            raise ValueError("a declaration relation requires a resolved base")
+        if self.base_value_parameters and (
+            self.base_status != "resolved" or self.base_parameter_status == "not_observed"
+        ):
+            raise ValueError("base parameter observations require a resolved declaration")
+        if self.base_parameter_status == "observed" and not self.base_value_parameters:
+            raise ValueError("observed base parameters require positive facts")
+        if any(not k or not v for k, v in self.base_value_parameters.items()):
+            raise ValueError("base parameter observations must be nonempty")
         return self
 
 

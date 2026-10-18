@@ -357,6 +357,67 @@ class NpiHierarchySourceProvider:
             definition_id, definition_name, location, definition_location, parameters, tuple(gaps),
         )
 
+    def _base_value_parameters(self, typespec):
+        """Observe explicit constant actuals on this extends Typespec only.
+
+        ParamAssign -> Lhs/Rhs is the documented Language relation. A base
+        declaration's default Parameter values are never actual overrides.
+        This bounded positive inventory does not establish a specialized
+        class type identity or prove the absence of type parameters.
+        """
+        relation = getattr(self.low, "ParamAssign", None)
+        gaps = {"npi_class_base_specialization_unverified"}
+        if relation is None:
+            return (), "not_observed", tuple(gaps | {"npi_class_base_parameters_unavailable"})
+        pairs, seen_names, partial = [], set(), False
+        iterator = _LanguageIterator(self, relation, typespec)
+        try:
+            for _ in range(129):
+                assignment = iterator.read()
+                if assignment is None:
+                    break
+                if len(pairs) >= 128:
+                    partial = True
+                    gaps.add("npi_class_base_parameter_limit")
+                    break
+                lhs, rhs = self.one(assignment, "lhs_handle"), self.one(assignment, "rhs_handle")
+                if lhs is not None and self.scalar(lhs, "type") == "npiRefObj":
+                    lhs = self.one(lhs, "actual_handle")
+                if lhs is None or self.scalar(lhs, "type") != "npiParameter":
+                    partial = True
+                    gaps.add("npi_class_base_parameter_unmodeled")
+                    continue
+                name = self.scalar(lhs, "name")
+                if not isinstance(name, str) or not name:
+                    partial = True
+                    gaps.add("npi_class_base_parameter_unavailable")
+                    continue
+                # Unknown RHS observations still participate in conflict
+                # detection; a later constant must not hide that assignment.
+                if name in seen_names:
+                    raise NpiHierarchyUnavailable("npi_class_base_parameter_conflict")
+                self.budget.reserve_bytes(128 + 4 * len(name))
+                seen_names.add(name)
+                if rhs is None or self.scalar(rhs, "type") != "npiConstant":
+                    partial = True
+                    gaps.add("npi_class_base_parameter_unmodeled")
+                    continue
+                value = self.scalar(rhs, "value")
+                if (value is None or str(value) == ""
+                        or value == getattr(self.util, "GET_VALUE_ERROR", "FAILED_TO_GET_VALUE")):
+                    partial = True
+                    gaps.add("npi_class_base_parameter_unavailable")
+                    continue
+                self.budget.reserve_bytes(128 + 4 * (len(name) + len(str(value))))
+                pairs.append((name, str(value)))
+            else:
+                partial = True
+                gaps.add("npi_class_base_parameter_limit")
+        finally:
+            self.close_iterator(iterator)
+        status = "partial" if partial else "observed" if pairs else "not_observed"
+        return tuple(pairs), status, tuple(sorted(gaps))
+
     def project_class(self, handle):
         path, name = self.scalar(handle, "full_name"), self.scalar(handle, "name")
         if not isinstance(path, str) or not path or not isinstance(name, str) or not name:
@@ -391,9 +452,11 @@ class NpiHierarchySourceProvider:
             if base is not None and self.scalar(base, "type") == "npiClassDefn":
                 base_path = self.scalar(base, "full_name")
                 if isinstance(base_path, str) and base_path:
+                    actuals, actual_status, binding_gaps = self._base_value_parameters(extends)
                     return ClassFact(symbol, "resolved",
                                      semantic_fact_id(self.origin, self.artifact_identity, "class", base_path),
-                                     base_path)
+                                     base_path, gaps=binding_gaps, base_value_parameters=actuals,
+                                     base_parameter_status=actual_status)
         # A Typespec's bare name is not a qualified binding. Keep it out of
         # base_qualified_name rather than matching it against package classes.
         return ClassFact(symbol, "unresolved", gaps=("npi_class_base_binding_unavailable",))
