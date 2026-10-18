@@ -1153,32 +1153,48 @@ def _git_show(head: str, path: str) -> str:
 
 def _dispatch_branch_digest(source: str, tool_name: str) -> str:
     tree = ast.parse(source)
-    dispatch = next(
-        (
-            node
-            for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_dispatch"
-        ),
-        None,
-    )
-    if dispatch is None:
-        raise BenchmarkError("server._dispatch AST unavailable")
-    for node in ast.walk(dispatch):
-        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
-            continue
-        comparison = node.test
-        if (
-            isinstance(comparison.left, ast.Name)
-            and comparison.left.id == "name"
-            and len(comparison.comparators) == 1
-            and isinstance(comparison.comparators[0], ast.Constant)
-            and comparison.comparators[0].value == tool_name
-        ):
-            normalized = ast.dump(
-                ast.Module(body=node.body, type_ignores=[]),
-                include_attributes=False,
-            )
-            return hashlib.sha256(normalized.encode()).hexdigest()
+    def owner(name):
+        matches = [node for node in tree.body
+                   if isinstance(node, ast.AsyncFunctionDef) and node.name == name]
+        if len(matches) != 1:
+            raise BenchmarkError(f"server.{name} AST unavailable or ambiguous")
+        return matches[0]
+
+    def branches(dispatch):
+        matches = []
+        for node in ast.walk(dispatch):
+            if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+                continue
+            comparison = node.test
+            if (
+                isinstance(comparison.left, ast.Name)
+                and comparison.left.id == "name"
+                and len(comparison.ops) == 1
+                and isinstance(comparison.ops[0], ast.Eq)
+                and len(comparison.comparators) == 1
+                and isinstance(comparison.comparators[0], ast.Constant)
+                and comparison.comparators[0].value == tool_name
+            ):
+                matches.append(node)
+        return matches
+
+    dispatch = owner("_dispatch")
+    matches = branches(dispatch)
+    # Preserve the historical inline digest. New servers keep the same branch
+    # bodies behind a real wrapper delegation; do not accept an unrelated helper.
+    if not matches and any(isinstance(node, ast.Call)
+                           and isinstance(node.func, ast.Name)
+                           and node.func.id == "_dispatch_inner"
+                           for node in ast.walk(dispatch)):
+        matches = branches(owner("_dispatch_inner"))
+    if len(matches) > 1:
+        raise BenchmarkError(f"dispatch branch ambiguous: {tool_name}")
+    if matches:
+        normalized = ast.dump(
+            ast.Module(body=matches[0].body, type_ignores=[]),
+            include_attributes=False,
+        )
+        return hashlib.sha256(normalized.encode()).hexdigest()
     raise BenchmarkError(f"dispatch branch unavailable: {tool_name}")
 
 

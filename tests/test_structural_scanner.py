@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -121,7 +122,9 @@ class TestStructuralScanner:
                 ]
             }
         }
-        index = CompileSourceIndex(max_bytes=1024, max_files=4)
+        # This is the sharing oracle, not the capacity oracle: source bodies,
+        # canonical paths and retained snapshot objects must all fit.
+        index = CompileSourceIndex(max_bytes=4096, max_files=4)
         index.preload([str(rtl)])
 
         result = scan_structural_risks(
@@ -131,10 +134,31 @@ class TestStructuralScanner:
             source_loader=index.read_text,
         )
         metrics = index.metrics_snapshot()
+        (tmp_path / "sharing_metrics.json").write_text(json.dumps(metrics, indent=2))
 
         assert result["total_risks"] == 1
         assert metrics["compile_source_index_physical_read_count"] == 1
         assert metrics["compile_source_index_cache_hit_count"] == 2
+        assert metrics["compile_source_index_capacity_bypass_count"] == 0
+
+    def test_compile_source_index_reports_long_path_capacity_bypass(self, tmp_path):
+        directory = tmp_path / ("long_scope_" * 10) / ("long_source_" * 10)
+        directory.mkdir(parents=True)
+        rtl = directory / "top.sv"
+        rtl.write_text("module top(input logic [3:0] mode, output logic y);\n"
+                       "always_comb if (mode == 4'h2) y = 1'b1;\nendmodule\n")
+        index = CompileSourceIndex(max_bytes=1024, max_files=4)
+        index.preload([str(rtl)])
+        result = scan_structural_risks("/tmp/compile.log", "vcs", compile_result={
+            "files": {"user": [{"path": str(rtl), "type": "module", "category": "rtl"}]}},
+            source_loader=index.read_text)
+        metrics = index.metrics_snapshot()
+        (tmp_path / "capacity_metrics.json").write_text(json.dumps(metrics, indent=2))
+        assert result["total_risks"] == 1
+        assert metrics["compile_source_index_status"] == "bypass_capacity"
+        assert metrics["compile_source_index_physical_read_count"] == 3
+        assert metrics["compile_source_index_cache_hit_count"] == 0
+        assert metrics["compile_source_index_cache_bytes"] == 0
 
     def test_brace_span_index_preserves_innermost_and_balanced_semantics(self):
         text = "prefix { outer 8'b0 { inner 4'b0 } tail 2'b0 } orphan 1'b0"

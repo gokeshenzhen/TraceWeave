@@ -219,6 +219,30 @@ def test_ast_route_receipt_detects_phase3a_path_without_x_or_wave_lock_change():
     )
 
 
+def test_branch_digest_preserves_inline_body_through_real_dispatch_delegation():
+    body = "    if name == 'explain_signal_driver':\n        return await route(args)\n"
+    inline = "async def _dispatch(name, args):\n" + body
+    delegated = ("async def _dispatch(name, args):\n    return await _dispatch_inner(name, args)\n"
+                 "async def _dispatch_inner(name, args):\n" + body)
+    assert benchmark._dispatch_branch_digest(inline, "explain_signal_driver") == (
+        benchmark._dispatch_branch_digest(delegated, "explain_signal_driver"))
+
+
+@pytest.mark.parametrize("source", [
+    "async def _dispatch(name, args):\n    return None\n",
+    "async def _dispatch(name, args):\n    return None\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    if name == 'x':\n        return 1\n"
+    "    if name == 'x':\n        return 2\n",
+    "async def _dispatch(name, args):\n    return await _dispatch_inner(name, args)\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 2\n",
+])
+def test_branch_digest_rejects_missing_unreachable_or_ambiguous_owner(source):
+    with pytest.raises(benchmark.BenchmarkError):
+        benchmark._dispatch_branch_digest(source, "x")
+
+
 @pytest.mark.anyio
 async def test_fake_public_phase2_benchmark_covers_routes_performance_and_failures(
     monkeypatch,

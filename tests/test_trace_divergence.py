@@ -201,7 +201,12 @@ async def test_missing_context_actions_recover_real_source_graph(tmp_path):
         assert response.backend == "source_graph"
         assert response.signal_path == f"top.q{action.side}"
         assert response.source_info_origin == "source_graph"
-        assert Path(response.source_file) == tmp_path / "design.sv"
+        expected_source = (tmp_path / "design.sv").resolve()
+        assert Path(response.source_file).resolve() == expected_source
+        other = tmp_path / "different_design" / "design.sv"
+        other.parent.mkdir(exist_ok=True)
+        other.write_text("module unrelated; endmodule\n")
+        assert Path(response.source_file).resolve() != other.resolve()
         # Hand-authored RTL: qa<=a is line 3; qb<=b is line 4. This also
         # rejects an A/B exchange even though both share one compile context.
         assert response.source_line == source_line
