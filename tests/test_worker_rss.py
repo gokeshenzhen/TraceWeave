@@ -49,6 +49,8 @@ def test_unavailable_rss_is_unknown_and_darwin_resource_units_are_bytes(monkeypa
     monkeypatch.setattr(worker.sys, "platform", "darwin")
     monkeypatch.setattr(worker.resource, "getrusage", lambda *args: SimpleNamespace(ru_maxrss=4097))
     assert worker._read_rss_kib() == (None, 5)
+    monkeypatch.setattr(worker.resource, "getrusage", lambda *args: SimpleNamespace(ru_maxrss=-1))
+    assert worker._read_rss_kib() == (None, None)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires Linux /proc address-space high water marks")

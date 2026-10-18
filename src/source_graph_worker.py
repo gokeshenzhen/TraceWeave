@@ -85,10 +85,10 @@ def _read_rss_kib() -> tuple[int | None, int | None]:
     if peak is None:
         try:
             peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-            if sys.platform == "darwin":
-                peak = (peak + 1023) // 1024
             if peak < 0:
                 peak = None
+            elif sys.platform == "darwin":
+                peak = (peak + 1023) // 1024
         except (ValueError, OSError):
             pass
     if current is not None and peak is not None:

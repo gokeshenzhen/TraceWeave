@@ -1162,7 +1162,22 @@ def _dispatch_branch_digest(source: str, tool_name: str) -> str:
 
     def branches(dispatch):
         matches = []
-        for node in ast.walk(dispatch):
+        def own_nodes(node):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                return
+            yield node
+            if isinstance(node, ast.If) and isinstance(node.test, ast.Constant) and isinstance(node.test.value, bool):
+                for child in node.body if node.test.value else node.orelse:
+                    yield from own_nodes(child)
+                return
+            for child in ast.iter_child_nodes(node):
+                yield from own_nodes(child)
+        def owner_body():
+            for statement in dispatch.body:
+                yield from own_nodes(statement)
+                if isinstance(statement, (ast.Return, ast.Raise)):
+                    break
+        for node in owner_body():
             if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
                 continue
             comparison = node.test
@@ -1182,10 +1197,17 @@ def _dispatch_branch_digest(source: str, tool_name: str) -> str:
     matches = branches(dispatch)
     # Preserve the historical inline digest. New servers keep the same branch
     # bodies behind a real wrapper delegation; do not accept an unrelated helper.
-    if not matches and any(isinstance(node, ast.Call)
-                           and isinstance(node.func, ast.Name)
-                           and node.func.id == "_dispatch_inner"
-                           for node in ast.walk(dispatch)):
+    # The first unconditional return must actually forward these arguments.
+    # Calls in unused nested functions, expressions or dead later returns do
+    # not establish a dispatch delegation.
+    forwarding_return = next((node for node in dispatch.body if isinstance(node, (ast.Return, ast.Raise))), None)
+    value = forwarding_return.value if isinstance(forwarding_return, ast.Return) else None
+    call = value.value if isinstance(value, ast.Await) else None
+    delegates = (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                 and call.func.id == "_dispatch_inner" and not call.keywords
+                 and len(call.args) == 2 and all(isinstance(arg, ast.Name) and arg.id == expected
+                                                for arg, expected in zip(call.args, ("name", "args"))))
+    if not matches and delegates:
         matches = branches(owner("_dispatch_inner"))
     if len(matches) > 1:
         raise BenchmarkError(f"dispatch branch ambiguous: {tool_name}")

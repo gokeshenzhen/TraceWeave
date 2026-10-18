@@ -237,6 +237,19 @@ def test_branch_digest_preserves_inline_body_through_real_dispatch_delegation():
     "async def _dispatch(name, args):\n    return await _dispatch_inner(name, args)\n"
     "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n"
     "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 2\n",
+    "async def _dispatch(name, args):\n    return await _dispatch_inner('different', {})\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    async def unused():\n        return await _dispatch_inner(name, args)\n"
+    "    return None\nasync def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    async def unused():\n        if name == 'x':\n            return 1\n"
+    "    return None\n",
+    "async def _dispatch(name, args):\n    _dispatch_inner(name, args)\n    return None\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    return None\n    return await _dispatch_inner(name, args)\n"
+    "async def _dispatch_inner(name, args):\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    return None\n    if name == 'x':\n        return 1\n",
+    "async def _dispatch(name, args):\n    if False:\n        if name == 'x':\n            return 1\n"
+    "    return None\n",
 ])
 def test_branch_digest_rejects_missing_unreachable_or_ambiguous_owner(source):
     with pytest.raises(benchmark.BenchmarkError):
