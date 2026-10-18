@@ -20,6 +20,7 @@ import atexit
 import contextlib
 import ctypes
 import hashlib
+import json
 import logging
 import os
 import re
@@ -427,7 +428,19 @@ class VerdiNpiBackend:
             raise NpiHierarchyUnavailable("npi_source_only_context")
         if getattr(self, "_bound_compile_result", None) != request.context.compile_result():
             raise NpiHierarchyUnavailable("npi_compile_context_mismatch")
-        result = self._query_language(request.execute, top=request.context.selected_top,
+        def execute(provider):
+            arguments = json.loads(request.arguments_json)
+            if request.operation == "get_tb_file_detail" and request.catalog is not None:
+                entry = request.catalog.find_file(arguments["path"], checkpoint=request.budget.checkpoint)
+                if entry is not None:
+                    # A single-file query need not retain unrelated declarations.
+                    # Exports and multi-file queries keep their shared inventory.
+                    provider._file_query_paths = frozenset((entry.path, *entry.aliases))
+            if request.operation == "get_tb_class_hierarchy":
+                provider._class_query_root = arguments.get("root_class")
+            return request.execute(provider)
+
+        result = self._query_language(execute, top=request.context.selected_top,
                                       budget=request.budget)
         result["context_identity_sha256"] = request.context.identity_sha256
         result["kdb_binding"] = dict(self._bound_kdb_anchor.receipt(), load_status="loaded",

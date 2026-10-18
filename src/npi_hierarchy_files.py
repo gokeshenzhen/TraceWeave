@@ -8,9 +8,11 @@ is real; copying a local file view is not evidence of local-only native work.
 """
 from __future__ import annotations
 
+from dataclasses import asdict
+import hashlib
 import json
 
-from .hierarchy_source_ir import semantic_fact_id
+from .hierarchy_source_ir import HierarchyBudgetExceeded, semantic_fact_id
 from .hierarchy_source_symbols import SourceSymbol
 from .npi_hierarchy_source import _LanguageIterator, _Namespaces, _NAMESPACES, NpiHierarchyUnavailable
 
@@ -21,6 +23,9 @@ class FileInventory:
     def __init__(self, provider):
         self.provider = provider
         self.rows, self.by_id = [], {}
+        self.target_paths = getattr(provider, "_file_query_paths", None)
+        self.examined_symbols = 0
+        self.observed_fingerprints = {}
         self.exhausted, self.closed = False, False
         self._gaps = {"npi_uninstantiated_declaration_inventory_unverified",
                       "npi_file_variable_inventory_unverified", "npi_file_import_inventory_unverified",
@@ -137,10 +142,33 @@ class FileInventory:
             except StopIteration:
                 self.exhausted = True
                 return None
+            # A targeted file query retains only its own copied facts. Native
+            # calls and inspected namespaces still consume their original work
+            # budgets, and discarded declarations retain a separate work cap.
+            self.examined_symbols += 1
+            if self.target_paths is not None and self.examined_symbols > self.provider.budget.max_symbols:
+                raise HierarchyBudgetExceeded("symbol_limit")
             if symbol.location is None:
                 # There is no basis for assigning this declaration to any
                 # requested compile member. Keep the missing mapping visible.
                 self._gaps.add("npi_file_symbol_ownership_unavailable")
+                continue
+            if self.target_paths is not None:
+                # Dropping a body must not hide an identity observed with two
+                # different file bindings. Keep a charged, fixed-size digest
+                # of every located observation, including non-target files.
+                fingerprint = hashlib.sha256(json.dumps(
+                    [asdict(symbol), uses_uvm], sort_keys=True, ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode()).digest()
+                previous = self.observed_fingerprints.get(symbol.symbol_id)
+                if previous is not None:
+                    if previous != fingerprint:
+                        raise NpiHierarchyUnavailable("npi_file_symbol_identity_conflict")
+                else:
+                    self.provider.budget.reserve_bytes(256 + 4 * len(symbol.symbol_id) + len(fingerprint))
+                    self.observed_fingerprints[symbol.symbol_id] = fingerprint
+            if self.target_paths is not None and symbol.location.file not in self.target_paths:
                 continue
             row = symbol, uses_uvm
             existing = self.by_id.get(symbol.symbol_id)

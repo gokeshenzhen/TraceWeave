@@ -261,6 +261,47 @@ def rows(result):
     return result_rows
 
 
+def test_qualified_root_is_observed_before_global_inventory_and_not_duplicated(monkeypatch):
+    sdk = Sdk()
+    with owned(monkeypatch, sdk) as provider:
+        provider._class_query_root = 'left.Child'
+        facts, complete, gaps = observe(provider)
+        assert facts[0].symbol.qualified_name == 'left.Child'
+        assert facts[0].base_qualified_name == 'right.Base'
+        assert len(facts) == len({fact.symbol.symbol_id for fact in facts}) == 5
+        assert not complete and INVENTORY_GAPS <= gaps
+    assert_closed(sdk)
+
+
+def test_qualified_root_survives_bounded_unrelated_inventory(monkeypatch):
+    sdk = Sdk()
+    with owned(monkeypatch, sdk, budget=HierarchyQueryBudget(max_scopes=1)) as provider:
+        provider._class_query_root = 'left.Child'
+        result = HierarchySourceService(provider).class_hierarchy(root_class='left.Child')
+        assert result['roots'][0]['qualified_name'] == 'left.Child'
+        assert result['roots'][0]['base_qualified_name'] == 'right.Base'
+        assert result['coverage_status'] == 'partial'
+        assert 'scope_limit' in result['analysis_limits']
+        assert not result['class_inventory_complete']
+    assert_closed(sdk)
+
+
+def test_qualified_root_conflict_with_later_inventory_is_rejected(monkeypatch):
+    sdk = Sdk()
+    with owned(monkeypatch, sdk) as provider:
+        provider._class_query_root = 'left.Child'
+        stream = native._Classes(provider)
+        try:
+            seed = next(stream)
+            assert seed.symbol.qualified_name == 'left.Child'
+            sdk.nodes['left.Child']['line_no'] += 1
+            with pytest.raises(native.NpiHierarchyUnavailable, match='npi_class_identity_conflict'):
+                list(stream)
+        finally:
+            stream.close()
+    assert_closed(sdk)
+
+
 def test_global_namespaces_real_base_identity_and_generate_scope_are_copied(monkeypatch):
     sdk = Sdk()
     with owned(monkeypatch, sdk) as p:

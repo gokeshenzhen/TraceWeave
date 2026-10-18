@@ -192,12 +192,33 @@ class _Classes(_Namespaces):
                          gaps=("npi_uninstantiated_declaration_inventory_unverified",
                                "npi_class_specialization_inventory_unverified"),
                          root_gap="npi_class_roots_unavailable")
+        self.root_hint = getattr(provider, "_class_query_root", None)
+        self.seed_checked = False
+        self.seed_fact = None
 
     def __next__(self):
+        if not self.seed_checked:
+            self.seed_checked = True
+            # An explicit qualified root can be observed before unrelated
+            # global namespaces consume the inventory budget. It remains an
+            # exact SDK lookup, not a source-name/nearest-package inference.
+            if isinstance(self.root_hint, str) and "." in self.root_hint:
+                handle = self.provider.lookup(self.root_hint)
+                if (handle is not None and self.provider.scalar(handle, "type") == "npiClassDefn"
+                        and self.provider.scalar(handle, "full_name") == self.root_hint):
+                    self.provider.budget.admit_namespace("npiClassDefn", self.root_hint, 0)
+                    fact = self.provider.project_class(handle)
+                    self.seed_fact = fact
+                    return fact
         while True:
             handle, kind, _ = super().__next__()
             if kind == "npiClassDefn":
-                return self.provider.project_class(handle)
+                fact = self.provider.project_class(handle)
+                if self.seed_fact is not None and fact.symbol.symbol_id == self.seed_fact.symbol.symbol_id:
+                    if fact != self.seed_fact:
+                        raise NpiHierarchyUnavailable("npi_class_identity_conflict")
+                    continue
+                return fact
 
 
 class NpiHierarchySourceProvider:

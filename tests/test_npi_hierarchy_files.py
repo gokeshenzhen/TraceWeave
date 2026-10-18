@@ -182,6 +182,57 @@ def test_global_walk_maps_only_definition_file_and_actual_typedef_scope(monkeypa
     assert_closed(sdk)
 
 
+def test_target_file_inventory_keeps_only_matching_facts_but_counts_namespace_work(monkeypatch):
+    sdk = FileSdk()
+    with owned(monkeypatch, sdk) as provider:
+        provider._file_query_paths = frozenset((B,))
+        facts, complete, _, _, gaps, work = observed(provider, catalog().files[1])
+        assert {fact.qualified_name for fact in facts} == {'leaf', 'p.C', 'p::packet_t'}
+        assert provider._file_inventory.examined_symbols == 8
+        assert len(provider._file_inventory.rows) == provider.budget.symbol_count == 3
+        assert provider.budget.scope_count == 6
+        assert provider.budget.call_count > 0
+        assert not complete and FILE_GAPS <= gaps and work == 'global_namespaces_bounded'
+    assert_closed(sdk)
+
+
+def test_discarded_file_symbols_still_have_a_work_limit_and_cleanup(monkeypatch):
+    sdk = FileSdk()
+    with owned(monkeypatch, sdk, budget=HierarchyQueryBudget(max_symbols=1)) as provider:
+        provider._file_query_paths = frozenset(('/not_observed.sv',))
+        with pytest.raises(ir.HierarchyBudgetExceeded, match='symbol_limit'):
+            observed(provider, catalog().files[1])
+        assert provider.budget.symbol_count == 0
+        assert provider.budget.scope_count > 0
+        assert provider._file_inventory.closed
+    assert_closed(sdk)
+
+
+@pytest.mark.parametrize('target_first', [False, True])
+def test_filtered_symbol_identity_conflict_is_rejected_in_both_orders(monkeypatch, target_first):
+    from src.connectivity_ir import SourceLocation
+    from src.npi_hierarchy_files import FileInventory
+    sdk = FileSdk()
+    with owned(monkeypatch, sdk) as provider:
+        provider._file_query_paths = frozenset((B,))
+        inventory = FileInventory(provider)
+        first = SourceSymbol('same-id', 'C', 'p.C', 'class', location=SourceLocation(A, 1))
+        second = replace(first, location=SourceLocation(B, 2))
+        observations = [(first, False), (second, False)]
+        if target_first:
+            observations.reverse()
+        inventory.generator = (row for row in observations)
+        try:
+            with pytest.raises(native.NpiHierarchyUnavailable, match='npi_file_symbol_identity_conflict'):
+                while inventory.read() is not None:
+                    pass
+            assert len(inventory.observed_fingerprints) == 1
+            assert provider.budget.fact_bytes >= 256 + 4 * len('same-id') + 32
+        finally:
+            inventory.close()
+    assert_closed(sdk)
+
+
 def test_same_owner_second_file_reuses_only_copied_facts_and_close_drops_inventory(monkeypatch):
     sdk = FileSdk()
     with owned(monkeypatch, sdk) as p:
