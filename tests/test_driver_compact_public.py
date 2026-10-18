@@ -60,7 +60,9 @@ async def test_catalog_and_runtime_default_share_per_tool_options():
     assert catalog['explain_signal_driver'].inputSchema['properties']['output_format']['default'] == 'compact'
     for name in schemas.COMPACT_OUTPUT_TOOLS:
         options = schemas.output_options_for_tool(name)
-        assert catalog[name].inputSchema['properties']['output_format'] == options.model_json_schema()['properties']['output_format']
+        expected = options.model_json_schema()['properties']['output_format']
+        expected.pop('title', None)  # Generated display labels are omitted on the wire.
+        assert catalog[name].inputSchema['properties']['output_format'] == expected
         assert options().output_format == ('compact' if name == 'explain_signal_driver' else 'full')
     desc = catalog['explain_signal_driver'].description
     assert 'traceweave.driver.compact.v1' in desc and 'statement_evidence_ref' in desc and 'full' in desc

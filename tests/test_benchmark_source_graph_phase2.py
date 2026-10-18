@@ -26,6 +26,10 @@ PHASE2_EVIDENCE = ROOT / "benchmarks/source_graph_connectivity_phase2_results.js
 PHASE2_EVIDENCE_SHA256 = (
     "1b5f76c3862601bb1163d838744c9c03ec7ed62cd1bc5f663ef7008bd0902599"
 )
+# The measured working tree was 8b40dc2; this is the first commit archiving
+# its benchmark script. Historical receipts must not hash a later maintenance
+# version of that script as though it produced the original measurements.
+PHASE2_SCRIPT_ARCHIVE_HEAD = "102f5a6339b399138c795e2cb917a0ef462b3c8d"
 
 
 def _args(*extra: str):
@@ -377,11 +381,14 @@ def test_tracked_phase2_evidence_passes_public_production_gate():
     assert result["schema_version"] == "1.0"
     assert result["benchmark"] == "source_graph_connectivity_phase2"
     assert result["repository"]["head"] == ("8b40dc2b7b597f152fe5d0a152d3afe71c8ff05e")
+    assert result["benchmark_script"]["path"] == "scripts/benchmark_source_graph_phase2.py"
+    historical_script = subprocess.check_output(
+        ["git", "show", f"{PHASE2_SCRIPT_ARCHIVE_HEAD}:scripts/benchmark_source_graph_phase2.py"],
+        cwd=ROOT,
+    )
     assert (
         result["benchmark_script"]["sha256"]
-        == hashlib.sha256(
-            (ROOT / result["benchmark_script"]["path"]).read_bytes()
-        ).hexdigest()
+        == hashlib.sha256(historical_script).hexdigest()
     )
     assert result["before_baselines"]["phase1a"]["sha256"] == (
         benchmark.PHASE1A_EVIDENCE_SHA256

@@ -255,10 +255,12 @@ async def test_registration_defaults_and_public_validation_share_schema(monkeypa
     tools = {t.name: t for t in await server.list_tools()}
     for name in schemas.COMPACT_OUTPUT_TOOLS:
         options = schemas.output_options_for_tool(name).model_json_schema()["properties"]
+        options["output_format"].pop("title", None)
         assert tools[name].inputSchema["properties"]["output_format"] == options["output_format"]
     for name, model in (("inspect_tlul", schemas.TlulAnalysisOptions),
                         ("reconstruct_transactions", schemas.TransactionDisplayOptions)):
         for key, prop in model.model_json_schema()["properties"].items():
+            prop.pop("title", None)  # Compare every runtime contract field, without display labels.
             assert all(tools[name].inputSchema["properties"][key][k] == v for k, v in prop.items())
     for args in ({"max_transactions": 0}, {"max_transactions": 65537},
                  {"max_transactions": True}, {"max_cycles": 0}, {"max_wait_cycles": -1}, {"edge": "both"}):
