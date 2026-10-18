@@ -1096,15 +1096,24 @@ class SystemVerilogPreprocessor:
     def preprocess(self, source_path: str) -> PreprocessedSource:
         return self._preprocess(source_path, dependencies_only=False)
 
-    def _preprocess(self, source_path: str, *, dependencies_only: bool) -> PreprocessedSource:
-        root = self._canonical_path(source_path)
-        contexts = self._context_index.contexts_for(root)
+    def options_for_source(self, source_path: str) -> PreprocessorOptions:
+        """Resolve source-specific options through this reader's shared index.
+
+        Context lookup still observes the source spelling on every call, so
+        capture readers retain their alias-change checks when options are cached.
+        """
+        contexts = self._context_index.contexts_for(source_path)
         options = self._options_cache.get(contexts)
         if options is None:
             options = _extract_options_from_contexts(contexts, self._environment.bindings)
             options = PreprocessorOptions(options.macros, options.include_dirs,
                                            options.complete and self._environment.complete)
             self._options_cache[contexts] = options
+        return options
+
+    def _preprocess(self, source_path: str, *, dependencies_only: bool) -> PreprocessedSource:
+        root = self._canonical_path(source_path)
+        options = self.options_for_source(root)
         state = _ExpansionState(
             macros=options.macro_dict(),
             text_macros={

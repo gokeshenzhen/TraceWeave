@@ -26,7 +26,7 @@ from .compile_log_parser import detect_simulator, merge_compile_results, parse_c
 from .compile_environment import resolve_compile_environment
 from .design_context import DesignContext, IncludeResolution
 from .hdl_suffixes import VHDL_SOURCE_SUFFIXES
-from .sv_preprocessor import SystemVerilogPreprocessor, extract_preprocessor_options
+from .sv_preprocessor import SystemVerilogPreprocessor
 
 
 _SIMULATORS = {"vcs", "xcelium", "verilator"}
@@ -253,7 +253,7 @@ def prepare_design_context(
                     gaps.add("opaque_vhdl_boundary")
                     dependencies_complete = False
                     continue
-                options = extract_preprocessor_options(compile_result, path)
+                options = reader.options_for_source(path)
                 if not options.complete:
                     gaps.add("compile_options_incomplete")
                     dependencies_complete = False

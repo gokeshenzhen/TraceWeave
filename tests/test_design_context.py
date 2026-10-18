@@ -82,6 +82,34 @@ def test_prepare_captures_exact_input_bytes_without_a_tree(tmp_path):
     assert "_scan_results" not in first.compile_result()
 
 
+def test_prepare_many_sources_shares_option_index_and_captures_selected_headers(tmp_path, monkeypatch):
+    """Preparing N sources must not reconstruct the N-source index N times."""
+    header = _write(tmp_path / "headers" / "selected.svh", "localparam int WIDTH = 4;\n")
+    sources = [
+        _write(tmp_path / f"unit_{index}.sv", f'module unit_{index};\n`include "selected.svh"\nendmodule\n')
+        for index in range(32)
+    ]
+    log = _vcs_log(tmp_path / "compile.log", sources,
+                   options=f"+incdir+{header.parent}", tops=("unit_0",))
+    constructions = []
+    original = sv_preprocessor._CommandContextIndex.__init__
+
+    def counted(self, compile_result, **kwargs):
+        constructions.append(len(compile_result["compile_evidence"]["ordered_compilation_units"]))
+        original(self, compile_result, **kwargs)
+
+    monkeypatch.setattr(sv_preprocessor._CommandContextIndex, "__init__", counted)
+    context = prepare_design_context(str(log))
+
+    assert constructions == [len(sources)]
+    assert _units(context) == list(map(str, sources))
+    assert context.include_resolution_complete
+    assert set(_record_map(context)) == {str(log), str(header), *map(str, sources)}
+    assert context.current()
+    header.write_text("localparam int WIDTH = 8;\n")
+    assert context.current() is False
+
+
 @pytest.mark.parametrize("simulator", ["vcs", "xcelium", "verilator"])
 def test_prepare_uses_real_text_compile_parsers(tmp_path, simulator):
     source = _write(tmp_path / "top.sv", "module top; endmodule\n")

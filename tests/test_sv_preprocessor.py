@@ -43,7 +43,9 @@ def test_duplicate_source_record_preserves_first_phase_match(tmp_path):
         },
     }
 
-    result = SystemVerilogPreprocessor(compile_result).preprocess(str(source))
+    preprocessor = SystemVerilogPreprocessor(compile_result)
+    assert preprocessor.options_for_source(str(source)).macro_dict() == {"FIRST": "1"}
+    result = preprocessor.preprocess(str(source))
 
     assert "u_first" in result.text
     assert "u_second" not in result.text
@@ -77,7 +79,9 @@ def test_missing_source_log_index_replays_all_phases_in_order(tmp_path):
         },
     }
 
-    result = SystemVerilogPreprocessor(compile_result).preprocess(str(source))
+    preprocessor = SystemVerilogPreprocessor(compile_result)
+    assert preprocessor.options_for_source(str(source)).macro_dict() == {"FIRST": "1", "SECOND": "1"}
+    result = preprocessor.preprocess(str(source))
 
     assert "u_both" in result.text
 
@@ -101,7 +105,9 @@ def test_missing_matching_phase_uses_compile_result_fallback(tmp_path):
         },
     }
 
-    result = SystemVerilogPreprocessor(compile_result).preprocess(str(source))
+    preprocessor = SystemVerilogPreprocessor(compile_result)
+    assert preprocessor.options_for_source(str(source)).macro_dict() == {"FALLBACK": "1"}
+    result = preprocessor.preprocess(str(source))
 
     assert "u_first" not in result.text
     assert "u_fallback" in result.text
@@ -140,6 +146,7 @@ def test_context_index_canonicalization_scales_linearly(tmp_path, monkeypatch):
         source_loader=lambda _path: "module unit; endmodule\n",
     )
     for path in sources:
+        assert preprocessor.options_for_source(str(path)).macro_dict() == {"BENCH": "1"}
         preprocessor.preprocess(str(path))
 
     assert canonical_calls <= source_count + 4
