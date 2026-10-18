@@ -41,16 +41,47 @@ def check_local_refs(schema):
 
 
 @pytest.mark.anyio
-async def test_all_tool_refs_resolve_and_definition_budget():
+async def test_all_tool_refs_resolve_and_definition_budget(tmp_path):
     tools = await server.list_tools()
     for tool in tools:
         Draft202012Validator.check_schema(tool.inputSchema)
         check_local_refs(tool.inputSchema)
     data = [t.model_dump(mode="json", exclude_none=True) for t in tools]
     size = len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode())
+    (tmp_path / "tool_catalog.json").write_text(json.dumps(data, ensure_ascii=False))
+    (tmp_path / "tool_sizes.json").write_text(json.dumps({
+        "total_bytes": size,
+        "tools": {t["name"]: len(json.dumps(t, ensure_ascii=False, separators=(",", ":")).encode())
+                  for t in data},
+    }, indent=2))
     # 207,896-byte baseline, including all tools. Reserve room for guidance
     # and examples while retaining at least a 25% reduction on the wire.
     assert size <= 155_922, size
+
+
+def test_schema_title_compaction_preserves_business_fields_and_validation():
+    schema = {
+        "title": "Generated object title", "type": "object",
+        "properties": {
+            "title": {"title": "Generated field title", "type": "string", "minLength": 2},
+            "kind": {"const": "title", "default": "title"},
+            "data": {"$ref": "#/$defs/title"},
+        },
+        "$defs": {"title": {"title": "Generated definition title", "type": "integer", "minimum": 1}},
+        "required": ["title", "data"], "additionalProperties": False,
+        "examples": [{"title": "example", "data": 1}],
+    }
+    before = json.loads(json.dumps(schema))
+    server._strip_schema_titles(schema)
+    assert schema["examples"] == before["examples"]
+    assert set(schema["properties"]) == {"title", "kind", "data"}
+    assert schema["properties"]["kind"] == before["properties"]["kind"]
+    assert schema["$defs"]["title"] == {"type": "integer", "minimum": 1}
+    for value in ({"title": "ok", "data": 2}, {"title": "x", "data": 2},
+                  {"title": "ok", "data": 0}, {"title": "ok", "data": 2, "extra": 1},
+                  {"data": 2}, {"title": "ok", "data": 2, "kind": "other"}):
+        assert Draft202012Validator(schema).is_valid(value) == Draft202012Validator(before).is_valid(value)
+    assert Draft202012Validator(schema).is_valid(schema["examples"][0])
 
 
 @pytest.mark.anyio

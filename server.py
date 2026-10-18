@@ -5984,14 +5984,32 @@ def _signal_selection_schema() -> dict:
     return {"$ref": "#/$defs/WaveformSignalInput"}
 
 
+def _strip_schema_titles(schema: dict) -> None:
+    """Drop generated display labels, preserving property names and examples."""
+    schema.pop("title", None)
+    for keyword in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas"):
+        for child in schema.get(keyword, {}).values():
+            if isinstance(child, dict):
+                _strip_schema_titles(child)
+    for keyword in ("items", "additionalProperties", "unevaluatedProperties", "contains",
+                    "propertyNames", "not", "if", "then", "else"):
+        child = schema.get(keyword)
+        if isinstance(child, dict):
+            _strip_schema_titles(child)
+    for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+        for child in schema.get(keyword, []):
+            if isinstance(child, dict):
+                _strip_schema_titles(child)
+
+
 def _signal_selection_definitions() -> dict:
     """Keep reusable inputs once per tool, including nested recursive types."""
     expression = schemas.WaveformExpression.model_json_schema()
     definitions = expression.pop("$defs", {})
     definitions["WaveformExpression"] = expression
     definitions["WaveformSignalInput"] = {
-        "description": "A signal path string, a fixed bit selection, or an explicit {expr,...} object. "
-                       "Use bindings for exact dump paths and types for SV semantics; wave_bits explicitly opts into unsigned vectors.",
+        "description": "Paths, fixed bit selections, or {expr,...}. Types are explicit; "
+                       "wave_bits opts into unsigned dump vectors.",
         "anyOf": [{"type": "string"}, {"$ref": "#/$defs/WaveformSelection"},
                   {"$ref": "#/$defs/WaveformExpression"}]
     }
@@ -8170,8 +8188,6 @@ async def list_tools():
             else:
                 prop.pop("type", None)
                 prop.update(_signal_selection_schema())
-            prop["description"] = prop.get("description", "") + (
-                " Accepts a path, fixed selection or {expr,...}; see WaveformSignalInput and WaveformExpression.")
         if tool.name == 'verify_window':
             props = tool.inputSchema['properties']
             legacy = props['predicate']['items']
@@ -8228,15 +8244,10 @@ async def list_tools():
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
-                " Expressions: {expr,bindings,types}; semantic (default) needs declared types. "
-                "typing=wave_bits explicitly uses unsigned dump vectors. scope only prefixes names. "
-                "Types may use {width:8} for unsigned [7:0]. Arrays need types.<name>.unpacked and "
-                "bindings.<name>.elements OR path_template with one {index} (1D, <=128 elements). "
-                "Range bounds are JSON integers."
-                " Derived results are in expressions: inspect coverage_status/gaps; partial or not_observed "
-                "cannot exclude a problem. Observed X/Z differs from missing data. observations_truncated "
-                "limits displayed evidence only. An error field means failure: use error_code/recovery "
-                "and correct the arguments before retrying.")
+                " Signals accept paths, selections or {expr,bindings,types}; input $defs document typing/array rules. "
+                "Read expressions.coverage_status/gaps: "
+                "partial/not_observed cannot exclude problems; X/Z is not missing data. observations_truncated "
+                "caps display only. error means failure; follow error_code/recovery before retrying.")
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
             properties.update(schemas.output_options_for_tool(tool.name).model_json_schema()["properties"])
         if tool.name == "explain_signal_driver":
@@ -8250,6 +8261,7 @@ async def list_tools():
                      else schemas.TransactionDisplayOptions)
             for key, prop in model.model_json_schema()["properties"].items():
                 properties[key] = {**properties.get(key, {}), **prop}
+        _strip_schema_titles(tool.inputSchema)
     # A/B harness toggle: hide the WHOLE handshake feature (suggestion and
     # inspection tools) from list_tools so a cold
     # "baseline" session cannot see or be hinted by it. Enabled by either
