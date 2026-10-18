@@ -144,14 +144,79 @@ async def test_clock_mode_and_no_difference_do_not_trace_or_create_cursor(tmp_pa
     assert r.comparison["samples_compared"] == 2
 
 
-@pytest.mark.anyio
-async def test_missing_exact_context_reports_both_prerequisites(tmp_path):
+async def missing_context_actions(tmp_path):
     args = await setup_case(tmp_path)
     server._handle_store.invalidate()
     r = await server._dispatch("trace_divergence", args)
+    (tmp_path / "blocked_response.json").write_text(r.model_dump_json(indent=2))
     assert r.status == "blocked" and len(r.next_actions) == 2
-    assert all(a.status == "needs_prerequisite" for a in r.next_actions)
     assert r.operation_metrics["backend_query_count"] == 0
+    assert not r.nodes and not r.edges and r.cursor is None
+    assert len(server._cursor_store) == 0
+    assert [a.side for a in r.next_actions] == ["a", "b"]
+    for action in r.next_actions:
+        side = args[f"side_{action.side}"]
+        context = {
+            "compile_log": side["compile_log"], "simulator": side["simulator"],
+            "supplementary_compile_logs": [],
+        }
+        assert r.contexts[action.side]["status"] == "hierarchy_unavailable"
+        assert action.status == "ready" and action.missing_fields == []
+        assert action.tool == "explain_signal_driver"
+        assert action.arguments == {
+            **side, "recursive": False, "compile_context": context,
+        }
+        assert action.evidence["context_status"] == "hierarchy_unavailable"
+        assert action.evidence["context_recovery"] == "required_before_query"
+        assert action.prerequisite_calls == [{
+            "id": f"scan_{action.side}_0", "tool": "scan_structural_risks",
+            "arguments": {"compile_log": side["compile_log"], "simulator": "vcs"},
+            "depends_on": [], "parallel_group": f"compile_{action.side}",
+        }]
+    return r.next_actions
+
+
+@pytest.mark.anyio
+async def test_missing_exact_context_returns_both_recoverable_actions(tmp_path):
+    await missing_context_actions(tmp_path)
+
+
+@pytest.mark.anyio
+@requires_source_graph
+async def test_missing_context_actions_recover_real_source_graph(tmp_path):
+    actions = await missing_context_actions(tmp_path)
+    for action, source_line in zip(actions, (3, 4)):
+        for call in action.prerequisite_calls:
+            scan = await server._dispatch(call["tool"], call["arguments"])
+            (tmp_path / f"scan_{action.side}.json").write_text(scan.model_dump_json(indent=2))
+        # Execute the original public action. The harness must not rebuild the
+        # invalidated tree, replace its context, or substitute a fake route.
+        response = await server._dispatch(action.tool, action.arguments)
+        (tmp_path / f"action_{action.side}_response.json").write_text(
+            response.model_dump_json(indent=2)
+        )
+        detail = response.model_dump(mode="json")
+        assert response.backend_status.actual_backend == "source_graph", detail
+        assert response.backend_status.single_backend_provenance is True
+        assert response.backend == "source_graph"
+        assert response.signal_path == f"top.q{action.side}"
+        assert response.source_info_origin == "source_graph"
+        assert Path(response.source_file) == tmp_path / "design.sv"
+        # Hand-authored RTL: qa<=a is line 3; qb<=b is line 4. This also
+        # rejects an A/B exchange even though both share one compile context.
+        assert response.source_line == source_line
+        assert response.resolved_bit_count == 8
+        assert {hop.backend for hop in response.driver_chain or []} <= {"source_graph"}
+        assert response.hierarchy_recovery.status == (
+            "rebuilt" if action.side == "a" else "hit_existing"
+        )
+        assert response.hierarchy_recovery.identity_basis == "current_sources"
+        recovered = response.hierarchy_recovery.compile_context
+        assert recovered["compile_log"] == action.arguments["compile_log"]
+        assert recovered["supplementary_compile_logs"] == []
+        # No historical source token was supplied by this caller. The ready
+        # action promises recovery, not proof of simulation/source identity.
+        assert "source_snapshot_sha256" not in action.arguments["compile_context"]
 
 
 @pytest.mark.anyio
