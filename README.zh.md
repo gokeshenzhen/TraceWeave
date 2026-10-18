@@ -320,8 +320,9 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 新 handle 在首次查询时重新建立后端绑定。恢复只校验已记录的编译/源码身份；
 KDB generation 及历史波形与源码的对应关系仍需各自的证据。
 
-新 handle 的 driver/load 源码回退默认使用有界 bootstrap；新 handle 的 path 当前
-需要 NPI，无 NPI 时使用既有 hierarchy 流程取得 Source Graph 路径回退。独立上下文的
+新 handle 的 driver/load 源码回退默认使用有界 bootstrap；新 handle 的 path 在 NPI
+不可用时也能为同一实例范围内的两个精确信号建立有界源码上下文。跨实例路径仍需 NPI
+或显式的旧 hierarchy 流程，独立源码范围合并尚未实现。独立上下文的
 X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
 接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
 history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。

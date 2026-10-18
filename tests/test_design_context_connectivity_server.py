@@ -292,6 +292,85 @@ async def test_source_fallback_uses_bound_metadata_for_bounded_bootstrap(tmp_pat
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("target", ["seed", "missing_signal"])
+async def test_prepared_same_scope_path_bootstraps_and_checks_both_endpoints(tmp_path, monkeypatch, target):
+    from src.source_graph_adapter import build_source_graph_path_plan
+    from src.source_graph_runtime import SourceGraphRuntime
+    from tests.test_source_graph_public_routing import ReadyWorker, _source_config
+
+    source = Path(__file__).parent / "fixtures/source_graph_frontend/hand_connectivity.sv"
+    log = tmp_path / "compile.log"
+    log.write_text(f"Chronologic VCS simulator\nCommand: vcs -sverilog {source} -top sg_top\n"
+                   f"Parsing design file '{source}'\nTop Level Modules:\n       sg_top\n")
+    handle, _ = await _prepare(log, backend_preference="source", top_hint="sg_top")
+    worker = ReadyWorker()
+    runtime = SourceGraphRuntime(worker)
+    monkeypatch.setattr(server, "get_source_graph_execution_config", _source_config)
+    monkeypatch.setattr(server, "get_source_graph_runtime", lambda cfg: runtime)
+    monkeypatch.setattr(server, "build_source_graph_path_plan", build_source_graph_path_plan)
+    monkeypatch.setattr(server, "_resolve_hierarchy_context", _forbidden)
+    monkeypatch.setattr(server, "_parse_merged_compile_context", _forbidden)
+    if target == "seed":
+        monkeypatch.setattr(connectivity_backend.StaticConnectivityBackend, "find_path", _forbidden)
+    result = await _public("trace_signal_path", {
+        "design_handle": handle, "from_signal": "sg_top.u_producer.rst_n",
+        "to_signal": "sg_top.u_producer." + target, "expand_assigns": True,
+    })
+    assert worker.calls == 1
+    receipt = result["backend_status"]["source_graph"]
+    assert receipt["bootstrap_context"]["scope"] == "same_scope_path"
+    assert receipt["bootstrap_context"]["ancestor_chain_proved"] is True
+    assert result["found"] is (target == "seed")
+    if target == "seed":
+        assert result["backend_status"]["actual_backend"] == "source_graph"
+        assert result["path"][0]["net_path"].startswith("sg_top.u_producer.rst_n")
+        assert result["path"][-1]["net_path"].startswith("sg_top.u_producer.seed")
+    else:
+        assert result["backend_status"]["actual_backend"] == "static"
+        assert receipt["query_status"] == "to_unresolved"
+
+
+@pytest.mark.anyio
+async def test_prepared_cross_scope_path_cannot_borrow_legacy_hierarchy(tmp_path, monkeypatch):
+    _, log, _ = _project(tmp_path, candidate=False)
+    handle, _ = await _prepare(log, backend_preference="source")
+    monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: replace(
+        config.get_source_graph_execution_config(), enabled=True, error_code=None))
+    monkeypatch.setattr(server, "_resolve_hierarchy_context", _forbidden)
+    monkeypatch.setattr(server, "build_bounded_connectivity_context", _forbidden)
+    result = await _public("trace_signal_path", {
+        "design_handle": handle, "from_signal": "top.a", "to_signal": "top.other.y",
+    })
+    assert result["found"] is False
+    assert result["backend_status"]["fallback_reason"] == "source_graph_bootstrap_path_scope_union_unavailable"
+    assert result["backend_status"]["source_graph"]["bootstrap_context"]["ancestor_chain_proved"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure,code", [("timeout", "design_context_timeout"),
+                                        ("changed", "design_context_changed"), ("cancel", None)])
+async def test_prepared_path_bootstrap_abort_never_advances_to_static(tmp_path, monkeypatch, failure, code):
+    _, log, _ = _project(tmp_path, candidate=False)
+    handle, _ = await _prepare(log, backend_preference="source")
+    monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: replace(
+        config.get_source_graph_execution_config(), enabled=True, error_code=None))
+    monkeypatch.setattr(server, "get_compile_source_index_config", lambda: replace(
+        config.get_compile_source_index_config(), enabled=False))
+    monkeypatch.setattr(server, "_resolve_hierarchy_context", _forbidden)
+    monkeypatch.setattr(connectivity_backend.StaticConnectivityBackend, "find_path", _forbidden)
+    def abort(**kwargs):
+        raise {"timeout": TimeoutError(), "changed": CaptureAborted("input_changed"),
+               "cancel": OperationCancelled()}[failure]
+    monkeypatch.setattr(server, "build_bounded_connectivity_context", abort)
+    args = {"design_handle": handle, "from_signal": "top.a", "to_signal": "top.y"}
+    if code is None:
+        with pytest.raises(asyncio.CancelledError):
+            await _public("trace_signal_path", args)
+    else:
+        assert (await _public("trace_signal_path", args))["error_code"] == code
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("reason", ["npi_load_failed", "npi_lsf_npi_unavailable", "npi_query_failed"])
 async def test_availability_failures_disable_later_npi_attempts_only_for_this_handle(tmp_path, backend_controls, reason):
     _, log, _ = _project(tmp_path)
