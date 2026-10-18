@@ -3372,6 +3372,7 @@ async def _query_prepared_source(*, operation, args, simulator, config):
             break
         budget.remaining()
         await validate_execution()
+        result["backend"] = backend.name
         query = result.pop("_source_graph_query_receipt")
         _merge_source_graph_query_receipt(receipt, query, query_wall_ms=(time.perf_counter() - query_started) * 1000)
         aggregate["query_wall_ms"] = aggregate.get("query_wall_ms", 0) + receipt["metrics"]["query_wall_ms"]
@@ -3421,6 +3422,7 @@ async def _query_prepared_source(*, operation, args, simulator, config):
             backend.bind_compile_context(context.compile_result())
             budget.remaining()
             result = await _call_signal_path_backend(backend, args=args, simulator=simulator)
+            result["backend"] = backend.name
             receipt["fallback_used"] = True
         else:
             claims = {"positive_fact_confidence": None, "target_bit_coverage": "none",

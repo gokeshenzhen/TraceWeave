@@ -79,6 +79,7 @@ async def path(tmp, handle, src, dst, **kwargs):
 
 
 def source_positive(value):
+    assert value.get("backend") == "source_graph", value
     assert value.get("backend_status", {}).get("actual_backend") == "source_graph", value
     assert value["backend_status"]["single_backend_provenance"] is True
     assert value["backend_status"]["source_graph"]["single_artifact_provenance"] is True
