@@ -41,6 +41,8 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
     out.mkdir(parents=True, exist_ok=False)
     require(not any(out.is_relative_to(Path(c['compile_log']).parent) for c in cases.values()),
             'evidence_inside_fixture')
+    prepared_waiter = args.lock_wait_prepared
+    prefix = 'p4_s8' if prepared_waiter else 'p4_s7'
     phase = 'setup'
     handles, identities, entries = {}, {}, {}
     events = report['lock_wait_events'] = []
@@ -211,6 +213,9 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
     original_set, original_auto = server._cursor_store.set, server._cursor_store.auto_set
     original_active = server._set_active_fsdb
     original_mark = server.operation_metrics.mark_cancel_observed
+    original_pin_all, original_exit = DivergenceDesigns.pin_all, DivergenceDesigns.__exit__
+    original_session_init = divergence_trace.ObservationSession.__init__
+    pin_events = report['lock_wait_pin_owners'] = []
 
     # Locate the ORIGINAL post-failed-acquire path, not a timing approximation.
     source_bytes = Path(server.__file__).read_bytes()
@@ -345,6 +350,8 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
                         and active[1] == priority == server._WAVE_PRIORITY_INTERACTIVE,
                         'holder_not_retained_interactive')
                 require(not release.is_set(), 'holder_released_before_queue')
+                require(all(v == (2 if prepared_waiter else 1) for v in pins().values()),
+                        'queued_request_lease_count')
                 state['queue_seen'] = True
                 event('queue_witness', event_id=id(cancel), holder_event_id=id(active[0]),
                       caller_line=frame.f_lineno, acquired_count=0, owns_fsdb=False,
@@ -398,24 +405,36 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
                     'holder_resident_group')
             require(counts['fsdb_abi_fsdb_event_open_v1'] == counts['fsdb_abi_fsdb_event_close_v1'],
                     'holder_event_cursor_open')
+            require(not locks()['source'] and not locks()['fan_in'], 'holder_native_owner_lock')
+            require(all(row.get('returned') and row.get('delegate_finished_ns')
+                        for row in report['fsdb_abi_calls']), 'holder_ffr_delegate_inflight')
+            require(counts['get_dynamic_step'] == len(report['dynamic_steps']),
+                    'holder_dynamic_delegate_inflight')
             state['holder_event'] = cancel
             save('gate_private_graph.json', stage)
             save('gate_real_observations.json', observations)
             save('gate_state.json', dict(pins=pins(), entries=entry_state(), parsers=parser_state(),
-                 event_id=id(cancel), counts=dict(counts), deadline=state['budget'].deadline))
+                 event_id=id(cancel), counts=dict(counts), deadline=state['budget'].deadline,
+                 all_ffr_delegates_finished=True, all_dynamic_delegates_returned=True,
+                 native_main_thread_serialized=True, native_owner_locks_clear=True))
             require(state['budget'].deadline - time.monotonic() >= 22, 'holder_gate_margin')
             state['gate_counts'] = dict(counts)
+            if prepared_waiter:
+                report['prepared_waiter_safe_holder_event'] = id(cancel)
+                report['prepared_waiter_gate_active'] = True
             state['gate_parser_calls'] = len(report['lock_wait_parser_calls'])
             event('holder_gate_ready', event_id=id(cancel), pins=pins(), deadline=state['budget'].deadline)
             loop.call_soon_threadsafe(ready.set)
             # This is a separate test event. Never arm either product event.
             state['gate_released'] = release.wait(20)
+            report['prepared_waiter_gate_active'] = False
             event('holder_gate_return', released=state['gate_released'], product_event_set=cancel.is_set())
         return result
 
     async def final(designs, *a, **kw):
         nonlocal final_active
         if ROLE.get() != 'holder':
+            event('nonholder_final_enter', designs_id=id(designs))
             return await original_final(designs, *a, **kw)
         final_active = True
         event('final_enter', pins=pins(), entries=entry_state())
@@ -468,6 +487,31 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
             waiting.cancel()
             await asyncio.gather(waiting, return_exceptions=True)
 
+    def pin_all(designs):
+        before = pins()
+        result = original_pin_all(designs)
+        pin_events.append(dict(kind='acquire', role=ROLE.get(), designs_id=id(designs),
+            task_id=id(asyncio.current_task()), before=before, after=pins(),
+            entries={label: id(designs.entries[handles[label]]) for label in cases}))
+        return result
+
+    def exit_designs(designs, *exc):
+        before = pins()
+        try:
+            return original_exit(designs, *exc)
+        finally:
+            pin_events.append(dict(kind='release', role=ROLE.get(), designs_id=id(designs),
+                task_id=id(asyncio.current_task()), before=before, after=pins(),
+                exception_type=exc[0].__name__ if exc and exc[0] else None))
+
+    def session_init(session, *a, **kw):
+        original_session_init(session, *a, **kw)
+        sessions[ROLE.get()] = (session, session.budget)
+
+    if prepared_waiter:
+        patch(DivergenceDesigns, 'pin_all', pin_all)
+        patch(DivergenceDesigns, '__exit__', exit_designs)
+        patch(divergence_trace.ObservationSession, '__init__', session_init)
     patch(server, '_run_in_wave_thread', wave)
     patch(server, '_run_in_cancellable_thread', source)
     patch(cancellation, 'push_cancel_event', push)
@@ -508,7 +552,7 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
             with server._design_context_store.pin(handles[label]) as entry:
                 entries[label] = entry
         require(handles['a'] != handles['b'] and identities['a'] != identities['b'], 'aliased_designs')
-        baseline_name = 'p4_s7_baseline'
+        baseline_name = prefix + '_baseline'
         baseline = await invoke('trace_baseline', 'trace_divergence', request(baseline_name, 'baseline must survive'))
         full_graph(baseline, 'trace_baseline')
         before_cursors, before_parsers = cursors(), parser_state()
@@ -519,11 +563,14 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
         save('baseline_state.json', dict(cursors=before_cursors, parsers=before_parsers, pins=pins(), anchors=anchor_ids))
 
         holder_task = asyncio.create_task(invoke('holder', 'trace_divergence',
-            request('p4_s7_holder', 'retained holder completes after queued waiter cancellation')))
+            request(prefix + '_holder', 'retained holder completes after queued waiter cancellation')))
         owned_tasks.append(holder_task)
         await reach(ready, holder_task, 5, 'holder_did_not_reach_gate')
-        waiter_task = asyncio.create_task(invoke('waiter', 'get_signal_at_time',
-            dict(wave_path=cases['b']['wave_path'], signal_path=cases['b']['signal_path'], time_ps=20000)))
+        waiter_tool = 'trace_divergence' if prepared_waiter else 'get_signal_at_time'
+        waiter_args = (request(prefix + '_waiter', 'cancel before first wave comparison')
+                       if prepared_waiter else dict(wave_path=cases['b']['wave_path'],
+                           signal_path=cases['b']['signal_path'], time_ps=20000))
+        waiter_task = asyncio.create_task(invoke('waiter', waiter_tool, waiter_args))
         owned_tasks.append(waiter_task)
         await reach(queued, waiter_task, 5, 'waiter_did_not_reach_failed_acquire')
         require(not holder_task.done() and not release.is_set() and original_lock.locked(), 'holder_not_waiting')
@@ -554,14 +601,36 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
         require(not [r for r in report['loads'] + report.get('dynamic_steps', []) if r.get('role') == 'waiter'],
                 'waiter_called_npi')
         require(not [e for e in events if e['role'] == 'waiter' and e['kind'] in
-                     ('wave_body_enter', 'set_active_fsdb', 'final_enter')], 'waiter_entered_body_or_owned_lock')
-        require(dict(counts) == state['gate_counts'] and len(report['lock_wait_parser_calls']) == state['gate_parser_calls'],
+                     ('wave_body_enter', 'set_active_fsdb', 'final_enter', 'nonholder_final_enter')], 'waiter_entered_body_or_owned_lock')
+        protected = {key for key in set(counts) | set(state['gate_counts'])
+                     if key != 'source_lock_check_profile_events'} if prepared_waiter else set(counts) | set(state['gate_counts'])
+        require(all(counts[key] == state['gate_counts'].get(key, 0) for key in protected)
+                and len(report['lock_wait_parser_calls']) == state['gate_parser_calls'],
                 'native_or_parser_work_while_holder_gated')
         require(not holder_task.done() and not state['holder_event'].is_set()
                 and original_lock.locked() and server._FSDB_ACTIVE[0] is state['holder_event']
                 and all(v == 1 for v in pins().values()), 'waiter_cancel_disrupted_holder')
         require(cursors() == before_cursors and not publications and parser_state() == before_parsers,
                 'waiter_changed_publication_or_parser')
+        if prepared_waiter:
+            waiter_leases = [row for row in pin_events if row['role'] == 'waiter']
+            holder_leases = [row for row in pin_events if row['role'] == 'holder']
+            require(len(waiter_leases) == 2 and len(holder_leases) == 1, 'lease_owner_event_count')
+            acquired, released = waiter_leases
+            require(acquired['kind'] == 'acquire' and released['kind'] == 'release'
+                    and acquired['designs_id'] == released['designs_id'] != holder_leases[0]['designs_id']
+                    and acquired['task_id'] == released['task_id'] != holder_leases[0]['task_id']
+                    and acquired['before'] == released['after'] == {'a': 1, 'b': 1}
+                    and acquired['after'] == released['before'] == {'a': 2, 'b': 2}
+                    and released['exception_type'] == 'CancelledError'
+                    and acquired['entries'] == {label: id(entries[label]) for label in cases},
+                    'prepared_waiter_own_leases_not_released')
+            require(report.get('prepared_waiter_nonowner_source_checks'), 'nonowner_source_work_unobserved')
+            waiter_session, waiter_budget = sessions['waiter']
+            require(not waiter_session.entries and waiter_session.events == waiter_session.nbytes
+                    == waiter_budget.cache_bytes == 0, 'waiter_session_leaked')
+            save('prepared_waiter_lease_receipt.json', dict(waiter=waiter_leases, holder=holder_leases,
+                 source_checks=report['prepared_waiter_nonowner_source_checks']))
         save('after_waiter_drain.json', dict(pins=pins(), entries=entry_state(), locks=locks(), cursors=cursors(),
              parsers=parser_state(), counts=dict(counts), waiter_owned_pins=0, pending_workers=pending()))
         event('holder_release_issue')
@@ -577,12 +646,12 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
             require([(e['side'], e['current']) for e in events if e['kind'] == name] == [('a', True), ('b', True)],
                     'holder_final_validation_incomplete')
         require(len(publications) == 1 and publications[0]['role'] == 'holder'
-                and publications[0]['result']['name'] == 'p4_s7_holder'
+                and publications[0]['result']['name'] == prefix + '_holder'
                 and publications[0]['result']['time_ps'] == 20000
                 and len(cursors()) == len(before_cursors) + 1, 'holder_cursor_contract')
         require(len(holder['next_actions']) == 2 and {a['side'] for a in holder['next_actions']} == {'a', 'b'}
                 and all(a['status'] == 'ready' and a['arguments']['design_handle'] == handles[a['side']]
-                and a['evidence']['time_ps'] == 20000 and a['evidence']['cursor_name'] == 'p4_s7_holder'
+                and a['evidence']['time_ps'] == 20000 and a['evidence']['cursor_name'] == prefix + '_holder'
                 for a in holder['next_actions']), 'holder_ready_actions')
         session = state['session']
         require(not session.entries and session.events == session.nbytes == state['budget'].cache_bytes == 0,
@@ -612,7 +681,7 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
                     and counts['sdk_load_design'] - before['sdk_load_design'] == 1
                     and counts['find_driver'] - before['find_driver'] == 1
                     and counts['fsdb_abi_total'] == before['fsdb_abi_total'], 'old_action_work')
-        recovered = await invoke('trace_recovered', 'trace_divergence', request('p4_s7_recovered', 'same healthy handles'))
+        recovered = await invoke('trace_recovered', 'trace_divergence', request(prefix + '_recovered', 'same healthy handles'))
         full_graph(recovered, 'trace_recovered')
         require(parser_state() == before_parsers, 'recovery_replaced_healthy_parser')
         require(not any(locks().values()) and all(v == 0 for v in pins().values()), 'recovery_resource_leak')
@@ -620,7 +689,8 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
                 'recovery_overwrote_baseline')
         session_states = {name: dict(entries=len(session.entries), events=session.events,
             nbytes=session.nbytes, cache_bytes=budget.cache_bytes) for name, (session, budget) in sessions.items()}
-        require(set(session_states) == {'trace_baseline', 'holder', 'trace_recovered'}
+        require(set(session_states) == ({'trace_baseline', 'holder', 'trace_recovered', 'waiter'}
+                if prepared_waiter else {'trace_baseline', 'holder', 'trace_recovered'})
                 and all(not any(row.values()) for row in session_states.values()), 'trace_session_cleanup')
         final_ids = {}
         for label, entry in entries.items():
@@ -645,10 +715,10 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
         require(counts['fsdb_abi_fsdb_event_open_v1'] == counts['fsdb_abi_fsdb_event_close_v1'],
                 'final_native_event_cursor_imbalance')
         report['coverage'] = dict(real_dual_native_wave=True, original_failed_lock_acquire=True,
-            queued_public_point_cancel=True, waiter_owned_design_pins=0, holder_continuity=True,
+            queued_public_point_cancel=not prepared_waiter, waiter_owned_design_pins=2 if prepared_waiter else 0, holder_continuity=True,
             original_handle_recovery=True, holder_gate_sec=20, analysis_timeout_sec=30,
             native_mid_call_interruption='not_tested', wire_cancellation='not_tested',
-            queued_prepared_trace_pins='not_tested', typed_backend_identity_timeout='not_tested',
+            queued_prepared_trace_pins='verified' if prepared_waiter else 'not_tested', typed_backend_identity_timeout='not_tested',
             license_checkout_release='unverified', source_wave_association='unverified', lsf='not_run')
         succeeded = True
     except BaseException as exc:
@@ -692,4 +762,5 @@ async def lock_wait_chain(args, report, cases, inventory, server, counts,
                 report['requires_exit_without_native_teardown'] = True
             save('lock_wait_events.json', events)
             save('lock_wait_workers.json', workers)
+            save('lock_wait_pin_owners.json', pin_events)
         require(not report.get('lifecycle_worker_undrained'), 'owned_workers_undrained')

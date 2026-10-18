@@ -167,7 +167,18 @@ async def run(args, report):
             counts['source_lock_check_profile_events'] += 1
             if runtime_server and any(lock.locked() for lock in runtime_server._wave_locks_for(
                     [case['wave_path'] for case in cases.values()])):
-                reject('source_under_wave_lock')
+                from src.cancellation import _cancel_event
+                active = runtime_server._FSDB_ACTIVE
+                safe_nonowner = (args.mode == 'lock-wait' and args.lock_wait_prepared
+                    and role() == 'waiter' and report.get('prepared_waiter_gate_active')
+                    and active is not None and id(active[0]) == report.get('prepared_waiter_safe_holder_event')
+                    and not active[0].is_set() and _cancel_event.get() is not active[0]
+                    and name in {'_validate_design_source', '_validate_design_binding'})
+                if not safe_nonowner:
+                    reject('source_under_wave_lock')
+                report.setdefault('prepared_waiter_nonowner_source_checks', []).append(dict(
+                    function=name, role=role(), thread=threading.get_ident(),
+                    own_event_id=id(_cancel_event.get()), holder_event_id=id(active[0])))
         if module == 'verdi_npi_backend.py' and name in {'find_driver', 'get_dynamic_step', 'query_source'}:
             if ((args.mode == 'kdb-mutation' and report.get('kdb_mutation_in_progress'))
                 or (args.mode == 'wave-mutation' and report.get('wave_mutation_in_progress'))):
@@ -313,7 +324,8 @@ async def run(args, report):
             require(all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
                         for p, digest in baseline_files.items()), 'final_actual_file_changed')
             report['final_actual_file_count'] = len(baseline_files)
-            report['status'] = 'dual_lock_wait_cancel_verified'
+            report['status'] = ('dual_prepared_lock_wait_cancel_verified' if args.lock_wait_prepared
+                                else 'dual_lock_wait_cancel_verified')
             return
 
         if args.mode == 'lifecycle':
@@ -670,6 +682,7 @@ def main():
     parser.add_argument('--inventory', required=True,
                         help='Reviewed private JSON with cases A/B, file paths and KDB identities')
     parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'), default='boundary')
+    parser.add_argument('--lock-wait-prepared', action='store_true', help='Queue a trace with its own design pins')
     parser.add_argument('--lock-wait-evidence-dir', help='New persistent directory for the read-only queued-lock row')
     parser.add_argument('--lifecycle-kind', choices=('cancel', 'timeout'))
     parser.add_argument('--lifecycle-evidence-dir', help='New persistent directory for the read-only lifecycle row')
