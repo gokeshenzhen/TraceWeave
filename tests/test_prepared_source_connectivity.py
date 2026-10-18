@@ -18,6 +18,11 @@ from src.source_graph_contract import SemanticScopeSearch, compare_source_graph_
 FIXTURES = Path(__file__).parent / "fixtures" / "prepared_source"
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 @pytest.fixture(autouse=True)
 def isolation(monkeypatch, tmp_path):
     import pyslang  # Required qualification; an unavailable frontend fails.
@@ -79,7 +84,7 @@ def source_positive(value):
     assert value["backend_status"]["source_graph"]["single_artifact_provenance"] is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("policy", ["auto", "source"])
 @pytest.mark.parametrize("old_global", [False, True])
 async def test_g1_same_scope_three_public_queries(tmp_path, policy, old_global):
@@ -106,7 +111,7 @@ async def test_g1_same_scope_three_public_queries(tmp_path, policy, old_global):
     assert repeat["backend_status"]["source_graph"]["effective_timeout_sec"] <= 60
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g1_cross_and_required_middle_instance(tmp_path):
     _, log = project(tmp_path, "chain", "chain_top")
     h = await prepare(tmp_path, log)
@@ -125,7 +130,7 @@ async def test_g1_cross_and_required_middle_instance(tmp_path):
     assert sg["semantic_instances_charged"] <= 64 and sg["semantic_members_charged"] <= 4096
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g1_generate_specialization_and_packed_field(tmp_path):
     _, log = project(tmp_path, "packed", "top")
     h = await prepare(tmp_path, log)
@@ -139,7 +144,7 @@ async def test_g1_generate_specialization_and_packed_field(tmp_path):
         assert all(row["exact_bit_mapping"] for row in r["path"][1:])
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g1_controlled_builder_failure_keeps_handle(tmp_path, monkeypatch):
     from src import kdb_builder
     _, log = project(tmp_path)
@@ -153,7 +158,7 @@ async def test_g1_controlled_builder_failure_keeps_handle(tmp_path, monkeypatch)
     assert r["found"] and r["backend_status"]["design_context"]["design_handle"] == h
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("change", ["source", "same_size_mtime", "options", "top", "order", "include"])
 async def test_g3_input_change_rejects_old_context(tmp_path, change):
     source, log = project(tmp_path)
@@ -182,7 +187,7 @@ async def test_g3_input_change_rejects_old_context(tmp_path, change):
     assert result["found"], result
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g3_same_named_designs_do_not_share_answers(tmp_path):
     a, alog = project(tmp_path / "a")
     b, blog = project(tmp_path / "b")
@@ -194,7 +199,7 @@ async def test_g3_same_named_designs_do_not_share_answers(tmp_path):
     assert good["backend_status"]["source_graph"]["compile_fingerprint_sha256"] != bad["backend_status"]["source_graph"]["compile_fingerprint_sha256"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g3_deadline_stops_before_next_stage(tmp_path, monkeypatch):
     _, log = project(tmp_path)
     h = await prepare(tmp_path, log)
@@ -211,7 +216,7 @@ async def test_g3_deadline_stops_before_next_stage(tmp_path, monkeypatch):
     await asyncio.sleep(.1)  # Wait for the owned planning thread to observe cancellation.
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g3_same_artifact_waiter_cancel_preserves_survivor(tmp_path, monkeypatch):
     _, log = project(tmp_path)
     h = await prepare(tmp_path, log)
@@ -241,7 +246,7 @@ async def test_g3_same_artifact_waiter_cancel_preserves_survivor(tmp_path, monke
     assert r["backend_status"]["source_graph"]["flight_disposition"] == "coalesced"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_g3_last_waiter_cancels_real_worker(tmp_path, monkeypatch):
     _, log = project(tmp_path)
     h = await prepare(tmp_path, log)
@@ -277,7 +282,7 @@ def test_g3_expansion_scope_key_and_coverage_are_exact():
     assert compare_source_graph_artifact_scopes(two, type(two).from_dict(two.to_dict())).value == "exact"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize('phase', ['worker', 'query', 'expansion'])
 @pytest.mark.parametrize('stop', ['timeout', 'config', 'kdb'])
 async def test_g3_phase_barriers_preserve_deadline_and_binding(tmp_path, monkeypatch, phase, stop):
@@ -337,7 +342,7 @@ async def test_g3_phase_barriers_preserve_deadline_and_binding(tmp_path, monkeyp
         await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize('work', ['prefix', 'instance', 'member', 'edge'])
 async def test_g3_cumulative_work_stops_without_static(tmp_path, monkeypatch, work):
     from src.connectivity_backend import StaticConnectivityBackend
@@ -378,7 +383,7 @@ async def test_g3_cumulative_work_stops_without_static(tmp_path, monkeypatch, wo
     (tmp_path / 'budget_trace.json').write_text(json.dumps({'control': work, 'requests': calls, 'response': result}))
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize('incomplete', [False, True])
 async def test_g3_prepared_scope_reuse_and_consumed_handoff(tmp_path, monkeypatch, incomplete):
     """Real worker data; incomplete manifest marker is an explicit control."""
@@ -425,7 +430,7 @@ async def test_g3_prepared_scope_reuse_and_consumed_handoff(tmp_path, monkeypatc
     (tmp_path / 'reuse_trace.json').write_text(json.dumps({'control_incomplete': incomplete, 'workers': calls, 'receipts': receipts}))
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize('limit', ['max_instances', 'max_members'])
 async def test_g3_real_projection_limit_is_typed_stop(tmp_path, monkeypatch, limit):
     from src.connectivity_backend import StaticConnectivityBackend
