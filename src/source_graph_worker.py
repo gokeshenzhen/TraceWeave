@@ -425,6 +425,7 @@ def project_semantic_frontend_session(
             exclusions=exclusions,
             focus_instance_paths=request.scope.coverage_boundary.instance_paths,
             assignment_instance_paths=request.scope.projection_instance_paths,
+            semantic_search=request.scope.semantic_search,
             metadata=(
                 (
                     "runtime",
@@ -556,7 +557,7 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         return _failure_payload(
             PrepareStatus.BUILD_FAILED,
             InternalBuildBlocker(
-                code="frontend_build_failed",
+                code=("semantic_scope_budget_exceeded" if type(exc).__name__ == "_SemanticScopeLimit" else "frontend_build_failed"),
                 stage="projection",
                 message=f"{type(exc).__name__}: {exc}",
             ),

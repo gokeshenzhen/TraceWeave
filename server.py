@@ -3290,6 +3290,158 @@ def _select_prepared_backend(entry, deferred):
     return backend, status, None
 
 
+async def _query_prepared_source(*, operation, args, simulator, config):
+    """Shared on-demand source route; every result belongs to one artifact."""
+    from src.prepared_source_connectivity import (
+        SourceQueryBudget, build_prepared_source_plan, semantic_expansion_root,
+    )
+    from src.source_graph_contract import SemanticScopeSearch
+
+    context = args["_prepared_design"].context
+    budget = SourceQueryBudget(args["_design_query_started"] + args.get("timeout_sec", 30))
+    async def validate_execution():
+        budget.remaining()
+        if (get_source_graph_execution_config() != config
+                or args.get("_prepared_source_execution", config) != config):
+            raise ExecutionBindingChanged()
+        await _validate_design_binding(args["_prepared_design"].binding,
+                                       timeout_sec=min(5, budget.remaining()))
+
+    await validate_execution()
+    if operation == "path":
+        budget.edges = 4096
+    worker_cap = min(config.timeout_sec, args.get("timeout_sec", 30))
+    signals = ((args["from_signal"], args["to_signal"]) if operation == "path"
+               else (args["signal_path"],))
+    started = time.perf_counter()
+    budget.remaining()
+    plan = await _run_in_cancellable_thread(lambda: build_prepared_source_plan(
+        context=context, operation=operation, args=args, config=config))
+    receipt = _blocked_source_graph_receipt("blocked", code="source_context_unavailable", stage="target_scope")
+    reason = "source_graph_context_unavailable"
+    result = None
+    attempts, aggregate = [], {}
+    for depth in range(3):
+        budget.remaining()
+        await validate_execution()
+        await _validate_design_source(context, timeout_sec=min(30, budget.remaining()))
+        if plan.status is AdapterStatus.BLOCKED:
+            if "limit" in plan.receipt.blocker.code or "budget" in plan.receipt.blocker.code:
+                raise CaptureAborted("source_scope_limit")
+            reason = "source_graph_" + plan.receipt.blocker.code
+            receipt = _blocked_source_graph_receipt("blocked", code=plan.receipt.blocker.code,
+                stage=plan.receipt.blocker.stage, adapter=plan.receipt.to_dict())
+            break
+        attempts.append(compute_source_graph_build_key(plan.request).digest)
+        with anyio.fail_after(budget.remaining()):
+            outcome = await get_source_graph_runtime(config).prepare(plan.request, timeout_seconds=worker_cap)
+        budget.remaining()
+        await validate_execution()
+        if outcome.status is PrepareStatus.CANCELLED:
+            raise asyncio.CancelledError
+        if outcome.status is PrepareStatus.TIMED_OUT:
+            raise TimeoutError("source worker deadline")
+        _record_source_graph_prepare_metrics(outcome)
+        receipt = _source_graph_receipt_from_prepare(plan, outcome,
+            adapter_wall_ms=(time.perf_counter() - started) * 1000 if depth == 0 else 0)
+        for key, value in receipt["metrics"].items():
+            if key.endswith("_ms") or key in {"actual_build_count", "frontend_launch_count", "coalesced_waiter_count"}:
+                aggregate[key] = aggregate.get(key, 0) + value
+        if outcome.status is not PrepareStatus.READY:
+            if outcome.blocker is not None and outcome.blocker.code == "semantic_scope_budget_exceeded":
+                raise CaptureAborted("source_scope_limit")
+            reason = _SOURCE_GRAPH_PREPARE_REASONS.get(outcome.status, "source_graph_prepare_failed")
+            result = None
+            break
+        budget.account_projection(outcome.entry)
+        if dict(outcome.entry.ir.metadata).get("semantic_scope_limited") == "1":
+            raise CaptureAborted("source_scope_limit")
+        backend = _source_graph_backend_for_plan(outcome.entry, plan)
+        backend.query_budget = budget
+        query_started = time.perf_counter()
+        budget.remaining()
+        try:
+            with anyio.fail_after(budget.remaining()):
+                result = (await _call_signal_path_backend(backend, args=args, simulator=simulator)
+                          if operation == "path" else await _call_public_connectivity_operation(
+                              backend, operation=operation, args=args, simulator=simulator))
+        except SourceGraphQueryBlocked as exc:
+            reason = "source_graph_" + exc.code
+            receipt["blocker"] = {"code": exc.code, "stage": "query"}
+            result = None
+            break
+        budget.remaining()
+        await validate_execution()
+        query = result.pop("_source_graph_query_receipt")
+        _merge_source_graph_query_receipt(receipt, query, query_wall_ms=(time.perf_counter() - query_started) * 1000)
+        aggregate["query_wall_ms"] = aggregate.get("query_wall_ms", 0) + receipt["metrics"]["query_wall_ms"]
+        budget.account_query(query)
+        receipt.update(final_artifact_fingerprint_sha256=outcome.entry.build_key.digest,
+                       single_artifact_provenance=True, final_artifact_scope_match=True)
+        reason = "source_graph_coverage_inconclusive"
+        found = query.get("status") == "found"
+        frontiers = tuple(query.get("expansion_frontiers", ()))
+        limited = dict(outcome.entry.ir.metadata).get("semantic_scope_limited") == "1"
+        truncated = any(query.get(key, False) for key in (
+            "query_truncated", "state_truncated", "edge_truncated", "assignment_truncated",
+            "evidence_truncated", "frontier_truncated", "traversal_truncated", "output_truncated"))
+        if found or query.get("coverage_status") == "complete":
+            break
+        if budget.exhausted or limited or truncated:
+            receipt["blocker"] = {"code": "source_query_budget_exceeded", "stage": "query"}
+            reason = "source_graph_source_query_budget_exceeded"
+            break
+        if depth == 2 or (operation != "path" and not frontiers):
+            break
+        root = await _run_in_cancellable_thread(
+            lambda: semantic_expansion_root(outcome.entry, (*signals, *frontiers)))
+        if root is None:
+            break
+        budget.remaining()
+        await validate_execution()
+        await _validate_design_source(context, timeout_sec=min(30, budget.remaining()))
+        plan = await _run_in_cancellable_thread(lambda: build_prepared_source_plan(
+            context=context, operation=operation, args=args, config=config, base=plan,
+            search=SemanticScopeSearch(roots=(root,), depth=depth + 1,
+                                       max_instances=budget.instances, max_members=budget.members)))
+        # No prefix facts survive into a different artifact.
+        result = None
+    budget.remaining()
+    receipt.update(artifact_attempt_count=len(attempts), scope_expansion_count=max(0, len(attempts)-1),
+                   attempted_artifact_fingerprints_sha256=attempts,
+                   request_timeout_sec=args.get("timeout_sec", 30),
+                   request_remaining_sec=budget.remaining(),
+                   semantic_instances_charged=64-budget.instances,
+                   semantic_members_charged=4096-budget.members)
+    receipt.setdefault("metrics", {}).update(aggregate)
+    if result is None:
+        if operation == "path":
+            from src.connectivity_backend import StaticConnectivityBackend
+            backend = StaticConnectivityBackend()
+            backend.bind_compile_context(context.compile_result())
+            budget.remaining()
+            result = await _call_signal_path_backend(backend, args=args, simulator=simulator)
+            receipt["fallback_used"] = True
+        else:
+            claims = {"positive_fact_confidence": None, "target_bit_coverage": "none",
+                      "global_coverage_status": "inconclusive", "exhaustive_search": False,
+                      "exclusive_driver_proved": False if operation == "driver" else None,
+                      "negative_claim_allowed": False}
+            result = {"signal_path": args["signal_path"], "backend": "source_graph",
+                      "resolved_rtl_name": args["signal_path"].rsplit(".", 1)[-1],
+                      "claim_semantics": claims, "unsupported_reason": reason}
+            if operation == "driver":
+                result.update(wave_path=args["wave_path"], driver_status="unknown", confidence="unverified",
+                              recursive=args.get("recursive", False))
+            else:
+                result.update(loads=[], completeness="shallow_only")
+    elif operation == "driver" and result.get("driver_status") in {"resolved", "partial"}:
+        await _attach_driver_dependencies(result, backend, args, simulator)
+    budget.remaining()
+    await validate_execution()
+    return _strip_connectivity_internal_receipts(result), receipt, reason
+
+
 async def _route_public_connectivity(
     *,
     operation: str,
@@ -3434,6 +3586,22 @@ async def _route_public_connectivity(
         )
 
     config = get_source_graph_execution_config()
+    if prepared is not None and config.enabled and config.valid:
+        clean, source_receipt, source_reason = await _query_prepared_source(
+            operation=operation, args=args, simulator=simulator, config=config)
+        actual = clean.get("backend", "source_graph")
+        usable = source_receipt.get("query_status") == "found"
+        attempts.append(_backend_attempt("source_graph", "success" if usable else "inconclusive",
+            reason=None if usable else source_reason, coverage_status=source_receipt.get("coverage_status")))
+        if actual == "static":
+            attempts.append(_backend_attempt("static", "success"))
+        status = _finalize_public_connectivity_status(
+            backend_status=backend_status, selected_backend=selected_backend, actual_backend=actual,
+            attempts=attempts, fallback_reason=fallback_reason if usable else source_reason,
+            npi_backend=npi_backend if npi_selected else None, npi_execution=npi_execution,
+            source_graph_receipt=source_receipt, npi_kdb_status=npi_kdb_status)
+        return clean, status
+
     source_graph_receipt: dict
     source_graph_reason: str
     bootstrap_receipt: dict | None = None
@@ -4261,6 +4429,22 @@ async def _route_public_signal_path(
         )
 
     config = get_source_graph_execution_config()
+    if prepared is not None and config.enabled and config.valid:
+        clean, source_receipt, source_reason = await _query_prepared_source(
+            operation="path", args=args, simulator=simulator, config=config)
+        actual = clean.get("backend", "source_graph")
+        usable = source_receipt.get("query_status") == "found"
+        attempts.append(_backend_attempt("source_graph", "success" if usable else "inconclusive",
+            reason=None if usable else source_reason, coverage_status=source_receipt.get("coverage_status")))
+        if actual == "static":
+            attempts.append(_backend_attempt("static", "success"))
+        status = _finalize_public_connectivity_status(
+            backend_status=backend_status, selected_backend=selected_backend, actual_backend=actual,
+            attempts=attempts, fallback_reason=fallback_reason if usable else source_reason,
+            npi_backend=npi_backend if npi_selected else None, npi_execution=npi_execution,
+            source_graph_receipt=source_receipt, npi_kdb_status=npi_kdb_status)
+        return clean, status
+
     source_graph_receipt: dict
     source_graph_reason: str
     if not config.enabled:
@@ -8464,6 +8648,15 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
     started = time.monotonic() if started is None else started
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
+    connectivity_query = name in {"explain_signal_driver", "find_signal_loads", "trace_signal_path"}
+    prepared_source_execution = get_source_graph_execution_config() if connectivity_query else None
+    if connectivity_query:
+        from src.hierarchy_source_ir import HierarchyQueryBudget
+        try:
+            HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
+        except (TypeError, ValueError) as exc:
+            return schemas.ToolErrorResult(error=str(exc), error_code="invalid_design_connectivity_arguments")
+        history_deadline = started + args.get("timeout_sec", 30)
     source_budget, source_arguments = None, None
     if name in {"find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
                 "get_tb_class_hierarchy", "dump_tb_section"}:
@@ -8560,7 +8753,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                     return raw
             binding, reused = await _prepare_pinned_design_entry(
                 store, handle, entry, metrics=metrics, remaining=remaining,
-                budget_binding=history_deadline is not None or source_budget is not None)
+                budget_binding=(history_deadline is not None and not connectivity_query) or source_budget is not None)
             resolved = {
                 **args, "compile_log": context.ordered_compile_logs[0],
                 "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
@@ -8571,9 +8764,11 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 resolved.setdefault("allow_bounded_bootstrap", True)
             if history_deadline is not None:
                 resolved["_design_query_started"] = started
+            if connectivity_query:
+                resolved["_prepared_source_execution"] = prepared_source_execution
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
+            if history_deadline is not None:
                 with anyio.fail_after(remaining(300)):
                     result = await _dispatch_inner(name, resolved)
             else:
@@ -8581,14 +8776,16 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                           if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
+            if history_deadline is not None:
                 remaining(30)
-            await _validate_design_source(context)
-            await _validate_design_binding(binding)
+            await _validate_design_source(context, timeout_sec=remaining(30))
+            await _validate_design_binding(binding, timeout_sec=remaining(5))
+            if connectivity_query and get_source_graph_execution_config() != prepared_source_execution:
+                raise ExecutionBindingChanged()
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             _require_design_store_owner(store)
-            if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
+            if history_deadline is not None:
                 remaining(30)
             status = (schemas.BackendStatus.model_validate(result["backend_status"])
                       if source_budget is not None else getattr(result, "backend_status", None))

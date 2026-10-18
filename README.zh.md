@@ -277,6 +277,14 @@ Static/Source Graph 仍保留有界覆盖。包括 Verilator 在内的编译上�
 上下文才重试。`backend_status.design_context` 分别报告候选身份、实际加载、源码
 关联及发现/校验成本；外部 KDB 的源码关联仍为未验证。
 
+prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备，
+从同一编译快照解析实例和 packed 字段，不隐式构建完整词法层级。路径可有界扩展
+语义邻域，每次从原端点在单一 artifact 重查。`timeout_sec` 包括绑定、规划、
+构建、查询和最终校验；`source_graph.effective_timeout_sec` 是共享 worker 的稳定
+期限上限，`request_timeout_sec` / `request_remaining_sec` 表示调用者总预算。
+范围不足或预算耗尽不证明无连接。前端仍可能处理完整有序编译上下文；语义候选和
+扩展范围保守地精确复用，磁盘缓存/持久会话默认值和显式旧 hierarchy 入口保持。
+
 `find_tb_instance(design_handle=..., path="top_tb.u0")` 也可使用默认 `auto`
 策略独立准备的上下文，直接读取 NPI 实例事实，无需完整 hierarchy；精确路径查询
 不枚举子节点。模块名查询支持 `count_mode="bounded"`（默认）或 `"exact"`，

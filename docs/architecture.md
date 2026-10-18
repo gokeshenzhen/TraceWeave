@@ -685,11 +685,29 @@ Verification
   gaps remain retryable. Binding metadata is charged against registry capacity.
   Receipts distinguish a candidate, successful load, and unverified source
   association, with first-discovery and repeated-validation costs. New-handle
-  driver/load fallback uses the existing bounded bootstrap over its captured
-  metadata; it cannot borrow another session's lexical hierarchy. Independent
-  dual-endpoint source planning is pending, so a new-handle path without a
-  usable NPI result reports unavailable Source Graph context and the existing
-  Static unsupported result. Ordinary compile-log/old-handle routing is retained.
+  driver/load/path fallback shares `prepared_source_connectivity` over its
+  immutable captured manifest and content snapshot. Exact bounded candidate
+  prefixes are resolved by Slang; only actual instances enter the IR, so packed
+  fields and generate scopes are not guessed lexical instances. Endpoint parents
+  select real assignment scopes together with their immediate real parents
+  (for internal binding nets) and the real endpoint LCA. Other ancestors retain
+  port/binding skeletons until a bounded expansion needs their assignments. A failed path
+  search can request at most two semantic neighborhood expansions, rooted in
+  the real endpoint LCA, and restarts from the original endpoints in one artifact.
+  The artifact key includes the semantic search specification and remaining
+  resource limits. Candidate/expansion scopes require exact projection/search
+  semantics for reuse (capability subsets remain valid). The cumulative request
+  budget charges repeated scope/definition-member work, including warm artifacts,
+  conservatively; `actual_build_count` separately reports actual frontend work.
+  Preparation, healthy NPI and legacy compatibility do not acquire this service.
+  `timeout_sec` owns the original caller deadline through final validation; a
+  stable worker cap preserves exact single-flight sharing and each caller's
+  deadline independently detaches its waiter. Final-waiter cancellation reaps
+  the worker. Cancellation, timeout, changed inputs and analysis budget failures
+  never advance fallback. Ordinary compile-log/old-handle routing is retained.
+  Frontend parsing/elaboration can still cover the full compilation, even though
+  IR projection is bounded. This slice does not migrate all X/failure consumers,
+  provide a six-tool Slang service, or change cache/session defaults.
   The optional `bounded_kdb_discovery` scope reuses that filesystem probe with
   one directory-entry budget (4,096 by default) and a caller-owned input
   capture. Setup files have a 64-KiB size precheck; compile option/filelist

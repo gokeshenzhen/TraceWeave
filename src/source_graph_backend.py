@@ -423,6 +423,7 @@ class SourceGraphConnectivityBackend:
 
     def __init__(self, entry: SourceGraphCacheEntry) -> None:
         self._entry = entry
+        self.query_budget = None
         self._unprojected_instance_candidates: tuple[str, ...] = ()
 
     def set_unprojected_instance_candidates(self, candidates: tuple[str, ...]) -> None:
@@ -449,6 +450,9 @@ class SourceGraphConnectivityBackend:
                 signal_path,
                 max_depth=max_depth,
                 unprojected_instance_candidates=(self._unprojected_instance_candidates),
+                **({"state_limit": self.query_budget.states, "edge_limit": self.query_budget.edges,
+                    "assignment_limit": self.query_budget.assignments, "match_limit": self.query_budget.matches,
+                    "frontier_limit": self.query_budget.frontiers, "evidence_limit": self.query_budget.evidence} if self.query_budget is not None else {}),
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
@@ -489,6 +493,9 @@ class SourceGraphConnectivityBackend:
                 signal_path,
                 max_depth=max_depth,
                 unprojected_instance_candidates=(self._unprojected_instance_candidates),
+                **({"state_limit": self.query_budget.states, "edge_limit": self.query_budget.edges, "match_limit": self.query_budget.matches,
+                    "frontier_limit": self.query_budget.frontiers}
+                   if self.query_budget is not None else {}),
             )
         except SignalResolutionError as exc:
             raise SourceGraphQueryBlocked(exc.code) from exc
@@ -520,6 +527,7 @@ class SourceGraphConnectivityBackend:
             from_signal,
             to_signal,
             expand_assigns=expand_assigns,
+            **({"traversal_limit": self.query_budget.edges} if self.query_budget is not None else {}),
         )
         claim_semantics = _path_claim_semantics(query)
         result = self._map_path(query, claim_semantics=claim_semantics)

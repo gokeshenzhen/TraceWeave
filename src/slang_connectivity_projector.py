@@ -63,6 +63,10 @@ MAX_PACKED_ALIASES = 1024
 MAX_PACKED_ALIAS_BITS = 65536
 
 
+class _SemanticScopeLimit(Exception):
+    pass
+
+
 class SlangProjectionError(RuntimeError):
     """The supplied frontend objects cannot produce a sound minimal IR."""
 
@@ -108,6 +112,7 @@ class ProjectionOptions:
     assignment_instance_paths: tuple[str, ...] = ()
     metadata: tuple[tuple[str, str], ...] = ()
     max_recorded_gaps: int = MAX_RECORDED_PROJECTION_GAPS
+    semantic_search: Any | None = None
 
     def __post_init__(self) -> None:
         if self.files_total < 0 or self.files_projected < 0:
@@ -401,6 +406,11 @@ class SlangConnectivityProjector:
                     "projector": "minimal_slang_connectivity",
                     "projection_model": "definition_template_plus_instance_binding",
                     **dict(self.options.metadata),
+                    **({"semantic_member_visits": str(self._semantic_member_visits),
+                        "semantic_instance_count": str(len(self._records)),
+                        "semantic_assignment_paths": json.dumps(sorted(self._semantic_assignment_paths)),
+                        "semantic_scope_limited": str(int(self._semantic_scope_limited))}
+                       if self.options.semantic_search is not None else {}),
                 }.items()
             )
         )
@@ -525,37 +535,147 @@ class SlangConnectivityProjector:
                 "Slang root contains no elaborated top instances"
             )
 
+    def _charge_semantic_member(self):
+        check_cancelled()
+        search = self.options.semantic_search
+        if search is not None:
+            if self._semantic_member_visits >= search.max_members:
+                raise _SemanticScopeLimit
+            self._semantic_member_visits += 1
+
+    def _semantic_scope_instances(self, root: Any) -> dict[str, Any]:
+        """Resolve exact prefixes, then enumerate only a budgeted neighborhood.
+
+        A packed member or generate scope is never admitted as an Instance.
+        Ancestors are looked up first so a stopped prefix cannot invent a parent.
+        Member work includes lookup and generate/array container visits.
+        """
+        search = self.options.semantic_search
+        selected: dict[str, Any] = {}
+        seen: set[str] = set()
+        self._semantic_member_visits = 0
+        self._semantic_scope_limited = False
+        self._semantic_assignment_paths: set[str] = set()
+
+        def charge():
+            check_cancelled()
+            if self._semantic_member_visits >= search.max_members:
+                raise _SemanticScopeLimit
+            self._semantic_member_visits += 1
+
+        def admit(symbol):
+            path = str(symbol.hierarchicalPath)
+            if path not in selected:
+                if len(selected) >= search.max_instances:
+                    raise _SemanticScopeLimit
+                selected[path] = symbol
+
+        try:
+            for requested in sorted(set(self.options.focus_instance_paths)):
+                parts = requested.split(".")
+                for index in range(1, len(parts) + 1):
+                    candidate = ".".join(parts[:index])
+                    if candidate in seen:
+                        continue
+                    seen.add(candidate)
+                    charge()
+                    try:
+                        symbol = root.lookupName(candidate)
+                    except Exception:
+                        continue
+                    if _kind_name(symbol) == "Instance":
+                        admit(symbol)
+            for candidate in search.assignment_candidates:
+                resolved = max((path for path in selected
+                                if candidate == path or candidate.startswith(path + ".")),
+                               key=len, default=None)
+                if resolved is not None:
+                    self._semantic_assignment_paths.add(resolved)
+            endpoints = tuple(self._semantic_assignment_paths)
+            # Bindings can terminate at an internal net in the immediate
+            # parent. Keep that bounded scope's declarations/assignments too;
+            # a ports-only skeleton cannot resolve such a binding endpoint.
+            for endpoint in endpoints:
+                parent = max((path for path in selected
+                              if endpoint.startswith(path + ".")), key=len, default=None)
+                if parent is not None:
+                    self._semantic_assignment_paths.add(parent)
+            if len(endpoints) > 1:
+                lca = max((path for path in selected if all(
+                    endpoint == path or endpoint.startswith(path + ".") for endpoint in endpoints)),
+                    key=len, default=None)
+                if lca is not None:
+                    self._semantic_assignment_paths.add(lca)
+            # Iterators, not lists/tuple materialization: wide instance/generate
+            # arrays are stopped before their entire contents are enumerated.
+            pending = [(selected[path], search.depth) for path in search.roots if path in selected]
+            expanded: set[str] = set()
+            while pending:
+                symbol, depth = pending.pop(0)
+                path = str(symbol.hierarchicalPath)
+                if depth < 1 or path in expanded:
+                    continue
+                expanded.add(path)
+                self._semantic_assignment_paths.add(path)
+                stack = [iter(symbol.body)]
+                while stack:
+                    charge()
+                    try:
+                        member = next(stack[-1])
+                    except StopIteration:
+                        stack.pop()
+                        continue
+                    kind = _kind_name(member)
+                    if kind == "GenerateBlock" and getattr(member, "isUninstantiated", False):
+                        continue
+                    if kind == "Instance":
+                        admit(member)
+                        self._semantic_assignment_paths.add(str(member.hierarchicalPath))
+                        if depth > 1:
+                            pending.append((member, depth - 1))
+                    elif kind in {"GenerateBlock", "GenerateBlockArray", "InstanceArray"}:
+                        stack.append(iter(member))
+        except _SemanticScopeLimit:
+            self._semantic_scope_limited = True
+            self._gaps.add(code="semantic_scope_budget_exceeded",
+                           message="bounded semantic instance discovery stopped",
+                           impact=CoverageStatus.INCONCLUSIVE,
+                           constructs=("hierarchy_scope",), scopes=("*",))
+        return selected
+
     def _collect_focused_hierarchy(self, root: Any) -> None:
         selected: dict[str, Any] = {}
         unresolved_requested: set[str] = set()
-        for requested in sorted(set(self.options.focus_instance_paths)):
-            parts = requested.split(".")
-            resolved_requested = False
-            while parts:
-                candidate = ".".join(parts)
-                try:
-                    symbol = root.lookupName(candidate)
-                except Exception:
+        if self.options.semantic_search is not None:
+            selected = self._semantic_scope_instances(root)
+        else:
+            for requested in sorted(set(self.options.focus_instance_paths)):
+                parts = requested.split(".")
+                resolved_requested = False
+                while parts:
+                    candidate = ".".join(parts)
+                    try:
+                        symbol = root.lookupName(candidate)
+                    except Exception:
+                        parts.pop()
+                        continue
+                    if _kind_name(symbol) == "Instance":
+                        selected[candidate] = symbol
+                        if candidate == requested:
+                            resolved_requested = True
                     parts.pop()
-                    continue
-                if _kind_name(symbol) == "Instance":
-                    selected[candidate] = symbol
-                    if candidate == requested:
-                        resolved_requested = True
-                parts.pop()
-            if not resolved_requested:
-                unresolved_requested.add(requested)
-                self._gaps.add(
-                    code="focused_instance_not_elaborated",
-                    message=(
-                        "a compile-hierarchy focus candidate is absent from the "
-                        "selected elaborated specialization"
-                    ),
-                    impact=CoverageStatus.INCONCLUSIVE,
-                    constructs=("hierarchy_scope", "conditional_instance"),
-                    scopes=(requested,),
-                )
-
+                if not resolved_requested:
+                    unresolved_requested.add(requested)
+                    self._gaps.add(
+                        code="focused_instance_not_elaborated",
+                        message=(
+                            "a compile-hierarchy focus candidate is absent from the "
+                            "selected elaborated specialization"
+                        ),
+                        impact=CoverageStatus.INCONCLUSIVE,
+                        constructs=("hierarchy_scope", "conditional_instance"),
+                        scopes=(requested,),
+                    )
         if not selected:
             raise SlangProjectionError(
                 "focused projection contains no elaborated instances"
@@ -598,9 +718,9 @@ class SlangConnectivityProjector:
             self._definition_representatives.setdefault(definition_id, record)
             self._definition_name_to_ids[str(symbol.definition.name)].add(definition_id)
 
-        assignment_paths = set(
+        assignment_paths = (self._semantic_assignment_paths if self.options.semantic_search is not None else set(
             self.options.assignment_instance_paths or self.options.focus_instance_paths
-        )
+        ))
         missing_assignment_paths = assignment_paths - selected_paths
         for path in sorted(missing_assignment_paths - unresolved_requested):
             self._gaps.add(
@@ -685,7 +805,7 @@ class SlangConnectivityProjector:
         assignments: list[AssignmentFact] = []
         assignment_keys: set[tuple[Any, ...]] = set()
         for member_index, (member, generate_scope) in enumerate(
-            _template_members(instance.body, record.path)
+            _template_members(instance.body, record.path, checkpoint=self._charge_semantic_member)
         ):
             kind = _kind_name(member)
             # The member ordinal distinguishes blocks even at identical macro
@@ -795,7 +915,8 @@ class SlangConnectivityProjector:
         ports: list[PortDecl] = []
         internal_paths: set[str] = set()
         packed_members: list[PackedMemberDecl] = []
-        for ordinal, port in enumerate(tuple(record.symbol.body.portList)):
+        for ordinal, port in enumerate(record.symbol.body.portList):
+            self._charge_semantic_member()
             kind = _kind_name(port)
             location = self._location(port.location)
             if location is None:
@@ -933,7 +1054,7 @@ class SlangConnectivityProjector:
             ) or bool(getattr(canonical, "isUnpackedStruct", False)):
                 return
             try:
-                fields = tuple(canonical)
+                fields = iter(canonical)
             except Exception:
                 self._gaps.add(
                     code="packed_members_unresolved",
@@ -945,6 +1066,7 @@ class SlangConnectivityProjector:
                 )
                 return
             for field in fields:
+                self._charge_semantic_member()
                 if _kind_name(field) != "Field":
                     continue
                 field_range = _packed_range(field)
@@ -1003,6 +1125,7 @@ class SlangConnectivityProjector:
             return None
         members: list[ModportMember] = []
         for member in symbol:
+            self._charge_semantic_member()
             if _kind_name(member) != "ModportPort":
                 self._gaps.add(
                     code="modport_member_unresolved",
@@ -1026,7 +1149,8 @@ class SlangConnectivityProjector:
         instance = record.symbol
         style = _binding_style(instance)
         bindings: list[PortBinding] = []
-        for position, connection in enumerate(tuple(instance.portConnections)):
+        for position, connection in enumerate(instance.portConnections):
+            self._charge_semantic_member()
             port = connection.port
             if _kind_name(port) == "InterfacePort":
                 projected = self._project_interface_binding(
@@ -1149,6 +1273,7 @@ class SlangConnectivityProjector:
         )
         bindings: list[PortBinding] = []
         for member in modport_symbol:
+            self._charge_semantic_member()
             if _kind_name(member) != "ModportPort":
                 continue
             internal = member.internalSymbol
@@ -1945,7 +2070,8 @@ class SlangConnectivityProjector:
 
     def _interface_aliases(self, instance: Any) -> dict[str, str]:
         aliases: dict[str, str] = {}
-        for port in tuple(instance.body.portList):
+        for port in instance.body.portList:
+            self._charge_semantic_member()
             if _kind_name(port) != "InterfacePort":
                 continue
             connection = getattr(port, "connection", None)
@@ -2173,8 +2299,10 @@ def _direct_child_instances(
 def _template_members(
     scope: Any,
     instance_path: str,
+    *, checkpoint=check_cancelled,
 ) -> Iterable[tuple[Any, str | None]]:
     for member in scope:
+        checkpoint()
         kind = _kind_name(member)
         if kind == "GenerateBlock" and getattr(member, "isUninstantiated", False):
             continue
@@ -2185,7 +2313,7 @@ def _template_members(
             relative = _relative_path(scope_path, instance_path)
             yield from (
                 (child, child_scope or relative)
-                for child, child_scope in _template_members(member, instance_path)
+                for child, child_scope in _template_members(member, instance_path, checkpoint=checkpoint)
             )
             continue
         absolute = str(getattr(member, "hierarchicalPath", ""))

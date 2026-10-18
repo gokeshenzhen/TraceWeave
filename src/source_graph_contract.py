@@ -26,10 +26,10 @@ from .connectivity_limits import DEFAULT_LOAD_OUTPUT_LIMIT
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 
 
-SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.3"
-SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.3"
+SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.4"
+SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.4"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.12"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.13"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
@@ -628,6 +628,51 @@ class CoverageBoundary:
 
 
 @dataclass(frozen=True)
+class SemanticScopeSearch:
+    """Bounded semantic lookup/expansion, never a proved lexical subtree.
+
+    Limits are artifact inputs. Different searches may not dominate each other,
+    even when their textual candidate prefixes happen to overlap.
+    """
+
+    roots: tuple[str, ...] = ()
+    depth: int = 0
+    max_instances: int = 64
+    max_members: int = 4096
+    assignment_candidates: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        roots = _path_set(self.roots, "semantic expansion root")
+        if len(roots) > 64 or any(len(path.split(".")) > 64 for path in roots):
+            raise ValueError("semantic expansion roots exceed bounds")
+        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or not 0 <= self.depth <= 2:
+            raise ValueError("semantic expansion depth must be between zero and two")
+        if bool(roots) != bool(self.depth):
+            raise ValueError("semantic expansion roots require a nonzero depth")
+        if not 1 <= _positive_limit(self.max_instances, "semantic instances") <= 64:
+            raise ValueError("semantic instance budget exceeds bounds")
+        if not 1 <= _positive_limit(self.max_members, "semantic members") <= 4096:
+            raise ValueError("semantic member budget exceeds bounds")
+        object.__setattr__(self, "roots", roots)
+        candidates = _path_set(self.assignment_candidates, "semantic assignment candidate")
+        if len(candidates) > 2 or any(len(path.split(".")) > 64 for path in candidates):
+            raise ValueError("semantic assignment candidates exceed bounds")
+        object.__setattr__(self, "assignment_candidates", candidates)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"roots": list(self.roots), "depth": self.depth,
+                "max_instances": self.max_instances, "max_members": self.max_members,
+                "assignment_candidates": list(self.assignment_candidates)}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> SemanticScopeSearch:
+        return cls(roots=tuple(value.get("roots", ())), depth=value.get("depth", 0),
+                   max_instances=value.get("max_instances", 64),
+                   max_members=value.get("max_members", 4096),
+                   assignment_candidates=tuple(value.get("assignment_candidates", ())))
+
+
+@dataclass(frozen=True)
 class SourceGraphBuildScope:
     design: str
     top: str
@@ -637,11 +682,18 @@ class SourceGraphBuildScope:
     coverage_boundary: CoverageBoundary
     path_hierarchy: PathHierarchyScope | None = None
     elaboration_candidates: tuple[str, ...] = ()
+    semantic_search: SemanticScopeSearch | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "design", _required_text(self.design, "design"))
         top = _hier_path(self.top, "top")
         object.__setattr__(self, "top", top)
+        if self.semantic_search is not None:
+            if not isinstance(self.semantic_search, SemanticScopeSearch):
+                raise ValueError("invalid semantic scope search")
+            if any(root != top and not root.startswith(top + ".")
+                   for root in (*self.semantic_search.roots, *self.semantic_search.assignment_candidates)):
+                raise ValueError("semantic roots must belong to the selected top")
         ancestors = tuple(
             _hier_path(path, "hierarchy ancestor") for path in self.hierarchy_ancestors
         )
@@ -696,6 +748,8 @@ class SourceGraphBuildScope:
             "target": self.target.to_dict(),
             "hierarchy_ancestors": list(self.hierarchy_ancestors),
             "elaboration_candidates": list(self.elaboration_candidates),
+            **({"semantic_search": self.semantic_search.to_dict()}
+               if self.semantic_search is not None else {}),
             "requested_cone": self.requested_cone.to_dict(),
             "coverage_boundary": self.coverage_boundary.to_dict(),
             "path_hierarchy": (
@@ -721,6 +775,8 @@ class SourceGraphBuildScope:
             target=_target_from_dict(target),
             hierarchy_ancestors=tuple(value.get("hierarchy_ancestors", ())),
             elaboration_candidates=tuple(value.get("elaboration_candidates", ())),
+            semantic_search=(SemanticScopeSearch.from_dict(value["semantic_search"])
+                             if value.get("semantic_search") is not None else None),
             requested_cone=RequestedCone.from_dict(cone),
             coverage_boundary=CoverageBoundary.from_dict(boundary),
             path_hierarchy=(
@@ -891,11 +947,18 @@ class SourceGraphArtifactScope:
     # Exact, bounded lookup requests, not hierarchy proof. A worker may admit
     # only actual elaborated Instance objects. No candidate-prefix cache reuse.
     elaboration_candidates: tuple[str, ...] = ()
+    semantic_search: SemanticScopeSearch | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "design", _required_text(self.design, "design"))
         top = _hier_path(self.top, "top")
         object.__setattr__(self, "top", top)
+        if self.semantic_search is not None:
+            if not isinstance(self.semantic_search, SemanticScopeSearch):
+                raise ValueError("invalid semantic scope search")
+            if any(root != top and not root.startswith(top + ".")
+                   for root in (*self.semantic_search.roots, *self.semantic_search.assignment_candidates)):
+                raise ValueError("semantic roots must belong to the selected top")
         snapshot = _required_text(
             self.hierarchy_snapshot_sha256, "hierarchy snapshot fingerprint"
         ).lower()
@@ -1008,6 +1071,7 @@ class SourceGraphArtifactScope:
             coverage_boundary=scope.coverage_boundary,
             capabilities=tuple(QueryOperation(item) for item in capabilities),
             elaboration_candidates=scope.elaboration_candidates,
+            semantic_search=scope.semantic_search,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1021,6 +1085,8 @@ class SourceGraphArtifactScope:
             "proved_lcas": list(self.proved_lcas),
             "projection_instance_paths": list(self.projection_instance_paths),
             "elaboration_candidates": list(self.elaboration_candidates),
+            **({"semantic_search": self.semantic_search.to_dict()}
+               if self.semantic_search is not None else {}),
             "coverage_boundary": self.coverage_boundary.to_dict(),
             "capabilities": [item.value for item in self.capabilities],
         }
@@ -1040,6 +1106,8 @@ class SourceGraphArtifactScope:
             proved_lcas=tuple(value.get("proved_lcas", ())),
             projection_instance_paths=tuple(value.get("projection_instance_paths", ())),
             elaboration_candidates=tuple(value.get("elaboration_candidates", ())),
+            semantic_search=(SemanticScopeSearch.from_dict(value["semantic_search"])
+                             if value.get("semantic_search") is not None else None),
             coverage_boundary=CoverageBoundary.from_dict(boundary),
             capabilities=tuple(
                 QueryOperation(item) for item in value.get("capabilities", ())
@@ -1313,6 +1381,7 @@ def _legacy_exact_artifact_identity(
         coverage_boundary=scope.coverage_boundary,
         capabilities=(scope.target.operation,),
         elaboration_candidates=scope.elaboration_candidates,
+        semantic_search=scope.semantic_search,
     )
     return SourceGraphArtifactIdentity(
         source=source,
@@ -1656,6 +1725,12 @@ def _artifact_scope_covers(
     available: SourceGraphArtifactScope,
     requested: SourceGraphArtifactScope,
 ) -> bool:
+    if available.semantic_search is not None or requested.semantic_search is not None:
+        if not set(requested.capabilities).issubset(available.capabilities):
+            return False
+        left, right = available.to_dict(), requested.to_dict()
+        left.pop("capabilities"); right.pop("capabilities")
+        return left == right
     if (
         available.design != requested.design
         or available.top != requested.top
@@ -1701,6 +1776,12 @@ def _semantic_context_scope_covers(
     they do not prevent the semantic root from projecting the requested scope.
     """
 
+    if available.semantic_search is not None or requested.semantic_search is not None:
+        if not set(requested.capabilities).issubset(available.capabilities):
+            return False
+        left, right = available.to_dict(), requested.to_dict()
+        left.pop("capabilities"); right.pop("capabilities")
+        return left == right
     if (
         available.design != requested.design
         or available.top != requested.top
@@ -1902,6 +1983,8 @@ def _scope_covers(
     available: SourceGraphBuildScope,
     requested: SourceGraphBuildScope,
 ) -> bool:
+    if available.semantic_search is not None or requested.semantic_search is not None:
+        return available.to_dict() == requested.to_dict()
     if (
         available.design != requested.design
         or available.top != requested.top

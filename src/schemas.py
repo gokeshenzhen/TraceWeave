@@ -1542,6 +1542,10 @@ class SourceGraphScopeMatchReceipt(SchemaModel):
 class SourceGraphBackendReceipt(SchemaModel):
     adapter_status: Literal["ready", "blocked", "disabled", "invalid"]
     bootstrap_context: dict[str, Any] | None = None
+    request_timeout_sec: float | None = None
+    request_remaining_sec: float | None = None
+    semantic_instances_charged: int | None = None
+    semantic_members_charged: int | None = None
     adapter: dict[str, Any] | None = None
     prepare_status: (
         Literal[

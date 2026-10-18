@@ -272,22 +272,24 @@ async def test_source_policy_skips_npi_and_keeps_fallback_coverage_explicit(tmp_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("tool", ["explain_signal_driver", "find_signal_loads"])
-async def test_source_fallback_uses_bound_metadata_for_bounded_bootstrap(tmp_path, monkeypatch, tool):
+async def test_source_fallback_uses_shared_prepared_source_metadata(tmp_path, monkeypatch, tool):
     _, log, _ = _project(tmp_path, candidate=False)
     handle, _ = await _prepare(log, backend_preference="source")
     cfg = replace(server.get_source_graph_execution_config(), enabled=True, error_code=None)
     monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: cfg)
     monkeypatch.setattr(server, "get_compile_source_index_config", lambda: replace(config.get_compile_source_index_config(), enabled=False))
+    from src import prepared_source_connectivity
+    from src.source_graph_adapter import _blocked_plan
     calls = []
-    def bounded(**kwargs):
+    def prepared_plan(**kwargs):
         calls.append(kwargs)
-        return type("BlockedBootstrap", (), {"status": "blocked", "hierarchy_result": None,
-                    "receipt": server._bootstrap_blocked_receipt(code="bootstrap_context_blocked", stage="target_scope")})()
-    monkeypatch.setattr(server, "build_bounded_connectivity_context", bounded)
+        return _blocked_plan(code="compile_context_unavailable", stage="compile_manifest")
+    monkeypatch.setattr(prepared_source_connectivity, "build_prepared_source_plan", prepared_plan)
+    monkeypatch.setattr(server, "build_bounded_connectivity_context", _forbidden)
     monkeypatch.setattr(server, "_resolve_hierarchy_context", _forbidden)
     monkeypatch.setattr(server, "_parse_merged_compile_context", _forbidden)
     result = await _public(tool, _arguments(tool, handle))
-    assert len(calls) == 1 and calls[0]["compile_result"]["top_modules"] == ["top"]
+    assert len(calls) == 1 and calls[0]["context"].compile_result()["top_modules"] == ["top"]
     assert result["backend"] == "source_graph" and result["claim_semantics"]["negative_claim_allowed"] is False
 
 
@@ -326,8 +328,8 @@ async def test_identity_abort_timeout_and_cancel_never_advance_fallback(tmp_path
         backend_controls.selector_action = fail
     else:
         backend_controls.action = fail
-    # Any source fallback would consult this configuration after the NPI stage.
-    monkeypatch.setattr(server, "get_source_graph_execution_config", _forbidden)
+    # Pure configuration capture is allowed; typed failures must not execute source fallback.
+    monkeypatch.setattr(server, "_query_prepared_source", _forbidden)  # Pure config capture is allowed; no source work after typed fatal.
     if failure == "cancel":
         with pytest.raises(asyncio.CancelledError):
             await _public("find_signal_loads", _arguments("find_signal_loads", handle))

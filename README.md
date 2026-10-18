@@ -113,6 +113,18 @@ Read `backend_status.design_context`: candidate identity, actual load and source
 association are separate, and validation/discovery costs are reported. External
 KDB source association remains unverified.
 
+Prepared driver/load/path share on-demand Source Graph planning when NPI is
+unavailable. They resolve semantic instance/packed-field boundaries from the
+same captured compilation, without an implicit full lexical hierarchy. Path
+queries can expand a bounded semantic neighborhood and restart in one artifact.
+`timeout_sec` covers binding, planning, builds, queries and final validation;
+`source_graph.effective_timeout_sec` is the stable shared-worker cap, while
+`request_timeout_sec` and `request_remaining_sec` describe the caller's total
+budget. Scope limits and incomplete coverage never prove that no path exists.
+The frontend may still process the full ordered compile context. Semantic
+candidate/expansion reuse is conservative and exact; cache/session defaults
+and explicit `build_tb_hierarchy` compatibility remain unchanged.
+
 `find_tb_instance(design_handle=..., path="top_tb.u0")` also accepts an
 independently prepared context with the default `auto` preference. It reads
 NPI instance facts without building the full hierarchy; exact path lookup does
