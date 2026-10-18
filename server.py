@@ -1019,35 +1019,6 @@ async def _resolve_connectivity_hierarchy_context(
     return result.hierarchy_result, snapshot, result.receipt, None
 
 
-async def _resolve_prepared_path_hierarchy_context(*, args: dict, simulator: str):
-    """Seed a same-scope path from its immutable prepared compile context.
-
-    One ancestor chain suffices only for two syntactically scoped endpoints
-    with the same parent. The path adapter still resolves both exact signals;
-    this seed is not proof that either signal exists or that they connect.
-    Cross-scope source unions remain unsupported here. Never borrow a legacy
-    hierarchy from mutable session state for a prepared query.
-    """
-    parents = [str(args[key]).strip().rpartition(".")[0]
-               for key in ("from_signal", "to_signal")]
-    if not parents[0] or parents[0] != parents[1]:
-        reason = "bootstrap_path_scope_union_unavailable"
-        receipt = _bootstrap_blocked_receipt(code=reason, stage="target_scope")
-        receipt["scope"] = "same_scope_path"
-        return None, args["_prepared_design"].context.identity_sha256, receipt, reason
-    hierarchy, snapshot, receipt, reason = await _resolve_connectivity_hierarchy_context(
-        args={**args, "signal_path": args["from_signal"], "allow_bounded_bootstrap": True},
-        simulator=simulator,
-    )
-    if reason == "bootstrap_timeout":
-        # The shared legacy helper reports its budget stop as a receipt.
-        # A prepared query's timeout must terminate, never advance fallback.
-        raise TimeoutError("prepared path bootstrap deadline exceeded")
-    if receipt is not None:
-        receipt = {**receipt, "scope": "same_scope_path"}
-    return hierarchy, snapshot, receipt, reason
-
-
 def _resolve_hierarchy_context(
     compile_log: str,
     simulator: str,
@@ -4292,7 +4263,6 @@ async def _route_public_signal_path(
     config = get_source_graph_execution_config()
     source_graph_receipt: dict
     source_graph_reason: str
-    bootstrap_receipt = None
     if not config.enabled:
         source_graph_reason = "source_graph_disabled"
         source_graph_receipt = _blocked_source_graph_receipt(
@@ -4316,19 +4286,14 @@ async def _route_public_signal_path(
     else:
         operation_metrics.set_value("source_graph_phase", "adapter")
         adapter_started = time.perf_counter()
-        bootstrap_reason = None
-        if prepared is not None:
-            (hierarchy_result, hierarchy_snapshot_sha256, bootstrap_receipt,
-             bootstrap_reason) = await _resolve_prepared_path_hierarchy_context(
-                args=args, simulator=simulator)
-        else:
-            hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
-                args["compile_log"], simulator)
+        hierarchy_result, hierarchy_snapshot_sha256 = (
+            (None, prepared.context.identity_sha256) if prepared is not None
+            else _resolve_hierarchy_context(args["compile_log"], simulator)
+        )
         if hierarchy_result is None:
             adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
             operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
-            source_graph_reason = (f"source_graph_{bootstrap_reason}" if bootstrap_reason
-                                   else "source_graph_hierarchy_context_unavailable")
+            source_graph_reason = "source_graph_hierarchy_context_unavailable"
             source_graph_receipt = _blocked_source_graph_receipt(
                 "blocked",
                 code=source_graph_reason,
@@ -4579,8 +4544,6 @@ async def _route_public_signal_path(
                                 operation_metrics.set_value(
                                     "source_graph_phase", "complete"
                                 )
-                                if bootstrap_receipt is not None:
-                                    source_graph_receipt["bootstrap_context"] = bootstrap_receipt
                                 status = _finalize_public_connectivity_status(
                                     backend_status=backend_status,
                                     selected_backend=selected_backend,
@@ -4607,8 +4570,6 @@ async def _route_public_signal_path(
                             )
 
     operation_metrics.set_value("source_graph_phase", "fallback")
-    if bootstrap_receipt is not None:
-        source_graph_receipt["bootstrap_context"] = bootstrap_receipt
     source_graph_receipt["fallback_used"] = True
     static_backend = StaticConnectivityBackend()
     if prepared is not None:
@@ -6838,8 +6799,6 @@ async def list_tools():
             description=(
                 "An explicit design_handle permits a fixed-design NPI query without a full hierarchy "
                 "prerequisite; compile_log may be omitted. Read backend_status for fallback coverage. "
-                "Prepared source fallback can bootstrap two exact signals in the same instance scope; "
-                "independent cross-scope source unions remain unsupported. "
                 "Find a structural connectivity path between two signals. A "
                 "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
                 "bounded, dual-endpoint Source Graph before Legacy Static. "

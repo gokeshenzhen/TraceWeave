@@ -171,11 +171,9 @@ The restored handle performs a new backend binding on its first query. This
 verifies the recorded compile/source identity; KDB generation and historical
 waveform correspondence still require their separate evidence.
 
-New-handle driver/load source fallback uses bounded bootstrap by default.
-New-handle paths can also bootstrap two exact signals in the same instance
-scope after NPI is unavailable. Cross-scope paths still need NPI or the explicit
-legacy hierarchy workflow; independent source scope unions remain pending.
-Independent-context X-trace uses the bound
+New-handle driver/load source fallback uses bounded bootstrap by default. The
+new-handle path route currently needs NPI; use the existing hierarchy workflow
+for a Source Graph path fallback. Independent-context X-trace uses the bound
 NPI route without a hierarchy; its source fallback currently reports unavailable
 semantic trace planning and recomputes with bound Static metadata. History keeps
 its dynamic-evidence limitations and includes context validation in the request
