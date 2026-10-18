@@ -8651,6 +8651,9 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
     connectivity_query = name in {"explain_signal_driver", "find_signal_loads", "trace_signal_path"}
+    enforce_total_deadline = connectivity_query or name in {
+        "analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields",
+    }
     prepared_source_execution = get_source_graph_execution_config() if connectivity_query else None
     if connectivity_query:
         from src.hierarchy_source_ir import HierarchyQueryBudget
@@ -8770,7 +8773,9 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 resolved["_prepared_source_execution"] = prepared_source_execution
             phase = time.monotonic()
             previous_failure = entry.npi_failure
-            if history_deadline is not None:
+            # X history owns its graph budget and returns a partial graph when
+            # it expires; only the total-deadline APIs reject late results.
+            if enforce_total_deadline:
                 with anyio.fail_after(remaining(300)):
                     result = await _dispatch_inner(name, resolved)
             else:
@@ -8778,16 +8783,16 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                           if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
             phase = time.monotonic()
-            if history_deadline is not None:
+            if enforce_total_deadline:
                 remaining(30)
-            await _validate_design_source(context, timeout_sec=remaining(30))
-            await _validate_design_binding(binding, timeout_sec=remaining(5))
+            await _validate_design_source(context, timeout_sec=remaining(30) if connectivity_query else 30)
+            await _validate_design_binding(binding, timeout_sec=remaining(5) if connectivity_query else 5)
             if connectivity_query and get_source_graph_execution_config() != prepared_source_execution:
                 raise ExecutionBindingChanged()
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             _require_design_store_owner(store)
-            if history_deadline is not None:
+            if enforce_total_deadline:
                 remaining(30)
             status = (schemas.BackendStatus.model_validate(result["backend_status"])
                       if source_budget is not None else getattr(result, "backend_status", None))
