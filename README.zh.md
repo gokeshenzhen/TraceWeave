@@ -316,7 +316,9 @@ prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备�
 元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
 `max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，
 需检查 `export_complete`。
-独立 Slang 层级回退仍待接入；旧 `handle` 的调用形状和静态 UVM 推断视图保持兼容。
+六个工具均已接受 `design_handle`。独立 Slang 层级回退仍待接入：无 NPI 时，已捕获的
+编译文件元数据仍可查询，缺少语义服务的查询会明确报告缺口；这六个 prepared 工具
+不会自动构建旧完整层级树。旧 `handle` 的调用形状和静态 UVM 推断视图保持兼容。
 目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
 
 `analyze_failure_event` 与 `recommend_failure_debug_next_steps` 接受同一个
@@ -332,9 +334,14 @@ prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备�
 新 handle 在首次查询时重新建立后端绑定。恢复只校验已记录的编译/源码身份；
 KDB generation 及历史波形与源码的对应关系仍需各自的证据。
 
-新 handle 的 driver/load 源码回退默认使用有界 bootstrap；新 handle 的 path 当前
-需要 NPI，无 NPI 时使用既有 hierarchy 流程取得 Source Graph 路径回退。独立上下文的
-X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
+prepared driver/load/path 已共用上述 Source Graph 范围规划，无需先 build 完整层级。
+工具返回不支持、浅层结果或覆盖不足时，客户端模型仍可用自己的文件读取工具继续
+追踪：先用同一 `design_handle` 的 `lookup_tb_files` / `get_tb_file_detail` 确认编译
+文件归属，再阅读赋值、端口绑定、参数和位范围，逐跳引用文件行号。将这些结论标为
+“源码推断”，与工具事实分开，并用波形/日志验证实际值和时序。不支持路径查询不表示
+电路没有连接；读取已确认的源码也不要求先构建完整层级。详见[源码继续调查流程](docs/workflow.md#continuing-with-source-files)。
+
+独立上下文的 X-trace 在健康 NPI 路线上无需完整 hierarchy；源码回退当前报告语义追踪范围服务尚未
 接通，并用绑定的编译元数据经 Static 重算整条链/图，history 保留动态证据不足的限制。
 history 的上下文校验计入请求期限；目标波形为已知值并不能证明 NPI 已加载 KDB。
 `trace_divergence` 的 `side_a.design_handle` 与 `side_b.design_handle` 可分别指定，

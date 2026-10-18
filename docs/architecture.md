@@ -1152,7 +1152,9 @@ Verification
   source-regex backend directly. Both NPI execution
   policies wrap Static at the parent: local NPI failures degrade in-process,
   while an LSF worker returns NPI-only results or a fixed failure receipt and the
-  login-node parent performs the fallback. `find_path` is NPI-only: Static returns
+  login-node parent performs the fallback. The public dispatcher also tries
+  bounded Source Graph before final Static fallback; prepared driver/load/path
+  share its compile-context planner. Static itself returns
   `unsupported_reason="static_backend_no_path_api"` rather than approximating
   with regex, since `sig_to_sig_conn_list` walks the elaborated netlist
   across assigns / interfaces / generates that source-regex cannot follow

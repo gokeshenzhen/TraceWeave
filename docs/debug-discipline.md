@@ -27,6 +27,12 @@ general form you can hand to any agent on any module.
 >   real waveform values and log lines — not on what the code "looks like" it
 >   should do. Use the available inspection tools to fetch evidence rather than
 >   reasoning from source alone.
+> - When connectivity tools report unsupported, shallow or incomplete coverage,
+>   continue reading the verified compiled source with client file tools. Trace
+>   assignments and port bindings, cite file:line, and label inferred hops as
+>   source inference. Keep uncertain parameter/generate bindings explicit. A
+>   tool capability gap does not prove disconnection or require abandoning the
+>   investigation; confirm runtime and root-cause claims with waveform/log facts.
 > - Do not modify any file, do not re-run the simulation, do not access the
 >   network.
 > - Do not let a file name, a historical backup, a README/HANDOFF note, or a

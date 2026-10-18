@@ -125,6 +125,16 @@ The frontend may still process the full ordered compile context. Semantic
 candidate/expansion reuse is conservative and exact; cache/session defaults
 and explicit `build_tb_hierarchy` compatibility remain unchanged.
 
+When connectivity reports unsupported, shallow or incomplete results, the client
+agent can continue tracing through the compiled source with its file-reading
+tools. Use `lookup_tb_files` / `get_tb_file_detail` with the same `design_handle`
+to confirm file ownership, then inspect assignments, port bindings, parameters
+and bit ranges. Cite each inferred hop as source inference, keep backend facts
+separate, and check runtime values and timing against waveform/log evidence.
+An unsupported path is not evidence of disconnection. No full hierarchy build
+is required just to read verified source; see the
+[source investigation workflow](docs/workflow.md#continuing-with-source-files).
+
 `find_tb_instance(design_handle=..., path="top_tb.u0")` also accepts an
 independently prepared context with the default `auto` preference. It reads
 NPI instance facts without building the full hierarchy; exact path lookup does
@@ -166,8 +176,11 @@ The three compile metadata sections need no backend; the four semantic sections
 use the same NPI services and preserve their coverage gaps. `max_items` bounds
 output, while work/time budgets still bound global traversal. An exact count
 does not make a truncated export complete: inspect `export_complete`.
-Independent Slang hierarchy fallback remains pending. Existing `handle` calls
-retain their output shape and static UVM inference view. Reusing a design
+All six tools already accept `design_handle`. Independent Slang hierarchy
+fallback remains pending: without NPI, captured file metadata remains available,
+while unsupported semantic requests report their missing provider. These six
+prepared tools do not automatically build the legacy full tree. Existing `handle`
+calls retain their output shape and static UVM inference view. Reusing a design
 handle currently reuses the binding; it does not yet avoid repeated KDB loads.
 
 `analyze_failure_event` and `recommend_failure_debug_next_steps` accept the same
@@ -188,10 +201,9 @@ The restored handle performs a new backend binding on its first query. This
 verifies the recorded compile/source identity; KDB generation and historical
 waveform correspondence still require their separate evidence.
 
-New-handle driver/load source fallback uses bounded bootstrap by default. The
-new-handle path route currently needs NPI; use the existing hierarchy workflow
-for a Source Graph path fallback. Independent-context X-trace uses the bound
-NPI route without a hierarchy; its source fallback currently reports unavailable
+Prepared driver/load/path use the shared Source Graph planner described above.
+Independent-context X-trace uses the bound NPI route without a hierarchy;
+its source fallback currently reports unavailable
 semantic trace planning and recomputes with bound Static metadata. History keeps
 its dynamic-evidence limitations and includes context validation in the request
 deadline. A clean waveform target does not establish that NPI loaded a KDB.

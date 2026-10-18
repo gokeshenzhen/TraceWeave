@@ -1728,6 +1728,20 @@ Simulation waveform debug workflow:
    - get_signal_at_time for exact values
    - get_waveform_summary for waveform sanity checks
 
+   If connectivity ends with unsupported, shallow_only, an unresolved boundary,
+   or incomplete coverage, continue with the client's source-file reading tools.
+   First verify compiled file ownership with lookup_tb_files/get_tb_file_detail
+   using the same design_handle; metadata-only lookup remains useful when semantic
+   details are unavailable. Read the actual assignments, port bindings, parameters,
+   generate conditions and bit ranges, then trace candidate connections manually.
+   Cite file:line for each inferred hop and label it as source inference, separately
+   from TraceWeave backend facts. Use waveform/log evidence to check runtime values,
+   active branches and clock phases before assigning a root cause. Missing tool
+   coverage does not prove disconnection; retain unresolved elaboration/identity
+   gaps and respect confirmed tool exclusions, cancellation and user stop limits.
+   Do not repeat an unchanged unsupported query or require a full hierarchy build
+   merely to continue reading verified source files.
+
 9. Call get_diagnostic_snapshot at any time to check workflow state.
    - Does NOT execute any sub-steps; only reads cached results
 """.strip()
@@ -6848,7 +6862,8 @@ async def list_tools():
             description=(
                 "Pass design_handle from prepare_design_context to query a fixed design without "
                 "a full hierarchy prerequisite. compile_log may then be omitted; supplied compile "
-                "arguments must match. Source fallback uses bounded bootstrap by default. "
+                "arguments must match. Source fallback uses the captured compile context and "
+                "bounded semantic instance planning without a full hierarchy build. "
                 "An expired explicit compile_context can also recover a bound design when a KDB "
                 "candidate is available; inspect hierarchy_recovery.design_handle and status. "
                 "Trace a waveform signal to its RTL driver and file:line (assignments, "
@@ -6864,9 +6879,12 @@ async def list_tools():
                 "sample the relevant window/clock phase. Omit for source lookup only.\n\n"
                 "Default route: trusted Verdi NPI -> bounded Source Graph -> Legacy Static. "
                 "Source Graph preserves per-bit port mappings and instance hierarchy; Static "
-                "cannot resolve composite port mappings. allow_bounded_bootstrap without full "
+                "cannot resolve composite port mappings. On legacy compile-log calls, allow_bounded_bootstrap without full "
                 "hierarchy returns proved positive Source Graph facts only; inconclusive results "
                 "never trigger a full-source Static scan.\n\n"
+                "If a boundary remains unresolved, continue reading verified compiled source with "
+                "client file tools. Cite each inferred connection separately from backend facts and "
+                "check runtime claims against waveform/log evidence.\n\n"
                 "Read backend_status.actual_backend, traversal limits/reasons, and source_info_origin "
                 "per hop. claim_semantics separates positive_fact_confidence/target_bit_coverage "
                 "from global_coverage_status; legacy confidence combines fact confidence and coverage. "
@@ -6914,7 +6932,8 @@ async def list_tools():
             name="find_signal_loads",
             description=(
                 "An explicit design_handle permits a fixed-design query without a full hierarchy "
-                "prerequisite; compile_log may be omitted. Source fallback uses bounded bootstrap by default. "
+                "prerequisite; compile_log may be omitted. Source fallback uses the captured compile "
+                "context and bounded semantic instance planning. "
                 "List places that consume (load) a signal: child instance input ports, "
                 "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and "
@@ -6922,7 +6941,7 @@ async def list_tools():
                 "that the static source-regex backend cannot reach. If NPI is unavailable or "
                 "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
                 "on-demand Source Graph; Legacy Static remains the normal final fallback "
-                "(shallow_only). When allow_bounded_bootstrap=true and no full hierarchy exists, "
+                "(shallow_only). On legacy compile-log calls, when allow_bounded_bootstrap=true and no full hierarchy exists, "
                 "only proved positive Source Graph facts are returned; an inconclusive/blocker "
                 "does not trigger a whole-source Static rescan. backend_status preserves the complete attempt chain and Source "
                 "Graph coverage/build receipt. claim_semantics separates confidence in returned "
@@ -6938,7 +6957,9 @@ async def list_tools():
                 "Each load query normalizes trailing numeric selects for Legacy Static matching, while "
                 "Source Graph validates the selected bits against the declaration. Each load "
                 "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
-                "which provenance produced its file:line."
+                "which provenance produced its file:line. For unresolved/shallow boundaries, continue "
+                "with client file reads of verified compiled sources; label manual connections as "
+                "source inference and verify runtime behavior with waveform/log evidence."
             ),
             inputSchema={
                 "type": "object",
@@ -6983,7 +7004,7 @@ async def list_tools():
         Tool(
             name="trace_signal_path",
             description=(
-                "An explicit design_handle permits a fixed-design NPI query without a full hierarchy "
+                "An explicit design_handle permits a fixed-design NPI or Source Graph query without a full hierarchy "
                 "prerequisite; compile_log may be omitted. Read backend_status for fallback coverage. "
                 "Find a structural connectivity path between two signals. A "
                 "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
@@ -6992,8 +7013,13 @@ async def list_tools():
                 "supported combinational dependencies. claim_semantics reports confidence in a "
                 "proved positive path independently from global coverage; a found path is not an "
                 "exhaustive enumeration. A no-path result is exact only when "
-                "negative_claim_allowed=true; an inconclusive result falls through "
-                "to unsupported_reason='static_backend_no_path_api'. This is "
+                "negative_claim_allowed=true. If no usable path result is available, final Static "
+                "can report unsupported_reason='static_backend_no_path_api'; bounded Source Graph "
+                "results may instead retain their incomplete coverage. Unsupported or incomplete results "
+                "do not prove disconnection. Continue with driver/load queries where useful and client "
+                "file reads of verified compiled sources; trace assignments, port bindings and bit "
+                "ranges manually, cite file:line, and label this as source inference rather than a "
+                "backend-proved path. Do not repeat an unchanged unsupported query. This is "
                 "connectivity, NOT temporal driver direction — use "
                 "explain_signal_driver for driver semantics."
             ),
@@ -7073,6 +7099,8 @@ async def list_tools():
                 "prepare_design_context for both modes. A healthy bound NPI route needs no full "
                 "hierarchy. Independent-context Source Graph trace planning is not yet available; "
                 "source fallback currently uses bound Static metadata and reports that limitation. "
+                "At an unsupported boundary, continue reading verified compiled source with client "
+                "file tools and use waveform evidence to check inferred propagation and timing. "
                 "When a signal shows X/Z at a target time, trace its propagation "
                 "chain through upstream driver logic. Uses the selected connectivity "
                 "route (trusted local/LSF NPI, bounded Source Graph, then Static). "

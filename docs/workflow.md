@@ -55,6 +55,36 @@ case or drop identity tokens to make a stale action appear valid.
 
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 
+## Continuing with source files
+
+An unsupported, shallow or incomplete connectivity result leaves an automated
+evidence gap. The client agent should continue investigating with its own file
+reading tools when those are available. `static_backend_no_path_api`, empty
+partial results and unresolved boundaries do not prove that no connection exists.
+Preserve any complete negative or objective exclusion within its stated scope.
+
+1. Keep the same `design_handle` and compile identity. Confirm file membership
+   with `lookup_tb_files` or `get_tb_file_detail`. Metadata-only lookup can still
+   identify compiled files when semantic details are unavailable. If identity
+   has changed, prepare a current context; do not borrow another design's files.
+2. Read the verified declarations and trace assignments, port connections,
+   always blocks, parameters, generate conditions, packed fields and bit ranges.
+   Record a file:line for each inferred hop. Keep unknown macro/parameter or
+   elaboration bindings explicit instead of guessing a concrete instance path.
+3. Report these hops as **source inference**, separately from tool/backend facts.
+   Source inspection can establish textual relationships and hypotheses; use
+   waveform/log evidence to check active branches, values, clock phases and a
+   claimed runtime root cause. Continue checking competing explanations.
+4. Use another tool call only when it adds evidence or changes the query scope.
+   Do not loop on an unchanged unsupported result or require a full hierarchy
+   build merely to read a verified file. Respect cancellation, time budgets and
+   user stop instructions. If source or runtime evidence is missing, report
+   that specific gap and the next useful observation.
+
+These instructions enable investigation beyond the connectivity backend's
+coverage. They do not change an unsupported result into a tool-proved path or
+guarantee that every client exposes local file-reading tools.
+
 ## Workflow
 
 ```
@@ -288,7 +318,7 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │           Read
    │           backend_status.execution_mode / scheduler_status / worker_status /
    │           fallback_reason: a failed worker means the parent result came from
-   │           local Static fallback, not exact NPI.
+   │           local Source Graph or Static fallback; inspect actual_backend.
    │           Recursive NPI fan-in admits at most 4,096 native states and
    │           returns at most 32 driver facts. A positive bounded prefix has
    │           driver_status="partial" and remains useful, but it is not an
@@ -327,18 +357,21 @@ Step 8: Deep dive (on demand, based on step 7 findings)
    │    When: A signal is X/Z at the failure time and the agent wants to
    │          trace propagation back to the root cause net.
    │    Output: propagation_chain[], root_cause, trace_status, analysis_guide
-   │    Notes: Combines waveform reads (per-hop value at time_ps) with
-   │           source-level driver analysis. The current implementation uses the
-   │           Static source resolver and does NOT dispatch NPI or LSF; it may
-   │           therefore stop at an instance-port boundary even when max_depth is
-   │           larger. At that stop, call explain_signal_driver(recursive=true)
-   │           on the boundary signal for a deeper NPI connectivity trace.
+   │    Notes: Combines waveform reads with trusted local/LSF NPI, bounded Source
+   │           Graph and Static routing. Both modes accept design_handle; healthy
+   │           NPI needs no full hierarchy. Prepared-context Source Graph trace
+   │           planning remains pending, so that route reports its gap and uses
+   │           bound Static metadata. At an unresolved boundary, inspect a driver
+   │           query and continue reading verified source, checking propagation
+   │           and clock phase against the waveform. See the source workflow above.
    │
    ├─ trace_signal_path(from_signal, to_signal, compile_log, expand_assigns?)
    │    When: Need a connected chain of nets between two signals (e.g. "how does
-   │          an input port reach the failing assertion?"). NPI-only — without
-   │          a KDB this returns unsupported_reason="static_backend_no_path_api"
-   │          and you should fall back to explain_signal_driver + find_signal_loads.
+   │          an input port reach the failing assertion?"). Uses trusted NPI,
+   │          then bounded Source Graph; prepared queries need no full hierarchy.
+   │          Final Static has no path API. An unsupported/inconclusive result is
+   │          not proof of disconnection. Use driver/load facts where useful and
+   │          continue with client source-file reads when automation reaches its limit.
    │    Output: path[], hops, found, direction_note
    │    Notes: This is connectivity (any direction), NOT temporal driver direction.
    │           Use explain_signal_driver for "what drives X temporally". Set
