@@ -367,7 +367,7 @@ class PendingContextRegistration:
 class DesignContextStore:
     """Bounded metadata registry. Busy contexts cannot be evicted or removed."""
 
-    def __init__(self, max_entries: int = 8, max_bytes: int = 16 * 1024 * 1024):
+    def __init__(self, max_entries: int = 8, max_bytes: int = 64 * 1024 * 1024):
         if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in (max_entries, max_bytes)):
             raise ValueError("context store limits must be positive integers")
         self.max_entries, self.max_bytes = max_entries, max_bytes

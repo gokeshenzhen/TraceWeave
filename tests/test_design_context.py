@@ -7,8 +7,9 @@ elaborated hierarchy, source replay completeness or semantic negative coverage.
 from __future__ import annotations
 
 import builtins
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import hashlib
+import json
 import os
 import subprocess
 import threading
@@ -637,6 +638,37 @@ def test_store_byte_budget_cannot_be_bypassed_by_first_registration(tmp_path):
     with pytest.raises(ContextUnavailable) as raised:
         store.register(context)
     assert raised.value.code == "context_capacity"
+
+
+def test_store_accepts_large_metadata_without_bypassing_explicit_byte_budget(tmp_path):
+    context = prepare_design_context(str(_simple(tmp_path)[0]))
+    metadata = context.compile_result()
+    # A synthetic large diagnostic inventory exercises actual serialized
+    # metadata accounting, without changing source observations or the getter.
+    metadata["diagnostic_inventory"] = "x" * (5 * 1024 * 1024)
+    large = replace(context, compile_result_json=json.dumps(metadata))
+    assert 16 * 1024 * 1024 < large.estimated_bytes < 64 * 1024 * 1024
+    small_store = DesignContextStore(max_bytes=16 * 1024 * 1024)
+    original_handle = small_store.register(context)
+    with pytest.raises(ContextUnavailable) as raised:
+        small_store.register(large)
+    assert raised.value.code == "context_capacity"
+    with small_store.lease(original_handle) as original:
+        assert original is context
+
+    store = DesignContextStore()
+    handle = store.register(large)
+    with store.lease(handle) as leased:
+        assert leased is large
+        assert leased.current()
+
+    metadata["diagnostic_inventory"] = "x" * (17 * 1024 * 1024)
+    oversized = replace(context, compile_result_json=json.dumps(metadata))
+    with pytest.raises(ContextUnavailable) as raised:
+        store.register(oversized)
+    assert raised.value.code == "context_capacity"
+    with store.lease(handle) as retained:
+        assert retained is large
 
 
 def _log_anchored_filelist_context(tmp_path, monkeypatch, ambient, *, matching_order=True):

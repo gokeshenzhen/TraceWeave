@@ -388,8 +388,12 @@ Verification
   timeout or changing inputs cannot publish one. Compilation replay, semantic
   coverage and KDB association still require their own validation.
   `DesignContextStore` owns immutable metadata under process-specific `dc_`
-  handles, with entry/byte limits and leases protecting busy entries from
-  eviction. Registration and acquisition revalidate content; neither registry
+  handles, with at most eight entries sharing a 64 MiB conservative metadata
+  charge and leases protecting busy entries from eviction. This total budget
+  was raised from 16 MiB for large SoC include-resolution inventories; it allows
+  up to 48 MiB more accounted metadata, while retaining the same accounting,
+  eviction and capacity rejection rules. It is not a process RSS limit.
+  Registration and acquisition revalidate content; neither registry
   entries nor released captures retain source bodies. Preparation and content
   validation run in a cancellable non-wave thread. A validated registration
   ticket is published on the event loop only after a cancellation checkpoint;
