@@ -394,7 +394,11 @@ async def test_unknown_expired_unsupported_and_reserved_handles_are_explicit(tmp
     handle, _ = await _prepare(log)
     unknown = await _public("find_signal_loads", _arguments("find_signal_loads", "dc_unknown"))
     assert unknown["error_code"] == "handle_expired"
-    unsupported = await _public("get_tb_subtree", {"design_handle": handle})
+    # Hierarchy queries now support prepared handles; waveform-only queries
+    # still reject them before opening the waveform or selecting a backend.
+    unsupported = await _public("get_waveform_summary", {
+        "design_handle": handle, "wave_path": "/control_only/unused.vcd",
+    })
     assert unsupported["error_code"] == "design_handle_tool_unsupported"
     reserved = await _public("find_signal_loads", {"_prepared_design": {}})
     assert reserved["error_code"] == "invalid_design_context_arguments"
