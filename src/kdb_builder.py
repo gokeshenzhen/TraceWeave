@@ -5,7 +5,7 @@ Auto-build a Verdi KDB from the compile_result of an Xcelium / VCS log.
 For Xcelium flows there is no KDB by default, so the NPI backend cannot
 answer driver/load queries. TraceWeave can run::
 
-    vericom -sv -kdb [+define+...] [+incdir+...] [-ntb_opts uvm] <files> -top T
+    vericom -sv -assert svaext -kdb [+define+...] [+incdir+...] [-ntb_opts uvm] <files> -top T
     elabcom -lib work.lib++ -elab kdb -top T
 
 itself, using the file list and defines parsed from the user's compile
@@ -60,6 +60,9 @@ from .sv_preprocessor import extract_preprocessor_options
 
 _KDB_ELAB_DIRNAME = "kdb.elab++"
 _WORK_LIB_DIRNAME = "work.lib++"
+# -sv alone selects IEEE 1800-2005 in the standalone frontend. Preserve
+# modern assertion syntax (e.g. s_eventually) without changing source macros.
+_VERICOM_FRONTEND_ARGS = ("-sv", "-assert", "svaext", "-kdb")
 
 
 class KdbBuildError(RuntimeError):
@@ -340,7 +343,9 @@ def _extract_build_inputs(
     dependencies = list(dict.fromkeys(dependencies))
 
     h = hashlib.sha256()
-    h.update(b"traceweave-kdb-inputs-v2\0")
+    h.update(b"traceweave-kdb-inputs-v3\0")
+    h.update(json.dumps(_VERICOM_FRONTEND_ARGS).encode())
+    h.update(b"\0")
     h.update(json.dumps(ordered_files, ensure_ascii=True).encode())
     h.update(b"\0")
     h.update(top.encode())
@@ -472,7 +477,7 @@ def _needs_uvm(compile_command: str, files: list[str]) -> bool:
 
 
 def _vericom_cmd(vericom_bin: str, inputs: dict[str, Any]) -> list[str]:
-    cmd = [vericom_bin, "-sv", "-kdb"]
+    cmd = [vericom_bin, *_VERICOM_FRONTEND_ARGS]
     if inputs["needs_uvm"] and not inputs.get("explicit_uvm_package"):
         cmd += ["-ntb_opts", "uvm"]
     for d in inputs["defines"]:
@@ -551,7 +556,7 @@ def _write_build_script(
     verdi_home: str,
     inputs: dict[str, Any],
 ) -> Path:
-    vericom_args = ["-sv", "-kdb"]
+    vericom_args = list(_VERICOM_FRONTEND_ARGS)
     if inputs["needs_uvm"] and not inputs.get("explicit_uvm_package"):
         vericom_args += ["-ntb_opts", "uvm"]
     for d in inputs["defines"]:

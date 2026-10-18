@@ -2090,6 +2090,13 @@ no full hierarchy + allow_bounded_bootstrap     → bounded Source Graph positiv
 
 ## Auto-KDB build for Xcelium (`build_kdb` tool)
 
+The standalone frontend enables IEEE 1800-2009 assertion extensions with
+`-assert svaext`, because `-sv` alone selects the 2005 syntax and rejects
+assertions such as `s_eventually`. The recorded source files and simulator
+macros stay intact. Live commands and `build.sh` share these frontend flags;
+the versioned cache key includes them, so an older recipe is rebuilt explicitly
+instead of being reused as an equivalent KDB.
+
 When the active simulator is Xcelium and the KDB probe finds nothing,
 the diagnostic snapshot lists `build_kdb` in `missing_steps`. Calling
 `build_kdb(compile_log=...)` runs vericom + elabcom against the file
@@ -2129,7 +2136,7 @@ build_kdb(compile_log)
 └── execution=local, or inside LSF worker
     → build in $TRACEWEAVE_CACHE_DIR/kdb/.tmp-<hash>-<pid>/
     ├── write build.sh (regenerated every rebuild; runnable standalone)
-    ├── vericom -sv -kdb [-ntb_opts uvm] [+define+...] [+incdir+...]
+    ├── vericom -sv -assert svaext -kdb [-ntb_opts uvm] [+define+...] [+incdir+...]
     │           <files in compile order> -top <top>
     │   → vericom.log
     ├── elabcom -lib work.lib++ -elab kdb -top <top>

@@ -270,11 +270,31 @@ def test_build_kdb_happy_path(tmp_path, monkeypatch):
     assert "vericom" in script
     assert "elabcom" in script
     assert "-top 'tb_top'" in script or "-top tb_top" in script
+    assert calls[0][1:5] == ["-sv", "-assert", "svaext", "-kdb"]
+    assert "-assert" in script and "svaext" in script
     # vericom got called before elabcom.
     phases = [Path(c[0]).name for c in calls]
     assert phases == ["vericom", "elabcom"]
     state = json.loads((Path(result["cache_dir"]) / "state.json").read_text(encoding="utf-8"))
     assert state["status"] == "ok"
+
+
+def test_frontend_recipe_change_cannot_hit_previous_kdb_cache(tmp_path, monkeypatch):
+    verdi_home = _fake_verdi_layout(tmp_path)
+    cr = _make_cr(tmp_path)
+    calls = _install_fake_run(monkeypatch, kdb_after_elabcom=True)
+    cache = tmp_path / "cache"
+    with monkeypatch.context() as previous:
+        previous.setattr(kdb_builder, "_VERICOM_FRONTEND_ARGS", ("-sv", "-kdb"))
+        old = build_kdb(cr, cache_root=cache, verdi_home=verdi_home)
+    current = build_kdb(cr, cache_root=cache, verdi_home=verdi_home)
+    assert old["status"] == current["status"] == "rebuilt"
+    assert old["hash"] != current["hash"]
+    assert old["kdb_path"] != current["kdb_path"]
+    assert len(calls) == 4
+    assert Path(old["kdb_path"]).is_dir()
+    assert build_kdb(cr, cache_root=cache, verdi_home=verdi_home)["status"] == "cached"
+    assert len(calls) == 4
 
 
 def test_write_build_script_uses_utf8_for_non_ascii_comments(tmp_path):
