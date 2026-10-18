@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -168,7 +169,18 @@ async def test_g3_input_change_rejects_old_context(tmp_path, change):
     header = tmp_path / "values.svh"
     header.write_text("`define V 1\n")
     source.write_text('`include "values.svh"\n' + source.read_text())
-    log.write_text(log.read_text().replace(f"{source} -top", f"+incdir+{tmp_path} {source} {extra} -top"))
+    evidence = f"Parsing design file '{source}'\nParsing design file '{extra}'\n"
+    log.write_text(log.read_text().replace(f"{source} -top", f"+incdir+{tmp_path} {source} {extra} -top")
+                   .replace(f"Parsing design file '{source}'\n", evidence))
+    def save_inputs(name):
+        records = {}
+        for file in (source, extra, header, log):
+            stat = file.stat()
+            records[str(file)] = {"sha256": hashlib.sha256(file.read_bytes()).hexdigest(),
+                "bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+                "inode": stat.st_ino}
+        (tmp_path / name).write_text(json.dumps(records, indent=2))
+    save_inputs("inputs.before.json")
     h = await prepare(tmp_path, log)
     if change in {"source", "same_size_mtime"}:
         before = source.stat()
@@ -177,7 +189,10 @@ async def test_g3_input_change_rejects_old_context(tmp_path, change):
     elif change == "include": header.write_text("`define V 2\n")
     elif change == "options": log.write_text(log.read_text().replace("-sverilog", "-sverilog +define+ALT"))
     elif change == "top": log.write_text(log.read_text().replace("p4_s9_a_tb", "other"))
-    else: log.write_text(log.read_text().replace(f"{source} {extra}", f"{extra} {source}"))
+    else:
+        log.write_text(log.read_text().replace(f"{source} {extra}", f"{extra} {source}")
+                       .replace(evidence, f"Parsing design file '{extra}'\nParsing design file '{source}'\n"))
+    save_inputs("inputs.after.json")
     r = await path(tmp_path, h, "p4_s9_a_tb.dut.q1", "p4_s9_a_tb.dut.result")
     assert r.get("error_code") == "design_context_changed", r
     assert not source_graph_production.source_graph_runtime_created()
@@ -186,6 +201,10 @@ async def test_g3_input_change_rejects_old_context(tmp_path, change):
     result = await path(tmp_path, fresh, *( ("other.a", "other.y") if change == "top"
                         else ("p4_s9_a_tb.dut.q1", "p4_s9_a_tb.dut.result")))
     assert result["found"], result
+    source_positive(result)
+    endpoint = result["path"][-1]
+    assert Path(endpoint["source_file"]).resolve() == (extra if change == "top" else source).resolve()
+    assert endpoint["source_line"] == (1 if change == "top" else 10)
 
 
 @pytest.mark.anyio
