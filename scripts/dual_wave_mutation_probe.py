@@ -99,7 +99,7 @@ def file_references(target, exclusions):
                 checked=checked, excluded=skipped, errors=errors, other_uids='not_checked')
 
 
-def install_wave_observers(server, report, counts, patches, reject, require, phase, main_thread):
+def install_wave_observers(server, report, counts, patches, reject, require, phase, main_thread, *, role=None):
     """Observe actual ABI delegates, preserving ctypes signature assignments."""
     from src import fsdb_parser
 
@@ -133,6 +133,9 @@ def install_wave_observers(server, report, counts, patches, reject, require, pha
                     else native_handles.get(args[0]) if args else None)
             row = dict(index=len(report['fsdb_abi_calls']), phase=phase(), api=self._name,
                        path=path, delegate_started_ns=time.monotonic_ns())
+            if role is not None:
+                from src.cancellation import _cancel_event
+                row.update(role=role(), thread=threading.get_ident(), event_id=id(_cancel_event.get()))
             report['fsdb_abi_calls'].append(row)
             try:
                 result = self._fn(*args, **kwargs)

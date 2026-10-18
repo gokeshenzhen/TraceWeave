@@ -98,6 +98,11 @@ async def run(args, report):
         for relative, digest in actual:
             baseline_files[str((tree / relative).resolve())] = digest
     report.update(counts=counts, denied=denied, loads=loads, phases={}, results={}, inputs=cases)
+    role = None
+    if args.mode == 'lock-wait':
+        from dual_lock_wait_probe import ROLE
+        role = ROLE.get
+        report['lock_wait_parser_calls'] = []
     phase = 'import'
     main_thread = threading.get_ident()
 
@@ -126,6 +131,11 @@ async def run(args, report):
             return
         module, name = Path(frame.f_code.co_filename).name, frame.f_code.co_name
         qualified = frame.f_code.co_qualname
+        if role is not None and ((module == 'fsdb_parser.py' and qualified.startswith('FSDBParser.'))
+                                 or (module == 'server.py' and name == '_get_parser')):
+            from src.cancellation import _cancel_event
+            report['lock_wait_parser_calls'].append(dict(function=qualified, role=role(),
+                thread=threading.get_ident(), event_id=id(_cancel_event.get()), monotonic_ns=time.monotonic_ns()))
         if ((module == 'tb_hierarchy_builder.py' and name in {
                 'build_hierarchy', 'build_component_tree', '_walk_component_tree', '_walk_children'})
                 or module == 'bounded_hierarchy_bootstrap.py' and name == 'build_bounded_connectivity_context'
@@ -209,8 +219,10 @@ async def run(args, report):
                             [case['wave_path'] for case in cases.values()])), 'native_under_wave_lock')
                         if _name == 'load_design':
                             loads.append(dict(phase=phase, arguments=a, kwargs=kw))
+                            if role is not None:
+                                loads[-1].update(role=role(), thread=threading.get_ident())
                             argv = a[0]
-                            if args.mode in {'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle'} or (args.mode == 'trace' and phase.startswith('trace_')):
+                            if args.mode in {'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'} or (args.mode == 'trace' and phase.startswith('trace_')):
                                 labels = [label for label, case in cases.items()
                                           if case['top_hint'] == argv[argv.index('-top') + 1]]
                                 require(len(labels) == 1, 'unknown_trace_load_top')
@@ -247,7 +259,7 @@ async def run(args, report):
         patches.extend(((npi, '_import_pynpi', original_import),
                         (server, '_select_prepared_backend', original_select)))
         npi._import_pynpi, server._select_prepared_backend = imported, select
-        if args.mode in {'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle'}:
+        if args.mode in {'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'}:
             original_step = npi.VerdiNpiBackend.get_dynamic_step
 
             def observed_step(backend, *a, **kw):
@@ -263,14 +275,16 @@ async def run(args, report):
                 report.setdefault('dynamic_steps', []).append(dict(
                     phase=phase, side=label, result=deepcopy(result),
                     loaded_top=backend._loaded_top, loaded_kdb=backend._loaded_kdb))
+                if role is not None:
+                    report['dynamic_steps'][-1].update(role=role(), thread=threading.get_ident())
                 return result
 
             patches.append((npi.VerdiNpiBackend, 'get_dynamic_step', original_step))
             npi.VerdiNpiBackend.get_dynamic_step = observed_step
-        if args.mode in {'wave-mutation', 'lifecycle'}:
+        if args.mode in {'wave-mutation', 'lifecycle', 'lock-wait'}:
             from dual_wave_mutation_probe import install_wave_observers
             install_wave_observers(server, report, counts, patches, reject, require,
-                                   lambda: phase, main_thread)
+                                   lambda: phase, main_thread, role=role)
         handles, identities = {}, {}
 
         async def measured(name, operation):
@@ -291,6 +305,16 @@ async def run(args, report):
             blocks = await server.call_tool(name, arguments)
             require(len(blocks) == 1 and blocks[0].type == 'text', 'unexpected_public_envelope')
             return json.loads(blocks[0].text)
+
+        if args.mode == 'lock-wait':
+            from dual_lock_wait_probe import lock_wait_chain
+            await lock_wait_chain(args, report, cases, inventory, server, counts,
+                                  measured, public, require, baseline_files)
+            require(all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
+                        for p, digest in baseline_files.items()), 'final_actual_file_changed')
+            report['final_actual_file_count'] = len(baseline_files)
+            report['status'] = 'dual_lock_wait_cancel_verified'
+            return
 
         if args.mode == 'lifecycle':
             from dual_lifecycle_probe import lifecycle_chain
@@ -382,7 +406,7 @@ async def run(args, report):
         report['product_completion_counts'] = dict(counts)
         phase = 'diagnostic_cleanup'
         cleanup_started = sample()
-        if runtime_server is not None and args.mode in {'chain', 'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle'}:
+        if runtime_server is not None and args.mode in {'chain', 'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'}:
             for case in cases.values():
                 if report.get('lifecycle_worker_undrained'):
                     report.setdefault('cleanup_errors', []).append('parser_cleanup_skipped_live_lifecycle_worker')
@@ -645,7 +669,8 @@ def main():
     parser.add_argument('--mcp-evidence', required=True)
     parser.add_argument('--inventory', required=True,
                         help='Reviewed private JSON with cases A/B, file paths and KDB identities')
-    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle'), default='boundary')
+    parser.add_argument('--mode', choices=('boundary', 'chain', 'trace', 'source-mutation', 'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'), default='boundary')
+    parser.add_argument('--lock-wait-evidence-dir', help='New persistent directory for the read-only queued-lock row')
     parser.add_argument('--lifecycle-kind', choices=('cancel', 'timeout'))
     parser.add_argument('--lifecycle-evidence-dir', help='New persistent directory for the read-only lifecycle row')
     parser.add_argument('--boundary-evidence', help='Reviewed real boundary JSON; required for chain mode')
@@ -654,6 +679,8 @@ def main():
     parser.add_argument('--mutation-evidence-dir', help='New private directory for durable recovery journal and raw responses')
     parser.add_argument('--fixture-lock-fd', type=int, help='Wave probe only: inherited outer exclusive fixture lock')
     args = parser.parse_args()
+    if args.mode == 'lock-wait' and not args.lock_wait_evidence_dir:
+        parser.error('lock-wait requires evidence directory')
     if args.mode == 'lifecycle' and not all((args.lifecycle_kind, args.lifecycle_evidence_dir)):
         parser.error('lifecycle requires kind and evidence directory')
     if args.mode in {'source-mutation', 'kdb-mutation', 'wave-mutation'} and not all((args.mutation_side, args.mutation_root, args.mutation_evidence_dir)):
@@ -668,7 +695,7 @@ def main():
     code, started = 0, sample()
     try:
         asyncio.run(run(args, report))
-        if args.mode in {'kdb-mutation', 'wave-mutation', 'lifecycle'}:
+        if args.mode in {'kdb-mutation', 'wave-mutation', 'lifecycle', 'lock-wait'}:
             # AnyIO schedules worker stop at root-task completion; give that
             # already-requested shutdown a bounded join before checking it.
             report['post_asyncio_threads_before_join'] = [thread.name for thread in threading.enumerate()]
@@ -692,7 +719,7 @@ def main():
         try:
             with os.fdopen(output_fd, 'w') as output:
                 print(json.dumps(report, indent=2, default=str), file=output, flush=True)
-                if args.mode in {'wave-mutation', 'lifecycle'}:
+                if args.mode in {'wave-mutation', 'lifecycle', 'lock-wait'}:
                     os.fsync(output.fileno())
         finally:
             if report.get('wave_mutation_in_progress') or report.get('lifecycle_worker_undrained'):
