@@ -75,11 +75,13 @@ def native_ports(backend, case, leaf, require, record):
         ports = [p for row in rows for p in row.get('ports', []) if p['direction'] == 'npiNlInput']
         clock = [p for p in ports if p['port_type'] == 'npiNlClockPort']
         data = [p for p in ports if p['port_type'] == 'npiNlDataPort']
+        expected_data = case['top_hint'] + '.dut.' + ('data' if leaf == 'q0' else 'q0')
         require(len(ports) == 2 and len(clock) == len(data) == 1
                 and clock[0]['state'] == 'npiNlRisingActive'
                 and clock[0]['net']['name'] in (case['top_hint'] + '.clk', case['top_hint'] + '.dut.clk')
-                and data[0]['net']['name'] == case['top_hint'] + '.dut.' + ('data' if leaf == 'q0' else 'q0')
-                and data[0]['net']['width'] == 8, 'sync_sdk_dff_pin_oracle')
+                and data[0]['net']['name'] in (expected_data, expected_data + '[7:0]')
+                and data[0]['net']['width'] == 8 and data[0]['net']['left'] == 7
+                and data[0]['net']['right'] == 0, 'sync_sdk_dff_pin_oracle')
     return result
 
 
