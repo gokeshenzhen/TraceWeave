@@ -57,19 +57,42 @@ _VHDL_SUFFIXES = VHDL_SOURCE_SUFFIXES
 
 
 def _read_rss_kib() -> tuple[int | None, int | None]:
-    current = None
+    """Read the current executable's RSS and peak in KiB.
+
+    Linux VmHWM belongs to the current address space. ru_maxrss can retain a
+    parent's pre-exec high water mark, so it is only a conservative fallback
+    when the address-space peak is unavailable (not proof of post-exec usage).
+    """
+    current = peak = None
     try:
         with open("/proc/self/status", encoding="utf-8") as stream:
             for line in stream:
-                if line.startswith("VmRSS:"):
-                    current = int(line.split()[1])
-                    break
+                parts = line.split()
+                if len(parts) != 3 or parts[0] not in {"VmRSS:", "VmHWM:"} or parts[2] != "kB":
+                    continue
+                try:
+                    value = int(parts[1])
+                except ValueError:
+                    continue
+                if value < 0:
+                    continue
+                if parts[0] == "VmRSS:":
+                    current = value
+                else:
+                    peak = value
     except (OSError, ValueError, IndexError):
         pass
-    try:
-        peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    except (ValueError, OSError):
-        peak = None
+    if peak is None:
+        try:
+            peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            if sys.platform == "darwin":
+                peak = (peak + 1023) // 1024
+            if peak < 0:
+                peak = None
+        except (ValueError, OSError):
+            pass
+    if current is not None and peak is not None:
+        peak = max(current, peak)
     return current, peak
 
 

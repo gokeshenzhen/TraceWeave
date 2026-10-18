@@ -258,6 +258,12 @@ Verification
   enters the server or disk. Context changes restart the child. Idle TTL, live
   and reported-peak RSS caps, timeout, cancellation, crash, and protocol errors
   destroy the whole session before any partial artifact can publish. A runtime
+  worker's Linux RSS receipt reads `VmRSS` and `VmHWM` together from
+  `/proc/self/status`, so the peak belongs to its current executable address
+  space and includes allocations already released. If `VmHWM` is unavailable,
+  the resource high-water fallback is conservative and may include pre-exec
+  history; unavailable observations remain unknown. Live polling and the
+  reported-peak guard both remain active at the configured limits. A runtime
   frontier outside the context takes the historical one-shot route without
   discarding the still-useful parent session. An opt-in, default-disabled disk
   tier stores only canonical ConnectivityIR JSON plus a versioned manifest
