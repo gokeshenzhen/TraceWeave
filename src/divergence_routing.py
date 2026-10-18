@@ -288,6 +288,24 @@ class DynamicRoute:
                     "multiple_driver_candidates",
                     "dynamic_expression_limit",
                 }
+                # Preserve positive native chains at an explicitly evidenced,
+                # unmodeled initial-only root. Generic missing evidence still
+                # restarts on Source Graph; this is neither a TB/input verdict
+                # nor an evaluated initial value.
+                sources = result.get("sources", ())
+                initial_leaf = (
+                    gaps == {"dynamic_evidence_unavailable"}
+                    and result.get("complete") is False
+                    and result.get("boundary") == "unsupported"
+                    and not result.get("branches") and sources
+                    and result.get("state", {}).get("signal")
+                    and all(row.get("kind") == "initial" and row.get("cell")
+                            and row.get("location")
+                            and row.get("declaration") == result["state"]["signal"]
+                            for row in sources)
+                )
+                if initial_leaf:
+                    terminal.add("dynamic_evidence_unavailable")
                 if (self.retain_async_controls and result.get('async_controls')
                     and result.get('clock') and result.get('boundary') == 'sequential'
                     and gaps <= {'temporal_context_unavailable', 'async_control_value_unmodeled', 'driver_set_incomplete'}):
@@ -351,6 +369,9 @@ class DynamicRoute:
             "attempted_backends": [
                 *self.attempts,
                 (dict(backend=self.stage, status='inconclusive', coverage_status='partial',
+                      reason='dynamic_evidence_unavailable')
+                 if self.stage == 'verdi_npi' and initial_leaf else
+                 dict(backend=self.stage, status='inconclusive', coverage_status='partial',
                       reason='async_control_value_unmodeled')
                  if self.retain_async_controls and result.get('async_controls')
                  else dict(backend=self.stage, status="success")),

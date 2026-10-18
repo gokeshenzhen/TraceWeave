@@ -285,6 +285,43 @@ async def test_no_difference_does_not_claim_native_load(tmp_path, controls, mode
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize('case', ['initial', 'empty', 'wrong_declaration', 'operator'])
+async def test_unmodeled_initial_leaf_retains_native_chain_only_with_source_evidence(
+        tmp_path, monkeypatch, controls, case):
+    _, _, args = await _case(tmp_path, controls)
+    original = ControlBackend.get_dynamic_step
+    def query(self, signal_path, **kwargs):
+        result = original(self, signal_path, **kwargs)
+        if self.name == 'verdi_npi' and signal_path in {'top.d', 'top.d[7:0]'}:
+            result.update(boundary='unsupported', complete=False, branches=[],
+                gaps=['npi_operator_semantics_unresolved' if case == 'operator'
+                      else 'dynamic_evidence_unavailable'], state=asdict(_ref('d', 8)),
+                sources=[] if case == 'empty' else [dict(kind='initial', cell='top:2:Init.Q',
+                    location='/design.sv:2', declaration='top.other' if case == 'wrong_declaration' else 'top.d')])
+        return result
+    monkeypatch.setattr(ControlBackend, 'get_dynamic_step', query)
+    result = await _trace(args)
+    assert result['status'] == 'partial'
+    assert not any(f['kind'] == 'local_logic_candidate' for f in result['findings'])
+    if case == 'initial':
+        assert len(result['nodes']) == 2 and len(result['edges']) == 1
+        leaf = result['nodes'][1]
+        assert leaf['status'] == 'frontier'
+        assert {f['reason'] for f in result['frontier']} == {'dynamic_evidence_unavailable'}
+        assert {f['side'] for f in result['frontier']} == {'a', 'b'}
+        assert result['coverage']['restart_reasons'] == []
+        assert not any(call[0] == 'static' for call in controls.calls)
+        for label in ('a', 'b'):
+            assert leaf[label]['structure']['backend'] == 'verdi_npi'
+            assert not leaf[label]['structure']['complete']
+            assert leaf[label]['structure']['sources'][0]['kind'] == 'initial'
+            assert result['contexts'][label]['backend_status']['actual_backend'] == 'verdi_npi'
+    else:
+        assert 'npi_dynamic_fallback' in result['coverage']['restart_reasons']
+        assert any(call[0] == 'static' for call in controls.calls)
+
+
+@pytest.mark.anyio
 async def test_omitted_supplements_and_explicit_matching_metadata_are_distinct(tmp_path, controls):
     a, _, args = await _case(tmp_path, controls, supplement=True)
     assert (await _trace(args))["comparison"]["first_divergence_time_ps"] == 5

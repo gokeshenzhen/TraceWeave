@@ -781,5 +781,6 @@ async def _walk(
                 )
             )
         node["status"] = (
-            "expanded" if expanded else "candidate" if all_equal else "frontier"
+            "expanded" if expanded else "candidate"
+            if all_equal and all(o["complete"] for o in observations.values()) else "frontier"
         )

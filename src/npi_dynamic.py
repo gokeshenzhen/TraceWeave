@@ -57,7 +57,7 @@ def query_step(backend, signal: str, *, include_dependency_candidates: bool = Fa
         return Expr("signal", width, signal=base, bits=bits, declared_bits=declared,
                     signed=bool(net.is_signed()))
 
-    def drivers(net):
+    def drivers(net, depth):
         original = bounded(net.driver_list() or [])
         # Preserve the normal tool's original-driver vs own-load alias guard.
         loads = [pin.full_name() for pin in bounded(net.load_list() or [])]
@@ -76,6 +76,22 @@ def query_step(backend, signal: str, *, include_dependency_candidates: bool = Fa
         # Preserve undecodable native handles as an explicit incompleteness gap.
         if any(f is None for _, f in pairs):
             raise ProjectionGap("driver_set_incomplete")
+        # An initial-only declaration has no modeled runtime expression. Keep
+        # its explicit native source evidence without promoting initialization
+        # to a permanent value, a runtime producer, or a testbench verdict.
+        # Only the queried root and a clean, fully decoded inventory qualify;
+        # missing/unknown/mixed drivers retain the ordinary fallback behavior.
+        if (depth == 0 and pairs and backend.kdb_load_quality == "clean"
+            and all(f.get("driver_kind") == "initial"
+                    and f.get("source_file")
+                    and isinstance(f.get("source_line"), int) and f["source_line"] > 0
+                    and f.get("_npi_raw") for _, f in pairs)):
+            result["boundary"] = "unsupported"
+            result["sources"].extend(dict(
+                kind="initial", cell=f["_npi_raw"],
+                location=f"{f['source_file']}:{f['source_line']}",
+                declaration=result["state"]["signal"],
+            ) for _, f in pairs)
         return genuine
 
     def expand(net, depth=0, force=False):
@@ -105,7 +121,7 @@ def query_step(backend, signal: str, *, include_dependency_candidates: bool = Fa
             raise ProjectionGap("combinational_cycle")
         active.add(key)
         try:
-            ds = drivers(net)
+            ds = drivers(net, depth)
             if len(ds) != 1:
                 raise ProjectionGap("multiple_driver_candidates" if ds else "dynamic_evidence_unavailable")
             pin = ds[0]
