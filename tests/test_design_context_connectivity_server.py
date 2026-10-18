@@ -292,39 +292,46 @@ async def test_source_fallback_uses_bound_metadata_for_bounded_bootstrap(tmp_pat
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("target", ["seed", "missing_signal"])
+@pytest.mark.parametrize("target", ["comb_y[7:4]", "missing_signal"])
 async def test_prepared_same_scope_path_bootstraps_and_checks_both_endpoints(tmp_path, monkeypatch, target):
+    from src.connectivity_ir import InstanceDecl
     from src.source_graph_adapter import build_source_graph_path_plan
     from src.source_graph_runtime import SourceGraphRuntime
-    from tests.test_source_graph_public_routing import ReadyWorker, _source_config
+    from tests.test_source_graph_public_routing import ReadyWorker, _source_config, _production_ir
 
     source = Path(__file__).parent / "fixtures/source_graph_frontend/hand_connectivity.sv"
     log = tmp_path / "compile.log"
-    log.write_text(f"Chronologic VCS simulator\nCommand: vcs -sverilog {source} -top sg_top\n"
-                   f"Parsing design file '{source}'\nTop Level Modules:\n       sg_top\n")
-    handle, _ = await _prepare(log, backend_preference="source", top_hint="sg_top")
-    worker = ReadyWorker()
+    log.write_text(f"Chronologic VCS simulator\nCommand: vcs -sverilog {source} -top sg_leaf\n"
+                   f"Parsing design file '{source}'\nTop Level Modules:\n       sg_leaf\n")
+    handle, _ = await _prepare(log, backend_preference="source", top_hint="sg_leaf")
+    ir = _production_ir()
+    leaf = next(definition for definition in ir.definitions if definition.name == "sg_leaf")
+    # Handwritten combinational concatenation: comb_y[7:4] = seq_q[3:0].
+    # Sequential and control-only dependencies are intentionally not paths.
+    ir = replace(ir, definitions=(leaf,), bindings=(), top_instances=("sg_leaf",),
+                 instances=(InstanceDecl("sg_leaf", "sg_leaf", leaf.definition_id, None, leaf.location),))
+    worker = ReadyWorker(ir=ir)
     runtime = SourceGraphRuntime(worker)
     monkeypatch.setattr(server, "get_source_graph_execution_config", _source_config)
     monkeypatch.setattr(server, "get_source_graph_runtime", lambda cfg: runtime)
     monkeypatch.setattr(server, "build_source_graph_path_plan", build_source_graph_path_plan)
     monkeypatch.setattr(server, "_resolve_hierarchy_context", _forbidden)
     monkeypatch.setattr(server, "_parse_merged_compile_context", _forbidden)
-    if target == "seed":
+    if target == "comb_y[7:4]":
         monkeypatch.setattr(connectivity_backend.StaticConnectivityBackend, "find_path", _forbidden)
     result = await _public("trace_signal_path", {
-        "design_handle": handle, "from_signal": "sg_top.u_producer.rst_n",
-        "to_signal": "sg_top.u_producer." + target, "expand_assigns": True,
+        "design_handle": handle, "from_signal": "sg_leaf.seq_q[3:0]",
+        "to_signal": "sg_leaf." + target, "expand_assigns": True,
     })
     assert worker.calls == 1
     receipt = result["backend_status"]["source_graph"]
     assert receipt["bootstrap_context"]["scope"] == "same_scope_path"
     assert receipt["bootstrap_context"]["ancestor_chain_proved"] is True
-    assert result["found"] is (target == "seed")
-    if target == "seed":
+    assert result["found"] is (target == "comb_y[7:4]")
+    if target == "comb_y[7:4]":
         assert result["backend_status"]["actual_backend"] == "source_graph"
-        assert result["path"][0]["net_path"].startswith("sg_top.u_producer.rst_n")
-        assert result["path"][-1]["net_path"].startswith("sg_top.u_producer.seed")
+        assert result["path"][0]["net_path"] == "sg_leaf.seq_q[3:0]"
+        assert result["path"][-1]["net_path"] == "sg_leaf.comb_y[7:4]"
     else:
         assert result["backend_status"]["actual_backend"] == "static"
         assert receipt["query_status"] == "to_unresolved"
