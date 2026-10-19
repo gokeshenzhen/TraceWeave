@@ -316,17 +316,20 @@ prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备�
 元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
 `max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，
 需检查 `export_complete`。
-六个工具均已接受 `design_handle`。独立 Slang 层级回退仍待接入：无 NPI 时，已捕获的
-编译文件元数据仍可查询，缺少语义服务的查询会明确报告缺口；这六个 prepared 工具
-不会自动构建旧完整层级树。旧 `handle` 的调用形状和静态 UVM 推断视图保持兼容。
-目前复用 design handle 会复用绑定，仍可能重复加载 KDB。
+六个工具均已接受 `design_handle`。无可用 NPI 时，精确 path 的 `find_tb_instance`
+与有限 `get_tb_subtree` 复用隔离的 Slang runtime：最多采集 64 个真实 scope、
+检查 4096 个 member、展开两层直接孩子；前端仍可能处理整个编译上下文。
+Generate scope 保留真实父子关系，定义和实例位置分开并绑定捕获源码，缺失位置为 null。
+局部计数保留下界，未找到不作全局不存在结论。Slang 的 module 搜索、精确计数、
+无限 depth、类/类型库存及文件/section 语义导出仍明确报告缺口。纯元数据免前端，
+健康 NPI 优先，旧 `handle` 能力保持兼容。
 
 `analyze_failure_event` 与 `recommend_failure_debug_next_steps` 接受同一个
-`design_handle`，在波形锁外查询日志中的精确实例和有界顶层直接子实例，再进行波形
-关联。建议仍是启发式结果，`source_correlation` 明示候选范围不完整。只提供
-`compile_log` 时自动独立准备上下文；NPI 不可用时保留有预算的旧源码回退，可能完整
-构建词法层级，并标明 `full_hierarchy_fallback=true`。未提供编译上下文的日志/波形
-分析，以及 `analyze_failures`，不要求层级。结构扫描和 handshake sweep 的建议仍保留。
+`design_handle`，在波形锁外关联源码。NPI 提供有限候选；Slang 使用精确日志 scope，
+没有合格路径时使用有限顶层孩子。每组候选只来自一个产物，建议是调查线索。
+只提供 `compile_log` 时自动准备上下文。默认 prepared 路线不再隐式构建旧全树；
+源码服务不可用时返回 partial 或 log-only 及缺口。显式 legacy 上下文恢复仍保留，
+结构扫描和 handshake sweep 的建议不变。
 
 淘汰或重启后，可将返回的 `recovery_context` 原样作为 `prepare_design_context`
 的参数。其 `context_identity_sha256` 是待匹配的身份；输入变化时拒绝发布 handle，

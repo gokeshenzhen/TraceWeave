@@ -331,6 +331,7 @@ class SlangConnectivityProjector:
         self._skipped_bindings = 0
         self._skipped_assignments = 0
         self._assignment_definition_ids: set[str] = set()
+        self._hierarchy_payload = None
 
     def project(self, root: Any) -> SlangProjection:
         self._seed_declared_gaps()
@@ -363,7 +364,7 @@ class SlangConnectivityProjector:
         instances = tuple(self._project_instance(record) for record in self._records)
         bindings: list[PortBinding] = []
         for record in self._records:
-            if record.parent_path is None:
+            if record.parent_path is None or self._hierarchy_payload is not None:
                 continue
             bindings.extend(self._project_bindings(record))
 
@@ -406,6 +407,8 @@ class SlangConnectivityProjector:
                     "projector": "minimal_slang_connectivity",
                     "projection_model": "definition_template_plus_instance_binding",
                     **dict(self.options.metadata),
+                    **({"hierarchy_scopes_v1": json.dumps(self._hierarchy_payload, sort_keys=True)}
+                       if self._hierarchy_payload is not None else {}),
                     **({"semantic_member_visits": str(self._semantic_member_visits),
                         "semantic_instance_count": str(len(self._records)),
                         "semantic_assignment_paths": json.dumps(sorted(self._semantic_assignment_paths)),
@@ -646,7 +649,14 @@ class SlangConnectivityProjector:
     def _collect_focused_hierarchy(self, root: Any) -> None:
         selected: dict[str, Any] = {}
         unresolved_requested: set[str] = set()
-        if self.options.semantic_search is not None:
+        if (self.options.semantic_search is not None
+                and self.options.semantic_search.purpose == "hierarchy"):
+            from .slang_hierarchy_projection import collect_hierarchy_scopes
+            selected, self._hierarchy_payload = collect_hierarchy_scopes(self, root)
+            self._semantic_member_visits = self._hierarchy_payload["member_visits"]
+            self._semantic_scope_limited = self._hierarchy_payload["limited"]
+            self._semantic_assignment_paths = set()
+        elif self.options.semantic_search is not None:
             selected = self._semantic_scope_instances(root)
         else:
             for requested in sorted(set(self.options.focus_instance_paths)):
@@ -786,6 +796,9 @@ class SlangConnectivityProjector:
             if str(definition.definitionKind.name).lower() == "interface"
             else DefinitionKind.MODULE
         )
+        if self._hierarchy_payload is not None:
+            return DefinitionTemplate(definition_id=record.definition_id,
+                name=str(definition.name), kind=definition_kind, location=definition_location)
         aliases = self._interface_aliases(instance)
         ports, port_internal_paths, packed_members = self._project_ports(record)
         if (

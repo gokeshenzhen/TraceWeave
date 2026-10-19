@@ -640,8 +640,11 @@ class SemanticScopeSearch:
     max_instances: int = 64
     max_members: int = 4096
     assignment_candidates: tuple[str, ...] = ()
+    purpose: str = "connectivity"
 
     def __post_init__(self) -> None:
+        if self.purpose not in {"connectivity", "hierarchy"}:
+            raise ValueError("unsupported semantic scope purpose")
         roots = _path_set(self.roots, "semantic expansion root")
         if len(roots) > 64 or any(len(path.split(".")) > 64 for path in roots):
             raise ValueError("semantic expansion roots exceed bounds")
@@ -662,14 +665,16 @@ class SemanticScopeSearch:
     def to_dict(self) -> dict[str, Any]:
         return {"roots": list(self.roots), "depth": self.depth,
                 "max_instances": self.max_instances, "max_members": self.max_members,
-                "assignment_candidates": list(self.assignment_candidates)}
+                "assignment_candidates": list(self.assignment_candidates),
+                **({"purpose": self.purpose} if self.purpose != "connectivity" else {})}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> SemanticScopeSearch:
         return cls(roots=tuple(value.get("roots", ())), depth=value.get("depth", 0),
                    max_instances=value.get("max_instances", 64),
                    max_members=value.get("max_members", 4096),
-                   assignment_candidates=tuple(value.get("assignment_candidates", ())))
+                   assignment_candidates=tuple(value.get("assignment_candidates", ())),
+                   purpose=value.get("purpose", "connectivity"))
 
 
 @dataclass(frozen=True)

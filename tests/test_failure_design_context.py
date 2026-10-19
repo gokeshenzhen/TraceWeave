@@ -266,25 +266,15 @@ async def test_second_unavailable_keeps_only_first_native_artifact(controls, sec
 
 
 @pytest.mark.anyio
-async def test_first_unavailable_uses_one_explicit_legacy_compatibility_view(controls, monkeypatch):
+async def test_unavailable_source_is_log_only_without_legacy_build(controls, monkeypatch):
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
     handle = await prepare(controls.log)
-    fallback_calls = []
-    hierarchy = {'project': {'top_module': 'top'}, 'component_tree': {'top': {'class': 'top',
-        'src': '/legacy/only.sv', 'children': {'legacy': {'class': 'legacy', 'src': '/legacy/only.sv'}}}}}
-    def fallback(context, limits, **kwargs):
-        controls.outside_wave()
-        assert threading.get_ident() != controls.thread
-        fallback_calls.append((context, kwargs))
-        return SimpleNamespace(hierarchy=deepcopy(hierarchy))
-    monkeypatch.setattr(server, '_build_recovery_context', fallback)
     controls.action = lambda *_: (_ for _ in ()).throw(NpiHierarchyUnavailable('npi_load_failed'))
     result = await invoke(controls, TOOLS[0], design_handle=handle)
-    assert len(fallback_calls) == len(controls.requests) == 1
-    assert result['source_correlation']['facts_origin'] == 'static_inference'
-    assert result['source_correlation']['full_hierarchy_fallback'] is True
-    assert {row['instance_path'] for row in candidates(result, TOOLS[0])} == {'top', 'top.legacy'}
-    assert all(row['src'] == '/legacy/only.sv' for row in candidates(result, TOOLS[0]))
-    assert result['backend_status']['actual_backend'] == 'static'
+    assert len(controls.requests) == 1
+    assert result['source_correlation']['facts_origin'] == 'log_only'
+    assert result['source_correlation']['full_hierarchy_fallback'] is False
+    assert result['backend_status'].get('actual_backend') is None
     assert server._result_cache['build_tb_hierarchy'] is None
 
 

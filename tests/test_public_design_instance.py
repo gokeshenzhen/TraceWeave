@@ -295,7 +295,8 @@ async def test_invalid_query_rejected_before_binding_or_native_selection(tmp_pat
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("reason", ["source", "absent", "native_failure", "ordinary_failure"])
-async def test_unsupported_independent_fallback_is_honestly_unavailable(tmp_path, controls, reason):
+async def test_disabled_source_fallback_is_honestly_unavailable(tmp_path, controls, reason, monkeypatch):
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH", "0")
     _, log, _ = project(tmp_path, candidate=reason != "absent")
     handle = await prepare(log, backend_preference="source" if reason == "source" else "auto")
     if reason in {"native_failure", "ordinary_failure"}:

@@ -462,14 +462,23 @@ Verification
   from these same source queries: exact log instance plus a depth-one selected
   top subtree, with one cumulative 256-scope/8192-call/1-MiB budget. Partial or
   empty native results never trigger a full tree to improve heuristic ranking.
-  The analyzer core no longer prepares hierarchy. Only native unavailability
-  permits the explicitly reported legacy full-tree source fallback under
-  recovery limits; source and
-  native facts are not merged. Semantic preparation is outside waveform locks,
+  The analyzer core no longer prepares hierarchy. Source unavailability returns
+  partial/log-only evidence without a legacy full-tree build; source and native
+  facts are not merged. Semantic preparation is outside waveform locks,
   wave access uses the normal request worker/lock, and recommendation cache
   publication follows final context/binding validation. Legacy compile-log
   calls independently prepare a context within the same request deadline.
-  Independent Slang hierarchy fallback remains pending. The internal
+  Exact instance and bounded subtree queries now use a capability-isolated
+  Slang projection through the existing Source Graph runtime when NPI is
+  unavailable. `SemanticScopeSearch.purpose=hierarchy` participates in artifact
+  identity and exact scope reuse. Its primitive scope rows carry actual semantic
+  parents, separate definition/site locations and per-parent enumeration evidence;
+  connectivity-only artifacts cannot supply this capability. Discovery is capped
+  at 64 scopes / 4096 member visits / two child levels. The compile frontend cost
+  can still span all inputs. Counts and misses remain local lower bounds.
+  Default prepared failure consumers use one artifact and never rebuild the
+  lexical full tree on source unavailability. Class/type/file semantic services
+  remain pending; NPI and explicit legacy capabilities are unchanged. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display

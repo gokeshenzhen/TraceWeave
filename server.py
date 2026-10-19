@@ -8451,7 +8451,68 @@ async def _prepare_pinned_design_entry(store, handle, entry, *, metrics,
     return binding, reused
 
 
-async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan=None):
+async def _query_slang_hierarchy(entry, plan, arguments, budget):
+    """Use the shared isolated runtime for this provider's declared capability."""
+    from src.slang_hierarchy_source import capability_gap, build_instance_plan, SlangHierarchyProvider
+    from src.hierarchy_source_ir import HierarchyBudgetExceeded
+    from src.hierarchy_source_service import finish_hierarchy_query
+
+    def unavailable(gap):
+        raw = plan.execute()
+        raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {gap})
+        return raw, None
+
+    gap = ("compile_tops_unresolved" if entry.context.selected_top is None else
+           capability_gap(plan.operation, arguments))
+    if gap is not None:
+        return unavailable(gap)
+    config = get_source_graph_execution_config()
+    if not config.valid or not config.enabled:
+        return unavailable("source_hierarchy_provider_unavailable")
+    budget.checkpoint()
+    remaining = budget.deadline - time.monotonic()
+    if remaining <= 0:
+        raise HierarchyBudgetExceeded("timeout_sec")
+    started = time.perf_counter()
+    with anyio.fail_after(remaining):
+        build = await _run_in_cancellable_thread(lambda: build_instance_plan(
+            entry.context, plan.operation, arguments, config, budget))
+        budget.checkpoint()
+        if build.status is AdapterStatus.BLOCKED:
+            return unavailable("source_hierarchy_scope_unavailable")
+        adapter_ms = (time.perf_counter() - started) * 1000
+        outcome = await get_source_graph_runtime(config).prepare(build.request,
+            timeout_seconds=min(config.timeout_sec, budget.deadline - time.monotonic()))
+        if outcome.status is PrepareStatus.CANCELLED:
+            raise asyncio.CancelledError
+        if outcome.status is PrepareStatus.TIMED_OUT:
+            raise TimeoutError("source hierarchy worker deadline")
+        budget.checkpoint()
+        entry.binding.require_policy_current()
+        if get_source_graph_execution_config() != config:
+            raise ExecutionBindingChanged()
+        _record_source_graph_prepare_metrics(outcome)
+        receipt = _source_graph_receipt_from_prepare(build, outcome,
+            adapter_wall_ms=adapter_ms)
+        if outcome.status is not PrepareStatus.READY:
+            raw, _ = unavailable("source_hierarchy_provider_unavailable")
+            return raw, receipt
+        def query():
+            provider = SlangHierarchyProvider(outcome.entry, entry.context, budget)
+            result = plan.execute(provider)
+            if plan.operation == "get_tb_subtree" and arguments.get("depth", 1) > 2:
+                result["coverage_gaps"] = sorted(set(result["coverage_gaps"]) | {"source_hierarchy_depth_limited"})
+            return finish_hierarchy_query(result, budget)
+        raw = await _run_in_cancellable_thread(query)
+        if get_source_graph_execution_config() != config:
+            raise ExecutionBindingChanged()
+        entry.binding.require_policy_current()
+        receipt.update(final_artifact_fingerprint_sha256=outcome.entry.build_key.digest,
+                       single_artifact_provenance=True, final_artifact_scope_match=True)
+        return raw, receipt
+
+
+async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan=None, allow_source=True):
     """Public semantic queries over the prepared NPI query service.
 
     Keep local native work synchronous, like driver/load/path. Only explicit
@@ -8470,6 +8531,7 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
     selected = getattr(backend, "name", None) == "verdi_npi"
     reason = selection_reason or status.pop("_npi_selection_reason", None) or "npi_kdb_unavailable"
     raw, execution, attempts, kdb_status = None, None, [], None
+    source_receipt = None
     if selected:
         try:
             entry.binding.require_policy_current()
@@ -8550,17 +8612,25 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
             "source_backend_requested", "npi_previous_load_failure",
         } else "unavailable", reason=reason))
     if raw is None:
-        raw = plan.execute()
-        raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {"source_hierarchy_provider_unavailable"})
-        attempts.append(_backend_attempt("source_graph", "blocked", reason="source_hierarchy_provider_unavailable"))
-    actual = "verdi_npi" if raw["facts_origin"] == "verdi_npi" else None
+        try:
+            if allow_source:
+                raw, source_receipt = await _query_slang_hierarchy(entry, plan, arguments, budget)
+            else:
+                raw = plan.execute()
+        except HierarchyBudgetExceeded as exc:
+            raw = plan._unstarted(exc.reason)
+        available = raw["facts_origin"] == "slang"
+        attempts.append(_backend_attempt("source_graph", "success" if available else "blocked",
+            **({"coverage_status": raw["coverage_status"]} if available else
+               {"reason": "source_hierarchy_provider_unavailable"})))
+    actual = {"verdi_npi": "verdi_npi", "slang": "source_graph"}.get(raw["facts_origin"])
     raw["context_identity_sha256"] = context.identity_sha256
     raw["backend_status"] = _finalize_public_connectivity_status(
         backend_status=status, selected_backend="verdi_npi" if selected else "source_graph",
         actual_backend=actual, attempts=attempts,
         fallback_reason=reason if raw.get("semantic_status") == "unavailable" else None,
         npi_backend=backend if selected else None, npi_execution=execution,
-        source_graph_receipt=None, npi_kdb_status=kdb_status,
+        source_graph_receipt=source_receipt, npi_kdb_status=kdb_status,
     )
     # The codec validates trees iteratively. Do not round-trip a valid deep
     # subtree through Pydantic's recursive Any serializer or discard nulls.
@@ -8568,11 +8638,10 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
 
 
 async def _failure_source_context(args, event):
-    """Copy bounded NPI candidates before acquiring any waveform lock.
+    """Copy one artifact's bounded candidates before acquiring a wave lock.
 
-    The source compatibility tree remains an explicitly reported fallback.
-    A successful native query, including a partial or empty result, never
-    triggers that tree merely to fill out heuristic recommendations.
+    A source query uses the exact log scope (or bounded top when absent).
+    Native partial/empty results retain priority; neither route builds a tree.
     """
     entry = args.get("_prepared_design")
     if entry is None or event is None:
@@ -8600,7 +8669,8 @@ async def _failure_source_context(args, event):
     attempts = []
     native_observed = False
     for operation, arguments in queries:
-        result = await _query_prepared_hierarchy(entry, operation, arguments, budget)
+        result = await _query_prepared_hierarchy(entry, operation, arguments, budget,
+                                                  allow_source=not native_observed)
         status = result["backend_status"]
         receipts.append({"operation": operation, **{key: result[key] for key in (
             "facts_origin", "artifact_identity", "coverage_status", "coverage_gaps", "analysis_limits",
@@ -8609,49 +8679,18 @@ async def _failure_source_context(args, event):
         status = {**status, "attempted_backends": list(attempts)}
         gaps.update(result["coverage_gaps"])
         gaps.update(result["analysis_limits"])
-        if result["facts_origin"] != "verdi_npi":
+        if result["facts_origin"] not in {"verdi_npi", "slang"}:
             if native_observed:
                 gaps.add("failure_candidate_query_unavailable")
-                # Keep a single native artifact's candidates and its receipt.
                 status = {**previous_status, "attempted_backends": list(attempts)}
                 break
-            if result["analysis_limits"]:
-                # An exhausted native budget is not provider unavailability.
-                # Switching to a full lexical build would evade the bound.
-                return {"source_correlation": {
-                    "facts_origin": "log_only", "coverage_status": "partial",
-                    "coverage_gaps": sorted(gaps), "analysis_limits": result["analysis_limits"],
-                    "context_identity_sha256": context.identity_sha256,
-                    "full_hierarchy_fallback": False, "queries": receipts,
-                }}, status
-            # Preserve the old source fallback only after native selection or
-            # query failed. No native facts are mixed into this compatibility
-            # view, and it never marks build_tb_hierarchy as already called.
-            limits = RecoveryLimits(timeout_sec=max(0.001, budget.deadline - time.monotonic()))
-            legacy_context = {"compile_log": context.ordered_compile_logs[0],
-                "supplementary_compile_logs": list(context.ordered_compile_logs[1:]),
-                "simulator": context.simulator, "top_hint": context.selected_top}
-            def source_fallback():
-                cancellation.check_cancelled()
-                if time.monotonic() >= budget.deadline:
-                    raise TimeoutError
-                return _build_recovery_context(legacy_context, limits, prepared=context).hierarchy
-            try:
-                with anyio.fail_after(limits.timeout_sec):
-                    hierarchy = await _run_in_cancellable_thread(source_fallback)
-            except RecoveryBlocked as exc:
-                if exc.code == "compile_context_changed":
-                    raise design_context_runtime.ContextUnavailable("design_context_changed") from exc
-                return {"source_correlation": {"facts_origin": "log_only", "coverage_status": "partial",
-                    "coverage_gaps": sorted(gaps | {exc.code}), "queries": receipts}}, status
-            status = {**status, "actual_backend": "static", "single_backend_provenance": True,
-                      "attempted_backends": [*status.get("attempted_backends", []),
-                          _backend_attempt("static", "success", coverage_status="partial")]}
-            return {"hierarchy": hierarchy, "source_correlation": {
-                "facts_origin": "static_inference", "coverage_status": "partial",
-                "coverage_gaps": ["legacy_lexical_hierarchy_fallback"],
+            return {"source_correlation": {
+                "facts_origin": "log_only", "coverage_status": "partial",
+                "coverage_gaps": sorted(gaps), "analysis_limits": result["analysis_limits"],
                 "context_identity_sha256": context.identity_sha256,
-                "full_hierarchy_fallback": True, "queries": receipts}}, status
+                "full_hierarchy_fallback": False, "queries": receipts,
+            }}, status
+        origin = result["facts_origin"]
         native_observed = True
         previous_status = status
         rows = list(result.get("hits", []))
@@ -8667,12 +8706,12 @@ async def _failure_source_context(args, event):
                     "kind", "definition_id", "definition_file", "definition_line",
                     "source_file", "source_line", "gaps")},
             }
-        if result["analysis_limits"]:
+        if result["analysis_limits"] or origin == "slang":
             break
     return {"instance_candidates": list(candidates.values()), "source_correlation": {
-        "facts_origin": "verdi_npi", "coverage_status": "partial", "coverage_gaps": sorted(gaps),
+        "facts_origin": origin, "coverage_status": "partial", "coverage_gaps": sorted(gaps),
         "context_identity_sha256": context.identity_sha256, "candidate_count": len(candidates),
-        "selection": "exact_log_path_and_top_direct_children", "full_hierarchy_fallback": False,
+        "selection": "exact_log_path_or_bounded_top" if origin == "slang" else "exact_log_path_and_top_direct_children", "full_hierarchy_fallback": False,
         "queries": receipts}}, status
 
 

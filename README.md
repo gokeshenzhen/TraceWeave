@@ -176,22 +176,28 @@ The three compile metadata sections need no backend; the four semantic sections
 use the same NPI services and preserve their coverage gaps. `max_items` bounds
 output, while work/time budgets still bound global traversal. An exact count
 does not make a truncated export complete: inspect `export_complete`.
-All six tools already accept `design_handle`. Independent Slang hierarchy
-fallback remains pending: without NPI, captured file metadata remains available,
-while unsupported semantic requests report their missing provider. These six
-prepared tools do not automatically build the legacy full tree. Existing `handle`
-calls retain their output shape and static UVM inference view. Reusing a design
-handle currently reuses the binding; it does not yet avoid repeated KDB loads.
+All six tools accept `design_handle`. Without usable NPI, exact-path
+`find_tb_instance` and bounded `get_tb_subtree` use the shared isolated Slang
+runtime. The instance projection copies at most 64 real scopes and inspects
+4096 members across two child levels; frontend elaboration can still cover the
+whole compile context. Generate scopes retain their semantic parents. Source
+locations must bind to captured inputs; unavailable sites stay null. Counts
+remain lower bounds and a missing local fact never proves global absence.
+Slang module searches, exact counts, unlimited depth, class/type inventories
+and semantic file/section exports remain unsupported with explicit gaps.
+Metadata queries need no frontend. Healthy NPI and existing legacy `handle`
+capabilities retain priority and compatibility.
 
 `analyze_failure_event` and `recommend_failure_debug_next_steps` accept the same
-`design_handle`. Source correlation queries the exact log instance and a bounded
-set of top-level children before waveform work acquires its lock. Suggestions
-remain heuristic and `source_correlation` reports their limited scope. Supplying
-only `compile_log` prepares an independent context automatically. If NPI is
-unavailable, the bounded legacy source fallback may build a lexical hierarchy;
-this is explicitly reported as `full_hierarchy_fallback=true`. Log/wave analysis
-without a compile context, including `analyze_failures`, requires no hierarchy.
-Structural-scan and handshake-sweep recommendations remain separate.
+`design_handle`. Source correlation runs before waveform locks: NPI supplies
+bounded candidates; Slang uses the exact log scope, or bounded top children
+when no qualified log path exists. Each candidate collection uses one artifact.
+Suggestions remain heuristic, and coverage gaps stay visible. Supplying only
+`compile_log` prepares an independent context automatically. Default prepared
+queries never build the legacy full tree, including when the source worker is
+unavailable; they report partial or log-only evidence instead. Explicit legacy
+context recovery remains supported. Structural-scan and handshake-sweep
+recommendations remain separate.
 
 After eviction or restart, pass the returned `recovery_context` unchanged as
 the arguments to `prepare_design_context`. Its `context_identity_sha256` is an
