@@ -8733,7 +8733,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
     enforce_total_deadline = connectivity_query or name in {
         "analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields",
     }
-    prepared_source_execution = get_source_graph_execution_config() if connectivity_query else None
+    prepared_source_execution = get_source_graph_execution_config()
     if connectivity_query:
         from src.hierarchy_source_ir import HierarchyQueryBudget
         try:
@@ -8861,16 +8861,22 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 result = (await _query_prepared_hierarchy(entry, name, source_arguments, source_budget, plan=source_plan)
                           if source_budget is not None else await _dispatch_inner(name, resolved))
             metrics["query_ms"] = (time.monotonic() - phase) * 1000
+            query_status = (result.get("backend_status", {}) if isinstance(result, dict)
+                            else getattr(result, "backend_status", None))
+            used_source = (query_status.get("actual_backend") == "source_graph" if isinstance(query_status, dict)
+                           else getattr(query_status, "actual_backend", None) == "source_graph")
             phase = time.monotonic()
             if enforce_total_deadline:
                 remaining(30)
             await _validate_design_source(context, timeout_sec=remaining(30) if connectivity_query else 30)
             await _validate_design_binding(binding, timeout_sec=remaining(5) if connectivity_query else 5)
-            if connectivity_query and get_source_graph_execution_config() != prepared_source_execution:
+            if (connectivity_query or used_source) and get_source_graph_execution_config() != prepared_source_execution:
                 raise ExecutionBindingChanged()
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
             await anyio.lowlevel.checkpoint()
             _require_design_store_owner(store)
+            if used_source and get_source_graph_execution_config() != prepared_source_execution:
+                raise ExecutionBindingChanged()
             if enforce_total_deadline:
                 remaining(30)
             status = (schemas.BackendStatus.model_validate(result["backend_status"])

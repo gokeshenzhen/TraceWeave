@@ -138,3 +138,32 @@ async def test_u2_failure_same_source_and_log_only(tmp_path, monkeypatch):
     value = await public(tmp_path, "analyze_failure_event", args | {"failure_event": event})
     assert value["source_correlation"]["facts_origin"] == "log_only"
     assert value["source_correlation"]["full_hierarchy_fallback"] is False
+
+
+@pytest.mark.anyio
+async def test_u2_source_execution_change_at_final_validation(tmp_path, monkeypatch):
+    from dataclasses import replace
+    _, log = project(tmp_path, "daily", "daily_top")
+    h = await prepare(tmp_path, log, "source")
+    config = server.get_source_graph_execution_config()
+    original_query = server._query_prepared_hierarchy
+    original_binding = server._validate_design_binding
+    completed = False
+    async def query(*args, **kwargs):
+        nonlocal completed
+        result = await original_query(*args, **kwargs)
+        assert result.get("facts_origin") == "slang", result
+        completed = True
+        return result
+    async def binding(*args, **kwargs):
+        result = await original_binding(*args, **kwargs)
+        if completed:
+            monkeypatch.setattr(server, "get_source_graph_execution_config",
+                                lambda: replace(config, timeout_sec=config.timeout_sec + 1))
+        return result
+    monkeypatch.setattr(server, "_query_prepared_hierarchy", query)
+    monkeypatch.setattr(server, "_validate_design_binding", binding)
+    value = await public(tmp_path, "find_tb_instance", {"design_handle": h,
+                         "path": "daily_top.g.u_leaf", "timeout_sec": 60})
+    assert value.get("error_code") == "design_context_execution_changed", value
+    assert "hits" not in value
