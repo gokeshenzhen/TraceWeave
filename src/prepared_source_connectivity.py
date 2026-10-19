@@ -66,13 +66,16 @@ class SourceQueryBudget:
 
 
 def build_prepared_source_plan(*, context, operation, args, config,
-                               search=None, base=None):
+                               search=None, base=None, signal_paths=None):
     """One shared planner for one/two endpoints; no mutable global hierarchy."""
     check_cancelled()
     operation = QueryOperation(operation)
     top = context.selected_top
-    signals = ((args["from_signal"], args["to_signal"]) if operation is QueryOperation.PATH
-               else (args["signal_path"],))
+    signals = tuple(signal_paths) if signal_paths is not None else (
+        (args["from_signal"], args["to_signal"]) if operation is QueryOperation.PATH
+        else (args["signal_path"],))
+    if not signals or len(signals) > 64:
+        return _blocked_plan(code="semantic_scope_candidate_limit", stage="target_scope")
     prefixes = set()
     parents = set()
     for signal in signals:
@@ -149,7 +152,8 @@ def build_prepared_source_plan(*, context, operation, args, config,
         manifest_incomplete_reasons=manifest.incomplete_reasons, gap_codes=tuple(gaps),
         objective_exclusions=tuple(exclusions), ancestor_count=1,
         requested_cone_instance_count=len(paths), coverage_boundary_instance_count=len(paths),
-        scope_kind="dual_endpoint_path" if len(signals) == 2 else "single_endpoint",
+        scope_kind=("dual_endpoint_path" if operation is QueryOperation.PATH else
+                    "multi_endpoint_trace" if len(signals) > 1 else "single_endpoint"),
         endpoint_count=len(signals), cross_request_reusable=key.cross_request_reusable,
         artifact_fingerprint_sha256=key.digest, query_fingerprint_sha256=compute_source_graph_query_key(query).digest,
         snapshot_identity_complete=artifact.snapshots_complete,

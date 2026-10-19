@@ -643,7 +643,7 @@ class SemanticScopeSearch:
     purpose: str = "connectivity"
 
     def __post_init__(self) -> None:
-        if self.purpose not in {"connectivity", "hierarchy"}:
+        if self.purpose not in {"connectivity", "hierarchy", "packed_layout", "trace"}:
             raise ValueError("unsupported semantic scope purpose")
         roots = _path_set(self.roots, "semantic expansion root")
         if len(roots) > 64 or any(len(path.split(".")) > 64 for path in roots):
@@ -658,7 +658,8 @@ class SemanticScopeSearch:
             raise ValueError("semantic member budget exceeds bounds")
         object.__setattr__(self, "roots", roots)
         candidates = _path_set(self.assignment_candidates, "semantic assignment candidate")
-        if len(candidates) > 2 or any(len(path.split(".")) > 64 for path in candidates):
+        candidate_limit = 64 if self.purpose == "trace" else 2
+        if len(candidates) > candidate_limit or any(len(path.split(".")) > 64 for path in candidates):
             raise ValueError("semantic assignment candidates exceed bounds")
         object.__setattr__(self, "assignment_candidates", candidates)
 

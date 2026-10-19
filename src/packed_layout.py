@@ -20,6 +20,16 @@ def packed_field_selections(entry, source_signal, dump_path, fields):
     engine = entry.query_engine
     root = engine.resolve_signal(source_signal)
     instance = engine.instance_index[root.instance_path]
+    search = getattr(entry.artifact_identity.scope, "semantic_search", None)
+    if search is not None:
+        # Purpose participates in artifact identity and exact scope comparison.
+        # A hierarchy or connectivity projection is not a type-layout request.
+        import json
+        if search.purpose != "packed_layout":
+            raise ValueError("artifact_type_layout_capability_missing")
+        projected = json.loads(dict(entry.ir.metadata).get("semantic_assignment_paths", "[]"))
+        if instance.path not in projected:
+            raise ValueError("port_binding_only_scope_has_no_complete_type_layout")
     if instance.path not in entry.artifact_identity.scope.projection_instance_paths:
         raise ValueError("port_binding_only_scope_has_no_complete_type_layout")
     definition = engine.definition_index[instance.definition_id]

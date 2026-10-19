@@ -6056,6 +6056,8 @@ async def _resolve_packed_fields(args):
                 attempted_backends=[*raw_status.get("attempted_backends", []),
                     _backend_attempt("source_graph", "success" if result is not None else "blocked",
                         reason=reason, coverage_status="complete" if result is not None else None)])
+            if result is not None and "source_graph" in result.get("evidence", {}):
+                raw_status["source_graph"] = result["evidence"]["source_graph"]
             status = schemas.BackendStatus.model_validate(raw_status)
         if result is None:
             return blocked(reason)
@@ -6080,17 +6082,59 @@ async def _resolve_packed_fields(args):
 
 
 async def _resolve_source_packed_fields(args, simulator):
-    """Keep the exact IR layout fallback, using a bounded independent seed."""
+    """Prepare typed semantic scopes directly from the captured design context."""
     config = get_source_graph_execution_config()
     if not config.enabled or not config.valid:
         return None, "semantic_runtime_unavailable"
-    if args.get("_prepared_design") is not None:
-        hierarchy, snapshot, _, blocker = await _resolve_connectivity_hierarchy_context(
-            args={**args, "signal_path": args["source_signal"], "allow_bounded_bootstrap": True},
-            simulator=simulator)
-    else:
-        hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
-        blocker = "current_hierarchy_required"
+    prepared = args.get("_prepared_design")
+    if prepared is not None:
+        from src.prepared_source_connectivity import SourceQueryBudget, build_prepared_source_plan
+        from src.source_graph_contract import SemanticScopeSearch
+        budget = SourceQueryBudget(args["_design_query_started"] + args.get("timeout_sec", 30))
+
+        async def validate():
+            budget.remaining()
+            if (get_source_graph_execution_config() != config
+                    or args.get("_prepared_source_execution", config) != config):
+                raise ExecutionBindingChanged()
+            await _validate_design_binding(prepared.binding, timeout_sec=min(5, budget.remaining()))
+            await _validate_design_source(prepared.context, timeout_sec=min(30, budget.remaining()))
+            budget.remaining()
+
+        await validate()
+        started = time.perf_counter()
+        plan = await _run_in_cancellable_thread(lambda: build_prepared_source_plan(
+            context=prepared.context, operation="driver",
+            args={"signal_path": args["source_signal"], "max_depth": 0}, config=config,
+            search=SemanticScopeSearch(purpose="packed_layout")))
+        budget.remaining()
+        if plan.status is AdapterStatus.BLOCKED:
+            return None, plan.receipt.blocker.code
+        if not compute_source_graph_build_key(plan.request).cross_request_reusable:
+            return None, "compile_identity_incomplete"
+        adapter_ms = (time.perf_counter() - started) * 1000
+        with anyio.fail_after(budget.remaining()):
+            outcome = await get_source_graph_runtime(config).prepare(
+                plan.request, timeout_seconds=min(config.timeout_sec, args.get("timeout_sec", 30)))
+        if outcome.status is PrepareStatus.CANCELLED:
+            raise asyncio.CancelledError
+        if outcome.status is PrepareStatus.TIMED_OUT:
+            raise TimeoutError("source layout deadline")
+        await validate()
+        _record_source_graph_prepare_metrics(outcome)
+        if outcome.status is not PrepareStatus.READY:
+            return None, "semantic_" + outcome.status.value
+        try:
+            result = await _run_in_cancellable_thread(lambda: packed_field_selections(
+                outcome.entry, args["source_signal"], args["signal_path"], args["fields"]))
+        except (ValueError, KeyError) as exc:
+            return None, str(exc)
+        await validate()
+        result["evidence"]["source_graph"] = _source_graph_receipt_from_prepare(
+            plan, outcome, adapter_wall_ms=adapter_ms)
+        return result, None
+    hierarchy, snapshot = _resolve_hierarchy_context(args["compile_log"], simulator)
+    blocker = "current_hierarchy_required"
     if hierarchy is None:
         return None, blocker or "source_context_unavailable"
     # Use the established identity/scope adapter, without an NPI driver query
@@ -8848,7 +8892,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 resolved.setdefault("allow_bounded_bootstrap", True)
             if history_deadline is not None:
                 resolved["_design_query_started"] = started
-            if connectivity_query:
+            if connectivity_query or name == "resolve_packed_fields":
                 resolved["_prepared_source_execution"] = prepared_source_execution
             phase = time.monotonic()
             previous_failure = entry.npi_failure
@@ -8868,8 +8912,8 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
             phase = time.monotonic()
             if enforce_total_deadline:
                 remaining(30)
-            await _validate_design_source(context, timeout_sec=remaining(30) if connectivity_query else 30)
-            await _validate_design_binding(binding, timeout_sec=remaining(5) if connectivity_query else 5)
+            await _validate_design_source(context, timeout_sec=remaining(30) if enforce_total_deadline else 30)
+            await _validate_design_binding(binding, timeout_sec=remaining(5) if enforce_total_deadline else 5)
             if (connectivity_query or used_source) and get_source_graph_execution_config() != prepared_source_execution:
                 raise ExecutionBindingChanged()
             metrics["final_validation_ms"] = (time.monotonic() - phase) * 1000
