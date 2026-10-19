@@ -33,10 +33,38 @@ def collect_hierarchy_scopes(projector, root):
         return asdict(value) if value is not None else None
 
     def parent(symbol):
-        scope = symbol.parentScope
-        if _kind_name(scope) == "InstanceBody":
-            scope = scope.parentInstance
-        return scope if _kind_name(scope) in kinds else None
+        # pyslang's parentScope is a Scope view, not necessarily a Symbol.
+        # Resolve candidate owners, then PROVE the edge with a direct member
+        # lookup (or array entry). Dotted spelling alone supplies no parent.
+        import re
+        path = str(symbol.hierarchicalPath)
+        candidates = []
+        if path.endswith("]"):
+            candidates.append(re.sub(r"\[-?\d+\]$", "", path))
+        if "." in path:
+            candidates.append(path.rpartition(".")[0])
+        for candidate in candidates:
+            charge()
+            owner = root.lookupName(candidate)
+            kind = _kind_name(owner)
+            if kind not in kinds:
+                continue
+            if kind in {"GenerateBlockArray", "InstanceArray"}:
+                entries = owner.entries if kind == "GenerateBlockArray" else owner.elements
+                for child in entries:
+                    charge()
+                    if str(child.hierarchicalPath) == path:
+                        return owner
+            else:
+                suffix = path[len(candidate) + 1:]
+                if not suffix or "." in suffix or "[" in suffix:
+                    continue
+                charge()
+                scope = owner.body if kind == "Instance" else owner
+                child = scope.find(suffix)
+                if child is not None and _kind_name(child) in kinds and str(child.hierarchicalPath) == path:
+                    return owner
+        return None
 
     def admit(symbol, ancestors=0):
         charge()
@@ -62,7 +90,8 @@ def collect_hierarchy_scopes(projector, root):
             kind=semantic_kind, parent_path=parent_path, definition_id=definition_id,
             definition_name=str(definition.name) if definition is not None else None,
             location=location(symbol), definition_location=location(definition) if definition is not None else None,
-            parameterization=parameters, gaps=[])
+            parameterization=parameters, gaps=(["source_scope_parent_unresolved"]
+                if parent_path is None and "." in path else []))
         symbols[path] = symbol
         if kind == "Instance":
             instances[path] = symbol
