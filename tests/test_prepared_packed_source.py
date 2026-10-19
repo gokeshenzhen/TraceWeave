@@ -60,20 +60,24 @@ async def test_prepared_generate_layout_and_exact_reuse(tmp_path, monkeypatch, p
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize('negative', ['missing', 'plain', 'dump_range'])
+@pytest.mark.parametrize('negative', ['missing', 'plain', 'field', 'dump_range'])
 async def test_prepared_mapping_required_retains_reason(tmp_path, negative):
     source, log, wave = project(tmp_path)
     handle = await prepare(tmp_path, log, 'source')
     args = dict(design_handle=handle, wave_path=str(wave), signal_path='top.active.small_bus.bus[5:0]',
                 source_signal='top.active.small_bus.bus', fields=['valid'], timeout_sec=60)
     if negative == 'missing': args['source_signal'] = 'top.inactive.absent.bus'
+    if negative == 'field': args['fields'] = ['absent']
     if negative == 'plain': args['source_signal'] = 'top.active.small_bus.plain'
     if negative == 'dump_range':
         wave.write_text(wave.read_text().replace('bus [5:0]', 'bus [6:1]'))
         args['signal_path'] = 'top.active.small_bus.bus[6:1]'
     result = await public(tmp_path, 'resolve_packed_fields', args)
     assert result['status'] == 'mapping_required' and result.get('fields', {}) == {}, result
-    assert result['reasons'], result
+    expected = {'missing': {'signal_not_declared', 'semantic_type_coverage_incomplete'},
+                'plain': {'packed_member_type_evidence_missing'}, 'field': {'packed_member_type_evidence_missing'},
+                'dump_range': {'dump_and_type_range_mismatch'}}
+    assert set(result['reasons']) <= expected[negative] and result['reasons'], result
 
 
 def test_layout_purpose_is_exact_capability_and_roundtrips():
@@ -155,3 +159,153 @@ async def test_prepared_trace_union_is_bounded_and_preserves_all_targets(tmp_pat
     assert type(plan.request).from_dict(plan.request.to_dict()) == plan.request
     with pytest.raises(ValueError):
         SemanticScopeSearch(purpose='trace', assignment_candidates=tuple(f'top.u{i}' for i in range(65)))
+
+
+@pytest.mark.anyio
+async def test_packed_cold_single_flight_and_cancelled_waiter(tmp_path, monkeypatch):
+    import asyncio
+    _, log, wave = project(tmp_path)
+    handle = await prepare(tmp_path, log, 'source')
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = source_graph_runtime.IsolatedSourceGraphProcessRunner.run
+    calls = []
+    async def held(self, *args, **kw):
+        calls.append(1); entered.set()
+        await release.wait()
+        return await original(self, *args, **kw)
+    monkeypatch.setattr(source_graph_runtime.IsolatedSourceGraphProcessRunner, 'run', held)
+    one = asyncio.create_task(packed(tmp_path, handle, wave))
+    await asyncio.wait_for(entered.wait(), 10)
+    two = asyncio.create_task(packed(tmp_path, handle, wave))
+    async def joined():
+        from src import source_graph_production
+        while not any(f.waiter_count >= 2 for f in source_graph_production._PROCESS_SESSION._runtime._inflight.values()):
+            await asyncio.sleep(.005)
+    await asyncio.wait_for(joined(), 10)
+    one.cancel()
+    with pytest.raises(asyncio.CancelledError): await one
+    release.set()
+    result = await asyncio.wait_for(two, 60)
+    assert result['status'] == 'resolved' and len(calls) == 1, result
+    assert result['backend_status']['source_graph']['flight_disposition'] == 'coalesced'
+
+
+@pytest.mark.anyio
+async def test_packed_last_waiter_cleans_real_worker(tmp_path, monkeypatch):
+    import asyncio
+    _, log, wave = project(tmp_path)
+    handle = await prepare(tmp_path, log, 'source')
+    entered = asyncio.Event()
+    original = asyncio.create_subprocess_exec
+    processes = []
+    async def observed(*a, **kw):
+        proc = await original(*a, **kw)
+        if any('source_graph_worker' in str(x) for x in a):
+            processes.append(proc); entered.set()
+        return proc
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', observed)
+    task = asyncio.create_task(packed(tmp_path, handle, wave))
+    await asyncio.wait_for(entered.wait(), 10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError): await task
+    for proc in processes:
+        await asyncio.wait_for(proc.wait(), 5)
+        assert not Path(f'/proc/{proc.pid}').exists()
+    assert processes
+
+
+@pytest.mark.anyio
+async def test_cached_connection_and_hierarchy_cannot_supply_layout(tmp_path, monkeypatch):
+    from src.packed_layout import packed_field_selections
+    _, log, wave = project(tmp_path)
+    handle = await prepare(tmp_path, log, 'source')
+    builds, entries = [], []
+    original_run = source_graph_runtime.IsolatedSourceGraphProcessRunner.run
+    original_prepare = source_graph_runtime.SourceGraphRuntime.prepare
+    async def run(self, *a, **kw):
+        builds.append(1); return await original_run(self, *a, **kw)
+    async def observe(self, *a, **kw):
+        outcome = await original_prepare(self, *a, **kw)
+        if outcome.entry: entries.append(outcome.entry)
+        return outcome
+    monkeypatch.setattr(source_graph_runtime.IsolatedSourceGraphProcessRunner, 'run', run)
+    monkeypatch.setattr(source_graph_runtime.SourceGraphRuntime, 'prepare', observe)
+    await public(tmp_path, 'find_tb_instance', dict(design_handle=handle, path='top.active.small_bus'))
+    await public(tmp_path, 'explain_signal_driver', dict(design_handle=handle,
+        signal_path='top.active.small_bus.bus', wave_path=str(wave), timeout_sec=60))
+    before = len(builds)
+    result = await packed(tmp_path, handle, wave)
+    assert result['status'] == 'resolved' and len(builds) == before + 1, result
+    entry = entries[-1]
+    for purpose in ('hierarchy', 'connectivity'):
+        scope = replace(entry.artifact_identity.scope, semantic_search=replace(
+            entry.artifact_identity.scope.semantic_search, purpose=purpose))
+        poisoned = replace(entry, artifact_identity=replace(entry.artifact_identity, scope=scope),
+            artifact_scope_receipt=replace(entry.artifact_scope_receipt, scope=scope))
+        with pytest.raises(ValueError, match='artifact_type_layout_capability_missing'):
+            packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
+    metadata = dict(entry.ir.metadata); metadata['semantic_assignment_paths'] = '[]'
+    poisoned = replace(entry, ir=replace(entry.ir, metadata=tuple(metadata.items())))
+    with pytest.raises(ValueError, match='port_binding_only_scope_has_no_complete_type_layout'):
+        packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('change', ['same_size_mtime', 'policy'])
+async def test_packed_real_prepare_identity_change_discards_fields(tmp_path, monkeypatch, change):
+    import os
+    source, log, wave = project(tmp_path)
+    handle = await prepare(tmp_path, log, 'source')
+    original = source_graph_runtime.SourceGraphRuntime.prepare
+    async def changed(self, *a, **kw):
+        outcome = await original(self, *a, **kw)
+        if change == 'same_size_mtime':
+            stat = source.stat()
+            source.write_text(source.read_text().replace('W=3', 'W=4'))
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        else:
+            monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH_TIMEOUT', '91')
+        return outcome
+    monkeypatch.setattr(source_graph_runtime.SourceGraphRuntime, 'prepare', changed)
+    result = await packed(tmp_path, handle, wave)
+    assert result['error_code'] == ('design_context_changed' if change == 'same_size_mtime' else 'design_context_execution_changed'), result
+    assert not result.get('fields')
+
+
+@pytest.mark.anyio
+async def test_native_failure_policy_change_stops_before_source_plan(controls, monkeypatch):
+    from src import prepared_source_connectivity
+    monkeypatch.setattr(server, '_resolve_source_packed_fields', _REAL_LAYOUT)
+    handle = await native_prepare(controls.log)
+    calls = []
+    def changed(*a):
+        monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH_TIMEOUT', '91')
+        raise RuntimeError('injected native failure')
+    def forbidden(*a, **kw):
+        calls.append(1); raise AssertionError('new source work after policy change')
+    controls.before = changed
+    monkeypatch.setattr(prepared_source_connectivity, 'build_prepared_source_plan', forbidden)
+    result = await public(controls.source.parent, 'resolve_packed_fields', dict(design_handle=handle,
+        wave_path=str(controls.wave), signal_path='top.packet[7:0]', source_signal='top.packet', fields=['tag']))
+    assert result['error_code'] == 'design_context_execution_changed', result
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_policy_changed_during_planner_stops_runtime(tmp_path, monkeypatch):
+    from src import prepared_source_connectivity
+    _, log, wave = project(tmp_path)
+    handle = await prepare(tmp_path, log, 'source')
+    original = prepared_source_connectivity.build_prepared_source_plan
+    calls = []
+    def changed(**kw):
+        plan = original(**kw)
+        monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH_TIMEOUT', '91')
+        return plan
+    async def forbidden(*a, **kw):
+        calls.append(1); raise AssertionError('worker after changed planner policy')
+    monkeypatch.setattr(prepared_source_connectivity, 'build_prepared_source_plan', changed)
+    monkeypatch.setattr(source_graph_runtime.SourceGraphRuntime, 'prepare', forbidden)
+    result = await packed(tmp_path, handle, wave)
+    assert result['error_code'] == 'design_context_execution_changed', result
+    assert calls == []

@@ -6107,7 +6107,7 @@ async def _resolve_source_packed_fields(args, simulator):
             context=prepared.context, operation="driver",
             args={"signal_path": args["source_signal"], "max_depth": 0}, config=config,
             search=SemanticScopeSearch(purpose="packed_layout")))
-        budget.remaining()
+        await validate()
         if plan.status is AdapterStatus.BLOCKED:
             return None, plan.receipt.blocker.code
         if not compute_source_graph_build_key(plan.request).cross_request_reusable:
@@ -6128,7 +6128,7 @@ async def _resolve_source_packed_fields(args, simulator):
             result = await _run_in_cancellable_thread(lambda: packed_field_selections(
                 outcome.entry, args["source_signal"], args["signal_path"], args["fields"]))
         except (ValueError, KeyError) as exc:
-            return None, str(exc)
+            return None, getattr(exc, "code", str(exc))
         await validate()
         result["evidence"]["source_graph"] = _source_graph_receipt_from_prepare(
             plan, outcome, adapter_wall_ms=adapter_ms)
