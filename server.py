@@ -8558,7 +8558,9 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
            capability_gap(plan.operation, arguments))
     if gap is not None:
         return unavailable(gap)
-    if plan.operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"} and (
+    if (plan.operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}
+        or plan.operation == "dump_tb_section" and arguments.get("section") in {
+            "files_full", "interfaces", "class_hierarchy_full"}) and (
         not entry.context.snapshot.complete
         or set(entry.context.gaps) & {
             "source_capture_byte_limit", "source_capture_file_limit",
@@ -8601,6 +8603,11 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
         receipt = _source_graph_receipt_from_prepare(build, outcome,
             adapter_wall_ms=adapter_ms)
         if outcome.status is not PrepareStatus.READY:
+            from src.slang_hierarchy_source import _LIMITS
+            if outcome.blocker is not None and outcome.blocker.code in _LIMITS:
+                raw = plan._unstarted(_LIMITS[outcome.blocker.code])
+                raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {"source_hierarchy_projection_unstarted"})
+                return raw, receipt
             raw, _ = unavailable("source_hierarchy_provider_unavailable")
             return raw, receipt
         def query():
@@ -8612,8 +8619,13 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
             else:
                 provider = SlangHierarchyProvider(outcome.entry, entry.context, budget)
             result = plan.execute(provider)
-            if plan.operation == "get_tb_subtree" and arguments.get("depth", 1) > 2:
-                result["coverage_gaps"] = sorted(set(result["coverage_gaps"]) | {"source_hierarchy_depth_limited"})
+            limits = getattr(provider, "analysis_limits", ())
+            if limits:
+                result["analysis_limits"] = sorted(set(result["analysis_limits"]) | set(limits))
+                result["coverage_status"] = "partial"
+                if "export_complete" in result:
+                    result["export_complete"] = False
+                    result["warning"] = "section export is incomplete; inspect coverage and output limits"
             return finish_hierarchy_query(result, budget)
         raw = await _run_in_cancellable_thread(query)
         if get_source_graph_execution_config() != config:

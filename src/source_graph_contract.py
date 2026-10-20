@@ -29,7 +29,7 @@ from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.4"
 SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.4"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.18"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.19"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
@@ -648,6 +648,10 @@ class SemanticScopeSearch:
     source_max_scopes: int = 1024
     source_max_depth: int = 128
     source_max_bytes: int = 2 * 1024 * 1024
+    hierarchy_version: int = 2
+    hierarchy_mode: str = "bounded"
+    hierarchy_max_bytes: int = 2 * 1024 * 1024
+    hierarchy_aliases: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.purpose not in {"connectivity", "hierarchy", "packed_layout", "trace", "source_catalog"}:
@@ -655,13 +659,14 @@ class SemanticScopeSearch:
         roots = _path_set(self.roots, "semantic expansion root")
         if len(roots) > 64 or any(len(path.split(".")) > 64 for path in roots):
             raise ValueError("semantic expansion roots exceed bounds")
-        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or not 0 <= self.depth <= 2:
-            raise ValueError("semantic expansion depth must be between zero and two")
-        if bool(roots) != bool(self.depth):
+        depth_max = 256 if self.purpose == "hierarchy" else 2
+        if type(self.depth) is not int or not 0 <= self.depth <= depth_max:
+            raise ValueError("semantic expansion depth exceeds purpose bounds")
+        if (not roots if self.purpose == "hierarchy" else bool(roots) != bool(self.depth)):
             raise ValueError("semantic expansion roots require a nonzero depth")
-        if not 1 <= _positive_limit(self.max_instances, "semantic instances") <= 64:
+        if not 1 <= _positive_limit(self.max_instances, "semantic instances") <= (10000 if self.purpose == "hierarchy" else 64):
             raise ValueError("semantic instance budget exceeds bounds")
-        if not 1 <= _positive_limit(self.max_members, "semantic members") <= 4096:
+        if not 1 <= _positive_limit(self.max_members, "semantic members") <= (100000 if self.purpose in {"hierarchy", "source_catalog"} else 4096):
             raise ValueError("semantic member budget exceeds bounds")
         object.__setattr__(self, "roots", roots)
         candidates = _path_set(self.assignment_candidates, "semantic assignment candidate")
@@ -695,6 +700,20 @@ class SemanticScopeSearch:
             raise ValueError("source files and capabilities require a source catalog")
         object.__setattr__(self, "source_files", files)
         object.__setattr__(self, "source_capabilities", capabilities)
+        if self.purpose == "hierarchy":
+            aliases = tuple(tuple(pair) for pair in self.hierarchy_aliases)
+            if (type(self.hierarchy_version) is not int or self.hierarchy_version != 2
+                    or self.hierarchy_mode not in {"bounded", "complete"}
+                    or type(self.hierarchy_max_bytes) is not int or not 1 <= self.hierarchy_max_bytes <= 8 * 1024 * 1024
+                    or len(aliases) > 32768 or any(len(pair) != 2 or
+                        any(not isinstance(item, str) or not item for item in pair)
+                        or not pair[1].startswith("/") for pair in aliases)
+                    or len({pair[0] for pair in aliases}) != len(aliases)):
+                raise ValueError("invalid hierarchy version, mode, aliases or byte limit")
+            object.__setattr__(self, "hierarchy_aliases", tuple(sorted(aliases)))
+        elif (self.hierarchy_version != 2 or self.hierarchy_mode != "bounded"
+              or self.hierarchy_max_bytes != 2 * 1024 * 1024 or self.hierarchy_aliases):
+            raise ValueError("hierarchy envelope requires hierarchy purpose")
 
     def to_dict(self) -> dict[str, Any]:
         return {"roots": list(self.roots), "depth": self.depth,
@@ -707,7 +726,12 @@ class SemanticScopeSearch:
                     "source_version": self.source_version,
                     "source_max_scopes": self.source_max_scopes,
                     "source_max_depth": self.source_max_depth,
-                    "source_max_bytes": self.source_max_bytes} if self.source_files else {})}
+                    "source_max_bytes": self.source_max_bytes} if self.source_files else {}),
+                **({"hierarchy_version": self.hierarchy_version,
+                    "hierarchy_mode": self.hierarchy_mode,
+                    "hierarchy_max_bytes": self.hierarchy_max_bytes,
+                    "hierarchy_aliases": [list(pair) for pair in self.hierarchy_aliases]}
+                   if self.purpose == "hierarchy" else {})}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> SemanticScopeSearch:
@@ -722,7 +746,11 @@ class SemanticScopeSearch:
                    source_version=value.get("source_version", 1),
                    source_max_scopes=value.get("source_max_scopes", 1024),
                    source_max_depth=value.get("source_max_depth", 128),
-                   source_max_bytes=value.get("source_max_bytes", 2 * 1024 * 1024))
+                   source_max_bytes=value.get("source_max_bytes", 2 * 1024 * 1024),
+                   hierarchy_version=value.get("hierarchy_version", 2),
+                   hierarchy_mode=value.get("hierarchy_mode", "bounded"),
+                   hierarchy_max_bytes=value.get("hierarchy_max_bytes", 2 * 1024 * 1024),
+                   hierarchy_aliases=tuple(tuple(pair) for pair in value.get("hierarchy_aliases", ())))
 
 
 @dataclass(frozen=True)

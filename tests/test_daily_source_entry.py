@@ -37,7 +37,7 @@ def test_hierarchy_purpose_codec_and_capability():
                        ("get_tb_subtree", {"depth": -1}),
                        ("get_tb_subtree", {"count_mode": "exact"}),
                        ("dump_tb_section", {"section": "files_full"})):
-        assert capability_gap(tool, args)
+        assert capability_gap(tool, args) is None
     assert capability_gap("get_tb_class_hierarchy", {}) is None
 
 
@@ -49,13 +49,15 @@ async def test_u1_real_instances_and_bounded_subtree(tmp_path, policy):
     assert not source_graph_production.source_graph_runtime_created()
     async def call(name, **args):
         return await public(tmp_path, name, {"design_handle": h, "timeout_sec": 60, **args})
-    for operation, args, gap in (
-        ("find_tb_instance", {"module": "daily_leaf"}, "source_hierarchy_module_search_unsupported"),
-        ("get_tb_subtree", {"depth": -1}, "source_hierarchy_unlimited_depth_unsupported"),
-        ("get_tb_subtree", {"count_mode": "exact"}, "source_hierarchy_exact_count_unsupported")):
+    for operation, args in (
+        ("find_tb_instance", {"module": "daily_leaf"}),
+        ("get_tb_subtree", {"depth": -1}),
+        ("get_tb_subtree", {"count_mode": "exact"})):
         value = await call(operation, **args)
-        assert gap in value["coverage_gaps"], value
-    assert not source_graph_production.source_graph_runtime_created()
+        assert value["facts_origin"] == "slang" and value["coverage_status"] == "complete", value
+        assert (value["total"] if operation == "find_tb_instance" else value["total_descendants"]) == (
+            3 if operation == "find_tb_instance" else 6), value
+    assert source_graph_production.source_graph_runtime_created()
     found = await call("find_tb_instance", path="daily_top.g.u_leaf")
     assert found.get("facts_origin") == "slang", found
     row = found["hits"][0]

@@ -34,6 +34,7 @@ from src.source_graph_runtime import (  # noqa: E402
 from src.source_graph_worker import (  # noqa: E402
     SemanticFrontendSession,
     _failure_payload,
+    _projection_blocker_code,
     _read_request,
     _read_rss_kib,
     _worker_metrics,
@@ -191,7 +192,7 @@ def execute_session_build(
         return _failure_payload(
             PrepareStatus.BUILD_FAILED,
             InternalBuildBlocker(
-                code="frontend_build_failed",
+                code=_projection_blocker_code(exc),
                 stage="projection",
                 message=f"{type(exc).__name__}: {exc}",
             ),

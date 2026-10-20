@@ -204,20 +204,30 @@ class catalogs can also serve file queries; an already cached exact file
 artifact keeps priority. Legacy `handle` retains its source-scan UVM/create view.
 `dump_tb_section(design_handle=..., section=...)` supports all seven sections.
 The three compile metadata sections need no backend; the four semantic sections
-use the same NPI services and preserve their coverage gaps. `max_items` bounds
+use the selected NPI or Slang services and preserve their coverage gaps. `max_items` bounds
 output, while work/time budgets still bound global traversal. An exact count
 does not make a truncated export complete: inspect `export_complete`.
-All six tools accept `design_handle`. Without usable NPI, exact-path
-`find_tb_instance` and bounded `get_tb_subtree` use the shared isolated Slang
-runtime. The instance projection copies at most 64 real scopes and inspects
-4096 members across two child levels; frontend elaboration can still cover the
-whole compile context. Generate scopes retain their semantic parents. Source
-locations must bind to captured inputs; unavailable sites stay null. Counts
-remain lower bounds and a missing local fact never proves global absence.
-Slang module searches, exact counts, unlimited depth
-and semantic file/section exports remain unsupported with explicit gaps.
-Metadata queries need no frontend. Healthy NPI and existing legacy `handle`
-capabilities retain priority and compatibility.
+All six tools accept `design_handle`. Without usable NPI, the shared isolated
+Slang runtime supports exact paths, selected-top module searches, bounded and
+exact subtree counts, deeper browsing and `depth=-1` within finite work budgets.
+A topology-only artifact preserves actual module/interface/program, generate
+and instance-array scopes, native parent membership, bind instances and value
+parameter evidence. Unsupported hierarchy kinds retain explicit gaps. Exact
+local subtrees enumerate that root; global module searches and full component
+exports enumerate the selected top. Exact path inputs retain a64-atom admission
+bound; semantic traversal is capped at256 levels. Each hierarchy artifact uses
+at most min(10000, remaining scopes/2),5000 at the default scope budget, min(50000, remaining calls/2) and2MiB of
+retained facts/coordinates, further constrained by the request deadline and
+remaining byte budget. `depth=-1` does not remove these limits. Frontend
+elaboration can still span the compile context. Locations bind to captured
+physical inputs; unavailable facts remain partial. A completed local child
+stream never proves global absence, and blocking diagnostics prevent clean
+negative or exact-global claims. Display trimming is independent of exact
+analysis counts. The four semantic section exports use the corresponding
+Slang class/file or hierarchy artifact; compatible catalog capabilities reuse
+one artifact, while distinct hierarchy ranges have distinct identities. Three
+compile metadata sections need no frontend. Healthy NPI and existing legacy
+`handle` capabilities retain priority and compatibility.
 
 `analyze_failure_event` and `recommend_failure_debug_next_steps` accept the same
 `design_handle`. Source correlation runs before waveform locks: NPI supplies

@@ -1,0 +1,8 @@
+Chronologic VCS simulator
+Command: vcs -sverilog ${FIXTURE}/types.sv ${FIXTURE}/hierarchy.sv ${FIXTURE}/outside.sv -top v3_top -top v3_other
+Parsing design file '${FIXTURE}/types.sv'
+Parsing design file '${FIXTURE}/hierarchy.sv'
+Parsing design file '${FIXTURE}/outside.sv'
+Top Level Modules:
+       v3_top
+       v3_other

@@ -228,6 +228,14 @@ def _failure_payload(
     }
 
 
+def _projection_blocker_code(exc):
+    from src.slang_hierarchy_projection import HierarchyProjectionLimit
+    if isinstance(exc, HierarchyProjectionLimit):
+        return exc.reason
+    return ('semantic_scope_budget_exceeded' if type(exc).__name__ == '_SemanticScopeLimit'
+            else 'frontend_build_failed')
+
+
 @dataclass
 class SemanticFrontendSession:
     """Worker-local Slang state; never imported into the MCP parent process."""
@@ -668,7 +676,7 @@ def execute_build(request: SourceGraphArtifactBuildRequest) -> dict[str, Any]:
         return _failure_payload(
             PrepareStatus.BUILD_FAILED,
             InternalBuildBlocker(
-                code=("semantic_scope_budget_exceeded" if type(exc).__name__ == "_SemanticScopeLimit" else "frontend_build_failed"),
+                code=_projection_blocker_code(exc),
                 stage="projection",
                 message=f"{type(exc).__name__}: {exc}",
             ),

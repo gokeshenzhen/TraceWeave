@@ -478,17 +478,35 @@ Verification
   wave access uses the normal request worker/lock, and recommendation cache
   publication follows final context/binding validation. Legacy compile-log
   calls independently prepare a context within the same request deadline.
-  Exact instance and bounded subtree queries now use a capability-isolated
-  Slang projection through the existing Source Graph runtime when NPI is
-  unavailable. `SemanticScopeSearch.purpose=hierarchy` participates in artifact
-  identity and exact scope reuse. Its primitive scope rows carry actual semantic
-  parents, separate definition/site locations and per-parent enumeration evidence;
-  connectivity-only artifacts cannot supply this capability. Discovery is capped
-  at 64 scopes / 4096 member visits / two child levels. The compile frontend cost
-  can still span all inputs. Counts and misses remain local lower bounds.
+  Slang hierarchy queries use a capability-isolated, topology-free artifact
+  through the existing Source Graph runtime when NPI is unavailable. The
+  `hierarchy_scopes_v2` envelope has its own strict codec, actual frontend top
+  observations and exact search digest, including aliases, range, mode and all
+  work limits. Runtime and disk validation reject mixed connectivity/catalog
+  facts, missing top proof, duplicate paths, invalid parents and inconsistent
+  child completeness or definition evidence. Only copied primitives leave the
+  worker. Generate/array owners and bind-introduced instances come from native
+  membership; dotted prefixes propose exact ancestors but never prove edges.
+  Module/interface/program/generate/instance-array facts form the supported
+  domain; checker/primitive/uninstantiated objects retain an explicit owner gap.
+  Instance and definition locations use physical parsed-buffer offsets bound
+  to captured aliases. Value parameter evidence identifies module definitions;
+  it does not claim canonical nominal module type-parameter identity.
+  Ordinary subtree projection covers requested depth plus a child frontier;
+  exact/unlimited local subtrees complete the actual root, while module search
+  and full component export complete the selected-top domain. Exact path input
+  admission remains64 atoms; the semantic walk supports256 levels. Limits are
+  min(10000,remaining scopes/2),5000 at the default scope budget, min(50000,remaining calls/2),256 depth and up to
+  2MiB retained rows/parameters/coordinate indexes, within the original request
+  deadline/byte budget. Early limits without real top proof publish a fixed
+  unstarted blocker. Later limits retain positive facts and null exact totals;
+  their critical coverage evidence precedes capped diagnostic details. No local
+  child completion promotes a global negative, and blocking diagnostics retain
+  partial coverage. Different hierarchy ranges have exact identities; global
+  module search and full-tree export share the same top-complete request.
   Default prepared failure consumers use one artifact and never rebuild the
-  lexical full tree on source unavailability. Class/type/file semantic services
-  remain pending; NPI and explicit legacy capabilities are unchanged. The internal
+  lexical full tree on source unavailability. NPI and explicit legacy paths
+  preserve their existing priority and capabilities. The internal
   `hierarchy_source_service` instance-query engine consumes immutable
   `HierarchyScope` facts and provider-owned child streams. Exact path lookup
   does not enumerate siblings; bounded subtree browsing stops at display
@@ -632,6 +650,14 @@ Verification
   established negative predicates; blocking errors turn incomplete class/file
   coverage and import/usage negatives into explicit unknowns. Ordinary
   connectivity/file-only artifacts retain their existing execution path.
+  File catalog coordinate indexing is restricted to requested captured files;
+  confirmed native owners outside that domain do not become unbound in-domain
+  declaration gaps. Catalog planning reserves at most half the remaining call
+  budget, capped at50000 visits, for buffer/declaration/namespace work, leaving
+  provider/rendering budget. Its scope/byte/deadline caps and exact identity
+  checks remain; ordinary connectivity/trace/packed4096 ceilings are unchanged.
+  This functional envelope supports the2432-input representative before local
+  UART declaration observation; it makes no performance claim.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
   against the byte budget. `record_export_complete` describes a successful

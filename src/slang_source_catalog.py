@@ -108,6 +108,19 @@ def collect_source_catalog(projector, root):
     def source(symbol):
         return location(symbol.location)
 
+    def source_owner(value):
+        """Bind native ownership even when coordinates are outside this query.
+
+        A confirmed source in another captured file is outside the requested
+        declaration domain; it must not become an unbound in-domain location.
+        """
+        try:
+            original = projector.source_manager.getFullyOriginalLoc(value)
+            return (binding(str(projector.source_manager.getFullPath(original.buffer)))
+                    or binding(str(projector.source_manager.getFileName(original))))
+        except (ValueError, RuntimeError):
+            return None
+
     def identity(symbol, where=None):
         where = source(symbol) if where is None else where
         return hashlib.sha256(json.dumps([_kind_name(symbol), str(symbol.lexicalPath),
@@ -182,6 +195,9 @@ def collect_source_catalog(projector, root):
         if public is None or not str(symbol.name) or symbol.syntax is None:
             return
         if where is None:
+            native_owner = source_owner(symbol.location)
+            if native_owner is not None and native_owner not in files:
+                return
             # Synthetic/compiler supplied symbols have no source declaration.
             if symbol.syntax is not None:
                 gap(owner_file, "source_declaration_location_unbound", ("inventory",))
@@ -207,12 +223,16 @@ def collect_source_catalog(projector, root):
         kind = _kind_name(node)
         where = (source(node) if isinstance(node, Symbol) else
                  location(node.sourceRange.start) if isinstance(node, Expression) else None)
-        path = where["file"] if where is not None else owner_file
+        path = (where["file"] if where is not None else
+                source_owner(node.location) if isinstance(node, Symbol) else
+                source_owner(node.sourceRange.start) if isinstance(node, Expression) else owner_file)
+        if path is None:
+            path = owner_file
         native_location = (node.location if isinstance(node, Symbol) else
                            node.sourceRange.start if isinstance(node, Expression) else None)
         if native_location is not None and projector.source_manager.isMacroLoc(native_location):
             expanded = location(native_location, expanded=True)
-            gap(expanded['file'] if expanded is not None else owner_file,
+            gap(expanded['file'] if expanded is not None else path,
                 'source_macro_usage_domain_uncovered', ('usage', 'imports'))
         if kind in {"ExplicitImport", "WildcardImport"}:
             package = node.package
@@ -308,6 +328,7 @@ def collect_source_catalog(projector, root):
             path = binding(str(projector.source_manager.getFullPath(buffer)))
             if path is not None:
                 processed.add(path)
+            if path in files:
                 raw = projector.source_manager.getSourceText(buffer).encode('utf-8')
                 starts = [0]
                 # Coordinate indexing reads only already parsed frontend
@@ -363,7 +384,7 @@ def collect_source_catalog(projector, root):
                 if _kind_name(scope) == 'Subroutine' and symbol in (scope.returnValVar, scope.thisVar):
                     continue
                 kind, where = _kind_name(symbol), source(symbol)
-                path = where["file"] if where is not None else owner_file
+                path = where["file"] if where is not None else source_owner(symbol.location) or owner_file
                 declaration(symbol, scope_key, path)
                 observe(symbol, path)
                 if kind == "Instance":

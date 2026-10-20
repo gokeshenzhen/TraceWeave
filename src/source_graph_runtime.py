@@ -31,6 +31,7 @@ from .connectivity_ir import ConnectivityIR, CoverageStatus
 from .connectivity_query import ConnectivityQueryEngine
 from .hierarchy_provider import ConnectivityIRHierarchyProvider
 from .slang_source_codec import validate_source_catalog_artifact
+from .slang_hierarchy_codec import validate_hierarchy_artifact
 from .source_graph_contract import (
     SOURCE_GRAPH_WORKER_PROTOCOL_VERSION,
     ScopeRelation,
@@ -1753,7 +1754,8 @@ class SourceGraphRuntime:
         if ir.ir_version != artifact_identity.source.ir_schema_version:
             raise ValueError("worker IR schema version mismatch")
         source_catalog = validate_source_catalog_artifact(ir, artifact_identity.scope)
-        if not source_catalog and artifact_identity.scope.top not in ir.top_instances:
+        hierarchy = validate_hierarchy_artifact(ir, artifact_identity.scope)
+        if not source_catalog and not hierarchy and artifact_identity.scope.top not in ir.top_instances:
             raise ValueError("worker IR does not contain the requested top")
         if isinstance(worker.scope_receipt, SourceGraphArtifactScopeReceipt):
             if worker.scope_receipt.scope != artifact_identity.scope:

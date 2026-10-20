@@ -330,16 +330,20 @@ worker 或产物缓存请求；健康 NPI 仍保持优先。查询前后继续�
 产物之前刷新；诊断详情到限时仍保留真实计数和截断标记。相容类产物可服务文件查询；已缓存的
 精确文件产物仍优先。旧 `handle` 保留源码扫描的 UVM/create 推断视图。
 `dump_tb_section(design_handle=..., section=...)` 支持全部七种 section：三个编译
-元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
+元数据 section 不调用后端，四个语义 section 使用选定的 NPI 或 Slang 服务并保留覆盖缺口。
 `max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，
 需检查 `export_complete`。
-六个工具均已接受 `design_handle`。无可用 NPI 时，精确 path 的 `find_tb_instance`
-与有限 `get_tb_subtree` 复用隔离的 Slang runtime：最多采集 64 个真实 scope、
-检查 4096 个 member、展开两层直接孩子；前端仍可能处理整个编译上下文。
-Generate scope 保留真实父子关系，定义和实例位置分开并绑定捕获源码，缺失位置为 null。
-局部计数保留下界，未找到不作全局不存在结论。Slang 的 module 搜索、精确计数、
-无限 depth 及文件/section 语义导出仍明确报告缺口。纯元数据免前端，
-健康 NPI 优先，旧 `handle` 能力保持兼容。
+六个工具均接受 `design_handle`。无可用 NPI 时，共享隔离 Slang runtime 支持精确 path、
+选定 top 内 module 搜索、有界/精确子树计数、深层浏览和预算内的 `depth=-1`。
+专用层次产物只保存真实 module/interface/program、generate、instance array 的原生父子关系、
+bind 实例和 value 参数证据；不支持的层次类型保留明确缺口。精确局部子树只遍历指定根，
+全局 module 搜索和完整 component 导出遍历选定 top。精确输入 path 仍限64个层次段，
+语义遍历深度限256；每个产物最多 min(10000,剩余scope/2)（默认scope预算下为5000）、min(50000,剩余call/2)，
+保留事实/坐标最多2MiB，并继续受原请求时间和剩余字节预算约束。`depth=-1` 不取消预算。
+前端仍可能展开整个编译上下文。位置绑定捕获的物理源码；局部完整不能证明全局不存在，
+阻断诊断保留 partial 和未知计数。显示截断与精确分析计数分别报告。四个语义 section
+使用对应的 Slang 类/文件或层次产物，相容 catalog 可复用，不同层次范围身份分开。
+三个编译元数据 section 免前端，健康 NPI 优先，旧 `handle` 保持兼容。
 
 `analyze_failure_event` 与 `recommend_failure_debug_next_steps` 接受同一个
 `design_handle`，在波形锁外关联源码。NPI 提供有限候选；Slang 使用精确日志 scope，

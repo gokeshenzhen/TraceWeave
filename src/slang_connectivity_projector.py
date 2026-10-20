@@ -335,7 +335,10 @@ class SlangConnectivityProjector:
         self._source_catalog_payload = None
 
     def project(self, root: Any) -> SlangProjection:
-        self._seed_declared_gaps()
+        hierarchy_only = (self.options.semantic_search is not None
+                          and self.options.semantic_search.purpose == "hierarchy")
+        if not hierarchy_only:
+            self._seed_declared_gaps()
         if (self.options.semantic_search is not None
                 and self.options.semantic_search.purpose == "source_catalog"):
             from .slang_source_catalog import collect_source_catalog
@@ -343,6 +346,27 @@ class SlangConnectivityProjector:
             self._semantic_member_visits = self._source_catalog_payload["member_visits"]
             self._semantic_scope_limited = self._source_catalog_payload["limited"]
             self._semantic_assignment_paths = set()
+        elif (self.options.semantic_search is not None
+              and self.options.semantic_search.purpose == "hierarchy"):
+            from .slang_hierarchy_projection import collect_hierarchy_scopes
+            self._hierarchy_payload = collect_hierarchy_scopes(self, root)
+            self._semantic_member_visits = self._hierarchy_payload["member_visits"]
+            self._semantic_scope_limited = self._hierarchy_payload["limited"]
+            self._semantic_assignment_paths = set()
+            if self._hierarchy_payload['limited']:
+                self._gaps.add(code=self._hierarchy_payload['stop_reason'],
+                    message='hierarchy projection stopped at its declared work envelope',
+                    impact=CoverageStatus.INCONCLUSIVE, constructs=('hierarchy_scope',),
+                    scopes=self.options.semantic_search.roots)
+            if not self._hierarchy_payload['limited'] and any(row['gaps'] for row in self._hierarchy_payload['rows']):
+                self._gaps.add(code='source_hierarchy_facts_incomplete',
+                    message='some actual hierarchy scopes lack supported complete facts',
+                    impact=CoverageStatus.INCONCLUSIVE, constructs=('hierarchy_scope',),
+                    scopes=self.options.semantic_search.roots)
+            # The one critical capability frontier precedes capped diagnostic
+            # details, including when max_recorded_gaps is only one. Exact
+            # diagnostic and gap totals still count every later observation.
+            self._seed_declared_gaps()
         else:
             self._collect_hierarchy(root)
         definitions = []
@@ -416,7 +440,7 @@ class SlangConnectivityProjector:
                     "projector": "minimal_slang_connectivity",
                     "projection_model": "definition_template_plus_instance_binding",
                     **dict(self.options.metadata),
-                    **({"hierarchy_scopes_v1": json.dumps(self._hierarchy_payload, sort_keys=True)}
+                    **({"hierarchy_scopes_v2": json.dumps(self._hierarchy_payload, sort_keys=True)}
                        if self._hierarchy_payload is not None else {}),
                     **({"source_catalog_v1": json.dumps(self._source_catalog_payload, sort_keys=True)}
                        if self._source_catalog_payload is not None else {}),
@@ -465,7 +489,8 @@ class SlangConnectivityProjector:
         return SlangProjection(ir=ir, receipt=receipt)
 
     def _seed_declared_gaps(self) -> None:
-        if self.options.focus_instance_paths:
+        if (self.options.focus_instance_paths and not (self.options.semantic_search is not None
+                and self.options.semantic_search.purpose == "hierarchy")):
             self._gaps.add(
                 code="hierarchy_projection_scoped",
                 message=(
@@ -660,14 +685,7 @@ class SlangConnectivityProjector:
     def _collect_focused_hierarchy(self, root: Any) -> None:
         selected: dict[str, Any] = {}
         unresolved_requested: set[str] = set()
-        if (self.options.semantic_search is not None
-                and self.options.semantic_search.purpose == "hierarchy"):
-            from .slang_hierarchy_projection import collect_hierarchy_scopes
-            selected, self._hierarchy_payload = collect_hierarchy_scopes(self, root)
-            self._semantic_member_visits = self._hierarchy_payload["member_visits"]
-            self._semantic_scope_limited = self._hierarchy_payload["limited"]
-            self._semantic_assignment_paths = set()
-        elif self.options.semantic_search is not None:
+        if self.options.semantic_search is not None:
             selected = self._semantic_scope_instances(root)
         else:
             for requested in sorted(set(self.options.focus_instance_paths)):

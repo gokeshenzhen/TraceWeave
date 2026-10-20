@@ -131,7 +131,7 @@ def prepare_source_query(context, operation, arguments, *, budget=None):
         if operation == "dump_tb_section" and arguments["section"] in METADATA_SECTIONS:
             needs_provider = False
         elif operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"} or (
-            operation == "dump_tb_section" and arguments["section"] in {"files_full", "interfaces"}
+            operation == "dump_tb_section" and arguments["section"] in {"files_full", "interfaces", "class_hierarchy_full"}
         ):
             available = budget.max_bytes - budget.fact_bytes - 512
             if available < 1:

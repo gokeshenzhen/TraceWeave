@@ -1,128 +1,140 @@
-"""Prepared instance queries over a capability-isolated Source Graph artifact."""
+"""Prepared hierarchy/source queries over capability-isolated Slang artifacts."""
 from __future__ import annotations
 
 from contextlib import contextmanager
-import json
-from pathlib import Path
 
 from .connectivity_ir import SourceLocation
 from .hierarchy_source_ir import HierarchyScope, ScopeLookup, semantic_fact_id, HierarchyBudgetExceeded
 from .prepared_source_connectivity import build_prepared_source_plan
 from .source_graph_contract import SemanticScopeSearch
+from .slang_hierarchy_codec import decode_hierarchy, validate_hierarchy_artifact
+
+
+_LIMITS = {'source_hierarchy_member_limit': 'native_call_limit',
+           'source_hierarchy_scope_limit': 'scope_limit',
+           'source_hierarchy_depth_limit': 'scope_depth_limit',
+           'source_hierarchy_byte_limit': 'fact_byte_limit',
+           'source_hierarchy_parameter_limit': 'parameter_binding_limit'}
 
 
 def capability_gap(operation, arguments):
-    if operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}:
+    if operation in {'get_tb_file_detail', 'lookup_tb_files', 'get_tb_class_hierarchy',
+                     'get_tb_subtree', 'find_tb_instance'}:
         return None
-    if operation not in {"get_tb_subtree", "find_tb_instance"}:
-        return "source_hierarchy_capability_unsupported"
-    if arguments.get("count_mode", "bounded") == "exact":
-        return "source_hierarchy_exact_count_unsupported"
-    if operation == "find_tb_instance" and arguments.get("path") is None:
-        return "source_hierarchy_module_search_unsupported"
-    if operation == "get_tb_subtree" and arguments.get("depth", 1) == -1:
-        return "source_hierarchy_unlimited_depth_unsupported"
-    return None
+    if operation == 'dump_tb_section' and arguments.get('section') in {
+            'files_full', 'interfaces', 'class_hierarchy_full', 'component_tree_full'}:
+        return None
+    return 'source_hierarchy_capability_unsupported'
 
 
 def build_instance_plan(context, operation, arguments, config, budget, *, catalog=None):
     budget.checkpoint()
     if budget.scope_count >= budget.max_scopes:
-        raise HierarchyBudgetExceeded("scope_limit")
+        raise HierarchyBudgetExceeded('scope_limit')
     if budget.call_count >= budget.max_calls:
-        raise HierarchyBudgetExceeded("native_call_limit")
+        raise HierarchyBudgetExceeded('native_call_limit')
     if budget.fact_bytes >= budget.max_bytes:
-        raise HierarchyBudgetExceeded("fact_byte_limit")
-    path = arguments.get("path") if operation == "find_tb_instance" else arguments.get("root")
-    path = path or context.selected_top
-    if operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}:
+        raise HierarchyBudgetExceeded('fact_byte_limit')
+    section = arguments.get('section') if operation == 'dump_tb_section' else None
+    source_operation = operation in {'get_tb_file_detail', 'lookup_tb_files', 'get_tb_class_hierarchy'}
+    if source_operation or section in {'files_full', 'interfaces', 'class_hierarchy_full'}:
         if catalog is None:
-            raise ValueError("source file queries require captured ownership")
-        if operation == "get_tb_file_detail":
-            selected = (catalog.find_file(arguments["path"], checkpoint=budget.checkpoint),)
-        elif operation == "lookup_tb_files":
-            filters = {name: arguments.get(name) for name in ("basename", "name_contains", "path_contains")}
+            raise ValueError('source file queries require captured ownership')
+        if operation == 'get_tb_file_detail':
+            selected = (catalog.find_file(arguments['path'], checkpoint=budget.checkpoint),)
+        elif operation == 'lookup_tb_files':
+            filters = {name: arguments.get(name) for name in ('basename', 'name_contains', 'path_contains')}
             selected = (catalog.select_files(**filters, checkpoint=budget.checkpoint)
                         if any(value is not None for value in filters.values()) else catalog.files)
         else:
             selected = catalog.files
         files = tuple(sorted(item.path for item in selected if item is not None))
-        return build_prepared_source_plan(context=context, operation="driver",
-            args={"signal_path": context.selected_top + ".__traceweave_source_anchor"}, config=config,
-            search=SemanticScopeSearch(purpose="source_catalog", source_files=files,
-                source_capabilities=(("class_inheritance", "file_declarations")
-                                     if operation == "get_tb_class_hierarchy" else ("file_declarations",)),
+        class_capable = operation == 'get_tb_class_hierarchy' or section == 'class_hierarchy_full'
+        return build_prepared_source_plan(context=context, operation='driver',
+            args={'signal_path': context.selected_top + '.__traceweave_source_anchor'}, config=config,
+            search=SemanticScopeSearch(purpose='source_catalog', source_files=files,
+                source_capabilities=(('class_inheritance', 'file_declarations')
+                                     if class_capable else ('file_declarations',)),
                 source_aliases=context.aliases,
                 source_max_scopes=min(1024, budget.max_scopes - budget.scope_count),
                 source_max_depth=budget.max_depth,
                 source_max_bytes=max(1, min(2 * 1024 * 1024, (budget.max_bytes - budget.fact_bytes) // 3)),
-                max_members=max(1, min(4096, (budget.max_calls - budget.call_count) // 2))))
-    # Reuse the captured manifest and artifact planner. This terminal is a
-    # private planning anchor only: no signal query is ever executed against it.
-    return build_prepared_source_plan(context=context, operation="driver",
-        args={"signal_path": path + ".__traceweave_scope_anchor"}, config=config,
-        search=SemanticScopeSearch(roots=(path,), depth=2, purpose="hierarchy",
-            max_instances=max(1, min(64, budget.max_scopes - budget.scope_count)),
-            max_members=max(1, min(4096, budget.max_calls - budget.call_count))))
+                max_members=max(1, min(50000, (budget.max_calls - budget.call_count) // 2))))
+    # Top-global module searches and tree exports share one complete domain.
+    # An exact/unlimited local subtree completes that actual root only; it
+    # never needs to enumerate unrelated selected-top siblings.
+    full = (section == 'component_tree_full' or operation == 'get_tb_subtree' and arguments.get('count_mode') == 'exact'
+            or operation == 'find_tb_instance' and arguments.get('path') is None
+            or operation == 'get_tb_subtree' and arguments.get('depth', 1) == -1)
+    global_domain = section == 'component_tree_full' or operation == 'find_tb_instance' and arguments.get('path') is None
+    path = (context.selected_top if global_domain else
+            arguments.get('path') if operation == 'find_tb_instance' else arguments.get('root'))
+    path = path or context.selected_top
+    depth = (budget.max_depth if full else 0 if operation == 'find_tb_instance' else
+             min(budget.max_depth, arguments.get('depth', 1) + 1))
+    return build_prepared_source_plan(context=context, operation='driver',
+        args={'signal_path': path + '.__traceweave_scope_anchor'}, config=config,
+        search=SemanticScopeSearch(roots=(path,), depth=depth, purpose='hierarchy',
+            hierarchy_mode='complete' if full else 'bounded', hierarchy_aliases=context.aliases,
+            hierarchy_max_bytes=max(1, min(2 * 1024 * 1024, (budget.max_bytes - budget.fact_bytes) // 3)),
+            max_instances=max(1, min(10000, (budget.max_scopes - budget.scope_count) // 2)),
+            max_members=max(1, min(50000, (budget.max_calls - budget.call_count) // 2))))
 
 
 class SlangHierarchyProvider:
-    origin = "slang"
+    origin = 'slang'
 
     def __init__(self, entry, context, budget):
         self.artifact_identity = entry.build_key.digest
-        self.top = context.selected_top
-        self.budget = budget
-        payload = json.loads(dict(entry.ir.metadata)["hierarchy_scopes_v1"])
+        self.top, self.budget = context.selected_top, budget
+        scope = entry.artifact_identity.scope
+        validate_hierarchy_artifact(entry.ir, scope, checkpoint=budget.checkpoint)
+        payload = decode_hierarchy(dict(entry.ir.metadata)['hierarchy_scopes_v2'],
+                                   scope.semantic_search, self.top, checkpoint=budget.checkpoint)
         self.facts, self.children = {}, {}
-        self.gaps = {"source_hierarchy_bounded"}
+        self.gaps = set()
         if entry.ir.coverage.blocking_diagnostic_count:
-            self.gaps.add("source_hierarchy_frontend_diagnostics")
-        if payload["limited"]:
-            self.gaps.add("source_hierarchy_projection_limit")
-        self.complete = set(payload["complete_children"])
-        if entry.ir.coverage.blocking_diagnostic_count:
+            self.gaps.add('source_hierarchy_frontend_diagnostics')
+        if entry.ir.coverage.gaps:
+            self.gaps.add('source_hierarchy_context_incomplete')
+        if payload['limited']:
+            self.gaps.add('source_hierarchy_projection_limit')
+        self.analysis_limits = (() if payload['stop_reason'] is None else (_LIMITS[payload['stop_reason']],))
+        self.complete = set(payload['complete_children'])
+        if self.gaps:
             self.complete.clear()
+        if payload['member_visits'] > budget.max_calls - budget.call_count:
+            raise HierarchyBudgetExceeded('native_call_limit')
+        budget.call_count += payload['member_visits']
+        # Worker-retained facts/coordinates and public copied facts share the
+        # request envelope. Public traversal charges its own row copies later.
+        budget.reserve_bytes(payload['retained_bytes'])
         captured = {record.path for record in context.snapshot.records}
-        aliases = dict(context.aliases)
-
-        def bound_location(value, gaps, role):
-            if value is None:
-                gaps.add("source_" + role + "_location_unavailable")
-                return None
-            spelling = value["file"]
-            # The worker normalizes relative to its fixed launch cwd. Exact
-            # captured membership is required; no basename guessing or reads.
-            canonical = aliases.get(spelling, str((Path(__file__).resolve().parents[1] / spelling).absolute()))
-            if canonical not in captured:
-                gaps.add("source_" + role + "_location_unbound")
-                return None
-            return SourceLocation(canonical, value["line"], value.get("column", 0))
-
-        for row in payload["rows"]:
+        for row in payload['rows']:
             budget.checkpoint()
-            gaps = set(row["gaps"])
-            site = bound_location(row["location"], gaps, "instance")
-            definition = (bound_location(row["definition_location"], gaps, "definition")
-                          if row["definition_id"] is not None else None)
+            for name in ('location', 'definition_location'):
+                if row[name] is not None and row[name]['file'] not in captured:
+                    raise ValueError('hierarchy source location escaped captured ownership')
             fact = HierarchyScope(
-                scope_id=semantic_fact_id(self.origin, self.artifact_identity, row["kind"], row["path"]),
-                path=row["path"], name=row["name"], kind=row["kind"], parent_path=row["parent_path"],
-                definition_id=row["definition_id"], definition_name=row["definition_name"],
-                location=site, definition_location=definition,
-                parameterization=tuple(tuple(p) for p in row["parameterization"]), gaps=tuple(gaps))
+                scope_id=semantic_fact_id(self.origin, self.artifact_identity, row['kind'], row['path']),
+                path=row['path'], name=row['name'], kind=row['kind'], parent_path=row['parent_path'],
+                definition_id=row['definition_id'], definition_name=row['definition_name'],
+                location=SourceLocation(**row['location']) if row['location'] is not None else None,
+                definition_location=(SourceLocation(**row['definition_location'])
+                                     if row['definition_location'] is not None else None),
+                parameterization=tuple(map(tuple, row['parameterization'])), gaps=tuple(row['gaps']))
             self.facts[fact.path] = fact
             self.children.setdefault(fact.parent_path, []).append(fact)
-        # Discovery and copied facts are part of this request's cumulative work.
-        if payload["member_visits"] > budget.max_calls - budget.call_count:
-            raise HierarchyBudgetExceeded("native_call_limit")
-        budget.call_count += payload["member_visits"]
+        self.global_complete = (scope.semantic_search.hierarchy_mode == 'complete'
+            and scope.semantic_search.roots == (self.top,) and not self.gaps
+            and bool(self.facts) and set(self.facts) == self.complete)
 
     def lookup_scope(self, path, budget):
         budget.call()
-        # Even an exact miss is local/incomplete evidence, never a global
-        # absence proof in a partial elaboration. Positive facts remain useful.
-        return ScopeLookup(self.facts.get(path), False, tuple(sorted(self.gaps)))
+        fact = self.facts.get(path)
+        complete = not self.gaps and (fact is not None or self.global_complete)
+        gaps = self.gaps | ({'source_scope_not_in_projected_domain'} if fact is None and not complete else set())
+        return ScopeLookup(fact, complete, tuple(sorted(gaps)))
 
     @contextmanager
     def open_children(self, scope, budget):
@@ -131,7 +143,7 @@ class SlangHierarchyProvider:
         complete = scope.path in self.complete
 
         class Stream:
-            gaps = () if complete else ("source_children_not_enumerated",)
+            gaps = () if complete else ('source_children_not_enumerated',)
             def __init__(self):
                 self.complete = False
             def __iter__(self):
@@ -143,5 +155,4 @@ class SlangHierarchyProvider:
                 except StopIteration:
                     self.complete = complete
                     raise
-
         yield Stream()
