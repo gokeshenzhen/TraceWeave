@@ -620,8 +620,11 @@ Verification
   domain is `declarations_and_referenced_specializations`, not all possible
   specializations or runtime UVM topology.
   Explicit class artifacts refresh the live compilation diagnostics after
-  projection, because the catalog may force lazy extends/type bindings after
-  the frontend session's initial snapshot. The worker reconciles IR counts,
+  projection to reconcile the actually observed snapshot with the session's
+  earlier observation. Unresolved inheritance can coexist with a complete
+  finite declaration inventory and zero SDK diagnostics; these are independent
+  facts. This refresh does not invent diagnostics or prove SDK lazy-binding
+  behavior. The worker reconciles IR counts,
   bounded diagnostic gaps, class/file coverage and the final scope receipt
   before serialization, without reprojecting or building another frontend.
   New diagnostic details share the catalog byte envelope and existing gap cap;

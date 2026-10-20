@@ -11,7 +11,9 @@ ORACLE = json.loads((FIXTURES / 'oracle.json').read_text())
 TOP = ORACLE['top']
 
 
-def materialize(root, *, missing=False):
+def materialize(root, *, missing=False, diagnostic=False):
+    if missing and diagnostic:
+        raise ValueError('missing-base and blocking-diagnostic controls are separate compilations')
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     for source in FIXTURES.iterdir():
@@ -19,11 +21,13 @@ def materialize(root, *, missing=False):
             shutil.copyfile(source, root / source.name)
     log = root / 'compile.log'
     text = (FIXTURES / 'compile.log').read_text().replace('${FIXTURE}', str(root))
-    if missing:
+    if missing or diagnostic:
+        name = 'missing.sv' if missing else 'diagnostic.sv'
+        top = 'missing_class_top' if missing else ORACLE['diagnostic']['top']
         text = ('Chronologic VCS simulator\nCommand: vcs -sverilog '
-                f'{root / "missing.sv"} -top missing_class_top\n'
-                f"Parsing design file '{root / 'missing.sv'}'\n"
-                'Top Level Modules:\n       missing_class_top\n')
+                f'{root / name} -top {top}\n'
+                f"Parsing design file '{root / name}'\n"
+                f'Top Level Modules:\n       {top}\n')
     log.write_text(text)
     return log
 

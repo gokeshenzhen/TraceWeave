@@ -371,12 +371,13 @@ def create_semantic_frontend_session(
 
 
 def _refresh_class_projection_diagnostics(session, request, projection, source_root):
-    """Publish diagnostics after lazy class/base/type binding has run.
+    """Reconcile the observed post-projection class diagnostic snapshot.
 
-    getRoot/getAllDiagnostics before a catalog walk need not bind a class's
-    extends clause. Refresh only the explicit class capability, within this
-    same worker/request; never reproject or construct a default specialization.
-    The normal connectivity and file-only projection paths are unchanged.
+    Inventory completeness and base resolution do not imply SDK diagnostics.
+    The original missing-base fixture observed zero before and after this
+    call. Refresh only the explicit class capability within the same worker;
+    never invent an error, reproject or construct a default specialization.
+    Ordinary connectivity and file-only projection paths are unchanged.
     """
     ir, receipt = projection.ir, projection.receipt.to_dict()
     search = request.scope.semantic_search

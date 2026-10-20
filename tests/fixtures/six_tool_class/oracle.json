@@ -1,5 +1,5 @@
 {
-  "provenance": "Handwritten from the finite fixture before execution; no product-generated identities or counts.",
+  "provenance": "Original positive declaration/binding table handwritten before attempt1; no product-generated identities. After attempt2, independent max review approved the missing-base inventory correction against the renderer contract and saved zero-diagnostic observations; separate UnknownModule control frozen before attempt3.",
   "top": "class_top",
   "declarations": [
     ["external.sv", "external_pkg::Base", 2, null],
@@ -40,6 +40,18 @@
   "nested_actual_type_count": 3,
   "class_inventory_lower_bound": 23,
   "generic_declaration_frontier": "source_generic_class_binding_not_instantiated",
-  "missing": {"file": "missing.sv", "class": "broken_pkg::MissingChild", "line": 2, "status": "unresolved"},
+  "missing": {
+    "file": "missing.sv", "class": "broken_pkg::MissingChild", "line": 2, "status": "unresolved",
+    "class_inventory_complete": true, "class_inventory_count": 1,
+    "diagnostic_count": 0, "blocking_diagnostic_count": 0,
+    "boundary": "Complete finite declaration inventory does not prove a resolved base or complete inheritance graph. Independent max review corrected the original invalid inventory/diagnostic implication; original fixture and failed evidence remain unchanged."
+  },
+  "diagnostic": {
+    "file": "diagnostic.sv", "top": "diagnostic_class_top", "cause": "UnknownModule",
+    "undeclared_module": "unavailable_diagnostic_module", "module_site_line": 8,
+    "classes": [["diagnostic_pkg::Base", 2, null], ["diagnostic_pkg::Child", 4, "diagnostic_pkg::Base"]],
+    "class_inventory_lower_bound": 2,
+    "boundary": "The blocking diagnostic is caused by the actual undeclared module instance, independently of the resolved class inheritance. Pinned Slang 11 precedent: tests/test_source_graph_mixed_language.py."
+  },
   "external_control": "Real catalog requesting classes.sv only against the same two-file captured compilation; beta::External binds external_pkg::Base as reference-only. Public all-file inventory recovers Base as a local declaration."
 }

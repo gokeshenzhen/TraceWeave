@@ -24,7 +24,7 @@ from src.slang_source_provider import SlangSourceProvider
 from src.source_graph_contract import SemanticScopeSearch
 from tests.test_prepared_source_connectivity import isolation, anyio_backend, public, prepare
 from tests.six_tool_class_support import (materialize, assert_class_oracle, flatten, named,
-                                           segments, TOP)
+                                           segments, TOP, ORACLE)
 
 
 async def call(root, handle, tool='get_tb_class_hierarchy', **arguments):
@@ -139,8 +139,65 @@ async def test_real_missing_base_and_frontend_diagnostics_stay_unresolved(tmp_pa
     row = named(flatten(result), 'broken_pkg::MissingChild')
     assert row['source_line'] == 2 and row['source_file'] == str(tmp_path / 'missing.sv')
     assert row['base_status'] == 'unresolved' and row['base_symbol_id'] is None
-    assert result['coverage_status'] == 'partial' and not result['class_inventory_complete']
+    assert result['coverage_status'] == 'partial'
+    assert 'class_base_unresolved' in result['coverage_gaps']
+    # Independent max review: a complete finite declaration inventory is
+    # separate from an unresolved inheritance relation. Both saved attempts
+    # observed zero SDK diagnostics here; never fabricate a missing-base error.
+    expected = ORACLE['missing']
+    assert result['class_inventory_complete'] is expected['class_inventory_complete']
+    assert result['class_inventory_count'] == result['class_inventory_lower_bound'] == expected['class_inventory_count']
+    receipt = result['backend_status']['source_graph']
+    assert receipt['coverage_diagnostic_count'] == expected['diagnostic_count']
+    assert receipt['coverage_blocking_diagnostic_count'] == expected['blocking_diagnostic_count']
+    assert 'source_class_frontend_diagnostics' not in result['coverage_gaps']
+
+
+@pytest.mark.anyio
+async def test_real_unknown_module_diagnostic_preserves_class_facts_and_incomplete_inventory(tmp_path):
+    expected = ORACLE['diagnostic']
+    log = materialize(tmp_path, diagnostic=True)
+    handle = await prepare(tmp_path, log, 'source', expected['top'])
+    result = await call(tmp_path, handle)
+    real_positive(result)
+    receipt = result['backend_status']['source_graph']
+    assert receipt['coverage_diagnostic_count'] > 0
+    assert receipt['coverage_blocking_diagnostic_count'] > 0
+    assert 'frontend_diagnostic_unknownmodule' in receipt['coverage_gap_codes']
+    native_gaps = []
+    for path in (tmp_path / 'cache_load_evidence').glob('*/ir.raw.json'):
+        saved_ir = json.loads(path.read_text())
+        native_gaps.extend(gap for gap in saved_ir['coverage']['gaps']
+                           if gap['code'] == 'frontend_diagnostic:UnknownModule')
+    assert len(native_gaps) == 1, native_gaps
+    where = native_gaps[0]['location']
+    diagnostic_file = Path(where['file'])
+    if not diagnostic_file.is_absolute():
+        diagnostic_file = Path(server.__file__).parent / diagnostic_file
+    assert diagnostic_file.resolve() == (tmp_path / expected['file']).resolve()
+    assert where['line'] == expected['module_site_line']
+    assert expected['undeclared_module'] in native_gaps[0]['message']
     assert 'source_class_frontend_diagnostics' in result['coverage_gaps']
+    assert result['coverage_status'] == 'partial' and result['class_inventory_complete'] is False
+    assert result['class_inventory_count'] is None
+    assert result['class_inventory_lower_bound'] == expected['class_inventory_lower_bound']
+    rows = flatten(result)
+    for qualified, line, base in expected['classes']:
+        row = named(rows, qualified)
+        assert row['source_file'] == str(tmp_path / expected['file']) and row['source_line'] == line
+        if base is None:
+            assert row['base_status'] == 'none'
+        else:
+            assert row['base_status'] == 'resolved' and row['base_symbol_id'] == named(rows, base)['symbol_id']
+    detail = await call(tmp_path, handle, 'get_tb_file_detail', path=str(tmp_path / expected['file']))
+    real_positive(detail)
+    assert detail['artifact_identity'] == result['artifact_identity']
+    assert detail['symbol_inventory_complete'] is False
+    assert detail['contains_uvm'] is None and detail['has_uvm_import'] is None
+    for row in rows:
+        matches = [symbol for symbol in detail['symbols'] if symbol['kind'] == 'class'
+                   and symbol['source_line'] == row['source_line']]
+        assert len(matches) == 1 and matches[0]['declaration_id'] == row['declaration_id']
 
 
 @pytest.mark.anyio

@@ -196,7 +196,7 @@ canonical matching preserves distinct nominal types and aliases of the same
 type. `base_relation="specialization"` and `base_type_parameter_bindings` refer
 to the actual bound base. Generic declarations without an actual binding,
 unresolved bases and frontend diagnostics retain partial coverage. Class
-diagnostics are refreshed after lazy base/type binding before artifact
+diagnostics are observed again after class projection before artifact
 publication; omitted diagnostic details retain exact counters and truncation.
 No possible
 parameter combinations are invented or exhaustively enumerated. Compatible
