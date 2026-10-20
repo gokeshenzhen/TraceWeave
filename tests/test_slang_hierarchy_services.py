@@ -18,8 +18,8 @@ from tests.six_tool_hierarchy_support import (TOP, ORACLE, EXPECTED, materialize
     assert_tree, assert_module, assert_classes, flatten_tree)
 
 
-async def call(root, handle, tool='get_tb_subtree', **arguments):
-    return await public(root, tool, dict(design_handle=handle, timeout_sec=30, **arguments))
+async def call(evidence_dir, handle, tool='get_tb_subtree', /, **arguments):
+    return await public(evidence_dir, tool, dict(design_handle=handle, timeout_sec=30, **arguments))
 
 
 @pytest.mark.anyio
