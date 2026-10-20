@@ -18,8 +18,8 @@ def payload():
     return dict(version=1, capabilities=['file_declarations'], source_files=['/rtl/a.sv'],
         declaration_domain='compilation_declarations_and_elaborated_scopes',
         usage_domain='resolved_types_imports_and_expression_references',
-        member_visits=1, scope_visits=1, limited=False, stop_reason=None,
-        limits=dict(members=4096, scopes=1024, depth=128),
+        member_visits=1, scope_visits=1, coordinate_bytes=0, limited=False, stop_reason=None,
+        limits=dict(members=4096, scopes=1024, depth=128, coordinate_bytes=2 * 1024 * 1024),
         files={'/rtl/a.sv': dict(symbols=[dict(key='a' * 64, name='A', qualified_name='A',
             kind='module', location=dict(file='/rtl/a.sv', line=7, column=1), scope_key=None,
             declaration_key='a' * 64, type_key=None, parameterization=[], external=False,
@@ -80,7 +80,7 @@ def test_catalog_scope_identity_and_exact_isolation():
                        scope=replace(request.artifact_identity.scope, semantic_search=search()))
     key = compute_source_graph_artifact_key(identity).digest
     assert SemanticScopeSearch.from_dict(search().to_dict()) == search()
-    for changed in (search(source_max_depth=127), search(source_max_scopes=100),
+    for changed in (search(source_max_depth=127), search(source_max_scopes=100), search(source_max_bytes=1000),
                     search(source_aliases=(('/alias/a.sv', '/rtl/a.sv'),))):
         other = replace(identity, scope=replace(identity.scope, semantic_search=changed))
         assert compute_source_graph_artifact_key(other).digest != key
@@ -91,7 +91,7 @@ def test_catalog_scope_identity_and_exact_isolation():
 
 
 @pytest.mark.parametrize('kwargs', [dict(source_version=True), dict(source_version=2),
-    dict(source_max_scopes=True), dict(source_max_depth=257),
+    dict(source_max_scopes=True), dict(source_max_depth=257), dict(source_max_bytes=True),
     dict(source_aliases=(('same', '/rtl/a.sv'), ('same', '/rtl/b.sv')))])
 def test_invalid_catalog_inputs_rejected_before_worker(kwargs):
     with pytest.raises(ValueError): search(**kwargs)

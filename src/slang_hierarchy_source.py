@@ -52,6 +52,7 @@ def build_instance_plan(context, operation, arguments, config, budget, *, catalo
                 source_aliases=context.aliases,
                 source_max_scopes=min(1024, budget.max_scopes - budget.scope_count),
                 source_max_depth=budget.max_depth,
+                source_max_bytes=max(1, min(2 * 1024 * 1024, (budget.max_bytes - budget.fact_bytes) // 3)),
                 max_members=max(1, min(4096, (budget.max_calls - budget.call_count) // 2))))
     # Reuse the captured manifest and artifact planner. This terminal is a
     # private planning anchor only: no signal query is ever executed against it.

@@ -547,7 +547,12 @@ Verification
   are bounded. Inventory, import and usage coverage remain separate. Source
   buffers establish processed-file evidence, including empty files and includes;
   missing/unprocessed files, generic members, opaque contexts and unelaborated
-  definition bodies cannot yield complete negatives. Declaration IDs bind the
+  definition bodies cannot yield complete negatives. Locations bind the
+  original parsed source buffer; a bounded byte-offset/newline index supplies
+  physical coordinates even with line directives. Macro expansion usage leaves
+  an explicit caller-side usage/import gap instead of a complete negative.
+  Coordinate-index bytes participate in artifact limits and request accounting.
+  Declaration IDs bind the
   captured context plus semantic scope/kind/location; symbol IDs remain local
   to the exact artifact. Applicable file-detail/filter queries reuse one exact
   artifact; another file domain requires honest new work. Preparation and pure

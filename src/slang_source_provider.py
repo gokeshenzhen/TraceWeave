@@ -25,6 +25,7 @@ class SlangSourceProvider:
             raise ValueError("source catalog artifact has no declaration projection")
         budget.reserve_bytes(512 + 4 * len(raw))
         payload = decode_source_catalog(raw, search, checkpoint=budget.checkpoint)
+        budget.reserve_bytes(payload['coordinate_bytes'])
         visits = payload["member_visits"]
         if not isinstance(visits, int) or not 0 <= visits <= budget.max_calls - budget.call_count:
             raise HierarchyBudgetExceeded("native_call_limit")

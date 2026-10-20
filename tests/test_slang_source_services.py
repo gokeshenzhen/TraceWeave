@@ -183,3 +183,34 @@ async def test_file_ordinary_npi_failure_uses_one_real_source_artifact(tmp_path,
     assert_file_oracle(value, 'plain.sv', tmp_path)
     assert any(row['backend'] == 'verdi_npi' and row['status'] == 'failed'
                for row in value['backend_status']['attempted_backends'])
+
+
+@pytest.mark.anyio
+async def test_macro_only_uvm_caller_cannot_be_a_complete_negative(tmp_path):
+    log = materialize(tmp_path)
+    header = tmp_path / 'macro.svh'
+    header.write_text('`define REPORT_CALL uvm_pkg::report()\n')
+    source = tmp_path / 'top.sv'
+    source.write_text('`include "macro.svh"\nmodule service_top;\n'
+                      '  int value;\n  initial value = `REPORT_CALL;\nendmodule\n')
+    log.write_text(log.read_text().replace(f"Parsing design file '{source}'\n",
+        f"Parsing design file '{source}'\nParsing included file '{header}'.\n"))
+    handle = await prepare(tmp_path, log, 'source', TOP)
+    value = await file_call(tmp_path, handle, 'get_tb_file_detail', path=str(source))
+    real_positive(value)
+    assert value['contains_uvm'] is None and value['has_uvm_import'] is None, value
+    assert 'source_macro_usage_domain_uncovered' in value['coverage_gaps'], value
+    assert value['coverage_status'] == 'partial'
+
+
+@pytest.mark.anyio
+async def test_line_directive_cannot_replace_physical_file_or_line(tmp_path):
+    log = materialize(tmp_path)
+    source = tmp_path / 'top.sv'
+    source.write_text('`line 800 "pretend.sv" 0\nmodule service_top;\n  logic marker;\nendmodule\n')
+    handle = await prepare(tmp_path, log, 'source', TOP)
+    value = await file_call(tmp_path, handle, 'get_tb_file_detail', path=str(source))
+    real_positive(value)
+    rows = {row['name']: row for row in value['symbols']}
+    assert rows['service_top']['source_file'] == str(source) and rows['service_top']['source_line'] == 2, value
+    assert rows['marker']['source_file'] == str(source) and rows['marker']['source_line'] == 3, value

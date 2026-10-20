@@ -9,6 +9,7 @@ Only primitives leave the worker. All locations bind through captured aliases.
 from __future__ import annotations
 
 from collections import deque
+from bisect import bisect_right
 import hashlib
 import json
 from pathlib import Path
@@ -44,6 +45,8 @@ def collect_source_catalog(projector, root):
     visits = scope_visits = 0
     limited = False
     stop_reason = None
+    coordinates = {}
+    coordinate_bytes = 0
 
     class Limit(Exception):
         pass
@@ -66,23 +69,31 @@ def collect_source_catalog(projector, root):
             spelling = str((projector.options.source_root or Path.cwd()) / path)
         return aliases.get(spelling)
 
-    def location(value):
+    def location(value, *, expanded=False):
         if value is None:
             return None
         manager = projector.source_manager
         try:
-            original = manager.getFullyOriginalLoc(value)
+            original = (manager.getFullyExpandedLoc(value) if expanded
+                        else manager.getFullyOriginalLoc(value))
             # Slang's display filename can be cwd-relative or affected by a
             # line directive. Its parsed buffer path supplies the real owner;
             # this is frontend evidence, not a live filesystem resolution.
             path = (binding(str(manager.getFullPath(original.buffer)))
                     or binding(str(manager.getFileName(original))))
-            line = int(manager.getLineNumber(original))
+            coordinate = coordinates.get(original.buffer)
+            if coordinate is None:
+                return None
+            starts, size = coordinate
+            offset = int(original.offset)
+            if not 0 <= offset <= size:
+                return None
+            line = bisect_right(starts, offset)
         except (ValueError, RuntimeError):
             return None
         if path is None or line < 1:
             return None
-        return dict(file=path, line=line, column=max(0, int(manager.getColumnNumber(original))))
+        return dict(file=path, line=line, column=offset - starts[line - 1] + 1)
 
     def source(symbol):
         return location(symbol.location)
@@ -183,6 +194,12 @@ def collect_source_catalog(projector, root):
         where = (source(node) if isinstance(node, Symbol) else
                  location(node.sourceRange.start) if isinstance(node, Expression) else None)
         path = where["file"] if where is not None else owner_file
+        native_location = (node.location if isinstance(node, Symbol) else
+                           node.sourceRange.start if isinstance(node, Expression) else None)
+        if native_location is not None and projector.source_manager.isMacroLoc(native_location):
+            expanded = location(native_location, expanded=True)
+            gap(expanded['file'] if expanded is not None else owner_file,
+                'source_macro_usage_domain_uncovered', ('usage', 'imports'))
         if kind in {"ExplicitImport", "WildcardImport"}:
             package = node.package
             if package is None:
@@ -239,9 +256,28 @@ def collect_source_catalog(projector, root):
         processed = set()
         for buffer in projector.source_manager.getAllBuffers():
             charge()
+            if str(projector.source_manager.getBufferKind(buffer).name) in {'Macro', 'MacroArg'}:
+                continue
             path = binding(str(projector.source_manager.getFullPath(buffer)))
             if path is not None:
                 processed.add(path)
+                raw = projector.source_manager.getSourceText(buffer).encode('utf-8')
+                starts = [0]
+                # Coordinate indexing reads only already parsed frontend
+                # buffers. Bytes and newline entries have one cumulative cap.
+                required = len(raw) + 512
+                if coordinate_bytes + required > search.source_max_bytes:
+                    raise Limit('source_catalog_coordinate_byte_limit')
+                coordinate_bytes += required
+                offset = raw.find(b'\n')
+                while offset >= 0:
+                    charge()
+                    if coordinate_bytes + 64 > search.source_max_bytes:
+                        raise Limit('source_catalog_coordinate_byte_limit')
+                    coordinate_bytes += 64
+                    starts.append(offset + 1)
+                    offset = raw.find(b'\n', offset + 1)
+                coordinates[buffer] = (starts, len(raw))
         for path in files:
             if path not in processed:
                 gap(path, "source_file_not_processed_by_frontend")
@@ -333,8 +369,9 @@ def collect_source_catalog(projector, root):
     return dict(version=CATALOG_VERSION, capabilities=list(search.source_capabilities),
         source_files=list(search.source_files), declaration_domain=DECLARATION_DOMAIN,
         usage_domain=USAGE_DOMAIN, member_visits=visits, scope_visits=scope_visits,
-        limited=limited, stop_reason=stop_reason,
-        limits=dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth),
+        limited=limited, stop_reason=stop_reason, coordinate_bytes=coordinate_bytes,
+        limits=dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth,
+                    coordinate_bytes=search.source_max_bytes),
         files={path: dict(symbols=list(row["symbols"].values()),
             inventory_gaps=sorted(row["inventory"]), import_gaps=sorted(row["imports"]),
             usage_gaps=sorted(row["usage"]),

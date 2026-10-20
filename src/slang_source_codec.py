@@ -39,7 +39,7 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
         return value
     payload = json.loads(raw, object_pairs_hook=object_pairs)
     _fields(payload, "version capabilities source_files declaration_domain usage_domain member_visits "
-                     "scope_visits limited stop_reason limits files")
+                     "scope_visits limited stop_reason coordinate_bytes limits files")
     if (type(payload['version']) is not int or payload['version'] != CATALOG_VERSION
             or payload['version'] != search.source_version
             or payload['source_files'] != list(search.source_files)
@@ -47,18 +47,21 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
             or payload['declaration_domain'] != DECLARATION_DOMAIN
             or payload['usage_domain'] != USAGE_DOMAIN):
         raise ValueError("source catalog capability or domain mismatch")
-    _fields(payload['limits'], "members scopes depth")
-    expected = dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth)
+    _fields(payload['limits'], "members scopes depth coordinate_bytes")
+    expected = dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth,
+                    coordinate_bytes=search.source_max_bytes)
     if any(type(payload['limits'][key]) is not int for key in expected) or payload['limits'] != expected:
         raise ValueError("source catalog limits mismatch")
     _count(payload['member_visits'], search.max_members)
     _count(payload['scope_visits'], search.source_max_scopes)
+    _count(payload['coordinate_bytes'], search.source_max_bytes)
     if payload['scope_visits'] > payload['member_visits']:
         raise ValueError('source catalog scope accounting invalid')
     if type(payload['limited']) is not bool:
         raise ValueError("source catalog limit status invalid")
     reason = payload['stop_reason']
-    if reason not in {None, 'source_catalog_visit_limit', 'source_catalog_scope_limit', 'source_catalog_depth_limit'}:
+    if reason not in {None, 'source_catalog_visit_limit', 'source_catalog_scope_limit', 'source_catalog_depth_limit',
+                      'source_catalog_coordinate_byte_limit'}:
         raise ValueError("source catalog stop reason invalid")
     if payload['limited'] != (reason is not None):
         raise ValueError("source catalog limit evidence invalid")
