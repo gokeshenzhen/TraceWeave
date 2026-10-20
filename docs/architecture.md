@@ -540,6 +540,12 @@ Verification
   `source_catalog` projection in the existing compact-IR envelope, with purpose,
   file domain, captured aliases, capabilities and traversal limits in its build
   identity. Connection and hierarchy artifacts cannot satisfy this capability.
+  Its envelope contains no definitions, instances, bindings or top-instance
+  connectivity rows. A separate `semantic_tops` list copies the frontend's
+  actual elaborated top paths. Runtime and exact disk loads validate this proof,
+  the requested file domain, capability, limits and primitive codec before
+  accepting a catalog. They reject mixed topology and catalog metadata under
+  an ordinary query scope; ordinary artifacts retain their top-in-IR check.
   `slang_source_catalog` copies real declarations and resolved type/import/call
   references; `slang_source_codec` validates primitive ownership, coverage and
   limits before `slang_source_provider` constructs immutable public facts.
@@ -551,7 +557,8 @@ Verification
   original parsed source buffer; a bounded byte-offset/newline index supplies
   physical coordinates even with line directives. Macro expansion usage leaves
   an explicit caller-side usage/import gap instead of a complete negative.
-  Coordinate-index bytes participate in artifact limits and request accounting.
+  Coordinate-index and retained top-proof bytes share the artifact byte limit
+  and request accounting; top proof also consumes the member-visit budget.
   Declaration IDs bind the
   captured context plus semantic scope/kind/location; symbol IDs remain local
   to the exact artifact. Applicable file-detail/filter queries reuse one exact

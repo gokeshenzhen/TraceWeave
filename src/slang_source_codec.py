@@ -38,7 +38,7 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
             raise ValueError("duplicate source catalog object key")
         return value
     payload = json.loads(raw, object_pairs_hook=object_pairs)
-    _fields(payload, "version capabilities source_files declaration_domain usage_domain member_visits "
+    _fields(payload, "version capabilities source_files semantic_tops declaration_domain usage_domain member_visits "
                      "scope_visits limited stop_reason coordinate_bytes limits files")
     if (type(payload['version']) is not int or payload['version'] != CATALOG_VERSION
             or payload['version'] != search.source_version
@@ -55,6 +55,12 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
     _count(payload['member_visits'], search.max_members)
     _count(payload['scope_visits'], search.source_max_scopes)
     _count(payload['coordinate_bytes'], search.source_max_bytes)
+    tops = payload['semantic_tops']
+    if (not isinstance(tops, list) or len(tops) > payload['member_visits']
+            or any(not isinstance(top, str) or not top.strip() for top in tops)
+            or tops != sorted(set(tops))
+            or sum(len(top.encode('utf-8')) + 64 for top in tops) > payload['coordinate_bytes']):
+        raise ValueError('source catalog semantic top evidence invalid')
     if payload['scope_visits'] > payload['member_visits']:
         raise ValueError('source catalog scope accounting invalid')
     if type(payload['limited']) is not bool:
@@ -119,3 +125,29 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
                 parameterization=tuple(symbol['parameterization']), external=symbol['external'],
                 gaps=tuple(symbol['gaps']), declaration_status=symbol['declaration_status'])
     return payload
+
+
+def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None):
+    """Validate the topology-free capability envelope at every load boundary.
+
+    Return False for ordinary IR, which still requires the caller's normal
+    topology/top check. A catalog cannot become connectivity IR by changing
+    its scope, and ordinary topology cannot be mixed into a catalog artifact.
+    """
+    search = scope.semantic_search
+    raw = dict(ir.metadata).get('source_catalog_v1')
+    if search is None or search.purpose != 'source_catalog':
+        if raw is not None:
+            raise ValueError('source catalog metadata requires its capability scope')
+        return False
+    if (search.source_capabilities != ('file_declarations',)
+            or type(search.source_version) is not int or search.source_version != CATALOG_VERSION):
+        raise ValueError('source catalog artifact capability mismatch')
+    if ir.definitions or ir.instances or ir.bindings or ir.top_instances:
+        raise ValueError('source catalog artifact contains topology facts')
+    if raw is None:
+        raise ValueError('source catalog artifact has no declaration projection')
+    payload = decode_source_catalog(raw, search, checkpoint=checkpoint)
+    if scope.top not in payload['semantic_tops']:
+        raise ValueError('source catalog frontend did not elaborate the requested top')
+    return True

@@ -55,6 +55,7 @@ def collect_source_catalog(projector, root):
     stop_reason = None
     coordinates = {}
     coordinate_bytes = 0
+    top_instances, semantic_tops = [], []
 
     class Limit(Exception):
         pass
@@ -263,6 +264,19 @@ def collect_source_catalog(projector, root):
             value.visit(callback)
 
     try:
+        # This capability deliberately has no connectivity topology. Preserve
+        # the frontend's actual top domain separately, before catalog limits
+        # can interrupt declaration traversal. Retained names share the byte
+        # budget with physical coordinate indexes; no instance facts are made.
+        for instance in root.topInstances:
+            charge()
+            name = str(instance.hierarchicalPath)
+            required = len(name.encode('utf-8')) + 64
+            if coordinate_bytes + required > search.source_max_bytes:
+                raise Limit('source_catalog_coordinate_byte_limit')
+            coordinate_bytes += required
+            semantic_tops.append(name)
+            top_instances.append(instance)
         # Buffers prove empty/header files were processed; membership alone
         # cannot establish that the frontend parsed a file or its language.
         processed = set()
@@ -303,7 +317,7 @@ def collect_source_catalog(projector, root):
             charge()
             declaration(package, None, None)
             enqueue(package, identity(package), None, 0)
-        for instance in root.topInstances:
+        for instance in top_instances:
             charge()
             key = identity(instance.definition)
             represented.add(key)
@@ -385,7 +399,8 @@ def collect_source_catalog(projector, root):
         if exclusion.code in {"protected_region", "opaque_protected_ip", "encrypted_source", "compile_manifest_incomplete"}:
             gap(None, "source_catalog_opaque_or_incomplete_context")
     return dict(version=CATALOG_VERSION, capabilities=list(search.source_capabilities),
-        source_files=list(search.source_files), declaration_domain=DECLARATION_DOMAIN,
+        source_files=list(search.source_files), semantic_tops=sorted(semantic_tops),
+        declaration_domain=DECLARATION_DOMAIN,
         usage_domain=USAGE_DOMAIN, member_visits=visits, scope_visits=scope_visits,
         limited=limited, stop_reason=stop_reason, coordinate_bytes=coordinate_bytes,
         limits=dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth,

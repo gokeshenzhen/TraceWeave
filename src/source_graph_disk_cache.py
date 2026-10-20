@@ -34,6 +34,7 @@ from typing import Any, Iterator
 import uuid
 
 from .connectivity_ir import CONNECTIVITY_IR_VERSION, ConnectivityIR, CoverageStatus
+from .slang_source_codec import validate_source_catalog_artifact
 from .source_graph_contract import (
     SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION,
     SOURCE_GRAPH_BUILD_CONTRACT_VERSION,
@@ -868,8 +869,13 @@ class SourceGraphDiskCache:
             ir.frontend_name != source.frontend_name
             or ir.frontend_version != source.frontend_version
             or ir.ir_version != source.ir_schema_version
-            or identity.scope.top not in ir.top_instances
         ):
+            raise _ValidationMiss(DiskValidationOutcome.IR_IDENTITY_MISMATCH)
+        try:
+            source_catalog = validate_source_catalog_artifact(ir, identity.scope)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _ValidationMiss(DiskValidationOutcome.IR_IDENTITY_MISMATCH) from exc
+        if not source_catalog and identity.scope.top not in ir.top_instances:
             raise _ValidationMiss(DiskValidationOutcome.IR_IDENTITY_MISMATCH)
 
     @staticmethod
