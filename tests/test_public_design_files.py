@@ -9,8 +9,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
+import os
 import threading
+from types import SimpleNamespace
 
 import anyio
 import jsonschema
@@ -18,11 +21,13 @@ import pytest
 
 import server
 from src import connectivity_backend, design_backend_binding, hierarchy_source_ir as ir
+from src import slang_hierarchy_source
 from src.cancellation import OperationCancelled
 from src.compile_input_capture import CaptureAborted, CompileInputCapture
 from src.connectivity_ir import SourceLocation
 from src.design_backend_binding import ExecutionBindingChanged
 from src.hierarchy_source_symbols import SourceSymbol
+from src.hierarchy_source_request import prepare_source_query
 from src.kdb_anchor import KdbBindingChanged
 from src.npi_hierarchy_source import NpiHierarchyUnavailable
 from tests.test_public_design_instance import anyio_backend, isolate, forbidden, prepare, public
@@ -34,7 +39,7 @@ FILE_GAPS = {'npi_uninstantiated_declaration_inventory_unverified',
              'npi_uvm_usage_inventory_unverified'}
 
 
-def project(root):
+def project(root, *, candidate=True):
     (root / 'v1').mkdir()
     (root / 'v2').mkdir()
     first, second, third = root / 'v1/shared.sv', root / 'v2/shared.sv', root / 'third.sv'
@@ -50,9 +55,10 @@ def project(root):
                    + ''.join(f"Parsing design file '{path}'\n" for path in paths)
                    + 'Top Level Modules:\n       top\n')
     maps = root / 'simv.daidir/kdb.elab++'
-    maps.mkdir(parents=True)
-    (maps / '_libFileMap').write_bytes(b'map-A')
-    (maps / '_stnElabDB').write_bytes(b'elab-A')
+    if candidate:
+        maps.mkdir(parents=True)
+        (maps / '_libFileMap').write_bytes(b'map-A')
+        (maps / '_stnElabDB').write_bytes(b'elab-A')
     return first, second, third, alias, log, maps
 
 
@@ -499,6 +505,156 @@ async def test_unavailable_semantics_keep_owned_metadata_and_unknown_symbol_inve
     assert value['facts_origin'] == 'compile_metadata' and value['symbol_inventory_complete'] is False
     assert value['backend_status'].get('actual_backend') is None
     if reason == 'source': assert controls.requests == [] and controls.selections == 0
+
+
+def no_source_planning(monkeypatch):
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '1')
+    monkeypatch.setattr(slang_hierarchy_source, 'build_instance_plan', forbidden)
+    monkeypatch.setattr(server, 'get_source_graph_runtime', forbidden)
+
+
+async def partial_source_setup(tmp_path, controls, *, preference='source', kind='missing', candidate=False):
+    first, second, third, alias, log, maps = project(tmp_path, candidate=candidate)
+    controls.configure((first, second, third), alias)
+    if kind == 'missing':
+        third.unlink()
+    handle = await prepare(log, backend_preference=preference, **({'max_files': 1} if kind == 'budget' else {}))
+    return handle, first, second, third, alias, log, maps
+
+
+def partial_file_metadata(value, path, source_status):
+    assert value['path'] == str(path) and value['source_status'] == source_status
+    assert value['facts_origin'] == 'compile_metadata' and value['semantic_status'] == 'unavailable'
+    assert value['coverage_status'] == 'partial' and 'source_capture_incomplete' in value['coverage_gaps']
+    assert value['ownership_identity'] == value['context_identity_sha256']
+    assert value['symbols'] is None and value['contains_uvm'] is None and value['has_uvm_import'] is None
+    assert value['file_type'] is None and value['symbol_inventory_complete'] is False
+    assert value['symbol_count'] is None and value['symbol_count_lower_bound'] == 0
+    assert value['backend_status'].get('actual_backend') is None
+    assert not value['backend_status'].get('source_graph')
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('preference', ['source', 'auto'])
+@pytest.mark.parametrize('kind', ['missing', 'budget'])
+async def test_stable_partial_source_capture_retains_metadata_and_unknown_filters(
+    tmp_path, monkeypatch, controls, preference, kind,
+):
+    handle, first, _, third, _, _, _ = await partial_source_setup(
+        tmp_path, controls, preference=preference, kind=kind)
+    no_source_planning(monkeypatch)
+    with server._design_context_store.pin(handle) as entry:
+        context = entry.context
+        # A source-stage file cap can leave an internally complete snapshot
+        # of the log alone. It still cannot authorize semantic source replay.
+        assert context.snapshot.complete is (kind == 'budget')
+        gap = 'compile_input_unavailable' if kind == 'missing' else 'source_capture_file_limit'
+        assert gap in context.gaps and context.current()
+    for _ in range(2):
+        missing = await detail(handle, third)
+        partial_file_metadata(missing, third, 'unavailable' if kind == 'missing' else 'not_captured')
+        assert gap in missing['coverage_gaps']
+    available = await detail(handle, first)
+    partial_file_metadata(available, first, 'captured' if kind == 'missing' else 'not_captured')
+    for filters in ({'has_module': 'alpha'}, {'contains_uvm': False}, {'file_type': 'module'}):
+        value = await lookup(handle, basename='shared.sv', count_mode='exact', **filters)
+        assert value['matches'] == [] and value['unknown_filter_files'] == 2
+        assert value['total'] is None and value['count_status'] == 'lower_bound'
+        assert value['count_lower_bound'] == 0 and value['semantic_file_queries'] == 0
+        assert value['semantic_status'] == 'unavailable' and value['coverage_status'] == 'partial'
+        assert {'source_capture_incomplete', gap} <= set(value['coverage_gaps'])
+        assert not value['backend_status'].get('source_graph')
+    assert controls.requests == [] and controls.opened == []
+
+
+@pytest.mark.anyio
+async def test_missing_source_keeps_healthy_native_semantic_opportunity(tmp_path, monkeypatch, controls):
+    handle, _, _, third, _, _, _ = await partial_source_setup(
+        tmp_path, controls, preference='auto', candidate=True)
+    no_source_planning(monkeypatch)
+    value = await detail(handle, third)
+    assert value['path'] == str(third) and value['source_status'] == 'unavailable'
+    assert value['facts_origin'] == 'verdi_npi' and value['classes'] == ['p.Monitor']
+    assert value['symbols'][0]['symbol_id'] == 'decl-monitor'
+    assert value['backend_status']['actual_backend'] == 'verdi_npi'
+    assert 'source_capture_incomplete' not in value['coverage_gaps']
+    assert len(controls.requests) == 1 and controls.opened == controls.closed == [str(third)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('when', ['before_query', 'after_query'])
+@pytest.mark.parametrize('change', ['appeared', 'rewritten', 'deleted', 'alias'])
+async def test_partial_capture_rejects_input_changes_before_metadata_publication(
+    tmp_path, monkeypatch, controls, when, change,
+):
+    handle, first, second, third, alias, _, _ = await partial_source_setup(tmp_path, controls)
+    no_source_planning(monkeypatch)
+    def mutate():
+        if change == 'appeared':
+            third.write_text('package p; class Monitor; endclass endpackage\n')
+        elif change == 'rewritten':
+            before = second.stat()
+            second.write_text(second.read_text().replace('beta', 'zeta'))
+            os.utime(second, ns=(before.st_atime_ns, before.st_mtime_ns))
+        elif change == 'deleted':
+            second.unlink()
+        else:
+            alias.unlink()
+            alias.symlink_to(second)
+    if when == 'before_query':
+        mutate()
+    else:
+        original = server._query_slang_hierarchy
+        async def query(*args, **kwargs):
+            result = await original(*args, **kwargs)
+            assert result[0]['facts_origin'] == 'compile_metadata'
+            mutate()
+            return result
+        monkeypatch.setattr(server, '_query_slang_hierarchy', query)
+    value = await detail(handle, third)
+    assert value['error_code'] == 'design_context_changed'
+    assert not {'path', 'symbols', 'matches', 'artifact_identity'} & value.keys()
+    assert controls.requests == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('gap', [
+    'source_capture_byte_limit', 'source_capture_file_limit',
+    'source_capture_reference_limit', 'source_capture_dependency_work_limit',
+])
+async def test_source_capture_limit_with_complete_record_snapshot_blocks_file_replay(
+    tmp_path, monkeypatch, controls, gap,
+):
+    handle, first, _, _, _, _, _ = await setup(tmp_path, controls, backend_preference='source')
+    no_source_planning(monkeypatch)
+    with server._design_context_store.pin(handle) as entry:
+        # Controlled preparation receipt: the raw record snapshot is complete,
+        # but preparation stopped before proving the complete capture closure.
+        context = replace(entry.context, gaps=(gap,))
+        assert context.snapshot.complete
+        plan = prepare_source_query(context, 'get_tb_file_detail', {'path': str(first)})
+        result, receipt = await server._query_slang_hierarchy(
+            SimpleNamespace(context=context), plan, {'path': str(first)}, plan.budget)
+    assert receipt is None and result['path'] == str(first) and result['symbols'] is None
+    assert result['semantic_status'] == 'unavailable'
+    assert {'source_capture_incomplete', gap} <= set(result['coverage_gaps'])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('gap', ['opaque_vhdl_boundary', 'compile_options_incomplete', 'include_inventory_incomplete'])
+async def test_dependency_gaps_alone_do_not_trigger_source_capture_guard(tmp_path, monkeypatch, controls, gap):
+    handle, first, _, _, _, _, _ = await setup(tmp_path, controls, backend_preference='source')
+    # Disabled provider is a later, distinct decision. Existing real opaque
+    # language tests separately require positive Slang provenance.
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
+    with server._design_context_store.pin(handle) as entry:
+        context = replace(entry.context, gaps=(gap,))
+        assert context.snapshot.complete
+        plan = prepare_source_query(context, 'get_tb_file_detail', {'path': str(first)})
+        result, receipt = await server._query_slang_hierarchy(
+            SimpleNamespace(context=context), plan, {'path': str(first)}, plan.budget)
+    assert receipt is None and 'source_hierarchy_provider_unavailable' in result['coverage_gaps']
+    assert 'source_capture_incomplete' not in result['coverage_gaps']
 
 
 @pytest.mark.anyio

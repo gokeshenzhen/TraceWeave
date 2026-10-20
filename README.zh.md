@@ -306,6 +306,10 @@ prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备�
 保留明确缺口。声明库存、import 与 UVM 使用分别报告覆盖，注释/字符串不作为使用证据。
 文件映射可能在预算内遍历全局 namespace，`semantic_work_scope` 明示这项工作。检查
 `symbol_inventory_complete`、`unknown_filter_files` 与 coverage gaps，未知不能作为负向匹配。
+若源文件不可用或捕获预算耗尽导致源码捕获不完整，文件工具保留编译文件元数据，
+语义字段保持未知，并返回 `source_capture_incomplete`。这条源码回退不启动 Slang
+worker 或产物缓存请求；健康 NPI 仍保持优先。查询前后继续校验输入：缺失文件出现、
+已捕获文件变化或别名目标变化都会拒绝结果，需要重新准备上下文。
 纯元数据结果携带设计/上下文身份和查询成本，不附加后端或 KDB receipt。
 `get_tb_class_hierarchy(design_handle=..., root_class=...)` 返回静态类继承，使用限定
 身份及实际基类绑定；短名称必须无歧义，只有引用的外部基类单独标明。`total` 是显示

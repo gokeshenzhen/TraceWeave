@@ -167,6 +167,12 @@ use. These inventories can walk global namespaces within the request budget;
 `unknown_filter_files` and coverage
 gaps; an unknown filter is not a negative match. Metadata-only results carry
 the design/context identity and query costs, with no backend or KDB receipt.
+When source capture is incomplete because an input was unavailable or a capture
+budget was reached, the file tools retain compiled-file metadata and unknown
+semantic fields with `source_capture_incomplete`. The source fallback starts no
+Slang worker or artifact cache request; healthy NPI still has priority. Initial
+and final input validation remain required: a missing file appearing, a captured
+file changing, or an alias changing rejects the result and requires a new context.
 `get_tb_class_hierarchy(design_handle=..., root_class=...)` returns static class
 inheritance with qualified identities and actual base bindings. Short names
 must be unambiguous; external reference-only bases are labelled. `total` is the

@@ -446,6 +446,16 @@ Verification
   identity, coverage and cumulative query costs. Semantic file queries use the
   same NPI binding/cleanup boundary; their canonical members, captured aliases
   and ownership identities are validated before publication. Native file
+  queries retain their opportunity to provide facts even for unavailable source
+  bodies. On the Slang file fallback only, an incomplete raw snapshot or an
+  explicit source-capture byte/file/reference/dependency-work limit returns
+  metadata, unknown semantic predicates and `source_capture_incomplete`, plus
+  the captured context gaps. This does not enter manifest planning or the shared
+  artifact runtime. A stable partial capture is not an input change: the pinned
+  caller still performs its full initial/final digest, alias and unavailable-path
+  validation. The legacy manifest adapter's complete-snapshot requirement stays
+  unchanged. Include/options/opaque-language gaps alone do not trigger this gate.
+  Native file
   mapping currently walks bounded global namespaces; local output does not
   imply local-only work. Partial declaration inventories and unknown filters
   cannot prove absence. `get_tb_class_hierarchy` and all seven `dump_tb_section`

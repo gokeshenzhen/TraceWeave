@@ -13,6 +13,7 @@ import json
 import math
 import os
 import threading
+import traceback
 
 import anyio
 import pytest
@@ -23,19 +24,28 @@ from src.compile_input_capture import CaptureAborted
 from src.design_context_runtime import ContextUnavailable, DesignContextStore
 
 
+_public_artifact_dir = None
+_public_call_index = 0
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
 
 
 @pytest.fixture(autouse=True)
-def isolated_session(monkeypatch):
+def isolated_session(monkeypatch, tmp_path):
+    global _public_artifact_dir, _public_call_index
+    _public_artifact_dir = tmp_path / "public-prepare-evidence"
+    _public_call_index = 0
     server.reset_session_state()
     # Public serialization is real; persistent usage recording is outside this
     # local fixture's contract and must not write a user's telemetry file.
     monkeypatch.setattr(server.usage_telemetry, "record_call", lambda *args, **kwargs: None)
     yield
     server.reset_session_state()
+    _public_artifact_dir = None
+    _public_call_index = 0
 
 
 @pytest.fixture
@@ -70,9 +80,35 @@ def _design(root, name="top", *, missing=False):
 
 
 async def _public(arguments):
-    blocks = await server.call_tool("prepare_design_context", arguments)
-    assert len(blocks) == 1 and blocks[0].type == "text"
-    return json.loads(blocks[0].text)
+    global _public_call_index
+    _public_call_index += 1
+    directory = _public_artifact_dir / f"{_public_call_index:04d}"
+    directory.mkdir(parents=True, exist_ok=False)
+    (directory / "request.json").write_text(json.dumps({
+        "tool": "prepare_design_context", "arguments": arguments}) + "\n")
+    try:
+        blocks = await server.call_tool("prepare_design_context", arguments)
+    except BaseException as exc:
+        (directory / "call_exception.json").write_text(json.dumps({
+            "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc)}) + "\n")
+        (directory / "call_exception.txt").write_text(traceback.format_exc())
+        raise
+    (directory / "response.repr.txt").write_text(repr(blocks))
+    try:
+        raw = [block.model_dump(mode="json") for block in blocks]
+        (directory / "response.raw.json").write_text(json.dumps({"blocks": raw}) + "\n")
+        for index, block in enumerate(raw):
+            if isinstance(block.get("text"), str):
+                (directory / f"block_{index:03d}.raw").write_bytes(block["text"].encode("utf-8"))
+        assert len(blocks) == 1 and blocks[0].type == "text"
+        value = json.loads(blocks[0].text)
+        (directory / "decoded.json").write_text(json.dumps(value) + "\n")
+        return value
+    except BaseException as exc:
+        (directory / "response_exception.json").write_text(json.dumps({
+            "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc)}) + "\n")
+        (directory / "response_exception.txt").write_text(traceback.format_exc())
+        raise
 
 
 def _forbidden(*args, **kwargs):

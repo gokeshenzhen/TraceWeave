@@ -8543,15 +8543,29 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
     from src.hierarchy_source_ir import HierarchyBudgetExceeded
     from src.hierarchy_source_service import finish_hierarchy_query
 
-    def unavailable(gap):
+    def unavailable(gap, context_gaps=()):
         raw = plan.execute()
-        raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {gap})
+        raw["coverage_gaps"] = sorted(set(raw["coverage_gaps"]) | {gap} | set(context_gaps))
         return raw, None
 
     gap = ("compile_tops_unresolved" if entry.context.selected_top is None else
            capability_gap(plan.operation, arguments))
     if gap is not None:
         return unavailable(gap)
+    if plan.operation in {"get_tb_file_detail", "lookup_tb_files"} and (
+        not entry.context.snapshot.complete
+        or set(entry.context.gaps) & {
+            "source_capture_byte_limit", "source_capture_file_limit",
+            "source_capture_reference_limit", "source_capture_dependency_work_limit",
+        }
+    ):
+        # A stable partial capture still proves compile membership. The legacy
+        # manifest adapter instead requires a complete hierarchy snapshot and
+        # reports an incomplete one as changed; do not ask it to repair this
+        # source capture. The pinned caller validates observed inputs before
+        # and after these metadata facts, including files that remain absent.
+        # NPI has already had its normal opportunity to provide native facts.
+        return unavailable("source_capture_incomplete", entry.context.gaps)
     config = get_source_graph_execution_config()
     if not config.valid or not config.enabled:
         return unavailable("source_hierarchy_provider_unavailable")
