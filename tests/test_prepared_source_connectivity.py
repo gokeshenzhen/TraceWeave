@@ -7,7 +7,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
+import threading
 import time
+import traceback
 
 import pytest
 
@@ -42,9 +45,89 @@ def isolation(monkeypatch, tmp_path):
     from src import kdb_builder
     monkeypatch.setattr(kdb_builder, "build_kdb", forbidden)
     monkeypatch.setattr(server.usage_telemetry, "record_call", lambda *a, **kw: None)
+    # Capture actual worker ingress before runtime decoding. Native frontend
+    # objects are never inspected, synthesized or rewritten by this wrapper.
+    evidence_root = tmp_path / "cache_load_evidence"
+    capture_failed = threading.Event()
+    original_load = source_graph_runtime.SourceGraphRuntime._load_cache_entry
+
+    def capture_load(runtime, request, key, worker):
+        directory = None
+        inputs_saved = False
+        def capture_error():
+            capture_failed.set()
+            if directory is not None:
+                try: (directory / "capture_error.txt").write_text(traceback.format_exc())
+                except BaseException: pass
+        try:
+            evidence_root.mkdir(exist_ok=True)
+            directory = Path(tempfile.mkdtemp(prefix="load-", dir=evidence_root))
+            if worker.ir_json_bytes is not None:
+                (directory / "ir.raw.json").write_bytes(worker.ir_json_bytes)
+            (directory / "request.json").write_text(json.dumps(request.to_dict()) + "\n")
+            (directory / "key.json").write_text(json.dumps(key.to_dict()) + "\n")
+            (directory / "worker.json").write_text(json.dumps({
+                "status": worker.status.value, "ir_fingerprint_sha256": worker.ir_fingerprint_sha256,
+                "ir_is_none": worker.ir_json_bytes is None,
+                "scope_receipt": worker.scope_receipt.to_dict() if worker.scope_receipt is not None else None,
+                "metrics": worker.metrics.to_dict(), "projection_receipt": worker.projection_receipt,
+                "fallback_used": worker.fallback_used,
+                "blocker": worker.blocker.to_dict() if worker.blocker is not None else None}) + "\n")
+            inputs_saved = True
+        except BaseException:
+            capture_error()
+
+        def finish(outcome, error=None, original_traceback=None):
+            try:
+                if directory is None: return
+                (directory / "result.json").write_text(json.dumps({"outcome": outcome}) + "\n")
+                if error is not None:
+                    (directory / "exception.json").write_text(json.dumps({
+                        "module": type(error).__module__, "type": type(error).__name__, "message": str(error)}) + "\n")
+                    (directory / "exception.txt").write_text(original_traceback)
+                if inputs_saved:
+                    files = {path.name: {"bytes": path.stat().st_size,
+                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                             for path in directory.iterdir() if path.is_file()}
+                    (directory / "manifest.json").write_text(json.dumps({"outcome": outcome, "files": files}) + "\n")
+            except BaseException:
+                capture_error()
+        try:
+            result = original_load(runtime, request, key, worker)
+        except BaseException as exc:
+            finish("raised", exc, traceback.format_exc())
+            raise
+        finish("returned")
+        return result
+
+    monkeypatch.setattr(source_graph_runtime.SourceGraphRuntime, "_load_cache_entry", capture_load)
     yield
     server.reset_session_state()
     source_graph_production._reset_source_graph_runtime_for_tests()
+    # Evidence errors fail the test independently of the original product
+    # return/exception; incomplete capture cannot silently qualify a result.
+    assert not capture_failed.is_set(), "worker ingress evidence capture failed"
+    for directory in evidence_root.iterdir() if evidence_root.exists() else ():
+        manifest = json.loads((directory / "manifest.json").read_text())
+        files = manifest["files"]
+        assert {"request.json", "key.json", "worker.json", "result.json"} <= files.keys()
+        worker = json.loads((directory / "worker.json").read_text())
+        assert ("ir.raw.json" in files) is not worker["ir_is_none"]
+        request = json.loads((directory / "request.json").read_text())
+        assert request["contract_version"] and request["artifact_identity"] and request["scope"]
+        assert worker["scope_receipt"] is not None and worker["ir_fingerprint_sha256"]
+        assert json.loads((directory / "result.json").read_text())["outcome"] == manifest["outcome"]
+        if manifest["outcome"] == "raised":
+            assert {"exception.json", "exception.txt"} <= files.keys()
+            assert json.loads((directory / "exception.json").read_text())["type"]
+            assert (directory / "exception.txt").read_text()
+        else:
+            assert manifest["outcome"] == "returned"
+        assert not (directory / "capture_error.txt").exists()
+        assert set(files) == {path.name for path in directory.iterdir() if path.is_file()} - {"manifest.json"}
+        for name, expected in files.items():
+            raw = (directory / name).read_bytes()
+            assert len(raw) == expected["bytes"] and hashlib.sha256(raw).hexdigest() == expected["sha256"]
 
 
 async def public(tmp, name, args):
