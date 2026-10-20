@@ -28,11 +28,19 @@ _SCOPE_KINDS = {"CompilationUnit", "Package", "ClassType", "InstanceBody", "Gene
                 "PackedUnionType", "UnpackedUnionType"}
 _NO_USAGE = {"EmptyMember", "Port", "MultiPort", "Genvar", "TransparentMember",
              "TimeScale", "DeferredMember", "EnumValue"}
+_USAGE_EXPRESSIONS = {
+    'IntegerLiteral', 'RealLiteral', 'TimeLiteral', 'UnbasedUnsizedIntegerLiteral',
+    'NullLiteral', 'UnboundedLiteral', 'StringLiteral', 'NamedValue', 'HierarchicalValue',
+    'UnaryOp', 'BinaryOp', 'ConditionalOp', 'Inside', 'Assignment', 'Concatenation',
+    'Replication', 'Streaming', 'ElementSelect', 'RangeSelect', 'MemberAccess', 'Call',
+    'Conversion', 'SimpleAssignmentPattern', 'StructuredAssignmentPattern',
+    'ReplicatedAssignmentPattern', 'EmptyArgument', 'ValueRange', 'Dist', 'NewArray', 'MinTypMax',
+}
 
 
 def collect_source_catalog(projector, root):
     from .slang_connectivity_projector import _kind_name
-    from pyslang.ast import Expression, Symbol, VisitAction
+    from pyslang.ast import AssertionExpr, Constraint, Expression, Pattern, Symbol, VisitAction
 
     search = projector.options.semantic_search
     files = {path: dict(symbols={}, inventory=set(), imports=set(), usage=set(),
@@ -211,16 +219,20 @@ def collect_source_catalog(projector, root):
         if kind == "TypeAlias":
             observe_type(node, path)
         elif kind == "TypeParameter":
-            observe_type(node.targetType, path)
+            observe_type(node.targetType.type, path)
         elif kind == "ClassType":
             observe_type(node, path)
         if isinstance(node, Expression):
+            if kind not in _USAGE_EXPRESSIONS:
+                gap(path, 'source_expression_usage_domain_uncovered', ('usage',))
             if is_uvm(node.getSymbolReference()) and path in files:
                 files[path]["used"] = True
             if kind == "Call" and not node.isSystemCall and is_uvm(node.subroutine) and path in files:
                 files[path]["used"] = True
             if node.bad:
                 gap(path, "source_expression_binding_unresolved", ("usage",))
+        elif isinstance(node, (AssertionExpr, Constraint, Pattern)):
+            gap(path, 'source_expression_usage_domain_uncovered', ('usage',))
 
     def enqueue(scope, scope_key, path, depth, key=None):
         pending.append((scope, scope_key, path, depth, key))
