@@ -619,6 +619,16 @@ Verification
   capture gate after healthy NPI's opportunity. The bounded canonical type
   domain is `declarations_and_referenced_specializations`, not all possible
   specializations or runtime UVM topology.
+  Explicit class artifacts refresh the live compilation diagnostics after
+  projection, because the catalog may force lazy extends/type bindings after
+  the frontend session's initial snapshot. The worker reconciles IR counts,
+  bounded diagnostic gaps, class/file coverage and the final scope receipt
+  before serialization, without reprojecting or building another frontend.
+  New diagnostic details share the catalog byte envelope and existing gap cap;
+  count/status metadata contains no duplicate messages. Warnings preserve
+  established negative predicates; blocking errors turn incomplete class/file
+  coverage and import/usage negatives into explicit unknowns. Ordinary
+  connectivity/file-only artifacts retain their existing execution path.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
   against the byte budget. `record_export_complete` describes a successful

@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import collections
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib.metadata
 import json
 import os
@@ -25,12 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.connectivity_ir import CoverageStatus, SourceLocation  # noqa: E402
+from src.connectivity_ir import CoverageGap, CoverageStatus, SourceLocation  # noqa: E402
+from src.cancellation import check_cancelled  # noqa: E402
 from src.hdl_suffixes import (  # noqa: E402
     FRONTEND_HDL_SUFFIXES,
     VHDL_SOURCE_SUFFIXES,
 )
 from src.slang_connectivity_projector import (  # noqa: E402
+    MAX_RECORDED_PROJECTION_GAPS,
     ProjectionDiagnostic,
     ProjectionExclusion,
     ProjectionOptions,
@@ -368,6 +370,91 @@ def create_semantic_frontend_session(
     )
 
 
+def _refresh_class_projection_diagnostics(session, request, projection, source_root):
+    """Publish diagnostics after lazy class/base/type binding has run.
+
+    getRoot/getAllDiagnostics before a catalog walk need not bind a class's
+    extends clause. Refresh only the explicit class capability, within this
+    same worker/request; never reproject or construct a default specialization.
+    The normal connectivity and file-only projection paths are unchanged.
+    """
+    ir, receipt = projection.ir, projection.receipt.to_dict()
+    search = request.scope.semantic_search
+    if (search is None or search.purpose != 'source_catalog'
+            or 'class_inheritance' not in search.source_capabilities):
+        return ir, receipt
+    check_cancelled()
+    before = session.diagnostic_payload
+    current = _diagnostics_payload(session.driver, list(session.compilation.getAllDiagnostics()))
+    check_cancelled()
+    if (current['total'] < before['total']
+            or current['blocking_error_count'] < before['blocking_error_count']):
+        raise ValueError('class diagnostic observation regressed within one semantic session')
+    session.diagnostic_payload = current
+    metadata = dict(ir.metadata)
+    metadata.pop('source_class_diagnostics_v1', None)
+    catalog = json.loads(metadata['source_catalog_v1'])
+    retained_bytes = catalog['coordinate_bytes']
+    # Reserve a fixed envelope for counts/status only. Diagnostic messages
+    # belong in bounded coverage rows, never a second metadata copy.
+    marker_reserved = retained_bytes + 2048 <= search.source_max_bytes
+    if marker_reserved:
+        retained_bytes += 2048
+    gaps = list(ir.coverage.gaps)
+    added_gaps, omitted_gaps = 0, False
+    if current['blocking_error_count']:
+        classes = catalog['classes']
+        classes['gaps'] = sorted(set(classes['gaps']) | {'source_class_frontend_diagnostics'})
+        classes['complete'] = False
+        for row in catalog['files'].values():
+            check_cancelled()
+            for field in ('inventory_gaps', 'import_gaps', 'usage_gaps'):
+                row[field] = sorted(set(row[field]) | {'source_catalog_frontend_diagnostics'})
+            row['gaps'] = sorted(set(row['inventory_gaps'] + row['import_gaps'] + row['usage_gaps']))
+            row['complete'] = False
+            # Positive imports/usage survive; no incomplete domain may become
+            # a complete false predicate after new blocking diagnostics.
+            for field in ('has_uvm_import', 'uses_uvm'):
+                if row[field] is False:
+                    row[field] = None
+        diagnostics = _projection_diagnostics(current, source_root)
+        omitted_gaps |= current['blocking_error_count'] > sum(item.blocking for item in diagnostics)
+        known = set(gaps)
+        for diagnostic in diagnostics:
+            check_cancelled()
+            if not diagnostic.blocking:
+                continue
+            gap = CoverageGap(code='frontend_diagnostic:' + diagnostic.code,
+                message=diagnostic.message, impact=CoverageStatus.INCONCLUSIVE,
+                constructs=diagnostic.constructs, scopes=diagnostic.scopes,
+                location=diagnostic.location)
+            if gap not in known:
+                known.add(gap)
+                added_gaps += 1
+                size = 512 + 4 * (len(gap.code) + len(gap.message) +
+                                  (len(gap.location.file) if gap.location else 0))
+                if (len(gaps) < MAX_RECORDED_PROJECTION_GAPS
+                        and retained_bytes + size <= search.source_max_bytes):
+                    gaps.append(gap)
+                    retained_bytes += size
+                else:
+                    omitted_gaps = True
+    catalog['coordinate_bytes'] = retained_bytes
+    metadata['source_catalog_v1'] = json.dumps(catalog, sort_keys=True)
+    if marker_reserved:
+        metadata['source_class_diagnostics_v1'] = json.dumps(dict(
+            observation='post_class_binding', initial_total=before['total'],
+            initial_blocking=before['blocking_error_count'], total=current['total'],
+            blocking=current['blocking_error_count'],
+            details_status='truncated' if omitted_gaps else 'complete'), sort_keys=True)
+    coverage = replace(ir.coverage, gaps=tuple(gaps),
+        status=CoverageStatus.INCONCLUSIVE if current['blocking_error_count'] else ir.coverage.status,
+        diagnostic_count=current['total'], blocking_diagnostic_count=current['blocking_error_count'])
+    receipt['projection_gap_count'] += added_gaps
+    receipt['projection_gaps_truncated'] |= omitted_gaps
+    return replace(ir, coverage=coverage, metadata=tuple(sorted(metadata.items()))), receipt
+
+
 def project_semantic_frontend_session(
     session: SemanticFrontendSession,
     request: SourceGraphArtifactBuildRequest,
@@ -462,7 +549,7 @@ def project_semantic_frontend_session(
             ),
         ),
     )
-    ir = projection.ir
+    ir, projection_receipt = _refresh_class_projection_diagnostics(session, request, projection, source_root)
     serialized = ir.to_json_bytes()
     gap_codes = {_gap_label(gap.code) for gap in ir.coverage.gaps}
     if ir.coverage.status is not CoverageStatus.COMPLETE and not gap_codes:
@@ -476,7 +563,7 @@ def project_semantic_frontend_session(
         serialized,
         ir.fingerprint_sha256(),
         scope_receipt,
-        projection.receipt.to_dict(),
+        projection_receipt,
     )
 
 

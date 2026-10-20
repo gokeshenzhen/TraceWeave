@@ -195,7 +195,10 @@ catalog for captured class declarations and actually referenced specializations
 canonical matching preserves distinct nominal types and aliases of the same
 type. `base_relation="specialization"` and `base_type_parameter_bindings` refer
 to the actual bound base. Generic declarations without an actual binding,
-unresolved bases and frontend diagnostics retain partial coverage. No possible
+unresolved bases and frontend diagnostics retain partial coverage. Class
+diagnostics are refreshed after lazy base/type binding before artifact
+publication; omitted diagnostic details retain exact counters and truncation.
+No possible
 parameter combinations are invented or exhaustively enumerated. Compatible
 class catalogs can also serve file queries; an already cached exact file
 artifact keeps priority. Legacy `handle` retains its source-scan UVM/create view.

@@ -326,7 +326,8 @@ worker 或产物缓存请求；健康 NPI 仍保持优先。查询前后继续�
 `type_id`、`type_parameter_bindings` 仅在同一产物内比较。真实 canonical matching 保留
 不同名义类型的区别，并识别同一类型的别名。`base_relation="specialization"` 和
 `base_type_parameter_bindings` 绑定实际基类特化。无实际绑定的泛型声明、未解析基类、
-前端诊断与不完整捕获仍明确为 partial/不可用。相容类产物可服务文件查询；已缓存的
+前端诊断与不完整捕获仍明确为 partial/不可用。类诊断在惰性基类/类型绑定之后、发布
+产物之前刷新；诊断详情到限时仍保留真实计数和截断标记。相容类产物可服务文件查询；已缓存的
 精确文件产物仍优先。旧 `handle` 保留源码扫描的 UVM/create 推断视图。
 `dump_tb_section(design_handle=..., section=...)` 支持全部七种 section：三个编译
 元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
