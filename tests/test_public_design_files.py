@@ -342,7 +342,10 @@ async def test_schema_legal_cross_file_or_context_payload_is_rejected(tmp_path, 
 
 
 @pytest.mark.anyio
-async def test_provider_cannot_emit_a_symbol_from_another_compile_member(tmp_path, controls):
+async def test_provider_cannot_emit_a_symbol_from_another_compile_member(tmp_path, monkeypatch, controls):
+    # This ownership/cleanup control deliberately has no semantic fallback.
+    # Real ordinary-NPI-to-Slang fallback has its own frontend acceptance case.
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
     handle, first, _, _, _, _, _ = await setup(tmp_path, controls)
     controls.foreign_symbol = True
     value = await detail(handle, first)

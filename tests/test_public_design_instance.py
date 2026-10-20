@@ -11,8 +11,10 @@ from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
+from pathlib import Path
 import subprocess
 import threading
+import traceback
 
 import anyio
 import jsonschema
@@ -32,6 +34,10 @@ from src.kdb_anchor import KdbBindingChanged
 from src.npi_hierarchy_source import NpiHierarchyUnavailable
 
 
+_public_artifact_dir = None
+_public_call_index = 0
+
+
 def forbidden(*args, **kwargs):
     pytest.fail("first-tool route entered build/scan/bootstrap/frontend/native/fallback/process work")
 
@@ -43,6 +49,9 @@ def anyio_backend():
 
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch, tmp_path):
+    global _public_artifact_dir, _public_call_index
+    _public_artifact_dir = tmp_path / "public-control-evidence"
+    _public_call_index = 0
     server.reset_session_state()
     monkeypatch.setenv("TRACEWEAVE_NPI_EXECUTION", "local")
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "auto")
@@ -61,8 +70,12 @@ def isolate(monkeypatch, tmp_path):
     for name in ("find_driver", "find_loads", "find_path"):
         monkeypatch.setattr(connectivity_backend.StaticConnectivityBackend, name, forbidden)
     monkeypatch.setattr(server, "_get_parser", forbidden)
-    yield
-    server.reset_session_state()
+    try:
+        yield
+    finally:
+        server.reset_session_state()
+        _public_artifact_dir = None
+        _public_call_index = 0
 
 
 def project(root, *, candidate=True):
@@ -81,9 +94,41 @@ def project(root, *, candidate=True):
 
 
 async def public(name, **arguments):
-    blocks = await server.call_tool(name, arguments)
-    assert len(blocks) == 1 and blocks[0].type == "text"
-    return json.loads(blocks[0].text)
+    global _public_call_index
+    directory = _public_artifact_dir
+    if directory is None:
+        # A real-source suite also imports prepare() without the control
+        # fixture; its explicit compile input still supplies a private root.
+        directory = Path(arguments["compile_log"]).parent / "public-control-evidence"
+    _public_call_index += 1  # Assigned before await, including concurrent calls.
+    call_dir = directory / f"{_public_call_index:04d}"
+    call_dir.mkdir(parents=True, exist_ok=False)
+    (call_dir / "request.json").write_text(json.dumps({"tool": name, "arguments": arguments}) + "\n")
+    try:
+        blocks = await server.call_tool(name, arguments)
+    except BaseException as exc:
+        (call_dir / "call_exception.json").write_text(json.dumps({
+            "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc)}) + "\n")
+        (call_dir / "call_exception.txt").write_text(traceback.format_exc())
+        raise
+    # Preserve every original block before shape checks or text decoding.
+    # repr also survives a malformed/non-model response or serialization error.
+    (call_dir / "response.repr.txt").write_text(repr(blocks))
+    try:
+        raw = [block.model_dump(mode="json") for block in blocks]
+        (call_dir / "response.raw.json").write_text(json.dumps({"blocks": raw}) + "\n")
+        for index, block in enumerate(raw):
+            if isinstance(block.get("text"), str):
+                (call_dir / f"block_{index:03d}.raw").write_bytes(block["text"].encode("utf-8"))
+        assert len(blocks) == 1 and blocks[0].type == "text"
+        value = json.loads(blocks[0].text)
+        (call_dir / "decoded.json").write_text(json.dumps(value) + "\n")
+        return value
+    except BaseException as exc:
+        (call_dir / "response_exception.json").write_text(json.dumps({
+            "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc)}) + "\n")
+        (call_dir / "response_exception.txt").write_text(traceback.format_exc())
+        raise
 
 
 async def prepare(log, **kwargs):
