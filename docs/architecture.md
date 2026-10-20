@@ -567,12 +567,16 @@ Verification
   original parsed source buffer; a bounded byte-offset/newline index supplies
   physical coordinates even with line directives. Macro expansion usage leaves
   an explicit caller-side usage/import gap instead of a complete negative.
-  Coordinate-index and retained top-proof bytes share the artifact byte limit
+  Coordinate-index, retained top proof and class/type parameter observation bytes share the artifact byte limit
   and request accounting; top proof also consumes the member-visit budget.
   Declaration IDs bind the
   captured context plus semantic scope/kind/location; symbol IDs remain local
   to the exact artifact. Applicable file-detail/filter queries reuse one exact
-  artifact; another file domain requires honest new work. Preparation and pure
+  artifact; another file domain requires honest new work unless an explicit
+  compatible catalog superset is available. Catalog subset reuse preserves all
+  other scope, aliases, selected top, capabilities, version and work limits;
+  actual artifact capabilities/domain are decoded before a provider is created.
+  Exact cache entries retain priority. Preparation and pure
   metadata queries still do not load a frontend or native provider.
   `hierarchy_source_symbols` defines copied source declarations and class-base
   bindings by semantic ID. Its internal class renderer keeps same-name classes
@@ -593,7 +597,28 @@ Verification
   inventory gaps, not complete negative results. All iterators and handles
   share the same exclusive Language owner and cleanup deadline as instances.
   Public class routing has control and limited real-KDB positive validation;
-  Slang class projection is subsequent work.
+  Slang source fallback requests a separate `class_inheritance` catalog
+  capability, alongside file declarations, with no connectivity topology.
+  `slang_class_catalog` copies finite declarations and actual referenced
+  ClassTypes, following bound bases, type parameters and instantiated nested
+  scopes. It never requests default specialization or enumerates possible
+  parameter sets. Actual canonical types are interned by `Type.isMatching`;
+  names, displayed parameters, bit widths and declaration locations are not
+  type equality. Every actual class node has an artifact-local canonical type
+  identity, including non-generic nested types under different outer
+  specializations. Its stable `declaration_id` and physical location agree with
+  file declarations; file `type_id` retains its declaration-domain meaning,
+  while class nodes explicitly report `type_identity_domain="artifact_canonical"`.
+  Type-parameter bindings use those canonical IDs, and specialized bases use
+  `base_relation="specialization"`. Generic declarations without actual bindings
+  keep explicit frontiers; an explicit extends clause with no resolved base
+  cannot become a no-base fact. Outside-inventory positive bases remain
+  reference-only. Class visits, recursion, copied parameter bytes and strict
+  codec counts share the existing limits; a stopped binding retains an
+  incomplete gap. Class source fallback also preserves the stable partial
+  capture gate after healthy NPI's opportunity. The bounded canonical type
+  domain is `declarations_and_referenced_specializations`, not all possible
+  specializations or runtime UVM topology.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
   against the byte budget. `record_export_complete` describes a successful

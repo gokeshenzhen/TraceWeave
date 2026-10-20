@@ -7197,8 +7197,9 @@ async def list_tools():
                 "Start from a real signal path; supported RTL expressions are extracted internally. "
                 "Accepts compile_log with the legacy hierarchy, or an explicit design_handle from "
                 "prepare_design_context for both modes. A healthy bound NPI route needs no full "
-                "hierarchy. Independent-context Source Graph trace planning is not yet available; "
-                "source fallback currently uses bound Static metadata and reports that limitation. "
+                "hierarchy. Source Graph plans bounded snapshot/history traces from the same captured "
+                "context, restarts from the original signal when its artifact scope expands, and "
+                "retains explicit partial frontiers. "
                 "At an unsupported boundary, continue reading verified compiled source with client "
                 "file tools and use waveform evidence to check inferred propagation and timing. "
                 "When a signal shows X/Z at a target time, trace its propagation "
@@ -7424,7 +7425,7 @@ async def list_tools():
             description=(
                 "Return static class inheritance, including UVM bases, rather than runtime UVM objects. "
                 "Use handle for the legacy source-scan view, or design_handle from prepare_design_context "
-                "for schema_version=2 NPI declarations with qualified identities and actual base bindings. "
+                "for schema_version=2 declarations with qualified identities and actual base bindings. "
                 "base_relation=declaration identifies the declared base; its defaults are not derived "
                 "actuals. base_value_parameters carries observed constant extends arguments; inspect "
                 "base_parameter_status/binding_gaps, not a complete specialized type identity. "
@@ -7432,7 +7433,12 @@ async def list_tools():
                 "Discovering derived classes can require a budgeted namespace inventory even for one root. "
                 "total counts rendered nodes; class_inventory_* describes declaration coverage. "
                 "Reference-only external bases are not recovered declarations. Raw source paths outside "
-                "captured inputs carry npi_class_location_unbound. Independent Slang class fallback is pending."
+                "captured inputs carry npi_class_location_unbound. Source preference or ordinary NPI "
+                "unavailability uses a bounded Slang catalog of declarations and actually referenced "
+                "specializations. Slang canonical type IDs/type_parameter_bindings are artifact-local; "
+                "declaration_id agrees with file declarations. base_relation=specialization binds the "
+                "actual specialized base, including base_type_parameter_bindings. Generic bodies "
+                "without an actual binding retain gaps; this is a static type graph, not UVM topology."
             ),
             inputSchema={
                 "type": "object",
@@ -8552,7 +8558,7 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
            capability_gap(plan.operation, arguments))
     if gap is not None:
         return unavailable(gap)
-    if plan.operation in {"get_tb_file_detail", "lookup_tb_files"} and (
+    if plan.operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"} and (
         not entry.context.snapshot.complete
         or set(entry.context.gaps) & {
             "source_capture_byte_limit", "source_capture_file_limit",
@@ -8601,7 +8607,8 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
             if build.request.scope.semantic_search.purpose == "source_catalog":
                 from src.slang_source_provider import SlangSourceProvider
                 provider = SlangSourceProvider(outcome.entry, entry.context, budget,
-                                              build.request.scope.semantic_search.source_files)
+                    build.request.scope.semantic_search.source_files,
+                    capabilities=build.request.scope.semantic_search.source_capabilities)
             else:
                 provider = SlangHierarchyProvider(outcome.entry, entry.context, budget)
             result = plan.execute(provider)
@@ -8672,7 +8679,7 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                     and "roots" in raw and "error" not in raw and raw["roots"]):
                 root = raw["roots"][0]
                 if (len(raw["roots"]) != 1 or arguments["root_class"] not in
-                        (root["symbol_id"], root["qualified_name"], root["name"])):
+                        (root["symbol_id"], root.get("declaration_id"), root["qualified_name"], root["name"])):
                     raise ValueError("npi_source_result_class_root_mismatch")
             if (operation in {"lookup_tb_files", "get_tb_file_detail"}
                     or section in {"files_full", "interfaces"}) and "error" not in raw:

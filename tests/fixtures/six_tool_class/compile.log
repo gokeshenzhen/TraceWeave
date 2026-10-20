@@ -1,0 +1,6 @@
+Chronologic VCS simulator
+Command: vcs -sverilog ${FIXTURE}/external.sv ${FIXTURE}/classes.sv -top class_top
+Parsing design file '${FIXTURE}/external.sv'
+Parsing design file '${FIXTURE}/classes.sv'
+Top Level Modules:
+       class_top

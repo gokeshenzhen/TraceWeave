@@ -1,0 +1,45 @@
+{
+  "provenance": "Handwritten from the finite fixture before execution; no product-generated identities or counts.",
+  "top": "class_top",
+  "declarations": [
+    ["external.sv", "external_pkg::Base", 2, null],
+    ["classes.sv", "alpha::Same", 2, null],
+    ["classes.sv", "alpha::ArgA", 4, null],
+    ["classes.sv", "alpha::ArgB", 6, null],
+    ["classes.sv", "alpha::Outer", 9, null],
+    ["classes.sv", "alpha::Outer::Nested", 10, "alpha::Same"],
+    ["classes.sv", "alpha::Generic", 13, null],
+    ["classes.sv", "alpha::Generic::Inner", 15, null],
+    ["classes.sv", "alpha::TypeOnly", 19, null],
+    ["classes.sv", "beta::Same", 23, "alpha::Same"],
+    ["classes.sv", "beta::Cross", 25, "alpha::Outer::Nested"],
+    ["classes.sv", "beta::BoundA", 27, "alpha::Generic"],
+    ["classes.sv", "beta::BoundB", 29, "alpha::Generic"],
+    ["classes.sv", "beta::BoundAlias", 31, "alpha::Generic"],
+    ["classes.sv", "beta::ValueOther", 33, "alpha::Generic"],
+    ["classes.sv", "beta::TypeBound", 35, "alpha::TypeOnly"],
+    ["classes.sv", "beta::External", 37, "external_pkg::Base"]
+  ],
+  "specialization_bindings": [
+    ["beta::BoundA", "alpha::ArgA", 3],
+    ["beta::BoundB", "alpha::ArgB", 3],
+    ["beta::BoundAlias", "alpha::ArgA", 3],
+    ["beta::ValueOther", "alpha::ArgA", 4]
+  ],
+  "identity_equal": [["beta::BoundA", "beta::BoundAlias"]],
+  "identity_different": [["beta::BoundA", "beta::BoundB"], ["beta::BoundA", "beta::ValueOther"]],
+  "declaration_scopes": {
+    "external_pkg::Base": "external_pkg",
+    "alpha::Same": "alpha", "alpha::ArgA": "alpha", "alpha::ArgB": "alpha",
+    "alpha::Outer": "alpha", "alpha::Outer::Nested": "alpha::Outer",
+    "alpha::Generic": "alpha", "alpha::Generic::Inner": "alpha::Generic",
+    "alpha::TypeOnly": "alpha", "beta::Same": "beta", "beta::Cross": "beta",
+    "beta::BoundA": "beta", "beta::BoundB": "beta", "beta::BoundAlias": "beta",
+    "beta::ValueOther": "beta", "beta::TypeBound": "beta", "beta::External": "beta"
+  },
+  "nested_actual_type_count": 3,
+  "class_inventory_lower_bound": 23,
+  "generic_declaration_frontier": "source_generic_class_binding_not_instantiated",
+  "missing": {"file": "missing.sv", "class": "broken_pkg::MissingChild", "line": 2, "status": "unresolved"},
+  "external_control": "Real catalog requesting classes.sv only against the same two-file captured compilation; beta::External binds external_pkg::Base as reference-only. Public all-file inventory recovers Base as a local declaration."
+}

@@ -56,6 +56,7 @@ def collect_source_catalog(projector, root):
     coordinates = {}
     coordinate_bytes = 0
     top_instances, semantic_tops = [], []
+    classes = None
 
     class Limit(Exception):
         pass
@@ -156,6 +157,8 @@ def collect_source_catalog(projector, root):
                 if item.isAssociativeArray:
                     work.append((item.associativeIndexType, depth + 1))
             elif kind == "ClassType":
+                if classes is not None:
+                    classes.observe_type(item)
                 work.append((item.baseClass, depth + 1))
                 for interface in item.implementedInterfaces:
                     work.append((interface, depth + 1))
@@ -187,6 +190,8 @@ def collect_source_catalog(projector, root):
         if row is None:
             return
         key = identity(symbol, where)
+        if classes is not None:
+            classes.declaration(symbol, scope_key)
         gaps = []
         if kind == "GenericClassDef":
             gaps.append("source_generic_class_members_not_enumerated")
@@ -237,6 +242,22 @@ def collect_source_catalog(projector, root):
 
     def enqueue(scope, scope_key, path, depth, key=None):
         pending.append((scope, scope_key, path, depth, key))
+
+    if "class_inheritance" in search.source_capabilities:
+        from .slang_class_catalog import ClassCollector
+        def class_depth_limit():
+            raise Limit("source_catalog_depth_limit")
+        def class_parameter_limit():
+            raise Limit("source_class_parameter_limit")
+        def class_reserve(size):
+            nonlocal coordinate_bytes
+            if coordinate_bytes + size > search.source_max_bytes:
+                raise Limit("source_catalog_coordinate_byte_limit")
+            coordinate_bytes += size
+        classes = ClassCollector(charge=charge, identity=identity, source=source,
+                                 enqueue=enqueue, kind_name=_kind_name, files=files,
+                                 max_depth=search.source_max_depth, depth_limit=class_depth_limit,
+                                 parameter_limit=class_parameter_limit, reserve=class_reserve)
 
     def expression_walk(value, scope_key, path, depth):
         if value is None:
@@ -405,6 +426,11 @@ def collect_source_catalog(projector, root):
         limited=limited, stop_reason=stop_reason, coordinate_bytes=coordinate_bytes,
         limits=dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth,
                     coordinate_bytes=search.source_max_bytes),
+        **({"classes": classes.payload(limited=limited,
+            diagnostics=bool(projector.options.blocking_diagnostic_total),
+            context_incomplete=any(exclusion.code in {
+                "protected_region", "opaque_protected_ip", "encrypted_source", "compile_manifest_incomplete"}
+                for exclusion in projector.options.exclusions))} if classes is not None else {}),
         files={path: dict(symbols=list(row["symbols"].values()),
             inventory_gaps=sorted(row["inventory"]), import_gaps=sorted(row["imports"]),
             usage_gaps=sorted(row["usage"]),

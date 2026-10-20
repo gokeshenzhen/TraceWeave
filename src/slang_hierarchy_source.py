@@ -12,7 +12,7 @@ from .source_graph_contract import SemanticScopeSearch
 
 
 def capability_gap(operation, arguments):
-    if operation in {"get_tb_file_detail", "lookup_tb_files"}:
+    if operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}:
         return None
     if operation not in {"get_tb_subtree", "find_tb_instance"}:
         return "source_hierarchy_capability_unsupported"
@@ -35,20 +35,23 @@ def build_instance_plan(context, operation, arguments, config, budget, *, catalo
         raise HierarchyBudgetExceeded("fact_byte_limit")
     path = arguments.get("path") if operation == "find_tb_instance" else arguments.get("root")
     path = path or context.selected_top
-    if operation in {"get_tb_file_detail", "lookup_tb_files"}:
+    if operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}:
         if catalog is None:
             raise ValueError("source file queries require captured ownership")
         if operation == "get_tb_file_detail":
             selected = (catalog.find_file(arguments["path"], checkpoint=budget.checkpoint),)
-        else:
+        elif operation == "lookup_tb_files":
             filters = {name: arguments.get(name) for name in ("basename", "name_contains", "path_contains")}
             selected = (catalog.select_files(**filters, checkpoint=budget.checkpoint)
                         if any(value is not None for value in filters.values()) else catalog.files)
+        else:
+            selected = catalog.files
         files = tuple(sorted(item.path for item in selected if item is not None))
         return build_prepared_source_plan(context=context, operation="driver",
             args={"signal_path": context.selected_top + ".__traceweave_source_anchor"}, config=config,
             search=SemanticScopeSearch(purpose="source_catalog", source_files=files,
-                source_capabilities=("file_declarations",),
+                source_capabilities=(("class_inheritance", "file_declarations")
+                                     if operation == "get_tb_class_hierarchy" else ("file_declarations",)),
                 source_aliases=context.aliases,
                 source_max_scopes=min(1024, budget.max_scopes - budget.scope_count),
                 source_max_depth=budget.max_depth,

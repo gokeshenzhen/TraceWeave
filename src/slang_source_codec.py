@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from .hierarchy_source_symbols import SourceSymbol
+from .hierarchy_source_symbols import SourceSymbol, ClassFact
 from .connectivity_ir import SourceLocation
 
 CATALOG_VERSION = 1
@@ -38,8 +38,10 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
             raise ValueError("duplicate source catalog object key")
         return value
     payload = json.loads(raw, object_pairs_hook=object_pairs)
+    class_capable = "class_inheritance" in search.source_capabilities
     _fields(payload, "version capabilities source_files semantic_tops declaration_domain usage_domain member_visits "
-                     "scope_visits limited stop_reason coordinate_bytes limits files")
+                     "scope_visits limited stop_reason coordinate_bytes limits files" +
+                     (" classes" if class_capable else ""))
     if (type(payload['version']) is not int or payload['version'] != CATALOG_VERSION
             or payload['version'] != search.source_version
             or payload['source_files'] != list(search.source_files)
@@ -67,7 +69,7 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
         raise ValueError("source catalog limit status invalid")
     reason = payload['stop_reason']
     if reason not in {None, 'source_catalog_visit_limit', 'source_catalog_scope_limit', 'source_catalog_depth_limit',
-                      'source_catalog_coordinate_byte_limit'}:
+                      'source_catalog_coordinate_byte_limit', 'source_class_parameter_limit'}:
         raise ValueError("source catalog stop reason invalid")
     if payload['limited'] != (reason is not None):
         raise ValueError("source catalog limit evidence invalid")
@@ -124,7 +126,81 @@ def decode_source_catalog(raw, search, *, checkpoint=lambda: None):
                 declaration_id=symbol['declaration_key'], type_id=symbol['type_key'],
                 parameterization=tuple(symbol['parameterization']), external=symbol['external'],
                 gaps=tuple(symbol['gaps']), declaration_status=symbol['declaration_status'])
+    if class_capable:
+        _decode_classes(payload['classes'], payload, checkpoint)
     return payload
+
+
+def _decode_classes(value, catalog, checkpoint):
+    _fields(value, "domain rows type_keys gaps complete")
+    if value['domain'] != 'declarations_and_referenced_specializations':
+        raise ValueError('class inventory domain mismatch')
+    _labels(value['gaps'])
+    if type(value['complete']) is not bool or value['complete'] != (not value['gaps']):
+        raise ValueError('class inventory completeness invalid')
+    if catalog['limited'] and ('source_class_inventory_limited' not in value['gaps'] or value['complete']):
+        raise ValueError('class inventory lost analysis frontier')
+    rows, types = value['rows'], value['type_keys']
+    if (not isinstance(types, list) or len(types) > catalog['member_visits']
+            or any(not isinstance(key, str) or not _KEY.fullmatch(key) for key in types)
+            or len(set(types)) != len(types)
+            or not isinstance(rows, list) or len(rows) > catalog['member_visits']):
+        raise ValueError('class inventory accounting invalid')
+    types, identities = set(types), set()
+    for row in rows:
+        checkpoint()
+        _fields(row, "key declaration_key type_key name qualified_name location scope_key declaration_status "
+                     "parameterization type_parameter_bindings base_status base_key base_qualified_name "
+                     "base_relation base_value_parameters base_type_parameter_bindings base_parameter_status gaps")
+        for field in ('key', 'declaration_key', 'type_key', 'scope_key', 'base_key'):
+            key = row[field]
+            if key is None and field in {'type_key', 'scope_key', 'base_key'}:
+                continue
+            if not isinstance(key, str) or not _KEY.fullmatch(key):
+                raise ValueError('class inventory identity invalid')
+        if row['key'] in identities:
+            raise ValueError('duplicate class inventory identity')
+        identities.add(row['key'])
+        _fields(row['location'], 'file line column')
+        where = row['location']
+        if (where['file'] not in catalog['files'] or type(where['line']) is not int or where['line'] < 1
+                or type(where['column']) is not int or where['column'] < 0):
+            raise ValueError('class declaration ownership invalid')
+        _labels(row['gaps'])
+        for field in ('parameterization', 'type_parameter_bindings', 'base_value_parameters',
+                      'base_type_parameter_bindings'):
+            pairs = row[field]
+            if (not isinstance(pairs, list) or len(pairs) > 128 or
+                    any(not isinstance(pair, list) or len(pair) != 2 or
+                        not all(isinstance(item, str) for item in pair) or not pair[0] for pair in pairs)
+                    or len({pair[0] for pair in pairs}) != len(pairs)):
+                raise ValueError('class parameter binding invalid')
+            if field.endswith('type_parameter_bindings') and any(pair[1] not in types for pair in pairs):
+                raise ValueError('class parameter type identity not interned')
+        if row['type_key'] is not None and row['type_key'] not in types:
+            raise ValueError('class canonical type not interned')
+        if row['declaration_status'] == 'specialization' and (
+                row['type_key'] is None or row['key'] != row['type_key']):
+            raise ValueError('class specialization requires canonical identity')
+        if row['type_key'] is None and row['key'] != row['declaration_key']:
+            raise ValueError('uninstantiated class declaration identity invalid')
+        if row['type_key'] is not None and row['key'] != row['type_key']:
+            raise ValueError('actual class requires canonical identity')
+        if row['base_relation'] not in {None, 'declaration', 'specialization'}:
+            raise ValueError('class base relation invalid')
+        if (row['base_relation'] is not None) != (row['base_status'] == 'resolved'):
+            raise ValueError('class relation requires resolved base')
+        if row['base_status'] == 'resolved' and row['base_key'] not in types:
+            raise ValueError('class base canonical identity not interned')
+        symbol = SourceSymbol(row['key'], row['name'], row['qualified_name'], 'class',
+            location=SourceLocation(**where), scope_id=row['scope_key'],
+            declaration_id=row['declaration_key'], type_id=row['type_key'],
+            parameterization=tuple(row['parameterization']), gaps=tuple(row['gaps']),
+            declaration_status=row['declaration_status'])
+        ClassFact(symbol, row['base_status'], row['base_key'], row['base_qualified_name'],
+            tuple(row['gaps']), tuple(row['base_value_parameters']), row['base_parameter_status'],
+            row['base_relation'] or 'declaration', tuple(row['type_parameter_bindings']),
+            tuple(row['base_type_parameter_bindings']), 'artifact_canonical')
 
 
 def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None):
@@ -140,7 +216,7 @@ def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None):
         if raw is not None:
             raise ValueError('source catalog metadata requires its capability scope')
         return False
-    if (search.source_capabilities != ('file_declarations',)
+    if (search.source_capabilities not in {('file_declarations',), ('class_inheritance', 'file_declarations')}
             or type(search.source_version) is not int or search.source_version != CATALOG_VERSION):
         raise ValueError('source catalog artifact capability mismatch')
     if ir.definitions or ir.instances or ir.bindings or ir.top_instances:

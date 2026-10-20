@@ -2967,9 +2967,12 @@ class SourceClassNode(SourceSymbolRow):
     base_symbol_id: SourceFactName | None = None
     base_qualified_name: SourceFactName | None = None
     binding_gaps: list[SourceFactLabel] = Field(default_factory=list)
-    base_relation: Literal["declaration"] | None = None
+    base_relation: Literal["declaration", "specialization"] | None = None
     base_value_parameters: dict[str, str] = Field(default_factory=dict, max_length=128)
     base_parameter_status: Literal["not_observed", "observed", "partial"] = "not_observed"
+    type_parameter_bindings: dict[str, SourceFactName] = Field(default_factory=dict, max_length=128)
+    base_type_parameter_bindings: dict[str, SourceFactName] = Field(default_factory=dict, max_length=128)
+    type_identity_domain: Literal["declaration", "artifact_canonical"] = "declaration"
 
     @model_validator(mode="after")
     def consistent_binding(self):
@@ -2987,14 +2990,17 @@ class SourceClassNode(SourceSymbolRow):
             raise ValueError("a class with no base cannot name one")
         if self.base_relation is not None and self.base_status != "resolved":
             raise ValueError("a declaration relation requires a resolved base")
-        if self.base_value_parameters and (
+        if (self.base_value_parameters or self.base_type_parameter_bindings) and (
             self.base_status != "resolved" or self.base_parameter_status == "not_observed"
         ):
             raise ValueError("base parameter observations require a resolved declaration")
-        if self.base_parameter_status == "observed" and not self.base_value_parameters:
+        if self.base_parameter_status == "observed" and not (
+                self.base_value_parameters or self.base_type_parameter_bindings):
             raise ValueError("observed base parameters require positive facts")
         if any(not k or not v for k, v in self.base_value_parameters.items()):
             raise ValueError("base parameter observations must be nonempty")
+        if any(not key for key in (*self.type_parameter_bindings, *self.base_type_parameter_bindings)):
+            raise ValueError("type parameter names must be nonempty")
         return self
 
 
@@ -3184,7 +3190,7 @@ class SourceClassResult(SourceQueryEnvelope):
     roots: list[dict[str, Any]]
     total: SourceFactCount
     output_truncated: bool
-    class_inventory_domain: Literal["provider_declarations"]
+    class_inventory_domain: Literal["provider_declarations", "declarations_and_referenced_specializations"]
     class_inventory_count: SourceFactCount | None
     class_inventory_lower_bound: SourceFactCount
     class_inventory_complete: bool
@@ -3209,7 +3215,7 @@ class SourceSectionResult(SourceQueryEnvelope):
     total_descendants: SourceFactCount | None = None
     truncated: bool | None = None
     view: Literal["elaborated_instances", "static_class_inheritance"] | None = None
-    class_inventory_domain: Literal["provider_declarations"] | None = None
+    class_inventory_domain: Literal["provider_declarations", "declarations_and_referenced_specializations"] | None = None
     class_inventory_count: SourceFactCount | None = None
     class_inventory_lower_bound: SourceFactCount | None = None
     class_inventory_complete: bool | None = None

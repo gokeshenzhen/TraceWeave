@@ -429,12 +429,29 @@ async def test_final_identity_change_discards_entire_class_export(tmp_path, cont
 
 
 @pytest.mark.anyio
-async def test_class_source_policy_is_unavailable_instead_of_guessed_legacy_topology(tmp_path, controls):
+async def test_class_source_policy_is_unavailable_instead_of_guessed_legacy_topology(tmp_path, monkeypatch, controls):
     handle, _ = await setup(tmp_path, controls, backend_preference='source')
+    # Deliberately disabled source provider: this remains a no-process routing
+    # control; actual supported class positives live in the real Slang suite.
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
     result = await classes(handle)
     assert result['error'] == 'semantic_provider_unavailable' and result['semantic_status'] == 'unavailable'
     assert result['facts_origin'] == 'compile_metadata' and 'roots' not in result
     assert controls.requests == [] and controls.selections == 0
+
+
+@pytest.mark.anyio
+async def test_healthy_native_class_inventory_retains_priority_with_incomplete_source_capture(tmp_path, monkeypatch, controls):
+    first, second, third, alias, log, _ = project(tmp_path)
+    third.unlink()
+    controls.configure(first, second, third, alias)
+    handle = await prepare(log)
+    monkeypatch.setattr(server, '_query_slang_hierarchy', forbidden)
+    result = await classes(handle)
+    assert result['facts_origin'] == 'verdi_npi' and result['total'] == 6
+    assert result['backend_status']['actual_backend'] == 'verdi_npi'
+    assert 'source_capture_incomplete' not in result['coverage_gaps']
+    assert len(controls.requests) == 1 and controls.opened == controls.closed == ['classes']
 
 
 @pytest.mark.anyio

@@ -29,7 +29,7 @@ from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.4"
 SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.4"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.16"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.17"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
@@ -674,7 +674,8 @@ class SemanticScopeSearch:
         if self.purpose == "source_catalog":
             if (not files or len(files) > 10000 or len(set(files)) != len(files)
                     or any(not value.startswith("/") for value in files)
-                    or capabilities != ("file_declarations",)):
+                    or capabilities not in {("file_declarations",),
+                                            ("class_inheritance", "file_declarations")}):
                 raise ValueError("source catalog requires bounded files and declared capabilities")
             if (type(self.source_version) is not int or self.source_version != 1
                     or type(self.source_max_scopes) is not int or not 1 <= self.source_max_scopes <= 10000
@@ -1773,6 +1774,26 @@ def _chain_covered_by(
     )
 
 
+def _catalog_search_scope_covers(available: dict, requested: dict) -> bool:
+    """Allow only a topology-free catalog's explicit capability/file subset.
+
+    All remaining identity, domain, alias, version and work limits stay exact.
+    A connectivity/hierarchy artifact can never be promoted to a catalog.
+    """
+    left, right = available.get('semantic_search'), requested.get('semantic_search')
+    if (not isinstance(left, dict) or not isinstance(right, dict)
+            or left.get('purpose') != 'source_catalog' or right.get('purpose') != 'source_catalog'):
+        return available == requested
+    if (not set(right['source_files']).issubset(left['source_files'])
+            or not set(right['source_capabilities']).issubset(left['source_capabilities'])):
+        return False
+    available, requested = dict(available), dict(requested)
+    available['semantic_search'], requested['semantic_search'] = dict(left), dict(right)
+    for value in (available['semantic_search'], requested['semantic_search']):
+        value.pop('source_files'); value.pop('source_capabilities')
+    return available == requested
+
+
 def _artifact_scope_covers(
     available: SourceGraphArtifactScope,
     requested: SourceGraphArtifactScope,
@@ -1782,7 +1803,7 @@ def _artifact_scope_covers(
             return False
         left, right = available.to_dict(), requested.to_dict()
         left.pop("capabilities"); right.pop("capabilities")
-        return left == right
+        return _catalog_search_scope_covers(left, right)
     if (
         available.design != requested.design
         or available.top != requested.top
@@ -1833,7 +1854,7 @@ def _semantic_context_scope_covers(
             return False
         left, right = available.to_dict(), requested.to_dict()
         left.pop("capabilities"); right.pop("capabilities")
-        return left == right
+        return _catalog_search_scope_covers(left, right)
     if (
         available.design != requested.design
         or available.top != requested.top
@@ -2036,7 +2057,7 @@ def _scope_covers(
     requested: SourceGraphBuildScope,
 ) -> bool:
     if available.semantic_search is not None or requested.semantic_search is not None:
-        return available.to_dict() == requested.to_dict()
+        return _catalog_search_scope_covers(available.to_dict(), requested.to_dict())
     if (
         available.design != requested.design
         or available.top != requested.top

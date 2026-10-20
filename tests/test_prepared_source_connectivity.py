@@ -134,11 +134,27 @@ async def public(tmp, name, args):
     # Raw evidence precedes decoding and assertions, including invalid JSON.
     with (tmp / "public.raw.jsonl").open("a") as out:
         out.write(json.dumps({"phase": "request", "tool": name, "arguments": args}) + "\n")
-    blocks = await server.call_tool(name, args)
+    try:
+        blocks = await server.call_tool(name, args)
+    except BaseException as exc:
+        with (tmp / "public.raw.jsonl").open("a") as out:
+            out.write(json.dumps({"phase": "exception", "tool": name,
+                "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc),
+                "traceback": traceback.format_exc()}) + "\n")
+        raise
     with (tmp / "public.raw.jsonl").open("a") as out:
-        out.write(json.dumps({"phase": "response", "tool": name,
-                              "blocks": [block.model_dump(mode="json") for block in blocks]}) + "\n")
-    value = json.loads(blocks[0].text)
+        out.write(json.dumps({"phase": "response_repr", "tool": name, "response": repr(blocks)}) + "\n")
+    try:
+        with (tmp / "public.raw.jsonl").open("a") as out:
+            out.write(json.dumps({"phase": "response", "tool": name,
+                                  "blocks": [block.model_dump(mode="json") for block in blocks]}) + "\n")
+        value = json.loads(blocks[0].text)
+    except BaseException as exc:
+        with (tmp / "public.raw.jsonl").open("a") as out:
+            out.write(json.dumps({"phase": "decode_exception", "tool": name,
+                "module": type(exc).__module__, "type": type(exc).__name__, "message": str(exc),
+                "traceback": traceback.format_exc()}) + "\n")
+        raise
     trace = tmp / "public.jsonl"
     with trace.open("a") as out:
         out.write(json.dumps({"tool": name, "arguments": args, "response": value}) + "\n")

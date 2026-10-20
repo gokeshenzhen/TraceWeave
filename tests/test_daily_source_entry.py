@@ -36,8 +36,9 @@ def test_hierarchy_purpose_codec_and_capability():
     for tool, args in (("find_tb_instance", {"module": "daily_leaf"}),
                        ("get_tb_subtree", {"depth": -1}),
                        ("get_tb_subtree", {"count_mode": "exact"}),
-                       ("get_tb_class_hierarchy", {}), ("dump_tb_section", {"section": "files_full"})):
+                       ("dump_tb_section", {"section": "files_full"})):
         assert capability_gap(tool, args)
+    assert capability_gap("get_tb_class_hierarchy", {}) is None
 
 
 @pytest.mark.anyio

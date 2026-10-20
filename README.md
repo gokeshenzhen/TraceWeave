@@ -168,11 +168,12 @@ use. These inventories can walk global namespaces within the request budget;
 gaps; an unknown filter is not a negative match. Metadata-only results carry
 the design/context identity and query costs, with no backend or KDB receipt.
 When source capture is incomplete because an input was unavailable or a capture
-budget was reached, the file tools retain compiled-file metadata and unknown
+budget was reached, file queries retain compiled-file metadata and unknown
 semantic fields with `source_capture_incomplete`. The source fallback starts no
 Slang worker or artifact cache request; healthy NPI still has priority. Initial
 and final input validation remain required: a missing file appearing, a captured
 file changing, or an alias changing rejects the result and requires a new context.
+Class source queries likewise remain unavailable for incomplete capture.
 `get_tb_class_hierarchy(design_handle=..., root_class=...)` returns static class
 inheritance with qualified identities and actual base bindings. Short names
 must be unambiguous; external reference-only bases are labelled. `total` is the
@@ -183,7 +184,21 @@ outside captured inputs carry `npi_class_location_unbound`.
 `parameterization` does not describe a derived class's actual arguments.
 `base_value_parameters` records observed constant arguments on that inheritance
 edge; inspect `base_parameter_status` and `binding_gaps`. These observations do
-not establish a complete specialized type identity or type-parameter inventory.
+not establish a complete specialized NPI type identity or type-parameter inventory.
+Source preference or ordinary NPI unavailability uses the shared isolated Slang
+catalog for captured class declarations and actually referenced specializations
+(`class_inventory_domain="declarations_and_referenced_specializations"`).
+`declaration_id` and physical locations agree with file declarations. File
+`type_id` is a declaration-domain identity; class nodes explicitly label
+`type_identity_domain="artifact_canonical"`, and their `type_id` and
+`type_parameter_bindings` are comparable only within that artifact. Slang's
+canonical matching preserves distinct nominal types and aliases of the same
+type. `base_relation="specialization"` and `base_type_parameter_bindings` refer
+to the actual bound base. Generic declarations without an actual binding,
+unresolved bases and frontend diagnostics retain partial coverage. No possible
+parameter combinations are invented or exhaustively enumerated. Compatible
+class catalogs can also serve file queries; an already cached exact file
+artifact keeps priority. Legacy `handle` retains its source-scan UVM/create view.
 `dump_tb_section(design_handle=..., section=...)` supports all seven sections.
 The three compile metadata sections need no backend; the four semantic sections
 use the same NPI services and preserve their coverage gaps. `max_items` bounds
@@ -196,7 +211,7 @@ runtime. The instance projection copies at most 64 real scopes and inspects
 whole compile context. Generate scopes retain their semantic parents. Source
 locations must bind to captured inputs; unavailable sites stay null. Counts
 remain lower bounds and a missing local fact never proves global absence.
-Slang module searches, exact counts, unlimited depth, class/type inventories
+Slang module searches, exact counts, unlimited depth
 and semantic file/section exports remain unsupported with explicit gaps.
 Metadata queries need no frontend. Healthy NPI and existing legacy `handle`
 capabilities retain priority and compatibility.

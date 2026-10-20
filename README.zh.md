@@ -319,6 +319,15 @@ worker 或产物缓存请求；健康 NPI 仍保持优先。查询前后继续�
 不代表派生类实际传入的参数；继承边上的 `base_value_parameters` 单独记录原生观察到的
 常量实参，需同时检查 `base_parameter_status` 与 `binding_gaps`。这些事实仍不证明
 完整特化类型身份或全部类型参数。
+显式 source 或普通 NPI 不可用时，类查询使用共享隔离 Slang catalog，有限域为捕获源码
+中的类声明和实际引用特化（`class_inventory_domain="declarations_and_referenced_specializations"`），
+不构造默认特化或枚举全部参数组合。`declaration_id`、物理位置与文件声明一致。文件
+`type_id` 表示声明域身份；类节点标明 `type_identity_domain="artifact_canonical"`，其
+`type_id`、`type_parameter_bindings` 仅在同一产物内比较。真实 canonical matching 保留
+不同名义类型的区别，并识别同一类型的别名。`base_relation="specialization"` 和
+`base_type_parameter_bindings` 绑定实际基类特化。无实际绑定的泛型声明、未解析基类、
+前端诊断与不完整捕获仍明确为 partial/不可用。相容类产物可服务文件查询；已缓存的
+精确文件产物仍优先。旧 `handle` 保留源码扫描的 UVM/create 推断视图。
 `dump_tb_section(design_handle=..., section=...)` 支持全部七种 section：三个编译
 元数据 section 不调用后端，四个语义 section 使用相同 NPI 服务并保留覆盖缺口。
 `max_items` 只限制输出，全局遍历仍受工作量和时间预算约束；精确计数不代表导出完整，
@@ -328,7 +337,7 @@ worker 或产物缓存请求；健康 NPI 仍保持优先。查询前后继续�
 检查 4096 个 member、展开两层直接孩子；前端仍可能处理整个编译上下文。
 Generate scope 保留真实父子关系，定义和实例位置分开并绑定捕获源码，缺失位置为 null。
 局部计数保留下界，未找到不作全局不存在结论。Slang 的 module 搜索、精确计数、
-无限 depth、类/类型库存及文件/section 语义导出仍明确报告缺口。纯元数据免前端，
+无限 depth 及文件/section 语义导出仍明确报告缺口。纯元数据免前端，
 健康 NPI 优先，旧 `handle` 能力保持兼容。
 
 `analyze_failure_event` 与 `recommend_failure_debug_next_steps` 接受同一个

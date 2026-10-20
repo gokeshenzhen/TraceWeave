@@ -89,6 +89,10 @@ class ClassFact:
     gaps: tuple[str, ...] = ()
     base_value_parameters: tuple[tuple[str, str], ...] = ()
     base_parameter_status: str = "not_observed"
+    base_relation: str = "declaration"
+    type_parameter_bindings: tuple[tuple[str, str], ...] = ()
+    base_type_parameter_bindings: tuple[tuple[str, str], ...] = ()
+    type_identity_domain: str = "declaration"
 
     def __post_init__(self):
         if not isinstance(self.symbol, SourceSymbol) or self.symbol.kind != "class":
@@ -117,9 +121,23 @@ class ClassFact:
             raise ValueError("invalid base value parameter observations")
         if self.base_parameter_status not in {"not_observed", "observed", "partial"}:
             raise ValueError("invalid base parameter status")
+        if self.base_relation not in {"declaration", "specialization"}:
+            raise ValueError("invalid base relation")
+        if self.type_identity_domain not in {"declaration", "artifact_canonical"}:
+            raise ValueError("invalid class type identity domain")
+        for field in ("type_parameter_bindings", "base_type_parameter_bindings"):
+            bindings = tuple(tuple(pair) for pair in getattr(self, field))
+            if (len(bindings) > 128 or any(len(pair) != 2 or
+                    not all(isinstance(item, str) and item for item in pair) for pair in bindings)
+                    or len({pair[0] for pair in bindings}) != len(bindings)):
+                raise ValueError("invalid canonical type parameter bindings")
+            object.__setattr__(self, field, bindings)
+        if self.base_type_parameter_bindings and (
+                self.base_status != "resolved" or self.base_parameter_status == "not_observed"):
+            raise ValueError("base type bindings require a resolved base")
         if parameters and (self.base_status != "resolved" or self.base_parameter_status == "not_observed"):
             raise ValueError("base parameter observations require a resolved declaration")
-        if self.base_parameter_status == "observed" and not parameters:
+        if self.base_parameter_status == "observed" and not (parameters or self.base_type_parameter_bindings):
             raise ValueError("observed base parameters require positive facts")
         object.__setattr__(self, "base_value_parameters", parameters)
 
@@ -127,9 +145,12 @@ class ClassFact:
         return dict(self.symbol.row(), base_status=self.base_status,
                     base_symbol_id=self.base_symbol_id, base_qualified_name=self.base_qualified_name,
                     binding_gaps=list(self.gaps),
-                    base_relation="declaration" if self.base_status == "resolved" else None,
+                    base_relation=self.base_relation if self.base_status == "resolved" else None,
                     base_value_parameters=dict(self.base_value_parameters),
-                    base_parameter_status=self.base_parameter_status)
+                    base_parameter_status=self.base_parameter_status,
+                    type_parameter_bindings=dict(self.type_parameter_bindings),
+                    base_type_parameter_bindings=dict(self.base_type_parameter_bindings),
+                    type_identity_domain=self.type_identity_domain)
 
 
 def validate_class_query(*, root_class=None, depth=-1, max_nodes=5000):
@@ -240,7 +261,9 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
 
     if root_class is not None:
         selected = [root_class] if root_class in nodes else [
-            key for key, row in nodes.items() if row["qualified_name"] == root_class]
+            key for key, row in nodes.items() if row.get("declaration_id") == root_class]
+        if not selected:
+            selected = [key for key, row in nodes.items() if row["qualified_name"] == root_class]
         if not selected:
             selected = [key for key, row in nodes.items() if row["name"] == root_class]
         if len(selected) > 1:
@@ -299,7 +322,7 @@ def query_class_hierarchy(provider, *, root_class=None, depth=-1, max_nodes=5000
         "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "facts_origin": provider.origin,
         "artifact_identity": provider.artifact_identity, "view": "static_class_inheritance",
         "roots": roots, "total": emitted, "output_truncated": output_truncated,
-        "class_inventory_domain": "provider_declarations",
+        "class_inventory_domain": getattr(provider, "class_inventory_domain", "provider_declarations"),
         "class_inventory_count": len(classes) if inventory_complete else None,
         "class_inventory_lower_bound": len(classes), "class_inventory_complete": inventory_complete,
         "coverage_status": "complete" if complete else "partial",
