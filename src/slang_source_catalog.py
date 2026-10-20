@@ -114,6 +114,8 @@ def collect_source_catalog(projector, root):
         A confirmed source in another captured file is outside the requested
         declaration domain; it must not become an unbound in-domain location.
         """
+        if value is None:
+            return None
         try:
             original = projector.source_manager.getFullyOriginalLoc(value)
             return (binding(str(projector.source_manager.getFullPath(original.buffer)))
