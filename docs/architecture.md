@@ -635,9 +635,10 @@ Verification
   cannot become fallback attempts. A clean/missing waveform target performs no
   driver query and leaves KDB load status unverified. Dynamic NPI queries record
   actual load evidence even when their semantic model returns partial facts.
-  Independent-context Source Graph trace planning is still unavailable during
-  this migration: it reports that gap and uses bound Static metadata, without
-  silently borrowing a legacy tree. This limitation does not complete D7.
+  Independent-context Source Graph traces use the captured compile context and
+  bounded semantic preparation described in "Prepared traces and packed layouts"
+  below. Missing source capabilities retain honest bound Static evidence without
+  borrowing a legacy tree. This trace integration is a D7 subset.
   Dual-side `trace_divergence` accepts these handles independently, including
   mixed legacy/prepared sides. `divergence_design_context` pins all unique
   handles before any await, then prepares them under the existing graph
