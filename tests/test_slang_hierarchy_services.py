@@ -221,32 +221,49 @@ async def test_controlled_ready_worker_frontier_preserves_public_positive_facts_
     from src.source_graph_runtime import IsolatedSourceGraphProcessRunner, WorkerBuildResult
     handle = await prepare(tmp_path, materialize(tmp_path), 'source', TOP)
     async def limited(runner, request, **kwargs):
-        current = request.scope.semantic_search
-        def controlled_row(path, parent, module, site, definition, params=()):
-            where = dict(file=str(tmp_path / 'hierarchy.sv'), line=definition, column=1)
-            parameters = list(map(list, params))
-            identity = hashlib.sha256(json.dumps([module, 'Module', where, parameters], sort_keys=True).encode()).hexdigest()
-            return dict(path=path, parent_path=parent, name=path.rsplit('.',1)[-1], kind='module',
-                definition_id=identity, definition_name=module, definition_location=where,
-                location=dict(file=str(tmp_path / 'hierarchy.sv'), line=site, column=1),
-                parameterization=parameters, gaps=[])
-        value = dict(version=2, capability='instance_hierarchy', domain='selected_top_elaborated_scopes',
-            selected_top=TOP, semantic_tops=[TOP],
-            search_sha256=hashlib.sha256(json.dumps(current.to_dict(), sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
-            rows=[controlled_row(TOP,None,'v3_top',13,13),
-                  controlled_row(TOP+'.low',TOP,'v3_leaf',15,1,[('W','4')])],
-            complete_children=[TOP+'.low'], member_visits=20, retained_bytes=10000,
-            limited=True, stop_reason=reason)
-        ir = ConnectivityIR(frontend_name=request.source.frontend_name, frontend_version=request.source.frontend_version,
-            definitions=(), instances=(), bindings=(), top_instances=(),
-            coverage=CoverageReport(CoverageStatus.INCONCLUSIVE, 3, 3,
-                gaps=(CoverageGap(reason,'controlled finite projection frontier',CoverageStatus.INCONCLUSIVE),)),
-            metadata=(('hierarchy_scopes_v2',json.dumps(value,sort_keys=True)),))
-        receipt = SourceGraphArtifactScopeReceipt(scope=request.scope, coverage_status=CoverageStatus.INCONCLUSIVE,
-                                                  gap_codes=(reason,))
-        (tmp_path / 'controlled_worker.request.json').write_text(json.dumps(request.to_dict())+'\n')
-        (tmp_path / 'controlled_worker.ir.raw.json').write_bytes(ir.to_json_bytes())
-        return WorkerBuildResult.ready(ir, receipt)
+        try:
+            # The patched runner receives a query build request. Save it before
+            # constructing controlled facts or following either identity layer.
+            (tmp_path / 'controlled_worker.request.json').write_text(json.dumps(request.to_dict())+'\n')
+            source = request.identity
+            artifact_scope = request.artifact_identity.scope
+            current = artifact_scope.semantic_search
+            def controlled_row(path, parent, module, site, definition, params=(), *, site_column=8):
+                where = dict(file=str(tmp_path / 'hierarchy.sv'), line=definition, column=8)
+                parameters = list(map(list, params))
+                identity = hashlib.sha256(json.dumps([module, 'Module', where, parameters], sort_keys=True).encode()).hexdigest()
+                return dict(path=path, parent_path=parent, name=path.rsplit('.',1)[-1], kind='module',
+                    definition_id=identity, definition_name=module, definition_location=where,
+                    location=dict(file=str(tmp_path / 'hierarchy.sv'), line=site, column=site_column),
+                    parameterization=parameters, gaps=[])
+            value = dict(version=2, capability='instance_hierarchy', domain='selected_top_elaborated_scopes',
+                selected_top=TOP, semantic_tops=['v3_other', TOP],
+                search_sha256=hashlib.sha256(json.dumps(current.to_dict(), sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                rows=[controlled_row(TOP,None,'v3_top',13,13),
+                      controlled_row(TOP+'.low',TOP,'v3_leaf',15,1,[('W','4')], site_column=20)],
+                # Both retained owners have omitted children, including the
+                # bound probe under low; neither has child-exhaustion proof.
+                complete_children=[], member_visits=20, retained_bytes=10000,
+                limited=True, stop_reason=reason)
+            ir = ConnectivityIR(frontend_name=source.frontend_name, frontend_version=source.frontend_version,
+                definitions=(), instances=(), bindings=(), top_instances=(),
+                coverage=CoverageReport(CoverageStatus.INCONCLUSIVE, 3, 3,
+                    gaps=(CoverageGap(reason,'controlled finite projection frontier',CoverageStatus.INCONCLUSIVE),)),
+                metadata=(('hierarchy_scopes_v2',json.dumps(value,sort_keys=True)),))
+            receipt = SourceGraphArtifactScopeReceipt(scope=artifact_scope, coverage_status=CoverageStatus.INCONCLUSIVE,
+                                                      gap_codes=(reason,))
+            (tmp_path / 'controlled_worker.ir.raw.json').write_bytes(ir.to_json_bytes())
+            (tmp_path / 'controlled_worker.receipt.raw.json').write_text(json.dumps(receipt.to_dict())+'\n')
+            return WorkerBuildResult.ready(ir, receipt)
+        except BaseException as exc:
+            details = traceback.format_exc()
+            try:
+                (tmp_path / 'controlled_worker.exception.json').write_text(json.dumps(dict(
+                    module=type(exc).__module__, type=type(exc).__name__, message=str(exc), traceback=details))+'\n')
+                (tmp_path / 'controlled_worker.exception.txt').write_text(details)
+            except BaseException:
+                pass  # An evidence write failure must not replace the original exception.
+            raise
     monkeypatch.setattr(IsolatedSourceGraphProcessRunner, 'run', limited)
     result = await call(tmp_path, handle, depth=-1, count_mode='exact')
     real_positive(result)  # real routing/codec; worker facts deliberately controlled
