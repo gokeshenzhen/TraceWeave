@@ -141,10 +141,11 @@ def test_synthetic_unowned_leaf_does_not_poison_captured_inventory(monkeypatch):
     projector = NS(source_manager=manager, options=NS(semantic_search=request,
         source_root=Path('/'), blocking_diagnostic_total=0, exclusions=()))
 
-    for case in ('synthetic', 'unbound_syntax', 'bound_source', 'captured_owner'):
+    for case in ('synthetic', 'unbound_syntax', 'bound_source', 'captured_owner', 'unknown_scope'):
         unknown = Symbol('UnknownCompilerLeaf', 'generated',
                          syntax=object() if case == 'unbound_syntax' else None,
-                         offset=10 if case == 'bound_source' else None)
+                         offset=10 if case == 'bound_source' else None,
+                         isScope=case == 'unknown_scope')
         declaration = Symbol('Definition', 'A', offset=7, syntax=object(), definitionKind=NS(name='Module'))
         variable = Symbol('Variable', 'A.g.flag', offset=16, syntax=object(), type=scalar, initializer=None)
         generate = Symbol('GenerateBlock', 'A.g', offset=10, syntax=object(),

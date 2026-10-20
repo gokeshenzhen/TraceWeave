@@ -366,7 +366,8 @@ def collect_source_catalog(projector, root):
                     # syntax nor captured owner is outside the source inventory.
                     # Real unbound syntax and captured-owner gaps stay unknown;
                     # containers and positive reference checks ran above.
-                    if where is not None or symbol.syntax is not None or path in files:
+                    if (where is not None or symbol.syntax is not None or path in files
+                            or bool(symbol.isScope)):
                         gap(path, "source_symbol_domain_uncovered")
                 if hasattr(symbol, "initializer"):
                     expression_walk(symbol.initializer, scope_key, path, depth + 1)
