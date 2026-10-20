@@ -523,3 +523,21 @@ async def test_x_trace_scope_guard_checks_all_x_upstreams_before_child_query():
 
     assert driver_calls == ["tb.dut.out"]
     assert guarded == [["tb.dut.left", "tb.dut.right"]]
+
+
+def test_prepared_trace_aggregate_preserves_public_metrics_contract():
+    """Runtime timer names must use the existing public receipt vocabulary."""
+    from types import SimpleNamespace
+    from src.prepared_source_trace import PreparedTracePlan
+    from src.schemas import SourceGraphBackendReceipt
+    planner = PreparedTracePlan(None, None, 100.0, 10)
+    outcome = SimpleNamespace(build_key=SimpleNamespace(digest='a'*64), entry=None,
+        metrics=SimpleNamespace(to_dict=lambda: dict(total_wall_ms=7.0,
+            admission_wait_ms=1.0, build_wall_ms=4.0, load_wall_ms=2.0,
+            actual_build_count=1, frontend_launch_count=1)))
+    planner.observe(outcome)
+    planner.observe(outcome)
+    receipt = SourceGraphBackendReceipt.model_validate(planner.receipt({'adapter_status':'ready'}))
+    assert receipt.metrics.prepare_total_wall_ms == 14.0
+    assert receipt.metrics.build_wall_ms == 8.0 and receipt.metrics.actual_build_count == 2
+    assert 'total_wall_ms' not in receipt.metrics.model_dump()

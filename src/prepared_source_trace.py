@@ -42,7 +42,8 @@ class PreparedTracePlan:
         self.attempts.append(outcome.build_key.digest)
         for name, value in outcome.metrics.to_dict().items():
             if value is not None and (name.endswith('_ms') or name in {'actual_build_count', 'frontend_launch_count'}):
-                self.metrics[name] = self.metrics.get(name, 0) + value
+                public_name = 'prepare_total_wall_ms' if name == 'total_wall_ms' else name
+                self.metrics[public_name] = self.metrics.get(public_name, 0) + value
         if outcome.entry is not None:
             self.budget.account_projection(outcome.entry)
             if dict(outcome.entry.ir.metadata).get('semantic_scope_limited') == '1':
