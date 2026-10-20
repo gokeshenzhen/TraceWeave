@@ -29,7 +29,7 @@ from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.4"
 SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.4"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.14"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.15"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
@@ -641,9 +641,15 @@ class SemanticScopeSearch:
     max_members: int = 4096
     assignment_candidates: tuple[str, ...] = ()
     purpose: str = "connectivity"
+    source_files: tuple[str, ...] = ()
+    source_capabilities: tuple[str, ...] = ()
+    source_aliases: tuple[tuple[str, str], ...] = ()
+    source_version: int = 1
+    source_max_scopes: int = 1024
+    source_max_depth: int = 128
 
     def __post_init__(self) -> None:
-        if self.purpose not in {"connectivity", "hierarchy", "packed_layout", "trace"}:
+        if self.purpose not in {"connectivity", "hierarchy", "packed_layout", "trace", "source_catalog"}:
             raise ValueError("unsupported semantic scope purpose")
         roots = _path_set(self.roots, "semantic expansion root")
         if len(roots) > 64 or any(len(path.split(".")) > 64 for path in roots):
@@ -662,12 +668,41 @@ class SemanticScopeSearch:
         if len(candidates) > candidate_limit or any(len(path.split(".")) > 64 for path in candidates):
             raise ValueError("semantic assignment candidates exceed bounds")
         object.__setattr__(self, "assignment_candidates", candidates)
+        files = _ordered_text(self.source_files, "semantic source file")
+        capabilities = _fixed_labels(self.source_capabilities, "semantic source capability")
+        if self.purpose == "source_catalog":
+            if (not files or len(files) > 10000 or len(set(files)) != len(files)
+                    or any(not value.startswith("/") for value in files)
+                    or capabilities != ("file_declarations",)):
+                raise ValueError("source catalog requires bounded files and declared capabilities")
+            if (type(self.source_version) is not int or self.source_version != 1
+                    or type(self.source_max_scopes) is not int or not 1 <= self.source_max_scopes <= 10000
+                    or type(self.source_max_depth) is not int or not 1 <= self.source_max_depth <= 256):
+                raise ValueError("invalid source catalog version or traversal limits")
+            aliases = tuple(tuple(pair) for pair in self.source_aliases)
+            if (len(aliases) > 32768 or any(len(pair) != 2 or
+                    any(not isinstance(value, str) or not value for value in pair)
+                    or not pair[1].startswith("/") for pair in aliases)
+                    or len({pair[0] for pair in aliases}) != len(aliases)):
+                raise ValueError("invalid source catalog aliases")
+            object.__setattr__(self, "source_aliases", tuple(sorted(aliases)))
+        elif (files or capabilities or self.source_aliases or self.source_version != 1
+              or self.source_max_scopes != 1024 or self.source_max_depth != 128):
+            raise ValueError("source files and capabilities require a source catalog")
+        object.__setattr__(self, "source_files", files)
+        object.__setattr__(self, "source_capabilities", capabilities)
 
     def to_dict(self) -> dict[str, Any]:
         return {"roots": list(self.roots), "depth": self.depth,
                 "max_instances": self.max_instances, "max_members": self.max_members,
                 "assignment_candidates": list(self.assignment_candidates),
-                **({"purpose": self.purpose} if self.purpose != "connectivity" else {})}
+                **({"purpose": self.purpose} if self.purpose != "connectivity" else {}),
+                **({"source_files": list(self.source_files),
+                    "source_capabilities": list(self.source_capabilities),
+                    "source_aliases": [list(pair) for pair in self.source_aliases],
+                    "source_version": self.source_version,
+                    "source_max_scopes": self.source_max_scopes,
+                    "source_max_depth": self.source_max_depth} if self.source_files else {})}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> SemanticScopeSearch:
@@ -675,7 +710,13 @@ class SemanticScopeSearch:
                    max_instances=value.get("max_instances", 64),
                    max_members=value.get("max_members", 4096),
                    assignment_candidates=tuple(value.get("assignment_candidates", ())),
-                   purpose=value.get("purpose", "connectivity"))
+                   purpose=value.get("purpose", "connectivity"),
+                   source_files=tuple(value.get("source_files", ())),
+                   source_capabilities=tuple(value.get("source_capabilities", ())),
+                   source_aliases=tuple(tuple(pair) for pair in value.get("source_aliases", ())),
+                   source_version=value.get("source_version", 1),
+                   source_max_scopes=value.get("source_max_scopes", 1024),
+                   source_max_depth=value.get("source_max_depth", 128))
 
 
 @dataclass(frozen=True)

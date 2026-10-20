@@ -7314,13 +7314,15 @@ async def list_tools():
             description=(
                 "Query compiled files with AND filters; at least one filter is required. "
                 "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
-                "schema_version=2 captured file ownership and on-demand NPI symbols. Basename/name/path-only "
+                "schema_version=2 captured file ownership and on-demand semantic symbols. Basename/name/path-only "
                 "filters never probe, select or load a semantic backend, and semantic fields remain null. "
                 "has_module/contains_uvm/file_type require semantic evidence; an unknown filter result "
                 "is not a negative match. NPI file mapping may walk global namespaces within the request "
                 "budget; inspect semantic_work_scope, coverage gaps and unknown_filter_files. "
                 "count_mode=bounded stops after an omitted match; exact requests all candidates within budgets. "
-                "Independent Slang file fallback is pending. Legacy handles retain their existing shape."
+                "Healthy NPI has priority; source preference or ordinary NPI unavailability uses a bounded "
+                "Slang declaration artifact. Declaration, import and UVM-usage coverage are separate; "
+                "unelaborated bodies and unprocessed files stay unknown. Legacy handles retain their existing shape."
             ),
             inputSchema={
                 "type": "object",
@@ -7395,12 +7397,14 @@ async def list_tools():
             description=(
                 "Return symbols (modules/classes/interfaces) defined in a single compiled file. "
                 "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
-                "schema_version=2 captured file ownership and on-demand NPI declarations. Only an exact "
+                "schema_version=2 captured file ownership and on-demand semantic declarations. Only an exact "
                 "captured path or alias binds a file; a nonmember returns basename suggestions without "
                 "probing or loading a backend. Native mapping may walk global namespaces within the query "
                 "budget and does not prove all uninstantiated declarations, imports or variables were recovered. "
-                "Inspect semantic_work_scope, symbol_inventory_complete and coverage gaps. Independent "
-                "Slang file fallback is pending. Legacy handles retain their existing shape."
+                "Inspect semantic_work_scope, symbol_inventory_complete and coverage gaps. "
+                "Source preference or ordinary NPI unavailability uses an isolated bounded Slang declaration "
+                "artifact with exact captured file ownership. Read symbol_inventory_complete and semantic_gaps; "
+                "an unelaborated body or unprocessed file cannot prove absence. Legacy handles retain their existing shape."
             ),
             inputSchema={
                 "type": "object",
@@ -8558,7 +8562,7 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
     started = time.perf_counter()
     with anyio.fail_after(remaining):
         build = await _run_in_cancellable_thread(lambda: build_instance_plan(
-            entry.context, plan.operation, arguments, config, budget))
+            entry.context, plan.operation, arguments, config, budget, catalog=plan.catalog))
         budget.checkpoint()
         if build.status is AdapterStatus.BLOCKED:
             return unavailable("source_hierarchy_scope_unavailable")
@@ -8580,7 +8584,12 @@ async def _query_slang_hierarchy(entry, plan, arguments, budget):
             raw, _ = unavailable("source_hierarchy_provider_unavailable")
             return raw, receipt
         def query():
-            provider = SlangHierarchyProvider(outcome.entry, entry.context, budget)
+            if build.request.scope.semantic_search.purpose == "source_catalog":
+                from src.slang_source_provider import SlangSourceProvider
+                provider = SlangSourceProvider(outcome.entry, entry.context, budget,
+                                              build.request.scope.semantic_search.source_files)
+            else:
+                provider = SlangHierarchyProvider(outcome.entry, entry.context, budget)
             result = plan.execute(provider)
             if plan.operation == "get_tb_subtree" and arguments.get("depth", 1) > 2:
                 result["coverage_gaps"] = sorted(set(result["coverage_gaps"]) | {"source_hierarchy_depth_limited"})

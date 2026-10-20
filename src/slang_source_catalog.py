@@ -1,0 +1,345 @@
+"""Bounded worker-local semantic declarations, never a lexical source scan.
+
+The finite inventory is supported declarations in compilation/package/class
+and elaborated scopes. Unelaborated definition bodies and generic declarations
+retain explicit frontiers. Inventory, imports and usage have separate coverage;
+an unsupported expression/scope can never turn into a negative UVM predicate.
+Only primitives leave the worker. All locations bind through captured aliases.
+"""
+from __future__ import annotations
+
+from collections import deque
+import hashlib
+import json
+from pathlib import Path
+
+from .cancellation import check_cancelled
+
+CATALOG_VERSION = 1
+DECLARATION_DOMAIN = "compilation_declarations_and_elaborated_scopes"
+USAGE_DOMAIN = "resolved_types_imports_and_expression_references"
+_KINDS = {"Package": "package", "ClassType": "class", "GenericClassDef": "class",
+          "TypeAlias": "typedef", "Variable": "variable", "Net": "variable",
+          "ClassProperty": "variable", "FormalArgument": "variable", "Field": "variable",
+          "Parameter": "parameter", "TypeParameter": "parameter", "EnumType": "enum"}
+_SCOPE_KINDS = {"CompilationUnit", "Package", "ClassType", "InstanceBody", "GenerateBlock",
+                "Subroutine", "StatementBlock", "PackedStructType", "UnpackedStructType",
+                "PackedUnionType", "UnpackedUnionType"}
+_NO_USAGE = {"EmptyMember", "Port", "MultiPort", "Genvar", "TransparentMember",
+             "TimeScale", "DeferredMember", "EnumValue"}
+
+
+def collect_source_catalog(projector, root):
+    from .slang_connectivity_projector import _kind_name
+    from pyslang.ast import Expression, Symbol, VisitAction
+
+    search = projector.options.semantic_search
+    files = {path: dict(symbols={}, inventory=set(), imports=set(), usage=set(),
+                       imported=False, used=False) for path in search.source_files}
+    aliases = dict(search.source_aliases)
+    aliases.update({path: path for path in files})
+    pending = deque()
+    seen_scopes, owners = set(), []
+    represented, definitions = set(), []
+    visits = scope_visits = 0
+    limited = False
+    stop_reason = None
+
+    class Limit(Exception):
+        pass
+
+    def charge():
+        nonlocal visits
+        check_cancelled()
+        if visits >= search.max_members:
+            raise Limit("source_catalog_visit_limit")
+        visits += 1
+
+    def binding(spelling):
+        # No filesystem resolve, basename association or unobserved '..'.
+        if spelling in aliases:
+            return aliases[spelling]
+        if not spelling:
+            return None
+        path = Path(spelling)
+        if not path.is_absolute():
+            spelling = str((projector.options.source_root or Path.cwd()) / path)
+        return aliases.get(spelling)
+
+    def location(value):
+        if value is None:
+            return None
+        manager = projector.source_manager
+        try:
+            original = manager.getFullyOriginalLoc(value)
+            # Slang's display filename can be cwd-relative or affected by a
+            # line directive. Its parsed buffer path supplies the real owner;
+            # this is frontend evidence, not a live filesystem resolution.
+            path = (binding(str(manager.getFullPath(original.buffer)))
+                    or binding(str(manager.getFileName(original))))
+            line = int(manager.getLineNumber(original))
+        except (ValueError, RuntimeError):
+            return None
+        if path is None or line < 1:
+            return None
+        return dict(file=path, line=line, column=max(0, int(manager.getColumnNumber(original))))
+
+    def source(symbol):
+        return location(symbol.location)
+
+    def identity(symbol, where=None):
+        where = source(symbol) if where is None else where
+        return hashlib.sha256(json.dumps([_kind_name(symbol), str(symbol.lexicalPath),
+                                         str(symbol.name), where], sort_keys=True).encode()).hexdigest()
+
+    def gap(path, label, domains=("inventory", "imports", "usage")):
+        targets = files.values() if path is None else (files[path],) if path in files else ()
+        for row in targets:
+            for domain in domains:
+                row[domain].add(label)
+
+    def is_uvm(symbol):
+        if symbol is None or not hasattr(symbol, "lexicalPath"):
+            return False
+        name = str(symbol.lexicalPath)
+        return name == "uvm_pkg" or name.startswith(("uvm_pkg::", "uvm_pkg."))
+
+    def observe_type(value, path):
+        # Actual canonical bindings include containers, composites and bases.
+        # Retain native owners so a Python object identity cannot be reused.
+        work, seen = [(value, 0)], set()
+        while work:
+            charge()
+            item, depth = work.pop()
+            if item is None:
+                continue
+            if depth > search.source_max_depth:
+                raise Limit("source_catalog_depth_limit")
+            if is_uvm(item) and path in files:
+                files[path]["used"] = True
+            marker = id(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            owners.append(item)
+            if item.isAlias:
+                work.append((item.targetType.type, depth + 1))
+                continue
+            item = item.canonicalType
+            if is_uvm(item) and path in files:
+                files[path]["used"] = True
+            kind = _kind_name(item)
+            if item.isError:
+                gap(path, "source_type_binding_unresolved", ("usage",))
+            elif item.isArray:
+                work.append((item.arrayElementType, depth + 1))
+                if item.isAssociativeArray:
+                    work.append((item.associativeIndexType, depth + 1))
+            elif kind == "ClassType":
+                work.append((item.baseClass, depth + 1))
+                for interface in item.implementedInterfaces:
+                    work.append((interface, depth + 1))
+            elif item.isStruct or item.isPackedUnion or item.isUnpackedUnion:
+                if not str(item.name):
+                    gap(path, 'source_anonymous_aggregate_inventory_uncovered', ('inventory',))
+                enqueue(item, identity(item), path, depth + 1)
+                for field in item:
+                    charge()
+                    if hasattr(field, "type"):
+                        work.append((field.type, depth + 1))
+            elif item.isVirtualInterface or item.isCovergroup or item.isTypeRefType:
+                gap(path, "source_type_usage_domain_uncovered", ("usage",))
+
+    def declaration(symbol, scope_key, owner_file):
+        kind, where = _kind_name(symbol), source(symbol)
+        public = (_KINDS.get(kind) if kind != "Definition" else
+                  str(symbol.definitionKind.name).lower())
+        if kind == "Subroutine":
+            public = str(symbol.subroutineKind.name).lower()
+        if public is None or not str(symbol.name) or symbol.syntax is None:
+            return
+        if where is None:
+            # Synthetic/compiler supplied symbols have no source declaration.
+            if symbol.syntax is not None:
+                gap(owner_file, "source_declaration_location_unbound", ("inventory",))
+            return
+        row = files.get(where["file"])
+        if row is None:
+            return
+        key = identity(symbol, where)
+        gaps = []
+        if kind == "GenericClassDef":
+            gaps.append("source_generic_class_members_not_enumerated")
+            gap(where["file"], gaps[0])
+        row["symbols"].setdefault(key, dict(key=key, name=str(symbol.name),
+            qualified_name=str(symbol.lexicalPath) or str(symbol.name), kind=public,
+            location=where, scope_key=scope_key, declaration_key=key,
+            type_key=key if bool(symbol.isType) else None,
+            parameterization=[], external=False, gaps=gaps, declaration_status="declaration"))
+
+    def observe(node, owner_file):
+        charge()
+        kind = _kind_name(node)
+        where = (source(node) if isinstance(node, Symbol) else
+                 location(node.sourceRange.start) if isinstance(node, Expression) else None)
+        path = where["file"] if where is not None else owner_file
+        if kind in {"ExplicitImport", "WildcardImport"}:
+            package = node.package
+            if package is None:
+                gap(path, "source_import_binding_unresolved", ("imports", "usage"))
+            elif str(package.name) == "uvm_pkg" and path in files:
+                files[path]["imported"] = files[path]["used"] = True
+        if hasattr(node, "type"):
+            observe_type(node.type, path)
+        if kind == "TypeAlias":
+            observe_type(node, path)
+        elif kind == "TypeParameter":
+            observe_type(node.targetType, path)
+        elif kind == "ClassType":
+            observe_type(node, path)
+        if isinstance(node, Expression):
+            if is_uvm(node.getSymbolReference()) and path in files:
+                files[path]["used"] = True
+            if kind == "Call" and not node.isSystemCall and is_uvm(node.subroutine) and path in files:
+                files[path]["used"] = True
+            if node.bad:
+                gap(path, "source_expression_binding_unresolved", ("usage",))
+
+    def enqueue(scope, scope_key, path, depth, key=None):
+        pending.append((scope, scope_key, path, depth, key))
+
+    def expression_walk(value, scope_key, path, depth):
+        if value is None:
+            return
+        work = [(value, scope_key, depth)]
+        while work:
+            value, current_scope, level = work.pop()
+            if level > search.source_max_depth:
+                raise Limit('source_catalog_depth_limit')
+            def callback(node):
+                observe(node, path)
+                if hasattr(node, 'blockSymbol') and hasattr(node, 'body'):
+                    block = node.blockSymbol
+                    block_key = identity(block) if block is not None else current_scope
+                    if block is not None:
+                        enqueue(block, block_key, path, level + 1)
+                    work.append((node.body, block_key, level + 1))
+                    return VisitAction.Skip
+                if isinstance(node, Symbol):
+                    declaration(node, current_scope, path)
+                    if node.isScope and _kind_name(node) in _SCOPE_KINDS:
+                        enqueue(node, identity(node), path, level + 1)
+                        return VisitAction.Skip
+                return VisitAction.Advance
+            value.visit(callback)
+
+    try:
+        # Buffers prove empty/header files were processed; membership alone
+        # cannot establish that the frontend parsed a file or its language.
+        processed = set()
+        for buffer in projector.source_manager.getAllBuffers():
+            charge()
+            path = binding(str(projector.source_manager.getFullPath(buffer)))
+            if path is not None:
+                processed.add(path)
+        for path in files:
+            if path not in processed:
+                gap(path, "source_file_not_processed_by_frontend")
+        definitions = list(root.compilation.getDefinitions())
+        for symbol in definitions:
+            charge()
+            declaration(symbol, None, None)
+        for index, unit in enumerate(root.compilationUnits):
+            enqueue(unit, None, None, 0, ("compilation_unit", index))
+        for package in root.compilation.getPackages():
+            charge()
+            declaration(package, None, None)
+            enqueue(package, identity(package), None, 0)
+        for instance in root.topInstances:
+            charge()
+            key = identity(instance.definition)
+            represented.add(key)
+            enqueue(instance.body, key, None, 0)
+        while pending:
+            charge()
+            scope, scope_key, owner_file, depth, explicit_key = pending.popleft()
+            if depth > search.source_max_depth:
+                raise Limit("source_catalog_depth_limit")
+            # CU ordinal, semantic source owner and actual elaborated path are
+            # distinct. Never collapse empty-path compilation units.
+            key = explicit_key or (_kind_name(scope), identity(scope), str(scope.hierarchicalPath))
+            if key in seen_scopes:
+                continue
+            if scope_visits >= search.source_max_scopes:
+                raise Limit("source_catalog_scope_limit")
+            scope_visits += 1
+            seen_scopes.add(key)
+            owners.append(scope)
+            for symbol in scope:
+                charge()
+                if _kind_name(scope) == 'Subroutine' and symbol in (scope.returnValVar, scope.thisVar):
+                    continue
+                kind, where = _kind_name(symbol), source(symbol)
+                path = where["file"] if where is not None else owner_file
+                declaration(symbol, scope_key, path)
+                observe(symbol, path)
+                if kind == "Instance":
+                    definition_key = identity(symbol.definition)
+                    represented.add(definition_key)
+                    enqueue(symbol.body, definition_key, path, depth + 1)
+                elif kind in {"InstanceArray", "GenerateBlockArray"}:
+                    for element in (symbol.elements if kind == "InstanceArray" else symbol.entries):
+                        charge()
+                        if kind == "InstanceArray":
+                            definition_key = identity(element.definition)
+                            represented.add(definition_key)
+                            enqueue(element.body, definition_key, path, depth + 1)
+                        elif not element.isUninstantiated:
+                            enqueue(element, scope_key, path, depth + 1)
+                elif kind == "GenerateBlock":
+                    if symbol.isUninstantiated:
+                        gap(path, "source_unelaborated_generate_declarations")
+                    else:
+                        enqueue(symbol, scope_key, path, depth + 1)
+                elif kind in _SCOPE_KINDS:
+                    enqueue(symbol, identity(symbol), path, depth + 1)
+                    if kind == "Subroutine":
+                        observe_type(symbol.returnType, path)
+                        expression_walk(symbol.body, identity(symbol), path, depth + 1)
+                elif kind == 'ProceduralBlock':
+                    for block in symbol.blocks:
+                        charge()
+                        enqueue(block, identity(block), path, depth + 1)
+                    expression_walk(symbol.body, scope_key, path, depth + 1)
+                elif kind == 'ContinuousAssign':
+                    expression_walk(symbol.assignment, scope_key, path, depth + 1)
+                elif kind not in {*_KINDS, "Definition", "ExplicitImport", "WildcardImport", *_NO_USAGE}:
+                    gap(path, "source_symbol_domain_uncovered")
+                if hasattr(symbol, "initializer"):
+                    expression_walk(symbol.initializer, scope_key, path, depth + 1)
+        for definition in definitions:
+            charge()
+            where = source(definition)
+            if where is not None and identity(definition) not in represented:
+                gap(where["file"], "source_definition_body_not_elaborated")
+    except Limit as exc:
+        limited, stop_reason = True, str(exc)
+        gap(None, stop_reason)
+    if projector.options.blocking_diagnostic_total:
+        gap(None, "source_catalog_frontend_diagnostics")
+    for exclusion in projector.options.exclusions:
+        if exclusion.code in {"protected_region", "opaque_protected_ip", "encrypted_source", "compile_manifest_incomplete"}:
+            gap(None, "source_catalog_opaque_or_incomplete_context")
+    return dict(version=CATALOG_VERSION, capabilities=list(search.source_capabilities),
+        source_files=list(search.source_files), declaration_domain=DECLARATION_DOMAIN,
+        usage_domain=USAGE_DOMAIN, member_visits=visits, scope_visits=scope_visits,
+        limited=limited, stop_reason=stop_reason,
+        limits=dict(members=search.max_members, scopes=search.source_max_scopes, depth=search.source_max_depth),
+        files={path: dict(symbols=list(row["symbols"].values()),
+            inventory_gaps=sorted(row["inventory"]), import_gaps=sorted(row["imports"]),
+            usage_gaps=sorted(row["usage"]),
+            gaps=sorted(row["inventory"] | row["imports"] | row["usage"]),
+            complete=not row["inventory"],
+            has_uvm_import=True if row["imported"] else None if row["imports"] else False,
+            uses_uvm=True if row["used"] else None if row["usage"] else False)
+            for path, row in files.items()})

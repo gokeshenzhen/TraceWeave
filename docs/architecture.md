@@ -536,7 +536,22 @@ Verification
   specializations carry separate declaration statuses. Typedef identity uses
   the actual scope/name relation; file-inventory rows do not project packed
   layout. Public file routing has control and limited real-KDB positive
-  validation; inventory gaps remain. Slang file projection is subsequent work.
+  validation; inventory gaps remain. The Slang route uses a separately versioned
+  `source_catalog` projection in the existing compact-IR envelope, with purpose,
+  file domain, captured aliases, capabilities and traversal limits in its build
+  identity. Connection and hierarchy artifacts cannot satisfy this capability.
+  `slang_source_catalog` copies real declarations and resolved type/import/call
+  references; `slang_source_codec` validates primitive ownership, coverage and
+  limits before `slang_source_provider` constructs immutable public facts.
+  Scope traversal is iterative; native expression visits and retained payloads
+  are bounded. Inventory, import and usage coverage remain separate. Source
+  buffers establish processed-file evidence, including empty files and includes;
+  missing/unprocessed files, generic members, opaque contexts and unelaborated
+  definition bodies cannot yield complete negatives. Declaration IDs bind the
+  captured context plus semantic scope/kind/location; symbol IDs remain local
+  to the exact artifact. Applicable file-detail/filter queries reuse one exact
+  artifact; another file domain requires honest new work. Preparation and pure
+  metadata queries still do not load a frontend or native provider.
   `hierarchy_source_symbols` defines copied source declarations and class-base
   bindings by semantic ID. Its internal class renderer keeps same-name classes
   separate, exposes unresolved/external bases and inheritance cycles, and never

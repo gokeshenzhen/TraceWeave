@@ -154,10 +154,17 @@ ownership without probing or loading a backend. Its semantic fields stay null.
 `get_tb_file_detail(design_handle=..., path=...)` accepts only captured paths or
 aliases; a nonmember returns basename suggestions without semantic work.
 Member details and semantic file filters (`has_module`, `contains_uvm`,
-`file_type`) use NPI declarations. Their mapping currently walks global
-namespaces within the request budget; `semantic_work_scope` exposes this work.
-Uninstantiated declarations, imports, variables and UVM usage are not proved
-complete. Read `symbol_inventory_complete`, `unknown_filter_files` and coverage
+`file_type`) prefer healthy NPI declarations. Source preference or ordinary NPI
+unavailability uses a bounded Slang declaration artifact through the shared
+isolated runtime. Its supported domain includes compile declarations and
+elaborated package, class, function and instance scopes, with actual source
+locations. An uninstantiated module declaration can be observed while its
+unelaborated body remains unknown. Generic members, unprocessed languages and
+unsupported semantic domains retain explicit gaps. Declaration inventory,
+imports and UVM usage have separate coverage; comments and strings are not UVM
+use. These inventories can walk global namespaces within the request budget;
+`semantic_work_scope` exposes this work. Read `symbol_inventory_complete`,
+`unknown_filter_files` and coverage
 gaps; an unknown filter is not a negative match. Metadata-only results carry
 the design/context identity and query costs, with no backend or KDB receipt.
 `get_tb_class_hierarchy(design_handle=..., root_class=...)` returns static class

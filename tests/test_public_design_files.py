@@ -480,7 +480,10 @@ async def test_metadata_after_native_success_does_not_validate_or_inherit_its_kd
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('reason', ['source', 'unavailable'])
-async def test_unavailable_semantics_keep_owned_metadata_and_unknown_symbol_inventory(tmp_path, controls, reason):
+async def test_unavailable_semantics_keep_owned_metadata_and_unknown_symbol_inventory(tmp_path, monkeypatch, controls, reason):
+    # An unavailable frontend retains metadata. Enabled Slang has independent
+    # positive acceptance in test_slang_source_services.py.
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
     handle, first, _, _, _, _, _ = await setup(tmp_path, controls,
         backend_preference='source' if reason == 'source' else 'auto')
     if reason == 'unavailable':

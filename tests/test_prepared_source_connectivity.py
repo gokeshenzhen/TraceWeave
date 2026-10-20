@@ -48,7 +48,13 @@ def isolation(monkeypatch, tmp_path):
 
 
 async def public(tmp, name, args):
+    # Raw evidence precedes decoding and assertions, including invalid JSON.
+    with (tmp / "public.raw.jsonl").open("a") as out:
+        out.write(json.dumps({"phase": "request", "tool": name, "arguments": args}) + "\n")
     blocks = await server.call_tool(name, args)
+    with (tmp / "public.raw.jsonl").open("a") as out:
+        out.write(json.dumps({"phase": "response", "tool": name,
+                              "blocks": [block.model_dump(mode="json") for block in blocks]}) + "\n")
     value = json.loads(blocks[0].text)
     trace = tmp / "public.jsonl"
     with trace.open("a") as out:

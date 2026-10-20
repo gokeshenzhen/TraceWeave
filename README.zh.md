@@ -299,9 +299,12 @@ prepared driver/load/path 在 NPI 不可用时共用按需 Source Graph 准备�
 `lookup_tb_files(design_handle=..., basename="des.v")` 直接过滤捕获的编译归属，
 不探测或加载后端，语义字段保持 null。`get_tb_file_detail(design_handle=..., path=...)`
 只接受捕获路径或别名；不在编译集时返回同 basename 建议，不启动语义查询。
-文件详情以及 `has_module`、`contains_uvm`、`file_type` 过滤使用 NPI 声明。
-当前文件映射会在预算内遍历全局 namespace，`semantic_work_scope` 明示这项工作；
-未实例化声明、import、变量和 UVM 使用的覆盖仍不完整。检查
+文件详情以及 `has_module`、`contains_uvm`、`file_type` 过滤优先使用健康 NPI。
+显式 source 或普通 NPI 不可用时，通过共享隔离 runtime 按需取得有界 Slang 声明产物，
+读取真实的编译声明、package/class/function 和已展开实例作用域及源码位置。
+未展开的 module 正声明与其未知 body 分开；泛型成员、匿名复合类型库存和未处理的文件
+保留明确缺口。声明库存、import 与 UVM 使用分别报告覆盖，注释/字符串不作为使用证据。
+文件映射可能在预算内遍历全局 namespace，`semantic_work_scope` 明示这项工作。检查
 `symbol_inventory_complete`、`unknown_filter_files` 与 coverage gaps，未知不能作为负向匹配。
 纯元数据结果携带设计/上下文身份和查询成本，不附加后端或 KDB receipt。
 `get_tb_class_hierarchy(design_handle=..., root_class=...)` 返回静态类继承，使用限定

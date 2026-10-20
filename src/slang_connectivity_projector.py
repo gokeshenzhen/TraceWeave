@@ -332,10 +332,19 @@ class SlangConnectivityProjector:
         self._skipped_assignments = 0
         self._assignment_definition_ids: set[str] = set()
         self._hierarchy_payload = None
+        self._source_catalog_payload = None
 
     def project(self, root: Any) -> SlangProjection:
         self._seed_declared_gaps()
-        self._collect_hierarchy(root)
+        if (self.options.semantic_search is not None
+                and self.options.semantic_search.purpose == "source_catalog"):
+            from .slang_source_catalog import collect_source_catalog
+            self._source_catalog_payload = collect_source_catalog(self, root)
+            self._semantic_member_visits = self._source_catalog_payload["member_visits"]
+            self._semantic_scope_limited = self._source_catalog_payload["limited"]
+            self._semantic_assignment_paths = set()
+        else:
+            self._collect_hierarchy(root)
         definitions = []
         aliases: dict[str, list[str]] = {}
         for record in self._records:
@@ -409,6 +418,8 @@ class SlangConnectivityProjector:
                     **dict(self.options.metadata),
                     **({"hierarchy_scopes_v1": json.dumps(self._hierarchy_payload, sort_keys=True)}
                        if self._hierarchy_payload is not None else {}),
+                    **({"source_catalog_v1": json.dumps(self._source_catalog_payload, sort_keys=True)}
+                       if self._source_catalog_payload is not None else {}),
                     **({"semantic_member_visits": str(self._semantic_member_visits),
                         "semantic_instance_count": str(len(self._records)),
                         "semantic_assignment_paths": json.dumps(sorted(self._semantic_assignment_paths)),
