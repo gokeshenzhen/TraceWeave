@@ -129,7 +129,7 @@ async def test_mixed_route_control_and_single_side_backend_restart(tmp_path, mon
     assert calls[0] == 'top.y' and 'top.dst.a' in calls
     if fallback:
         assert 'controlled-native.sv' not in str(result)
-        assert 'npi_dynamic_fallback' in result['operation_metrics']['restart_reasons']
+        assert 'npi_dynamic_fallback' in result['coverage']['restart_reasons']
     else:
         assert result['contexts']['a']['backend_status'].get('source_graph') is None
 
