@@ -224,7 +224,7 @@ def test_worker_stops_with_positive_bounded_facts_and_fixed_frontier(tmp_path, l
     decode_hierarchy(json.dumps(value), current, 'sg_top')
 
 
-def test_hierarchy_identity_keeps_modes_ranges_aliases_limits_and_capabilities_separate():
+def test_hierarchy_identity_keeps_modes_ranges_aliases_limits_and_capabilities_separate(tmp_path, monkeypatch):
     from tests.test_source_graph_runtime import _request
     from src.source_graph_contract import compare_source_graph_artifact_scopes
     scope = replace(_request().artifact_identity.scope, semantic_search=search())
@@ -238,6 +238,127 @@ def test_hierarchy_identity_keeps_modes_ranges_aliases_limits_and_capabilities_s
         SemanticScopeSearch(roots=('sg_top.' + '.'.join('a' for _ in range(64)),), depth=2, purpose='hierarchy')
     with pytest.raises(ValueError):
         SemanticScopeSearch(roots=('sg_top',), depth=3)  # connectivity stays tight
+
+    # Bind runtime connectivity exclusions do not describe this strict native
+    # scope-inventory capability. Exercise real planning from the same copied
+    # global compile evidence, rather than filtering a provider's output gaps.
+    from src import prepared_source_connectivity as planner
+    from src.source_graph_adapter import SOURCE_GRAPH_ADAPTER_VERSION, _empty_digest_metrics
+    from src.source_graph_contract import SourceGraphArtifactScopeReceipt
+    original = replace(_request().identity.compile_inputs,
+        ordered_inputs=('tests/fixtures/source_graph_frontend/hand_connectivity.sv', '/rtl/bind_aux.sv'),
+        ordered_tops=('bind_top', 'sg_top'))
+    context = NS(selected_top='sg_top', ordered_compile_logs=('/rtl/compile.log',),
+        compile_result=lambda: {}, snapshot=object(), identity_sha256='f' * 64)
+    config = NS(frontend_version='1.0', runtime_plusarg_allowlist=frozenset())
+    compile_snapshot = 'e' * 64
+
+    def invoke(label, current_search, manifest, global_exclusions, *, base=None):
+        directory = tmp_path / label
+        directory.mkdir()
+        saved = []
+        def action():
+            plan = planner.build_prepared_source_plan(context=context, operation='driver',
+                args={'signal_path': 'sg_top.__scope_anchor'}, config=config,
+                search=current_search, base=base)
+            saved.append(plan)
+            return {'request': plan.request.to_dict() if plan.request is not None else None,
+                    'receipt': plan.receipt.to_dict()}
+        observe(directory, {'global_manifest': manifest.to_dict(),
+                            'global_exclusions': global_exclusions,
+                            'purpose': current_search.purpose if current_search is not None else 'connectivity',
+                            'based': base is not None}, action)
+        return saved[0]
+
+    for label, manifest, global_exclusions in (
+            ('bind_only', original, ('bind_semantics',)),
+            ('mixed_barriers', replace(original, options_complete=False),
+             ('bind_semantics', 'opaque_vhdl_boundary', 'protected_region'))):
+        def copied_manifest(*args, **kwargs):
+            return (manifest, (), global_exclusions, 'miss_reused_compile_session', compile_snapshot,
+                    _empty_digest_metrics())
+        monkeypatch.setattr(planner, '_compile_manifest', copied_manifest)
+        expected_global = tuple(sorted(set(global_exclusions) |
+            ({'compile_manifest_incomplete'} if not manifest.complete else set())))
+        plans = {}
+        for purpose, current_search in (
+                ('hierarchy', search()),
+                ('source_catalog', SemanticScopeSearch(purpose='source_catalog',
+                    source_files=('/rtl/a.sv',), source_capabilities=('file_declarations',))),
+                ('connectivity', None)):
+            plan = invoke(label + '_' + purpose, current_search, manifest, global_exclusions)
+            plans[purpose] = plan
+            expected = tuple(code for code in expected_global if code != 'bind_semantics') if purpose == 'hierarchy' else expected_global
+            assert plan.request.identity.compile_inputs is manifest
+            assert plan.request.identity.compile_inputs.fingerprint == original.fingerprint
+            assert plan.request.identity.compile_inputs.ordered_inputs == original.ordered_inputs
+            assert plan.request.identity.compile_inputs.ordered_options == original.ordered_options
+            assert plan.request.identity.compile_inputs.ordered_tops == original.ordered_tops
+            assert plan.request.artifact_identity.compile_snapshot_sha256 == compile_snapshot
+            assert plan.request.artifact_identity.adapter_version == SOURCE_GRAPH_ADAPTER_VERSION
+            assert plan.request.scope.coverage_boundary.objective_exclusions == expected
+            assert plan.request.artifact_identity.scope.coverage_boundary.objective_exclusions == expected
+            assert plan.receipt.objective_exclusions == expected
+            if expected:
+                with pytest.raises(ValueError):
+                    SourceGraphArtifactScopeReceipt(plan.request.artifact_identity.scope, CoverageStatus.COMPLETE)
+            else:
+                receipt = SourceGraphArtifactScopeReceipt(plan.request.artifact_identity.scope, CoverageStatus.COMPLETE)
+                assert receipt.reuse_for(plan.request.artifact_identity.scope).complete_for_request
+                for native_gap in ('frontend_diagnostic_unknownmodule', 'source_hierarchy_member_limit',
+                                   'source_hierarchy_facts_incomplete'):
+                    partial = SourceGraphArtifactScopeReceipt(plan.request.artifact_identity.scope,
+                        CoverageStatus.INCONCLUSIVE, (native_gap,))
+                    assert not partial.reuse_for(plan.request.artifact_identity.scope).complete_for_request
+                    with pytest.raises(ValueError):
+                        SourceGraphArtifactScopeReceipt(plan.request.artifact_identity.scope,
+                            CoverageStatus.COMPLETE, (native_gap,))
+        # A based plan must classify the inherited compile exclusions too,
+        # while retaining its exact original source object and global receipt.
+        def no_manifest_rebuild(*args, **kwargs):
+            raise AssertionError('based capability planning rebuilt the global manifest')
+        monkeypatch.setattr(planner, '_compile_manifest', no_manifest_rebuild)
+        base = plans['connectivity']
+        based = invoke(label + '_based_hierarchy', search(), manifest, global_exclusions, base=base)
+        expected_hierarchy = tuple(code for code in expected_global if code != 'bind_semantics')
+        assert based.request.identity is base.request.identity
+        assert based.request.scope.coverage_boundary.objective_exclusions == expected_hierarchy
+        assert based.request.artifact_identity.scope.coverage_boundary.objective_exclusions == expected_hierarchy
+        assert based.receipt.objective_exclusions == expected_hierarchy
+        assert base.receipt.objective_exclusions == expected_global
+        assert base.request.scope.coverage_boundary.objective_exclusions == expected_global
+        catalog_based = invoke(label + '_catalog_based_hierarchy', search(), manifest,
+                               global_exclusions, base=plans['source_catalog'])
+        assert catalog_based.request.identity is plans['source_catalog'].request.identity
+        assert catalog_based.receipt.objective_exclusions == expected_hierarchy
+        again = invoke(label + '_hierarchy_based_hierarchy', search(), manifest,
+                       global_exclusions, base=plans['hierarchy'])
+        assert again.request.identity is plans['hierarchy'].request.identity
+        assert again.receipt.objective_exclusions == expected_hierarchy
+        legacy_request = replace(base.request,
+            scope=replace(base.request.scope, semantic_search=None),
+            artifact=replace(base.request.artifact_identity,
+                scope=replace(base.request.artifact_identity.scope, semantic_search=None)))
+        legacy = replace(base, request=legacy_request)
+        legacy_hierarchy = invoke(label + '_legacy_based_hierarchy', search(), manifest,
+                                  global_exclusions, base=legacy)
+        legacy_connectivity = invoke(label + '_legacy_based_connectivity', None, manifest,
+                                     global_exclusions, base=legacy)
+        assert legacy_hierarchy.request.identity is legacy_connectivity.request.identity is base.request.identity
+        assert legacy_hierarchy.receipt.objective_exclusions == expected_hierarchy
+        assert legacy_connectivity.receipt.objective_exclusions == expected_global
+        # The classified hierarchy receipt cannot be promoted to any other
+        # capability. A fresh call above retains the global bind exclusion.
+        for purpose, current_search in (
+                ('connectivity', None), ('source_catalog', plans['source_catalog'].request.scope.semantic_search),
+                ('trace', SemanticScopeSearch(purpose='trace')),
+                ('packed_layout', SemanticScopeSearch(purpose='packed_layout'))):
+            blocked = invoke(label + '_reverse_' + purpose, current_search, manifest,
+                             global_exclusions, base=plans['hierarchy'])
+            assert blocked.request is None
+            assert blocked.receipt.status.value == 'blocked'
+            assert blocked.receipt.blocker.code == 'prepared_base_capability_mismatch'
+            assert blocked.receipt.blocker.stage == 'compile_manifest'
 
 
 @pytest.mark.parametrize('calls', [0, 90000, 99998])

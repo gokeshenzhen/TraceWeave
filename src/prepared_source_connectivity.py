@@ -116,6 +116,22 @@ def build_prepared_source_plan(*, context, operation, args, config,
         snapshot = base.request.artifact_identity.compile_snapshot_sha256
         digests = {name: 0 for name in ("content_digest_reuse_count", "content_digest_reuse_bytes",
                    "content_digest_read_count", "content_digest_read_bytes", "content_snapshot_conflict_count")}
+        base_search = base.request.scope.semantic_search
+        if (base_search is not None and base_search.purpose == "hierarchy"
+                and search.purpose != "hierarchy"):
+            # A hierarchy receipt has capability-specific effective exclusions,
+            # not the original global connectivity exclusions. Other purposes
+            # need fresh compile evidence rather than inheriting that receipt.
+            return _blocked_plan(code="prepared_base_capability_mismatch", stage="compile_manifest",
+                manifest=manifest, gaps=gaps, exclusions=exclusions,
+                fingerprint_cache_disposition=disposition, digest_metrics=digests)
+    if search.purpose == "hierarchy":
+        # The topology-only capability observes bind attachments through real
+        # native owner membership. The compile manifest retains this exclusion
+        # for connectivity's unresolved runtime signal semantics; it does not
+        # exclude the supported elaborated-scope inventory. All other compile
+        # barriers, native diagnostics and hierarchy frontiers remain active.
+        exclusions = tuple(code for code in exclusions if code != "bind_semantics")
     paths = (top, *sorted(prefixes))
     if operation is QueryOperation.PATH:
         target = ConnectivityPathTarget(operation, *signals, top, top,
