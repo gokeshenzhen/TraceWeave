@@ -28,6 +28,7 @@ from .source_graph_adapter import AdapterStatus
 from .source_graph_runtime import PrepareStatus
 from .source_graph_x_trace import (
     SourceGraphTraceArtifactGuard,
+    SourceGraphTraceQueryLedger,
     SourceGraphTraceScopeExpansion,
     SourceGraphTraceFallbackRequired,
 )
@@ -61,6 +62,7 @@ class DynamicRoute:
         self.prepared = getattr(bound, "prepared", None)
         self.npi_backend = None
         self.trace_plan = None
+        self.query_ledger = None
         if self.prepared is not None:
             from .prepared_source_trace import PreparedTracePlan
             self.trace_plan = PreparedTracePlan(self.prepared.context, self.config,
@@ -205,6 +207,7 @@ class DynamicRoute:
                             final_artifact_scope_match=True,
                             final_artifact_fingerprint_sha256=outcome.entry.build_key.digest)
                         self.artifact = outcome.entry.build_key.digest
+                        self.query_ledger = SourceGraphTraceQueryLedger(self.artifact)
                         return
                     reason = self.s._SOURCE_GRAPH_PREPARE_REASONS.get(
                         outcome.status, "source_graph_prepare_failed"
@@ -236,6 +239,8 @@ class DynamicRoute:
         self.backend.bind_compile_context(self.bound.compile_result)
         self.artifact = self.bound.snapshot
         self.fallback_reason = reason
+        if self.source_receipt is not None:
+            self.source_receipt['fallback_used'] = True
 
     def _expand(self, expansion):
         paths = expansion.signal_paths
@@ -360,6 +365,10 @@ class DynamicRoute:
                     raise TraceRestart(self.label, "npi_dynamic_fallback")
             else:
                 query_receipt = result.pop("_source_graph_query_receipt", {})
+                if self.query_ledger is not None and query_receipt:
+                    self.query_ledger.record(signal_path=signal, max_depth=16, recursive=False,
+                                             query_receipt=query_receipt)
+                    self.source_receipt.update(self.query_ledger.to_dict())
                 if self.trace_plan is not None:
                     self.trace_plan.budget.account_query(query_receipt)
                     if self.trace_plan.budget.exhausted or query_receipt.get('query_truncated'):

@@ -2460,6 +2460,36 @@ again before return. Wave access uses existing locks; backend work stays outside
 them. Metrics contain numeric aggregates only. Static/unsupported semantics and
 incomplete positive Source Graph coverage remain explicit frontiers.
 
+## Prepared traces and packed layouts
+
+Prepared X snapshot/history and both `trace_divergence` sides use the captured
+compile context directly through `prepared_source_connectivity` and
+`prepared_source_trace`. They do not materialize a lexical hierarchy. Semantic
+candidate unions are bounded to 64 targets/instances and 4,096 member visits;
+frontier searches use actual semantic instance roots and at most two descendant
+levels. Each artifact change discards the graph and restarts at its original
+root. Divergence sides retain independent identities, artifacts and query
+ledgers; an unchanged side can retain its valid artifact across the other side's
+restart. Source preparation and queries stay outside waveform locks.
+
+Snapshot uses the original prepared-request start and configured Source Graph
+timeout across preparation, expansion, waveform work and final validation.
+History retains its own graph budget: its deadline yields a partial graph and
+frontier, while explicit backend timeouts, cancellation and identity changes
+cannot publish an old graph. A declared top input reached through positive
+bindings is an incomplete investigation boundary, not a complete negative or
+an exclusive root cause. Dynamic receipts count the actual driver query statuses;
+port-alias positive evidence is also retained in the structure, even when the
+underlying bounded driver query is inconclusive.
+
+Prepared `resolve_packed_fields` requests a separate `packed_layout` semantic
+purpose, which participates in artifact identity and exact capability/scope
+reuse. Only a real projected declaration and typed member layout can produce
+field selections. Hierarchy and connectivity artifacts cannot stand in for
+layout capability. Dump declaration ranges are checked under the waveform lock;
+missing type/target evidence or a range mismatch retains `mapping_required`.
+Legacy explicit hierarchy routes and trusted NPI priority remain available.
+
 ## Bounded X History
 
 `trace_x_source` preserves the same-time `snapshot` mode and adds opt-in `history`.

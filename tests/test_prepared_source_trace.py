@@ -55,6 +55,8 @@ def assert_source(result, mode):
         nodes = result['history']['nodes']
         assert len(nodes) >= 3 and result['history']['edges'], result
         assert any(n['signal'].split('[')[0] == 'top.d' for n in nodes), result
+        assert sg['query_count'] == len(sg['query_statuses']) == len(sg['query_fingerprints_sha256'])
+        assert sg['positive_query_count'] >= 3 and sg['complete_negative_query_count'] == 0, sg
         structures = [n['structure'] for n in nodes if n.get('structure')]
         assert {s['backend'] for s in structures} == {'source_graph'}, result
         assert len({s['artifact_sha256'] for s in structures}) == 1, result
