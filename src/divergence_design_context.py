@@ -22,6 +22,7 @@ from .schemas import DesignQueryMetrics
 class DivergenceDesigns:
     def __init__(self, services, request_model, sides, budget):
         self.base = services
+        self.source_execution = services.get_source_graph_execution_config()
         self.sides = sides
         self.budget = budget
         self.store = getattr(services, "_design_context_store", None)
@@ -92,7 +93,7 @@ class DivergenceDesigns:
                 self.prepared.add(handle)
             finally:
                 self.prepare_ms += (time.monotonic() - phase) * 1000
-        return PreparedTraceContext(entry, handle)
+        return PreparedTraceContext(entry, handle, self.source_execution)
 
     def require_owner(self):
         check_cancelled()

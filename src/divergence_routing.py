@@ -45,7 +45,7 @@ class DynamicRoute:
         self.backend = None
         self.stage = None
         self.guard = None
-        self.config = get_source_graph_execution_config()
+        self.config = getattr(bound, "source_execution", None) or get_source_graph_execution_config()
         self.targets = [side["signal_path"]]
         self.attempts = []
         self.receipt = {}
@@ -60,6 +60,11 @@ class DynamicRoute:
         self.root_binding = None
         self.prepared = getattr(bound, "prepared", None)
         self.npi_backend = None
+        self.trace_plan = None
+        if self.prepared is not None:
+            from .prepared_source_trace import PreparedTracePlan
+            self.trace_plan = PreparedTracePlan(self.prepared.context, self.config,
+                                               budget.deadline, budget.limits['max_depth'])
 
     async def initialize(self):
         if str(self.side['signal_path']).startswith('TOP.'):
@@ -123,23 +128,28 @@ class DynamicRoute:
             self.fallback_reason = reason
             self.stage = "source_graph"
 
+    async def _validate_source(self):
+        if self.prepared is None:
+            return
+        self.budget.check()
+        if self.s.get_source_graph_execution_config() != self.config:
+            raise ExecutionBindingChanged()
+        await self.budget.run(lambda: self.s._validate_design_source(
+            self.prepared.context, timeout_sec=min(30, self.budget.remaining)))
+        await self.budget.run(lambda: self.s._validate_design_binding(
+            self.prepared.binding, timeout_sec=min(5, self.budget.remaining)))
+
     async def _prepare_source(self):
         reason = None
+        await self._validate_source()
         if not self.config.enabled or not self.config.valid:
-            reason = (
-                "source_graph_disabled"
-                if not self.config.enabled
-                else "source_graph_config_invalid"
-            )
-        elif self.prepared is not None and self.bound.hierarchy is None:
-            # The semantic trace planner will accept independent contexts in
-            # its own migration. Never borrow a recent legacy tree meanwhile.
-            reason = "source_graph_hierarchy_context_unavailable"
+            reason = 'source_graph_disabled' if not self.config.enabled else 'source_graph_config_invalid'
         else:
             try:
                 plan = await self.budget.run(
                     lambda: self.s._run_in_cancellable_thread(
-                        lambda: self.s.build_source_graph_trace_plan(
+                        lambda: self.trace_plan.build(self.targets) if self.trace_plan is not None
+                        else self.s.build_source_graph_trace_plan(
                             compile_log=self.bound.context["compile_log"],
                             compile_result=self.bound.compile_result,
                             hierarchy_result=self.bound.hierarchy,
@@ -152,6 +162,7 @@ class DynamicRoute:
                         )
                     )
                 )
+                await self._validate_source()
                 if plan.status is AdapterStatus.BLOCKED:
                     reason = "source_graph_" + plan.receipt.blocker.code
                 else:
@@ -160,31 +171,49 @@ class DynamicRoute:
                         lambda: runtime.prepare(
                             plan.request,
                             timeout_seconds=min(
-                                self.config.timeout_sec, self.budget.remaining
+                                self.config.timeout_sec, self.budget.limits["timeout_sec"]
                             ),
                         )
                     )
+                    if self.prepared is not None and outcome.status is PrepareStatus.TIMED_OUT:
+                        raise TimeoutError("source trace preparation deadline")
+                    await self._validate_source()
+                    if self.trace_plan is not None:
+                        self.trace_plan.observe(outcome)
                     if hasattr(self.budget, "record_preparation"):
                         self.budget.record_preparation(outcome.metrics)
                     self.source_receipt = self.s._source_graph_receipt_from_prepare(
                         plan, outcome, adapter_wall_ms=0
                     )
+                    if self.trace_plan is not None:
+                        self.trace_plan.receipt(self.source_receipt)
                     if outcome.status is PrepareStatus.CANCELLED:
                         raise asyncio.CancelledError
                     if outcome.status is PrepareStatus.READY:
                         self.backend = self.s._source_graph_backend_for_plan(
                             outcome.entry, plan
                         )
-                        self.guard = SourceGraphTraceArtifactGuard(
-                            artifact_scope=outcome.entry.artifact_scope_receipt.scope,
-                            hierarchy_result=self.bound.hierarchy,
-                        )
+                        if self.trace_plan is not None:
+                            from .prepared_source_trace import PreparedTraceArtifactGuard
+                            self.backend.query_budget = self.trace_plan.budget
+                            self.guard = PreparedTraceArtifactGuard(outcome.entry, plan)
+                        else:
+                            self.guard = SourceGraphTraceArtifactGuard(
+                                artifact_scope=outcome.entry.artifact_scope_receipt.scope,
+                                hierarchy_result=self.bound.hierarchy)
+                        self.source_receipt.update(single_artifact_provenance=True,
+                            final_artifact_scope_match=True,
+                            final_artifact_fingerprint_sha256=outcome.entry.build_key.digest)
                         self.artifact = outcome.entry.build_key.digest
                         return
                     reason = self.s._SOURCE_GRAPH_PREPARE_REASONS.get(
                         outcome.status, "source_graph_prepare_failed"
                     )
-            except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
+            except CaptureAborted as exc:
+                if exc.code == 'source_scope_limit':
+                    raise BudgetExceeded('source_scope_limit') from exc
+                raise
+            except (OperationCancelled, BudgetExceeded, KdbBindingChanged,
                     ExecutionBindingChanged, ContextUnavailable, TimeoutError):
                 raise
             except Exception:
@@ -208,9 +237,11 @@ class DynamicRoute:
         self.artifact = self.bound.snapshot
         self.fallback_reason = reason
 
-    def _expand(self, paths):
+    def _expand(self, expansion):
+        paths = expansion.signal_paths
+        changed = self.trace_plan.expand(expansion) if self.trace_plan is not None else False
         new = [p for p in paths if p not in self.targets]
-        if not new:
+        if not new and not changed:
             self._static("source_graph_scope_expansion_stalled")
         elif len(self.targets) + len(new) > self.config.frontier_max_instances:
             raise BudgetExceeded("source_graph_frontier_instances")
@@ -229,8 +260,10 @@ class DynamicRoute:
         wave_signal = signal
         if self.root_binding:
             signal = self.root_binding.to_design(signal)
-        if self.stage == "source_graph" and self.guard is None:
-            await self._prepare_source()
+        if self.stage == "source_graph":
+            await self._validate_source()
+            if self.guard is None:
+                await self._prepare_source()
         self.budget.queries += 1
         if self.stage == "static":
             structural = await self.budget.run(
@@ -272,7 +305,7 @@ class DynamicRoute:
                 if self.prepared is not None:
                     self.prepared.binding.require_policy_current()
             except SourceGraphTraceScopeExpansion as exc:
-                self._expand(exc.signal_paths)
+                self._expand(exc)
             except (OperationCancelled, BudgetExceeded, CaptureAborted, KdbBindingChanged,
                     ExecutionBindingChanged, ContextUnavailable, TimeoutError):
                 raise
@@ -327,6 +360,10 @@ class DynamicRoute:
                     raise TraceRestart(self.label, "npi_dynamic_fallback")
             else:
                 query_receipt = result.pop("_source_graph_query_receipt", {})
+                if self.trace_plan is not None:
+                    self.trace_plan.budget.account_query(query_receipt)
+                    if self.trace_plan.budget.exhausted or query_receipt.get('query_truncated'):
+                        raise BudgetExceeded('source_query_budget')
                 frontiers = query_receipt.get("expansion_frontiers", ())
                 try:
                     if (
@@ -342,7 +379,7 @@ class DynamicRoute:
                             )
                         )
                 except SourceGraphTraceScopeExpansion as exc:
-                    self._expand(exc.signal_paths)
+                    self._expand(exc)
                 except SourceGraphTraceFallbackRequired:
                     pass
                 # Keep supported positive statements even with honest objective exclusions.
@@ -410,6 +447,8 @@ class DynamicRoute:
         return result
 
     def current(self, *, validate_binding=True):
+        if self.prepared is not None and self.s.get_source_graph_execution_config() != self.config:
+            raise ExecutionBindingChanged()
         if self.prepared is not None and validate_binding:
             self.prepared.binding.require_current()
         if self.root_binding:

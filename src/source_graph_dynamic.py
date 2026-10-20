@@ -20,6 +20,10 @@ def query_step(backend, signal):
         signal,
         max_depth=16,
         unprojected_instance_candidates=backend._unprojected_instance_candidates,
+        **({'state_limit': backend.query_budget.states, 'edge_limit': backend.query_budget.edges,
+            'assignment_limit': backend.query_budget.assignments, 'match_limit': backend.query_budget.matches,
+            'frontier_limit': backend.query_budget.frontiers, 'evidence_limit': backend.query_budget.evidence}
+           if getattr(backend, "query_budget", None) is not None else {}),
     )
     claims = _query_claim_semantics(query)
     target_definition = engine.definition_index[engine.instance_index[query.signal.instance_path].definition_id]
@@ -63,9 +67,27 @@ def query_step(backend, signal):
             if endpoint.signal != query.signal and set(
                 endpoint.query_target.bits
             ) == set(query.signal.bits):
+                budget = getattr(backend, 'query_budget', None)
+                limits = {}
+                if budget is not None:
+                    edges = min(budget.edges-query.inspected_edge_count,
+                                budget.states-query.visited_state_count-1, 4096)
+                    evidence = min(budget.evidence-len(query.matches), 256)
+                    if edges <= 0 or evidence <= 0:
+                        result['_source_graph_query_receipt']['query_truncated'] = True
+                        result.update(boundary='unsupported', complete=False,
+                                      gaps=['source_query_budget_exceeded'])
+                        return result
+                    limits = {'traversal_limit': edges, 'output_limit': evidence}
                 path = engine.query_path(
-                    endpoint.signal.path(include_bits=True), signal
-                )
+                    endpoint.signal.path(include_bits=True), signal, **limits)
+                if budget is not None:
+                    receipt = result['_source_graph_query_receipt']
+                    receipt['inspected_edge_count'] += path.traversed_edge_count
+                    receipt['visited_state_count'] += path.visited_state_count
+                    receipt['retained_evidence_count'] += len(path.path)
+                    receipt['query_truncated'] = receipt['query_truncated'] or path.traversal_truncated or path.output_truncated
+
                 allowed = {
                     EdgeKind.PORT_BIND_INPUT,
                     EdgeKind.PORT_BIND_OUTPUT,

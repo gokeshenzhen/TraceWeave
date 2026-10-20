@@ -124,6 +124,9 @@ async def trace_x_source(
         node = _build_chain_node(current_signal, depth, value_result, driver)
         chain.append(node)
 
+        if driver.get("unsupported_reason") == "source_graph_input_boundary":
+            node["trace_stop_reason"] = "source_graph_input_boundary"
+            continue
         driver_status = driver.get("driver_status")
         if driver_status != "resolved":
             traversal = driver.get("traversal")

@@ -69,7 +69,9 @@ class SourceGraphTraceScopeExpansion(RuntimeError):
 
     code = "source_graph_trace_scope_expansion_required"
 
-    def __init__(self, signal_paths: Sequence[str]) -> None:
+    def __init__(self, signal_paths: Sequence[str], *, semantic_roots=(), semantic_depth=0) -> None:
+        self.semantic_roots = tuple(semantic_roots)
+        self.semantic_depth = semantic_depth
         self.signal_paths = tuple(dict.fromkeys(signal_paths))
         if not self.signal_paths:
             raise ValueError("scope expansion requires at least one signal path")
@@ -290,9 +292,10 @@ class SourceGraphTraceConnectivityBackend:
         artifact_scope: SourceGraphArtifactScope,
         hierarchy_result: Mapping[str, Any],
         artifact_fingerprint_sha256: str,
+        guard=None,
     ) -> None:
         self._backend = backend
-        self._guard = SourceGraphTraceArtifactGuard(
+        self._guard = guard or SourceGraphTraceArtifactGuard(
             artifact_scope=artifact_scope,
             hierarchy_result=hierarchy_result,
         )
@@ -314,6 +317,10 @@ class SourceGraphTraceConnectivityBackend:
         simulator: str = "auto",
     ) -> dict[str, Any]:
         check_cancelled()
+        budget = getattr(self._backend, "query_budget", None)
+        if budget is not None and budget.exhausted:
+            from .compile_input_capture import CaptureAborted
+            raise CaptureAborted("source_scope_limit")
         self._guard.require((signal_path,))
         started = time.perf_counter()
         try:
@@ -361,6 +368,9 @@ class SourceGraphTraceConnectivityBackend:
                 "source_graph_trace_mixed_provenance"
             )
 
+        budget = getattr(self._backend, "query_budget", None)
+        if budget is not None:
+            budget.account_query(query_receipt)
         self.ledger.record(
             signal_path=signal_path,
             max_depth=max_depth,
@@ -370,7 +380,7 @@ class SourceGraphTraceConnectivityBackend:
         status = query_receipt.get("status")
         coverage = query_receipt.get("coverage_status")
         if status == "found":
-            if result.get("driver_status") != "resolved":
+            if result.get("driver_status") not in {"resolved", "partial"}:
                 raise SourceGraphTraceFallbackRequired(
                     "source_graph_trace_positive_mapping_invalid"
                 )
@@ -385,6 +395,15 @@ class SourceGraphTraceConnectivityBackend:
             )
         else:
             frontiers = query_receipt.get("expansion_frontiers", ())
+            if (not query_receipt.get("query_truncated")
+                    and getattr(self._guard, "input_frontier", lambda _: False)(frontiers)
+                    and self.ledger.positive_query_count):
+                # Keep prior positive edges, but stop at an explicitly partial
+                # input frontier. No complete negative or root-cause verdict.
+                clean = dict(result)
+                clean.pop("_source_graph_query_receipt", None)
+                clean.update(driver_status="partial", unsupported_reason="source_graph_input_boundary")
+                return clean
             if (
                 isinstance(frontiers, Sequence)
                 and not isinstance(frontiers, (str, bytes))

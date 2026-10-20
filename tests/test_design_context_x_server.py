@@ -68,9 +68,9 @@ def isolate(monkeypatch, tmp_path):
                          (divergence_context, "resolve_context"), (server, "build_source_graph_trace_plan"),
                          (server, "get_source_graph_runtime")):
         monkeypatch.setattr(module, name, _forbidden)
-    # Enabled source policy exposes the missing independent trace planner rather
-    # than disguising that boundary as a disabled frontend or a successful IR.
-    source_cfg = replace(server.get_source_graph_execution_config(), enabled=True, error_code=None)
+    # This routing-control suite deliberately disables the optional frontend.
+    # Real prepared source traces are exercised in test_prepared_source_trace.
+    source_cfg = replace(server.get_source_graph_execution_config(), enabled=False, error_code=None)
     monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: source_cfg)
     monkeypatch.setattr(divergence_routing, "get_source_graph_execution_config", lambda: source_cfg)
     yield
@@ -355,7 +355,7 @@ async def test_no_native_query_never_reports_a_loaded_candidate(tmp_path, contro
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("policy", ["source", "route"])
-async def test_source_policy_uses_bound_static_and_honest_source_graph_blocker(tmp_path, controls, monkeypatch, mode, policy):
+async def test_source_policy_uses_bound_static_and_honest_disabled_source(tmp_path, controls, monkeypatch, mode, policy):
     handle, _, _, _, wave = await _prepare(tmp_path, preference="source" if policy == "source" else "auto")
     if policy == "route":
         monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
@@ -363,7 +363,7 @@ async def test_source_policy_uses_bound_static_and_honest_source_graph_blocker(t
     monkeypatch.setattr(design_backend_binding, "capture_kdb_anchor", _forbidden)
     result = await _trace(handle, wave, mode)
     assert not controls.selections and not _npi_calls(controls)
-    assert "source_graph_hierarchy_context_unavailable" in json.dumps(result)
+    assert "source_graph_disabled" in json.dumps(result)
     assert result["backend_status"]["actual_backend"] == "static"
     assert controls.static_instances and all(b.compile_result["top_modules"] == ["top"] for b in controls.static_instances)
     assert result["backend_status"]["design_context"]["selection"] == "source_policy"

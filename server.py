@@ -5007,11 +5007,11 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             from src.prepared_trace_context import PreparedTraceContext
             history_args = {k: v for k, v in args.items() if k not in {
                 "design_handle", "_prepared_design", "supplementary_compile_logs",
-                "_design_query_started",
+                "_design_query_started", "_prepared_source_execution",
             }}
             return await trace_x_history(
                 sys.modules[__name__], {**history_args, "simulator": simulator},
-                bound_context=PreparedTraceContext(prepared, args["design_handle"]),
+                bound_context=PreparedTraceContext(prepared, args["design_handle"], args.get("_prepared_source_execution")),
                 started_at=args.get("_design_query_started"),
             )
         return await trace_x_history(sys.modules[__name__], {**args, "simulator": simulator})
@@ -5110,6 +5110,10 @@ async def _handle_trace_x_source(args: dict, simulator: str):
         finalized["whole_trace_restart_reasons"] = list(restart_reasons)
         finalized["single_backend_provenance"] = True
         result["backend_status"] = finalized
+        if prepared is not None and actual_backend == "source_graph" and any(
+                n.get("trace_stop_reason") in {"driver_traversal_incomplete", "source_graph_input_boundary"}
+                for n in result.get("propagation_chain", ())):
+            result["root_cause"] = None
         result["trace_restarted"] = bool(restart_reasons)
         if root_binding:
             from src.scope_metadata import file_identity
@@ -5205,7 +5209,24 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             )
         )
 
-    config = get_source_graph_execution_config()
+    config = args.get("_prepared_source_execution") or get_source_graph_execution_config()
+    trace_plan_state = None
+    if prepared is not None:
+        from src.prepared_source_trace import PreparedTracePlan, PreparedTraceArtifactGuard
+        trace_plan_state = PreparedTracePlan(prepared.context, config,
+            args["_design_query_started"] + config.timeout_sec, max_depth)
+
+    async def validate_source_trace():
+        if trace_plan_state is None:
+            return
+        remaining = trace_plan_state.budget.remaining
+        remaining()
+        if get_source_graph_execution_config() != config:
+            raise ExecutionBindingChanged()
+        await _validate_design_source(prepared.context, timeout_sec=min(30, remaining()))
+        await _validate_design_binding(prepared.binding, timeout_sec=min(5, remaining()))
+        remaining()
+
     source_graph_receipt: dict
     source_graph_reason: str
     source_graph_attempted = False
@@ -5241,7 +5262,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             (None, prepared.context.identity_sha256) if prepared is not None
             else _resolve_hierarchy_context(compile_log, simulator)
         )
-        if hierarchy_result is None:
+        if hierarchy_result is None and prepared is None:
             source_graph_reason = "source_graph_hierarchy_context_unavailable"
             source_graph_receipt = _blocked_source_graph_receipt(
                 "blocked",
@@ -5252,7 +5273,8 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                 _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
             )
         else:
-            compile_result = hierarchy_result.get("compile_result")
+            compile_result = (prepared.context.compile_result() if prepared is not None
+                              else hierarchy_result.get("compile_result"))
             if not isinstance(compile_result, dict):
                 source_graph_reason = "source_graph_compile_context_unavailable"
                 source_graph_receipt = _blocked_source_graph_receipt(
@@ -5271,8 +5293,10 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                     operation_metrics.set_value("source_graph_phase", "adapter")
                     adapter_started = time.perf_counter()
                     try:
+                        await validate_source_trace()
                         plan = await _run_in_cancellable_thread(
-                            lambda: build_source_graph_trace_plan(
+                            lambda: trace_plan_state.build(scope_targets) if trace_plan_state is not None
+                            else build_source_graph_trace_plan(
                                 compile_log=compile_log,
                                 compile_result=compile_result,
                                 hierarchy_result=hierarchy_result,
@@ -5341,6 +5365,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         break
 
                     assert plan.request is not None
+                    await validate_source_trace()
                     operation_metrics.set_value("source_graph_phase", "prepare")
                     try:
                         runtime = get_source_graph_runtime(config)
@@ -5391,6 +5416,11 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         )
                         break
 
+                    if prepared is not None and outcome.status is PrepareStatus.TIMED_OUT:
+                        raise TimeoutError("source trace preparation deadline")
+                    await validate_source_trace()
+                    if trace_plan_state is not None:
+                        trace_plan_state.observe(outcome)
                     _record_source_graph_prepare_metrics(outcome)
                     _accumulate_source_graph_trace_metrics(
                         trace_metrics,
@@ -5430,8 +5460,12 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                     assert outcome.entry is not None
                     selected_artifact_fingerprint = outcome.entry.build_key.digest
                     attempted_artifact_fingerprints[-1] = selected_artifact_fingerprint
+                    source_backend = _source_graph_backend_for_plan(outcome.entry, plan)
+                    if trace_plan_state is not None:
+                        source_backend.query_budget = trace_plan_state.budget
                     trace_backend = SourceGraphTraceConnectivityBackend(
-                        backend=_source_graph_backend_for_plan(outcome.entry, plan),
+                        backend=source_backend,
+                        guard=(PreparedTraceArtifactGuard(outcome.entry, plan) if prepared is not None else None),
                         artifact_scope=(outcome.entry.artifact_scope_receipt.scope),
                         hierarchy_result=hierarchy_result,
                         artifact_fingerprint_sha256=(selected_artifact_fingerprint),
@@ -5471,7 +5505,8 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                             for path in exc.signal_paths
                             if path not in scope_targets
                         ]
-                        if not new_targets:
+                        changed_scope = trace_plan_state.expand(exc) if trace_plan_state is not None else False
+                        if not new_targets and not changed_scope:
                             source_graph_reason = "source_graph_scope_expansion_stalled"
                             source_graph_receipt["blocker"] = {
                                 "code": "scope_expansion_stalled",
@@ -5489,6 +5524,8 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                             len(scope_targets) + len(new_targets)
                             > config.frontier_max_instances
                         ):
+                            if prepared is not None:
+                                raise CaptureAborted("source_scope_limit")
                             source_graph_reason = "source_graph_frontier_instance_limit"
                             source_graph_receipt["blocker"] = {
                                 "code": "frontier_instance_limit",
@@ -5561,6 +5598,7 @@ async def _handle_trace_x_source(args: dict, simulator: str):
                         )
                         break
                     else:
+                        await validate_source_trace()
                         final_query_count = len(
                             trace_backend.ledger.query_fingerprints_sha256
                         )
@@ -8774,10 +8812,13 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
     metrics = dict.fromkeys(schemas.DesignQueryMetrics.model_fields, 0)
     history_deadline = None
     connectivity_query = name in {"explain_signal_driver", "find_signal_loads", "trace_signal_path"}
-    enforce_total_deadline = connectivity_query or name in {
+    snapshot_query = name == "trace_x_source" and args.get("mode", "snapshot") == "snapshot"
+    enforce_total_deadline = connectivity_query or snapshot_query or name in {
         "analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields",
     }
     prepared_source_execution = get_source_graph_execution_config()
+    if snapshot_query:
+        history_deadline = started + prepared_source_execution.timeout_sec
     if connectivity_query:
         from src.hierarchy_source_ir import HierarchyQueryBudget
         try:
@@ -8892,7 +8933,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 resolved.setdefault("allow_bounded_bootstrap", True)
             if history_deadline is not None:
                 resolved["_design_query_started"] = started
-            if connectivity_query or name == "resolve_packed_fields":
+            if connectivity_query or name in {"resolve_packed_fields", "trace_x_source"}:
                 resolved["_prepared_source_execution"] = prepared_source_execution
             phase = time.monotonic()
             previous_failure = entry.npi_failure

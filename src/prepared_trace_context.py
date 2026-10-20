@@ -15,6 +15,7 @@ from .divergence_compare import file_identity
 class PreparedTraceContext:
     prepared: object
     design_handle: str
+    source_execution: object | None = None
 
     @property
     def context(self) -> dict:

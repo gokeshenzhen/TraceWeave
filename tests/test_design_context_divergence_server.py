@@ -66,7 +66,7 @@ def isolated(monkeypatch, tmp_path):
             (server, "get_source_graph_runtime"), (server, "build_source_graph_trace_plan"),
             (verdi_npi_backend, "_import_pynpi"), (subprocess, "Popen"), (subprocess, "run")):
         monkeypatch.setattr(module, name, _forbidden)
-    source_config = replace(server.get_source_graph_execution_config(), enabled=True, error_code=None)
+    source_config = replace(server.get_source_graph_execution_config(), enabled=False, error_code=None)
     monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: source_config)
     monkeypatch.setattr(divergence_routing, "get_source_graph_execution_config", lambda: source_config)
     original_import = builtins.__import__
@@ -409,11 +409,11 @@ async def test_real_resource_budget_remains_partial_with_final_checks(tmp_path, 
 
 
 @pytest.mark.anyio
-async def test_source_policy_honestly_uses_static_and_reports_unavailable_planner(tmp_path, controls):
+async def test_source_policy_honestly_uses_static_and_reports_disabled_source(tmp_path, controls):
     _, _, args = await _case(tmp_path, controls, source=True)
     result = await _trace(args)
     assert controls.selections == []
-    assert "source_graph_hierarchy_context_unavailable" in json.dumps(result)
+    assert "source_graph_disabled" in json.dumps(result)
     assert controls.calls
     assert all(call[0] == "static" and call[2]["top_modules"] == ["top"] for call in controls.calls)
     assert result["status"] == "partial"
