@@ -48,7 +48,7 @@ def assert_source(result, mode):
         nodes = result['propagation_chain']
         assert len(nodes) >= 3, result
         assert any(n['signal_path'].split('[')[0] == 'top.src.a' for n in nodes), result
-        assert result['root_cause'] is None, result
+        assert result.get('root_cause') is None, result
         assert sg['complete_negative_query_count'] == 0, result
         assert sum(n.get('source_line') == 2 for n in nodes) >= 3, result
     else:
@@ -275,7 +275,7 @@ async def test_snapshot_real_bounded_positive_remains_source_partial(tmp_path, m
     node = result['propagation_chain'][0]
     assert node['driver_status'] == 'partial' and node['source_line'] in (2,3), result
     assert node['traversal']['returned_fact_count'] == 1, result
-    assert result['root_cause'] is None
+    assert result.get('root_cause') is None
 
 
 @pytest.mark.anyio

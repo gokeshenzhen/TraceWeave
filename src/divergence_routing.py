@@ -369,6 +369,8 @@ class DynamicRoute:
                     if (
                         frontiers
                         and not result.get("complete")
+                        and not (self.trace_plan is not None and self.guard.input_frontier(frontiers)
+                                 and (result.get("branches") or result.get("boundary") == "input"))
                         and not self.s._query_gap_blocks_scope_expansion(
                             set(query_receipt.get("unresolved_boundary_codes", ()))
                         )
