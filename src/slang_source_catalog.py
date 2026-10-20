@@ -362,7 +362,12 @@ def collect_source_catalog(projector, root):
                 elif kind == 'ContinuousAssign':
                     expression_walk(symbol.assignment, scope_key, path, depth + 1)
                 elif kind not in {*_KINDS, "Definition", "ExplicitImport", "WildcardImport", *_NO_USAGE}:
-                    gap(path, "source_symbol_domain_uncovered")
+                    # An unknown compiler leaf with neither a source nor
+                    # syntax nor captured owner is outside the source inventory.
+                    # Real unbound syntax and captured-owner gaps stay unknown;
+                    # containers and positive reference checks ran above.
+                    if where is not None or symbol.syntax is not None or path in files:
+                        gap(path, "source_symbol_domain_uncovered")
                 if hasattr(symbol, "initializer"):
                     expression_walk(symbol.initializer, scope_key, path, depth + 1)
         for definition in definitions:

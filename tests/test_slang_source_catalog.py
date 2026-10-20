@@ -95,3 +95,70 @@ def test_catalog_scope_identity_and_exact_isolation():
     dict(source_aliases=(('same', '/rtl/a.sv'), ('same', '/rtl/b.sv')))])
 def test_invalid_catalog_inputs_rejected_before_worker(kwargs):
     with pytest.raises(ValueError): search(**kwargs)
+
+
+def test_synthetic_unowned_leaf_does_not_poison_captured_inventory(monkeypatch):
+    """Pure copied-scope control; fake SDK objects, no frontend/API probe.
+
+    Unknown generated leaves lack all ownership evidence. Real unbound syntax
+    and captured-owner unknowns remain gaps; instance/generate traversal must
+    retain its supported declaration in every case.
+    """
+    from pathlib import Path
+    import sys
+    from types import ModuleType, SimpleNamespace as NS
+    from src.slang_source_catalog import collect_source_catalog
+
+    class Symbol:
+        def __init__(self, kind, name='', *, offset=None, syntax=None, members=(), **attrs):
+            self.kind, self.name = NS(name=kind), name
+            self.lexicalPath = self.hierarchicalPath = name
+            self.location = None if offset is None else NS(buffer='file', offset=offset)
+            self.syntax, self.isType, self.isScope = syntax, False, bool(members)
+            self.members = members
+            self.__dict__.update(attrs)
+        def __iter__(self): return iter(self.members)
+
+    ast_module = ModuleType('pyslang.ast')
+    ast_module.Symbol = Symbol
+    for name in ('Expression', 'AssertionExpr', 'Constraint', 'Pattern'):
+        setattr(ast_module, name, type(name, (), {}))
+    ast_module.VisitAction = NS(Skip=1, Advance=0)
+    package = ModuleType('pyslang')
+    package.__path__, package.ast = [], ast_module
+    monkeypatch.setitem(sys.modules, 'pyslang', package)
+    monkeypatch.setitem(sys.modules, 'pyslang.ast', ast_module)
+
+    request = search()
+    scalar = NS(kind=NS(name='PredefinedIntegerType'), lexicalPath='', isAlias=False,
+        isError=False, isArray=False, isStruct=False, isPackedUnion=False, isUnpackedUnion=False,
+        isVirtualInterface=False, isCovergroup=False, isTypeRefType=False)
+    scalar.canonicalType = scalar
+    manager = NS(getAllBuffers=lambda: ['file'], getFullPath=lambda _: Path('/rtl/a.sv'),
+        getSourceText=lambda _: 'module A;\nlogic flag;\nendmodule\n',
+        getBufferKind=lambda _: NS(name='DesignFile'), getFullyOriginalLoc=lambda loc: loc,
+        getFullyExpandedLoc=lambda loc: loc, getFileName=lambda _: '/rtl/a.sv', isMacroLoc=lambda _: False)
+    projector = NS(source_manager=manager, options=NS(semantic_search=request,
+        source_root=Path('/'), blocking_diagnostic_total=0, exclusions=()))
+
+    for case in ('synthetic', 'unbound_syntax', 'bound_source', 'captured_owner'):
+        unknown = Symbol('UnknownCompilerLeaf', 'generated',
+                         syntax=object() if case == 'unbound_syntax' else None,
+                         offset=10 if case == 'bound_source' else None)
+        declaration = Symbol('Definition', 'A', offset=7, syntax=object(), definitionKind=NS(name='Module'))
+        variable = Symbol('Variable', 'A.g.flag', offset=16, syntax=object(), type=scalar, initializer=None)
+        generate = Symbol('GenerateBlock', 'A.g', offset=10, syntax=object(),
+                          isUninstantiated=False, members=(variable, unknown) if case == 'captured_owner' else (variable,))
+        body = Symbol('InstanceBody', 'A', members=(generate,))
+        top = Symbol('Instance', 'A', offset=7, syntax=object(), definition=declaration, body=body)
+        unit = Symbol('CompilationUnit', members=() if case == 'captured_owner' else (unknown,))
+        compilation = NS(getDefinitions=lambda: [declaration], getPackages=lambda: [])
+        root = NS(compilation=compilation, compilationUnits=[unit], topInstances=[top])
+        result = decode_source_catalog(json.dumps(collect_source_catalog(projector, root)), request)
+        row = result['files']['/rtl/a.sv']
+        assert {symbol['kind'] for symbol in row['symbols']} == {'module', 'variable'}, (case, row)
+        if case == 'synthetic':
+            assert row['complete'] and row['gaps'] == [] and row['uses_uvm'] is False, row
+        else:
+            assert not row['complete'] and row['uses_uvm'] is None, (case, row)
+            assert 'source_symbol_domain_uncovered' in row['gaps'], row
