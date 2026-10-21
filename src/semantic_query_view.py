@@ -96,37 +96,44 @@ class SemanticQueryView:
 
     def covers_hierarchy(self, requested):
         """Use validated native parent links, attempted depth and child proofs."""
+        return self._hierarchy_reuse_decision(requested)[0]
+
+    def _hierarchy_reuse_decision(self, requested):
+        """Private fixed reason for bounded observer diagnostics; no retained trace."""
         other = requested.semantic_search
         if self.search.purpose != 'hierarchy' or other is None or other.purpose != 'hierarchy':
-            return False
+            return False, 'purpose_mismatch'
         left, right = self.scope.to_dict(), requested.to_dict()
         if (not self.scope.coverage_boundary.explicit or not requested.coverage_boundary.explicit
                 or not set(requested.capabilities).issubset(self.scope.capabilities)
                 or self.scope.coverage_boundary.objective_exclusions != requested.coverage_boundary.objective_exclusions):
-            return False
+            return False, 'coverage_policy_mismatch'
         for value in (left, right):
             for key in ('capabilities', 'proved_ancestor_chains', 'proved_lcas',
                         'projection_instance_paths', 'elaboration_candidates', 'coverage_boundary'):
                 value.pop(key)
-            for key in ('roots', 'depth', 'hierarchy_mode', 'max_instances', 'max_members', 'hierarchy_max_bytes'):
+            # Assignment candidates guide connectivity projection; hierarchy
+            # projection consumes roots and proves actual parent membership.
+            for key in ('roots', 'depth', 'hierarchy_mode', 'max_instances', 'max_members', 'hierarchy_max_bytes',
+                        'assignment_candidates'):
                 value['semantic_search'].pop(key, None)
         if left != right:
-            return False
+            return False, 'semantic_context_mismatch'
         # A requested chain/boundary must consist of actual stored scope facts.
         atoms = (*requested.projection_instance_paths, *requested.coverage_boundary.instance_paths,
                  *(path for chain in requested.proved_ancestor_chains for path in chain))
         if any(path not in self.by_path for path in atoms):
-            return False
+            return False, 'scope_fact_missing'
         for root in other.roots:
             if root not in self.levels:
                 if root in self.by_path and other.hierarchy_mode == 'bounded' and other.depth == 0:
                     continue  # A captured ancestor is still an authoritative positive.
-                return False
+                return False, 'root_not_captured'
             if root in self.exhausted:
                 continue
             if other.hierarchy_mode == 'complete' or self.levels[root] + other.depth > self.search.depth:
-                return False
-        return True
+                return False, 'requested_depth_uncovered'
+        return True, 'stored_native_scope_coverage'
 
     def bind_ownership(self, context, checkpoint):
         checkpoint()
