@@ -22,7 +22,7 @@
   <a href="https://github.com/gokeshenzhen/TraceWeave/stargazers"><img src="https://img.shields.io/github/stars/gokeshenzhen/TraceWeave?style=for-the-badge" alt="Stars"></a>
 </p>
 
-TraceWeave is an MCP server for RTL / SoC debugging. It connects compile records, simulation logs, VCD/FSDB waveforms, and RTL source to your AI assistant, helping you work from a failed simulation to the relevant time, signals, and driving logic.
+TraceWeave is an MCP server for RTL / SoC debugging. It connects compile records, simulation logs, VCD/FSDB/FST waveforms, and RTL source to your AI assistant, helping you work from a failed simulation to the relevant time, signals, and driving logic.
 
 Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the problem in natural language; the assistant uses tools to investigate, trace, and verify, with evidence you can review.
 
@@ -46,245 +46,7 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 
 Supports VCS / Xcelium / Verilator simulation logs and VCD / FSDB / FST waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
-Optional FST support on Linux provides discovery, basic reads, fixed bit selections, expressions, cycle sampling, protocol and transaction analysis, cross-format comparison and X history. The summary lists the currently accepted tools.
-
-Signal tracing (driver, load, and connectivity path queries) follows **Verdi NPI → Source Graph → basic static analysis (Legacy Static)** by default. It first queries the elaborated KDB; when NPI is unavailable or cannot provide a trustworthy result, it tries Source Graph without a commercial license, then falls back to basic static analysis where supported.
-
-Source Graph counts independent structural writers separately from assignment
-statements. All retained branch evidence remains available; `traversal` reports
-writer, assignment inspection, and evidence limits separately. Overlapping
-writers are structural evidence, not proof of an observed value conflict.
-Bit provenance explicitly distinguishes `found`, `proved_no_driver`, and
-`unknown`, with reason codes and `driver_set_complete`. A budget or unsupported
-write never proves absence. If Static also cannot handle an inconclusive
-Source Graph query, the bounded Source Graph evidence and both attempts remain
-visible.
-Driver-chain and provenance rows share identical metadata within a writer;
-`statement_evidence` retains every source line and column. The legacy
-`source_line` names the first entry. `query_instance_path` names the queried
-instance, while `resolved_instance_path` keeps its historical head-driver meaning.
-VCD searches explain that `direction=null` means unavailable metadata.
-
-**Driver output migration:** `explain_signal_driver` now defaults to
-`traceweave.driver.compact.v1`. Each response contains all retained evidence,
-with identical statement semantics and ordered locations/indices shared in
-typed `evidence_tables`. Legacy scripts should request `output_format="full"`
-to retain the original JSON shape and indentation, or decode the response:
-
-```python
-from src.evidence_output import expand_compact_result
-driver = expand_compact_result(text_content.text)
-print(driver["driver_chain"])
-```
-
-Reading only `response["result"]` does not expand its references. Table entries
-and location occurrences are not writer counts. Other tools keep their defaults
-and `traceweave.compact.v1` contract. Distinct evidence can still produce large
-responses; this format does not guarantee inline delivery by every client.
-
-Hierarchy handles live only in the server process. An explicit driver
-`compile_context` can recover a missing handle once under a 30-second,
-4,096-input-file, 128-MiB input capture budget (stricter hierarchy settings apply).
-With a KDB candidate it prepares an independent design, without rebuilding the
-hierarchy, and returns `hierarchy_recovery.design_handle` with status
-`prepared_design` or `hit_design_context`. That handle can be used by the same
-four tracing tools. Existing full handles and source-only recovery retain the
-legacy hierarchy path. `hierarchy_recovery` reports reuse, preparation, rebuilding
-or a blocker. Input verification can reread captured bytes; preparation metrics
-report that work separately from query time. Supplied identity
-tokens are revalidated; without a historical source fingerprint, recovery
-establishes current sources only. Structural scanning remains a separate step.
-Historical compile-log tokens contain stat identity; matching them does not
-verify prior log bytes if a rewrite preserves those stat fields.
-
-`prepare_design_context(compile_log=..., backend_preference="source")` can
-independently capture compile inputs and source identities under file, byte and
-time budgets. Its `design_handle` expires on process restart or registry eviction;
-the receipt separates input capture from include resolution and semantic coverage.
-Preparation does not build a hierarchy, run Slang or probe/load KDB. Pass its
-`design_handle` to `explain_signal_driver`, `find_signal_loads`,
-`trace_signal_path` or `trace_x_source` (snapshot and history); `compile_log`
-can then be omitted. With the default `auto`
-preference, the first semantic query fixes a candidate KDB (optional `kdb_path` declares
-one explicitly). Later queries validate that binding and source context; a
-change or restart requires a new handle. `source` avoids NPI, and a recorded NPI
-load failure suppresses repeated attempts until a new context is prepared.
-Read `backend_status.design_context`: candidate identity, actual load and source
-association are separate, and validation/discovery costs are reported. External
-KDB source association remains unverified.
-
-Prepared driver/load/path share on-demand Source Graph planning when NPI is
-unavailable. They resolve semantic instance/packed-field boundaries from the
-same captured compilation, without an implicit full lexical hierarchy. Path
-queries can expand a bounded semantic neighborhood and restart in one artifact.
-`timeout_sec` covers binding, planning, builds, queries and final validation;
-`source_graph.effective_timeout_sec` is the stable shared-worker cap, while
-`request_timeout_sec` and `request_remaining_sec` describe the caller's total
-budget. Scope limits and incomplete coverage never prove that no path exists.
-The frontend may still process the full ordered compile context. Semantic
-candidate/expansion reuse is conservative and exact; cache/session defaults
-and explicit `build_tb_hierarchy` compatibility remain unchanged.
-
-When connectivity reports unsupported, shallow or incomplete results, the client
-agent can continue tracing through the compiled source with its file-reading
-tools. Use `lookup_tb_files` / `get_tb_file_detail` with the same `design_handle`
-to confirm file ownership, then inspect assignments, port bindings, parameters
-and bit ranges. Cite each inferred hop as source inference, keep backend facts
-separate, and check runtime values and timing against waveform/log evidence.
-An unsupported path is not evidence of disconnection. No full hierarchy build
-is required just to read verified source; see the
-[source investigation workflow](docs/workflow.md#continuing-with-source-files).
-
-`find_tb_instance(design_handle=..., path="top_tb.u0")` also accepts an
-independently prepared context with the default `auto` preference. It reads
-NPI instance facts without building the full hierarchy; exact path lookup does
-not enumerate children. Module searches accept `count_mode="bounded"` (default)
-or `"exact"`, and `timeout_sec` includes binding and final validation. This route
-returns schema version 2 with separate instance/definition locations and count
-limits. Location fields preserve raw NPI observations: a row's
-`npi_instance_location_unbound` or `npi_definition_location_unbound` gap means
-that path is not a verified locator in the captured inputs.
-`get_tb_subtree(design_handle=..., root="top_tb.u0.u0", depth=1)` uses the same
-service and location checks for every returned node. Its default bounded count
-stops at display frontiers; `total_descendants` is null when only a lower bound
-is known. `count_mode="exact"` explicitly requests traversal of undisplayed
-descendants within the work/time budget. `max_nodes` includes the root.
-`lookup_tb_files(design_handle=..., basename="des.v")` filters captured compile
-ownership without probing or loading a backend. Its semantic fields stay null.
-`get_tb_file_detail(design_handle=..., path=...)` accepts only captured paths or
-aliases; a nonmember returns basename suggestions without semantic work.
-Member details and semantic file filters (`has_module`, `contains_uvm`,
-`file_type`) prefer healthy NPI declarations. Source preference or ordinary NPI
-unavailability uses a bounded Slang declaration artifact through the shared
-isolated runtime. Its supported domain includes compile declarations and
-elaborated package, class, function and instance scopes, with actual source
-locations. An uninstantiated module declaration can be observed while its
-unelaborated body remains unknown. Generic members, unprocessed languages and
-unsupported semantic domains retain explicit gaps. Declaration inventory,
-imports and UVM usage have separate coverage; comments and strings are not UVM
-use. These inventories can walk global namespaces within the request budget;
-`semantic_work_scope` exposes this work. Read `symbol_inventory_complete`,
-`unknown_filter_files` and coverage
-gaps; an unknown filter is not a negative match. Metadata-only results carry
-the design/context identity and query costs, with no backend or KDB receipt.
-When source capture is incomplete because an input was unavailable or a capture
-budget was reached, file queries retain compiled-file metadata and unknown
-semantic fields with `source_capture_incomplete`. The source fallback starts no
-Slang worker or artifact cache request; healthy NPI still has priority. Initial
-and final input validation remain required: a missing file appearing, a captured
-file changing, or an alias changing rejects the result and requires a new context.
-Class source queries likewise remain unavailable for incomplete capture.
-`get_tb_class_hierarchy(design_handle=..., root_class=...)` returns static class
-inheritance with qualified identities and actual base bindings. Short names
-must be unambiguous; external reference-only bases are labelled. `total` is the
-rendered node count, separate from `class_inventory_*`. A root filter does not
-avoid the namespace work needed to find derived classes. Raw class locations
-outside captured inputs carry `npi_class_location_unbound`.
-`base_relation="declaration"` identifies the declared base class. Its default
-`parameterization` does not describe a derived class's actual arguments.
-`base_value_parameters` records observed constant arguments on that inheritance
-edge; inspect `base_parameter_status` and `binding_gaps`. These observations do
-not establish a complete specialized NPI type identity or type-parameter inventory.
-Source preference or ordinary NPI unavailability uses the shared isolated Slang
-catalog for captured class declarations and actually referenced specializations
-(`class_inventory_domain="declarations_and_referenced_specializations"`).
-`declaration_id` and physical locations agree with file declarations. File
-`type_id` is a declaration-domain identity; class nodes explicitly label
-`type_identity_domain="artifact_canonical"`, and their `type_id` and
-`type_parameter_bindings` are comparable only within that artifact. Slang's
-canonical matching preserves distinct nominal types and aliases of the same
-type. `base_relation="specialization"` and `base_type_parameter_bindings` refer
-to the actual bound base. Generic declarations without an actual binding,
-unresolved bases and frontend diagnostics retain partial coverage. Class
-diagnostics are observed again after class projection before artifact
-publication; omitted diagnostic details retain exact counters and truncation.
-No possible
-parameter combinations are invented or exhaustively enumerated. Compatible
-class catalogs can also serve file queries; an already cached exact file
-artifact keeps priority. Legacy `handle` retains its source-scan UVM/create view.
-`dump_tb_section(design_handle=..., section=...)` supports all seven sections.
-The three compile metadata sections need no backend; the four semantic sections
-use the selected NPI or Slang services and preserve their coverage gaps. `max_items` bounds
-output, while work/time budgets still bound global traversal. An exact count
-does not make a truncated export complete: inspect `export_complete`.
-All six tools accept `design_handle`. Without usable NPI, the shared isolated
-Slang runtime supports exact paths, selected-top module searches, bounded and
-exact subtree counts, deeper browsing and `depth=-1` within finite work budgets.
-A topology-only artifact preserves actual module/interface/program, generate
-and instance-array scopes, native parent membership, bind instances and value
-parameter evidence. Unsupported hierarchy kinds retain explicit gaps. Exact
-local subtrees enumerate that root; global module searches and full component
-exports enumerate the selected top. Exact path inputs retain a64-atom admission
-bound; semantic traversal is capped at256 levels. Each hierarchy artifact uses
-at most min(10000, remaining scopes/2),5000 at the default scope budget, min(50000, remaining calls/2) and2MiB of
-retained facts/coordinates, further constrained by the request deadline and
-remaining byte budget. `depth=-1` does not remove these limits. Frontend
-elaboration can still span the compile context. Locations bind to captured
-physical inputs; unavailable facts remain partial. A completed local child
-stream never proves global absence, and blocking diagnostics prevent clean
-negative or exact-global claims. Display trimming is independent of exact
-analysis counts. The four semantic section exports use the corresponding
-Slang class/file or hierarchy artifact; compatible catalog capabilities reuse
-one artifact, while distinct hierarchy ranges have distinct identities. Three
-compile metadata sections need no frontend. Healthy NPI and existing legacy
-`handle` capabilities retain priority and compatibility.
-
-`analyze_failure_event` and `recommend_failure_debug_next_steps` accept the same
-`design_handle`. Source correlation runs before waveform locks: NPI supplies
-bounded candidates; Slang uses the exact log scope, or bounded top children
-when no qualified log path exists. Each candidate collection uses one artifact.
-Suggestions remain heuristic, and coverage gaps stay visible. Supplying only
-`compile_log` prepares an independent context automatically. Default prepared
-queries never build the legacy full tree, including when the source worker is
-unavailable; they report partial or log-only evidence instead. Explicit legacy
-context recovery remains supported. Structural-scan and handshake-sweep
-recommendations remain separate.
-
-After eviction or restart, pass the returned `recovery_context` unchanged as
-the arguments to `prepare_design_context`. Its `context_identity_sha256` is an
-expected identity: changed inputs are rejected before publishing a handle.
-Success returns a new handle with `identity_verification="matched_recovery_identity"`.
-The restored handle performs a new backend binding on its first query. This
-verifies the recorded compile/source identity; KDB generation and historical
-waveform correspondence still require their separate evidence.
-
-Prepared driver/load/path use the shared Source Graph planner described above.
-Independent-context X-trace uses the bound NPI route without a hierarchy;
-its source fallback currently reports unavailable
-semantic trace planning and recomputes with bound Static metadata. History keeps
-its dynamic-evidence limitations and includes context validation in the request
-deadline. A clean waveform target does not establish that NPI loaded a KDB.
-`trace_divergence` also accepts `side_a.design_handle` and
-`side_b.design_handle` independently, including a mix with one legacy side.
-Each handle side may omit `compile_log`; optional compile metadata must match
-the handle, and old hierarchy/source identity tokens cannot be combined with it.
-Both designs stay pinned across preparation, comparison, tracing and final
-validation. Preparation shares the trace deadline; final identity checks still
-run after an exhausted analysis budget and report their cost. A typed identity,
-capture or execution-policy failure returns `inconclusive` with an empty graph
-and comparison and no new cursor. Driver suggestions reuse the corresponding
-handle. Different identity schemes require explicit dependency mappings even
-when their displayed source paths match.
-
-The per-side `contexts.*.design_context` describes shared candidate evidence,
-with `metrics_owner_side` identifying the one copy of preparation metrics for
-each unique handle. Actual backend/load facts remain per side in
-`contexts.*.backend_status`; a no-difference comparison performs no NPI query.
-Independent source planning has the same limitation as X-trace above.
-`diff_first_divergence` accepts `{"design_handle": "dc_..."}` in `context_a`
-and `context_b` to bind subsequent driver actions. The comparison creates no
-backend binding and loads no NPI design. Source, any existing binding, waveform
-and parser identities are checked before publishing actions and the cursor;
-changed identities return an error without a cursor. Context-free waveform
-comparison, exact legacy compile contexts and legacy hierarchy handles remain
-supported.
-
-Capabilities for large designs, with selected examples of validated scale:
-
-- **Hierarchy and source browsing on demand**: the server builds and retains hierarchy and file indexes, then returns local results by instance, subtree, or file to keep large SoC queries manageable in the assistant's context. Hierarchy construction and local queries have been verified on a synthetic design with **50,500 logical instances**; the initial build still scans compilation records and sources.
-- **Bulk handshake checks**: `sweep_handshakes` discovers AHB / valid-ready interfaces and checks stalls, payload stability, and premature valid/HTRANS deassertion. A recorded design with **78,817 total signals and a 2.59 ms waveform** yielded 49 candidate interfaces involving 262 clock/protocol signals; **35 interfaces were checked in about 4.65 minutes**, with 14 skipped and partial coverage. Runtime and coverage depend on the waveform, interface types, and resource limits.
-- **Bounded FSDB sweep sampling**: capable FSDB readers consume event pages and sample blocks while retaining protocol state across blocks. Selected interfaces can scan beyond the former materialized-transition limit within the total work budget. Discovery limits, interface caps and skipped checks still determine overall coverage; bounded Python sampling does not guarantee constant native RSS. See [the architecture](docs/architecture.md) for limits and compatibility fallback.
-- **GiB-scale log parsing**: `parse_sim_log` has been verified on a **1 GiB synthetic log with 2,097,152 lines**, finding all four errors at the beginning, middle, and end.
+Trace signals from the waveform back to their driving logic with **Verdi NPI → Source Graph → basic static analysis**, according to available tools and query coverage. Source Graph provides semantic source analysis without a commercial license. Results retain source references, coverage gaps, and next steps so you can check the evidence before assigning a root cause.
 
 ## Installation
 
@@ -321,16 +83,9 @@ traceweave-mcp --doctor
 
 For logs, VCD, and basic static analysis only, install `traceweave-mcp` without `[source-graph]`. The PyPI package does not include the FSDB reader; use the repository installation for FSDB.
 
-### Optional FST reads
+### Optional FST support
 
-Install the extra in the MCP server's Python environment: `python3.11 -m pip install "traceweave-mcp[fst]"`. For a repository installation, use `.venv/bin/python -m pip install "pylibfst==0.2.1"`. Reconnect the server, then check `traceweave-mcp --doctor` or `get_sim_paths`. Existing VCD/FSDB users do not need this dependency.
-
-For example, ask: “Find the FST waveform under `/path/to/run`, show its summary, find `top.data`, and read its transitions from 10 ns to 20 ns.” The basic tools preserve X/Z and distinguish missing recording intervals from observed values. Nonzero time offsets, real/string signals, external hierarchy files, and whole-file gzip containers are currently unsupported. Reads exceeding the bounded index, native memory, result, or time limits stop explicitly; narrow the query or use a smaller dump. See [FST boundaries and resource limits](docs/architecture.md#fst-basic-reading).
-
-Use the same analysis tools to inspect FST handshakes, reconstruct transactions,
-compare an FST signal against VCD/FSDB, or trace an earlier X after its input has
-recovered. Source-based analysis keeps its usual compile-context prerequisites.
-Recording gaps and incomplete clock history remain partial evidence.
+On Linux, install `traceweave-mcp[fst]` in the server environment; repository users can install `pylibfst==0.2.1` with `.venv/bin/python -m pip install`. Reconnect the server and check waveform discovery. See [FST support and limits](docs/architecture.md#fst-basic-reading).
 
 ## Client Setup
 
@@ -364,396 +119,95 @@ The client must inherit or explicitly pass these variables. Project files, the T
 
 ## Start Debugging
 
-Once connected, try a request like this, replacing the path with your project directory:
+Connect your assistant and ask, replacing the path with your project directory:
 
-> Use TraceWeave to investigate the simulation failure in `my_case` under `/path/to/verif`. Start with the logs, design structure, and interface handshakes, then trace suspicious signals. Include timestamps, signals, and source references in your findings.
+> Use TraceWeave to investigate the simulation failure in `my_case` under `/path/to/verif`. Check logs, design structure, and interface handshakes, then trace suspicious signals. Include timestamps, signal paths, and source references.
 
-You can also start with a specific question:
+The default investigation discovers run artifacts, prepares a design context and scans structural risks in parallel, then parses failures and sweeps handshakes when a failed run has a waveform. The assistant uses that context to browse source and trace signals on demand. A full hierarchy build remains available when explicitly needed.
 
-> Compare `tb.dut.result` in these two waveforms and trace the logic producing the difference on each side.
+Try a more focused question:
 
-> Use deep mode to scan the design described by this compile log for suspicious ties, unconnected inputs, and constant comparisons.
+- **Find a mismatch:** “Compare `tb.dut.result` in these two waveforms and trace the logic producing the difference on each side.”
+- **Trace an X:** “`tb.dut.q` is X at 36 ns, but its input is now known. Check earlier sampling and hold behavior from 0 to 36 ns.”
+- **Inspect transactions:** “Check this TL-UL interface from 10 to 20 μs for stalls, response latency, and outstanding requests.”
+- **Check source structure:** “Use deep mode to scan this compile log's design for suspicious ties, open inputs, and constant comparisons.”
+- **Verify a hypothesis:** “Sample these signals before each clock edge and check whether the payload stays stable while waiting for ready.”
 
-The assistant's default investigation follows these steps:
+You can also evaluate [SV expressions](docs/expressions.md), inspect packed bus fields, and compare failures after a fix. Coverage limits remain visible: zero findings from an incomplete check do not establish that the design is correct.
 
-1. **Find the run's artifacts:** locate compile logs, simulation logs, and waveforms.
-2. **Establish design context:** build the hierarchy and scan structural risks in parallel using the same compile log.
-3. **Narrow the investigation:** parse failures and scan handshakes for failed runs with a waveform.
-4. **Trace and verify:** inspect signals, drivers, and consumers, then test hypotheses with window or cycle checks.
-5. **Compare after a fix:** check how failure records and waveforms change in the next run.
+For a connection check, ask the assistant to call `get_sim_paths`. See the [debug workflow](docs/workflow.md) for the full procedure and the [readback check](docs/architecture.md#readback-client-check) for a repository smoke check.
 
-For a first connection check, ask the assistant to call `get_sim_paths` and confirm that actual MCP tool calls run. See the [debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) for the full procedure.
+### Custom runtime logs
 
-For a repository readback check without an EDA license, run
-`.venv/bin/python scripts/check_waveform_readback.py --work-dir /tmp/traceweave-readback-check`.
-It checks the server catalog and actual point/batch values through MCP, and
-prints explicit requests for a separate AI-client smoke session. Server checks
-leave AI-client visibility and model adoption unverified; see the
-[readback check procedure](docs/architecture.md#readback-client-check).
-
-### Find Waveform Differences and Trace X/Z Sources
-
-When two simulation runs produce different results, TraceWeave can compare selected signals, locate the earliest difference it can confirm within a time window, and trace the related data, control, and RTL logic on both sides.
-
-For X/Z, inspect the propagation path at the time of interest or look back through history to check whether a register sampled an unknown value and continued to hold it. You can investigate earlier events even if the input is now known:
-
-> `tb.dut.q` is X at 36 ns, but its input is now known. Review the waveform from 0 to 36 ns, check earlier sampling and hold behavior, and trace possible sources.
-
-Results distinguish relationships supported by evidence from leads that need more investigation. When history is missing or a structure is unsupported, TraceWeave explains where tracing stopped. The first recorded anomaly is not automatically its true point of origin.
-
-See [waveform comparison](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#divergence-evidence-and-backtrace) and [X/Z history tracing](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#bounded-x-history) for tool parameters and detailed support limits.
-
-### Evaluate SV Expressions
-
-Existing waveform tools accept explicit `{ "expr": "a[b] + c", ... }` inputs. Expressions use SV precedence, widths, signedness and four-state values; indices are sampled again at each observation. Point, cycle, transition, window, handshake, transaction and TL-UL queries share this core with RTL backtracing. No additional MCP tool is required.
-
-Use exact `bindings` and explicit `types`, or choose `typing: "wave_bits"` for an unsigned four-state view of dumped vectors. Fixed arrays use bounded element mappings; reading a formula does not replace the recorded output signal. See [expression inputs, examples and limits](docs/expressions.md).
-
-### Inspect Bus Fields and TL-UL Interfaces
-
-When address, data, and control information share a packed bus, TraceWeave can identify field positions from source types that match the waveform. The assistant can then inspect individual fields, reducing manual work to look up widths and calculate offsets. You can also provide a field-to-bit mapping when automatic resolution is unavailable.
-
-For TL-UL interfaces, once the assistant confirms the field mapping and clock, it can check handshake stalls, request/response matching, response latency, and outstanding requests within a specified time window:
-
-> Check the TL-UL interface under `tb.dut` from 10 to 20 μs for handshake stalls or outstanding requests. List the relevant times and signals.
-
-Results state which checks ran and what information is missing. A request still outstanding at the end of the window is not automatically a deadlock, and these checks do not replace full TL-UL protocol verification.
-
-For a long debugging conversation, ask for compact evidence output. Repeated field mappings are shown once, while checked scope, missing evidence, time boundaries and next steps remain available. These waveform tools keep their usual output by default; driver output follows the migration above. See [compact evidence output](docs/architecture.md#compact-evidence-output) for examples and client integration.
-
-See [bus fields and TL-UL](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#packed-waveform-selections-and-tl-ul) for field configuration and detailed support limits.
-
-### Custom Runtime Error Formats
-
-### Verilator runtime logs
-
-`parse_sim_log(log_path=..., simulator="verilator")` recognizes native runtime
-assertions / `$error` / `$fatal` / `$stop`, cocotb test failures with bounded Python
-tracebacks, X-HEEP `example_dma` comparisons and software exit values, and
-OpenTitan software comparisons / status failures. Compiler warnings and errors,
-`ERROR:cocotb:` logger wrappers, source echoes, normal `$finish`, and software
-exit zero are excluded. Other custom TB text needs explicit custom patterns.
-
-Bare native timestamps stay `time_ps=None` unless `native_time_unit="ps"` (or
-fs/ns/us/ms/s) is supplied with independently verified TB/context evidence.
-This setting applies only to native/custom/UVM bare simulation timestamps.
-Explicit units take precedence. Conversion uses exact decimal arithmetic and
-rounds up sub-ps time to integer ps. Cycle counts, UART rows, and host wallclock
-time do not acquire waveform timestamps. Optional TraceWeave acceptance
-observers provide software-exit or termination anchors, not the first bad RTL
-transaction. Detection source locations are checker locations, not root causes.
-Use the same verified unit setting in analysis and snapshot/log diff calls;
-snapshots with different settings cannot be compared. Unknown-time analysis
-returns log context without querying 0ps.
-
-Verilator discovery reads bounded head/tail log samples, including delayed cocotb
-banners. Hierarchy and structural analysis require a real HDL invocation
-(`verilator --cc/--xml-only ...`) with an explicit `--top-module`, the execution
-cwd (for example Make's entering-directory line), and available ordered
-`-f`/`-F` inputs. Include paths, macros, and top parameter overrides are replayed
-into the existing Source Graph frontend; C++ files and `.vlt` controls are not
-HDL. Waiver/trace/optimizer controls are fingerprinted support inputs; unmodeled
-controls stay explicit coverage exclusions. Missing HDL commands, filelists,
-or tops remain gaps. A C++ build log alone does not provide HDL context; there
-is no automatic unrelated-sidecar or vendor-tree recovery.
-
-Run `get_sim_paths`, then `prepare_design_context` and `scan_structural_risks` in
-parallel on that same compile log before parsing/analyzing the run. Failed runs
-with waveforms require `sweep_handshakes`; zero/partial coverage does not exclude
-OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
-synthetic waveform `TOP.` prefix is not an HDL instance (remove it only after
-confirming the following segment is the compiled top). Static/Source Graph
-coverage remains bounded. An existing external KDB can be declared through
-`prepare_design_context(kdb_path=...)`, including for Verilator inputs; it must
-pass the same candidate/load checks and is not assumed to match current sources.
-
-Use the returned `design_handle` for on-demand source and tracing queries.
-`get_diagnostic_snapshot(design_handle=...)` reports observed context metadata;
-it does not revalidate source/KDB identity or imply complete semantic coverage.
-Multiple contexts for the same primary log require an explicit selection.
-`build_tb_hierarchy` remains the explicit legacy full-tree option; when used,
-run it alongside the same structural scan. Expired driver actions retain their
-historical identity tokens during recovery; preparing current inputs does not
-prove a historical source association.
-
-`parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
-
-If your messages share a label but the text after it varies, matching that label is enough:
-
-```text
-MY_CHECK_FAIL @ 12.5 ns expected=0x12 actual=0x34
-MY_CHECK_FAIL @ 20 ns timeout waiting for response
-```
-
-Replace the default `patterns: []` with the following, or append the rule to your existing `patterns` list:
-
-```yaml
-patterns:
-  - name: my_checker
-    severity: ERROR
-    regex: '^MY_CHECK_FAIL'
-```
-
-`^` means the start of the line; everything after the label may vary, with no extra regex needed. If a timestamp or other text precedes the label, use `regex: 'MY_CHECK_FAIL'` to match it anywhere in the line.
-
-- `name` identifies the failure group. `severity` defaults to `ERROR`; `FATAL` and `WARNING` are also supported. Matched custom warnings are included in runtime failure counts. `description` is for maintainers.
-- `regex` matches one log line at a time. Use YAML single quotes to preserve backslashes. Built-in assertion and UVM parsing runs first, followed by custom rules in list order (first match wins), then the generic `ERROR` fallback. Recognized compile / elaboration diagnostics remain excluded.
-
-The `expected=0x12 actual=0x34` format above is already recognized automatically, so the simple label rule is enough and no named captures are needed. Suppose your log uses its own field names instead:
-
-```text
-MY_CHECK_FAIL @ 12.5 ns want=0x12 have=0x34
-```
-
-`regex: '^MY_CHECK_FAIL'` still recognizes the error and preserves the full message. To also extract `want` and `have` as the expected and actual values, replace the `regex` in the rule above with:
-
-```yaml
-regex: '^MY_CHECK_FAIL.*want=(?P<expected>\S+)\s+have=(?P<actual>\S+)'
-```
-
-Repository installations use the root `custom_patterns.yaml` by default. To keep project rules elsewhere, or when using the PyPI installation, save the YAML above in your own file and pass its absolute path to the MCP server process:
-
-```bash
-export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
-```
-
-This selects that file instead of the default custom rules; built-in formats remain active. The MCP client must inherit or explicitly forward the variable. Restart or reconnect the server after changing it, then parse the log again. Edits to the selected YAML are loaded on the next `parse_sim_log` call.
+Built-in parsing covers UVM, VCS/Xcelium assertions, and supported Verilator/cocotb failures. Add project-specific checker labels through [custom_patterns.yaml](custom_patterns.yaml), or set `TRACEWEAVE_CUSTOM_PATTERNS_FILE` to your own file. See [log formats and configuration](docs/architecture.md#runtime-log-formats) for examples and Verilator time-unit requirements.
 
 ## Tool Quick Reference
 
-Usually, you describe the debugging goal and let the assistant select the tools. This table lists every tool by purpose; MCP tool definitions provide the parameters.
+Describe your debugging goal and let the assistant choose the tools. All tools are listed below; consult their MCP definitions for parameters and supported scope.
 
-<table>
-  <thead>
-    <tr>
-      <th>Category</th>
-      <th>Tool</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td rowspan="3">Session and artifacts</td>
-      <td><code>get_sim_paths</code></td>
-      <td>Find simulation cases, compile logs, runtime logs, and waveforms</td>
-    </tr>
-    <tr>
-      <td><code>get_formal_paths</code></td>
-      <td>Find formal projects, logs, and exported waveforms; currently supports JasperGold</td>
-    </tr>
-    <tr>
-      <td><code>get_diagnostic_snapshot</code></td>
-      <td>Review collected debugging information and outstanding steps</td>
-    </tr>
-    <tr>
-      <td rowspan="8">Hierarchy and source</td>
-      <td><code>prepare_design_context</code></td>
-      <td>Capture compile/source identity and coverage gaps without building a hierarchy; returns a process-local design handle</td>
-    </tr>
-    <tr>
-      <td><code>build_tb_hierarchy</code></td>
-      <td>Build an RTL / testbench hierarchy view from compile records</td>
-    </tr>
-    <tr>
-      <td><code>get_tb_subtree</code></td>
-      <td>Browse a selected instance&#x27;s local hierarchy</td>
-    </tr>
-    <tr>
-      <td><code>find_tb_instance</code></td>
-      <td>Find instances by path or module name</td>
-    </tr>
-    <tr>
-      <td><code>lookup_tb_files</code></td>
-      <td>Find source files in the actual compiled file set</td>
-    </tr>
-    <tr>
-      <td><code>get_tb_file_detail</code></td>
-      <td>Inspect modules, interfaces, and classes defined in a source file</td>
-    </tr>
-    <tr>
-      <td><code>get_tb_class_hierarchy</code></td>
-      <td>Browse UVM / SystemVerilog class inheritance</td>
-    </tr>
-    <tr>
-      <td><code>dump_tb_section</code></td>
-      <td>Retrieve a complete section of hierarchy analysis data</td>
-    </tr>
-    <tr>
-      <td rowspan="6">Logs and failures</td>
-      <td><code>parse_sim_log</code></td>
-      <td>Group runtime failures and extract timestamps and error summaries</td>
-    </tr>
-    <tr>
-      <td><code>get_error_context</code></td>
-      <td>Read the original log around an error</td>
-    </tr>
-    <tr>
-      <td><code>diff_sim_failure_results</code></td>
-      <td>Compare new, persistent, and resolved failures between runs</td>
-    </tr>
-    <tr>
-      <td><code>analyze_failures</code></td>
-      <td>Combine log and waveform context for a failure group</td>
-    </tr>
-    <tr>
-      <td><code>analyze_failure_event</code></td>
-      <td>Identify candidate instances, signals, and source files for one failure</td>
-    </tr>
-    <tr>
-      <td><code>recommend_failure_debug_next_steps</code></td>
-      <td>Recommend investigation targets and follow-up tool calls</td>
-    </tr>
-    <tr>
-      <td>Static structural scanning</td>
-      <td><code>scan_structural_risks</code></td>
-      <td>Statically scan source code for suspicious structures; semantic mode checks ties, open inputs, and constant comparisons</td>
-    </tr>
-    <tr>
-      <td rowspan="4">Signal tracing</td>
-      <td><code>explain_signal_driver</code></td>
-      <td>Trace a signal&#x27;s driver and relevant RTL</td>
-    </tr>
-    <tr>
-      <td><code>find_signal_loads</code></td>
-      <td>Find a signal&#x27;s consumers and potential impact</td>
-    </tr>
-    <tr>
-      <td><code>trace_signal_path</code></td>
-      <td>Query structural connectivity between two signals</td>
-    </tr>
-    <tr>
-      <td><code>trace_x_source</code></td>
-      <td>Trace X/Z propagation and inspect historical register sampling and hold behavior</td>
-    </tr>
-    <tr>
-      <td rowspan="6">Waveform queries</td>
-      <td><code>get_waveform_summary</code></td>
-      <td>Inspect waveform format, duration, timescale, and top modules</td>
-    </tr>
-    <tr>
-      <td><code>search_signals</code></td>
-      <td>Find full signal paths by name</td>
-    </tr>
-    <tr>
-      <td><code>get_signal_at_time</code></td>
-      <td>Read a signal&#x27;s value at a specific time</td>
-    </tr>
-    <tr>
-      <td><code>get_signal_transitions</code></td>
-      <td>Inspect signal transitions within a time window</td>
-    </tr>
-    <tr>
-      <td><code>get_signals_around_time</code></td>
-      <td>Inspect multiple signals around a selected time</td>
-    </tr>
-    <tr>
-      <td><code>get_signals_by_cycle</code></td>
-      <td>Sample multiple signals on clock edges</td>
-    </tr>
-    <tr>
-      <td rowspan="4">Differences and timing</td>
-      <td><code>diff_first_divergence</code></td>
-      <td>Find the first observed known-value difference between two signals</td>
-    </tr>
-    <tr>
-      <td><code>trace_divergence</code></td>
-      <td>Verify a waveform difference and trace relevant data, control, and prior state on both sides</td>
-    </tr>
-    <tr>
-      <td><code>period</code></td>
-      <td>Check signal periods and cadence anomalies</td>
-    </tr>
-    <tr>
-      <td><code>verify_window</code></td>
-      <td>Verify temporal conditions within a waveform window and return concrete evidence</td>
-    </tr>
-    <tr>
-      <td rowspan="7">Protocols and transactions</td>
-      <td><code>suggest_handshakes</code></td>
-      <td>Discover valid/ready interfaces and signal bundles for inspection</td>
-    </tr>
-    <tr>
-      <td><code>suggest_protocol_bundles</code></td>
-      <td>Discover AHB / APB interface signal bundles</td>
-    </tr>
-    <tr>
-      <td><code>sweep_handshakes</code></td>
-      <td>Scan discovered valid/ready and AHB interfaces across the design and summarize anomalies</td>
-    </tr>
-    <tr>
-      <td><code>inspect_handshake</code></td>
-      <td>Check one interface for stalls, stability, and handshake anomalies</td>
-    </tr>
-    <tr>
-      <td><code>reconstruct_transactions</code></td>
-      <td>Reconstruct requests and responses to inspect latency, outstanding requests, and ordering</td>
-    </tr>
-    <tr>
-      <td><code>resolve_packed_fields</code></td>
-      <td>Map packed bus fields through an independent design context and verify their dump coordinates</td>
-    </tr>
-    <tr>
-      <td><code>inspect_tlul</code></td>
-      <td>Check TL-UL requests and responses for handshake stalls, response latency, and outstanding requests</td>
-    </tr>
-    <tr>
-      <td rowspan="3">Time cursors</td>
-      <td><code>cursor_set</code></td>
-      <td>Name a key timestamp for reuse in later queries</td>
-    </tr>
-    <tr>
-      <td><code>cursor_list</code></td>
-      <td>List time cursors in the current session</td>
-    </tr>
-    <tr>
-      <td><code>cursor_delete</code></td>
-      <td>Remove a time cursor</td>
-    </tr>
-    <tr>
-      <td>EDA integration</td>
-      <td><code>build_kdb</code></td>
-      <td>Build and cache a Verdi KDB from compile records for NPI queries</td>
-    </tr>
-  </tbody>
-</table>
+| Category | Tool | Purpose |
+|---|---|---|
+| Session and artifacts | `get_sim_paths` | Discover compile logs, simulation logs, and waveforms |
+|  | `get_formal_paths` | Discover JasperGold projects and exported waveforms |
+|  | `get_diagnostic_snapshot` | Review collected evidence and suggested steps |
+| Design and source | `prepare_design_context` | Prepare a design context for on-demand queries |
+|  | `build_tb_hierarchy` | Explicitly build an RTL / testbench hierarchy view |
+|  | `get_tb_subtree` | Browse a selected instance subtree |
+|  | `find_tb_instance` | Find instances by path or module name |
+|  | `lookup_tb_files` | Find source files in the compiled input set |
+|  | `get_tb_file_detail` | Inspect module, interface, and class declarations |
+|  | `get_tb_class_hierarchy` | Browse SystemVerilog / UVM class inheritance |
+|  | `dump_tb_section` | Export a selected hierarchy or source section |
+| Logs and failures | `parse_sim_log` | Group runtime failures and extract times and summaries |
+|  | `get_error_context` | Read original log lines around an error |
+|  | `diff_sim_failure_results` | Compare failures between runs |
+|  | `analyze_failures` | Combine log and waveform evidence for a failure group |
+|  | `analyze_failure_event` | Correlate one failure with instance, signal, and source leads |
+|  | `recommend_failure_debug_next_steps` | Suggest investigation targets and next tool calls |
+| Structure and tracing | `scan_structural_risks` | Scan suspicious source structures, with optional deep semantic checks |
+|  | `explain_signal_driver` | Trace signal drivers and source locations |
+|  | `find_signal_loads` | Find signal consumers and loads |
+|  | `trace_signal_path` | Query structural connectivity between signals |
+|  | `trace_x_source` | Trace X/Z propagation and historical sampling |
+| Waveform reads | `get_waveform_summary` | Inspect duration, signal counts, and timescale |
+|  | `search_signals` | Search for full signal paths |
+|  | `get_signal_at_time` | Read a value or expression at a selected time |
+|  | `get_signal_transitions` | Read transitions within a time window |
+|  | `get_signals_around_time` | Inspect multiple signals around a selected time |
+|  | `get_signals_by_cycle` | Sample signals or expressions on clock edges |
+| Differences and timing | `diff_first_divergence` | Locate the first confirmed known-value difference |
+|  | `trace_divergence` | Backtrace data, control, and prior state on both sides of a difference |
+|  | `period` | Check periods and cadence anomalies |
+|  | `verify_window` | Check temporal conditions in a waveform window |
+| Protocols and transactions | `suggest_handshakes` | Discover valid/ready signal bundles |
+|  | `suggest_protocol_bundles` | Discover AHB / APB signal bundles |
+|  | `sweep_handshakes` | Sweep discovered AHB / valid-ready interfaces for anomalies |
+|  | `inspect_handshake` | Inspect stalls and hold behavior on one interface |
+|  | `reconstruct_transactions` | Reconstruct requests/responses, latency, and outstanding requests |
+|  | `resolve_packed_fields` | Resolve packed fields and verify waveform coordinates |
+|  | `inspect_tlul` | Inspect TL-UL handshakes and requests/responses |
+| Time cursors | `cursor_set` | Name a key timestamp |
+|  | `cursor_list` | List session cursors |
+|  | `cursor_delete` | Delete a time cursor |
+| EDA integration | `build_kdb` | Build and cache a Verdi KDB |
 
 ## FAQ
 
-**Can I use TraceWeave without a commercial license?**
+**Can I use it without a commercial license?**
 
-Log analysis, VCD queries, static structural scanning, and Source Graph do not need a commercial license. **Direct value and transition queries on existing waveforms do not need an NPI license**: VCD uses the built-in parser, while FSDB uses the local Verdi FSDB Reader and remains subject to its agreement described above. Verdi NPI signal tracing and KDB builds require the corresponding EDA environment and license.
+Log analysis, VCD, optional FST, structural scanning, and Source Graph need no commercial license. FSDB uses your site's Verdi FSDB Reader under its applicable agreement. NPI tracing and KDB builds require the corresponding EDA environment and license.
 
-**Can missing path variables be recovered automatically?**
+**Do I need simulation results for a structural scan?**
 
-Yes. You can use a CLI agent in a terminal where the project's setup script has not been sourced, or give it logs and waveforms from a run launched in another terminal. TraceWeave can recover compilation input path variables from VCS compile logs and filelists when their values can be determined unambiguously, enabling hierarchy analysis, KDB builds, and Source Graph queries.
+No. Supply a compile/elaboration log and accessible sources/includes. The default `auto` mode runs text checks and reuses compatible semantic results; request `deep` for a new semantic scan. Findings are investigation leads, including potentially legitimate tie-offs.
 
-Recovery covers compilation input paths; the corresponding source and include files must remain accessible. The runtime prerequisites must already be available: `VERDI_HOME`, installed EDA tools, and license configuration for KDB builds, plus Python and `pyslang` dependencies for Source Graph.
+**Can it inspect formal waveforms?**
 
-**How should I judge signal-tracing accuracy?**
-
-NPI uses an elaborated KDB matching the current design; Source Graph builds a semantic connectivity graph from source. With complete compilation context, supported target semantics, and **complete query coverage, exact resolution, and no truncation**, the results can be treated as **exact structural connectivity facts within the current query scope** for driver, load, and connectivity path analysis.
-
-**Can I run static structural scans without simulation results?**
-
-Yes. `scan_structural_risks` performs static source analysis without running a simulation or reading simulation run logs or VCD / FSDB waveforms. The current interface requires a compile/elaboration log (`compile_log`) and access to the corresponding sources and include files, so it can be used after compilation/elaboration, before running the simulation.
-
-**How do I choose auto or deep for static structural scanning?**
-
-The default `auto` mode runs source-text checks and reuses compatible semantic results already available. Ask the assistant to use `deep` when you need a new semantic scan for constant connections, open inputs, and similar facts. The `analysis_mode` parameter applies to each call; no client configuration change is needed. Findings are leads to investigate: legitimate tie-offs and protocol constants may also appear.
-
-**Does a scan with no findings mean the design is correct?**
-
-Conclusions depend on actual coverage. Missing signals, resource limits, or unsupported structures can limit analysis. Zero findings with zero or partial coverage do not establish that a design is free of problems. Tools report coverage and truncation so the assistant can decide whether to narrow the scope and investigate further.
-
-**Can I inspect formal waveforms?**
-
-You can query exported VCD / FSDB files and automatically discover JasperGold artifacts. Property results, trace classification, and reachability semantics must come from the formal tool or the user.
-
-Standalone exports do not require a recognized formal project. When discovery finds waveforms without project entries, `get_formal_paths` includes a short hint for the existing point and batch readers; the caller selects the waveform, signals, and timestamp.
+Yes, exported waveforms use the same readers, with automatic JasperGold artifact discovery. Property results and reachability semantics still come from your formal tool or verification context.
 
 **Where is design data processed?**
 
-File parsing and EDA queries run locally or on the configured LSF compute nodes. Returned debugging evidence enters your AI client's context. TraceWeave usage telemetry is off by default and writes only to local files when enabled.
+File parsing and EDA queries run locally or on configured LSF nodes. Returned evidence enters your AI client's context. Usage telemetry is off by default and writes locally when enabled.
 
 ## Documentation and Feedback
 
@@ -762,6 +216,7 @@ File parsing and EDA queries run locally or on the configured LSF compute nodes.
 | Debugging steps and tool cooperation | [Debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) |
 | Verifying a root cause with evidence | [Debug discipline](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/debug-discipline.md) |
 | Architecture, backend capabilities, and resource limits | [Architecture](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md) |
+| Expression inputs and worked examples | [SV expressions](docs/expressions.md) |
 | Complete environment configuration and advanced settings | [Configuration reference](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#client-configuration-reference) |
 | Reporting a problem or suggesting a feature | [GitHub Issues](https://github.com/gokeshenzhen/TraceWeave/issues) |
 

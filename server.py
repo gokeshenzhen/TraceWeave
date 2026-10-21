@@ -7276,8 +7276,9 @@ async def list_tools():
                 "remain unvisited. count_mode=exact explicitly traverses undisplayed descendants within "
                 "the query budget. max_nodes includes the root. Locations retain raw NPI paths; "
                 "*_location_unbound row gaps identify paths not bound to captured inputs. "
-                "Independent Slang hierarchy fallback is pending; unavailable NPI returns an explicit "
-                "capability gap. Legacy handles retain their existing result shape."
+                "Source preference or ordinary NPI unavailability uses a bounded isolated Slang "
+                "hierarchy artifact; unsupported scopes retain explicit coverage gaps. "
+                "Legacy handles retain their existing result shape."
             ),
             inputSchema={
                 "type": "object",
@@ -7368,8 +7369,9 @@ async def list_tools():
                 "mean the path is not bound to captured inputs and is not a verified source locator. "
                 "Exact path queries do not enumerate children. Module searches "
                 "are bounded; count_mode=exact requests a complete count within the query budget. "
-                "Independent Slang hierarchy fallback is pending; unavailable NPI returns an explicit "
-                "capability gap. Legacy handles retain their existing result shape."
+                "Source preference or ordinary NPI unavailability uses a bounded isolated Slang "
+                "hierarchy artifact; unsupported scopes retain explicit coverage gaps. "
+                "Legacy handles retain their existing result shape."
             ),
             inputSchema={
                 "type": "object",
@@ -7465,7 +7467,8 @@ async def list_tools():
                 "component_tree_full requests exact descendant counting within those budgets. "
                 "export_complete=false means the export is partial or truncated even if its count is exact. "
                 "Class sections describe static inheritance; file/interface sections retain declaration "
-                "coverage gaps. Independent Slang export fallback is pending."
+                "coverage gaps. Source preference or ordinary NPI unavailability uses the corresponding "
+                "bounded Slang hierarchy, file or class artifact."
             ),
             inputSchema={
                 "type": "object",
@@ -7609,8 +7612,9 @@ async def list_tools():
                 "aligned clock_a/clock_b edges. History never extends before start_time_ps."
                 " Observations are reused only within this request and graph artifact; "
                 "a sub-ps event difference remains a sampling frontier for dynamic tracing."
-                " Independent-context source trace planning remains unavailable; bound Static "
-                "fallback reports that limitation. Identity changes discard both sides and the "
+                " Independent-context source tracing uses captured compile inputs and bounded semantic "
+                "artifacts; changing an artifact restarts that side from its original root. "
+                "Identity changes discard both sides and the "
                 "root comparison before any evidence cursor is published."
             ),
             inputSchema=schemas.TraceDivergenceInput.model_json_schema(),

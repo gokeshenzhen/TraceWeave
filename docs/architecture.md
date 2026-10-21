@@ -16,7 +16,7 @@ MCP interface and workflow gate
   - diagnostic snapshot and result caching
 
 Artifact discovery
-  src/path_discovery.py          # VCS/Xcelium simulation artifacts
+  src/path_discovery.py          # VCS/Xcelium/Verilator simulation artifacts
   src/formal_path_discovery.py   # bounded provider boundary; JasperGold first
 
 Core log and failure analysis
@@ -50,7 +50,7 @@ Waveform backends
   src/fst_runtime.py             # bounded, cancellable process transport
   src/fst_worker.py              # isolated libfst reader; request-scoped native state
   src/cycle_query.py
-  src/waveform_batch.py           # FSDB+VCD batch reader (time-window)
+  src/waveform_batch.py           # FSDB/VCD/FST batch readers (time-window)
   src/waveform_selection.py       # request-local declared-coordinate projections
   src/waveform_hints.py           # producer and exact tool pseudo-signal hints
   src/cancellation.py             # cooperative cancel checkpoints for worker-thread scans
@@ -178,10 +178,14 @@ Verification
   names and compiler-only content, and ranks evidence-backed simulation logs by
   filename affinity before mtime. Same-path snapshots remain independent of
   sibling-file discovery.
-- Structural scan results carry an additive coverage receipt. Only
-  `coverage_status=complete` with `total_risks=0` supports a clean-scan
-  observation; `zero_coverage` and `degraded` explicitly preserve uncertainty
-  when no supported source or only a partial/parser-degraded source set was read.
+- Structural scan results separate lexical and semantic coverage.
+  `lexical_coverage_status` preserves the lexical scan's coverage. The top-level
+  `coverage_status` starts with lexical coverage and is also degraded when an
+  explicitly requested `deep` scan has incomplete semantics. `semantic.status`,
+  `semantic.gaps` and `semantic.propagation` describe semantic work. Complete
+  lexical coverage with no findings is not a semantic pass.
+  `zero_coverage` and `degraded` preserve source/parser uncertainty, and
+  `semantic.status=not_run` means semantic checks did not run.
 - Protocol coverage and retry actionability are separate. Server routing relays
   only a sweep action that expands scope, narrows the time window, changes the
   edge, or raises a truncated interface cap. An unscoped zero-interface sweep
@@ -848,8 +852,9 @@ Verification
   the worker. Cancellation, timeout, changed inputs and analysis budget failures
   never advance fallback. Ordinary compile-log/old-handle routing is retained.
   Frontend parsing/elaboration can still cover the full compilation, even though
-  IR projection is bounded. This slice does not migrate all X/failure consumers,
-  provide a six-tool Slang service, or change cache/session defaults.
+  IR projection is bounded. Prepared X/divergence tracing and the six-tool Slang
+  hierarchy/source service are described separately above and below; this
+  planner does not change cache/session defaults.
   The optional `bounded_kdb_discovery` scope reuses that filesystem probe with
   one directory-entry budget (4,096 by default) and a caller-owned input
   capture. Setup files have a 64-KiB size precheck; compile option/filelist
@@ -1724,9 +1729,11 @@ raw `compile_result`, compact per-file scan results, and a private immutable
 content snapshot) but returns only a **slim payload** to the LLM: project,
 stats, depth-2 `tree_skeleton`, interfaces, `ambiguous_basenames`, numeric
 `build_metrics`, and a content-addressed `hierarchy_handle`. Compile transcripts
-are consumed as streams. A source body exists only while its file is being
-scanned; cross-file facts plus digest/stat/marker records are derived at that
-point and `source_text` is removed before the result enters the handle store.
+are consumed as streams. Without a shared preload, a source body exists only
+while its file is being scanned. Concurrent legacy hierarchy/scan consumers may instead retain bounded
+source text in the transient compile-source index until their final lease ends.
+Cross-file facts plus digest/stat/marker records survive; `source_text` is removed
+before the result enters the handle store.
 Retained hierarchy memory therefore scales with extracted metadata and one
 fixed-size record per file, not the sum of source bytes. The full result is
 registered in an in-process `HandleStore` (`src/hierarchy_handles.py`) keyed by
@@ -1948,7 +1955,7 @@ would defeat the bootstrap's resource bound.
 
 ## Connectivity Backend Cooperation (NPI, Source Graph, Static)
 
-Source Graph IR 1.5 / projector 1.12 records a template-local
+Source Graph IR 1.5 / projector 1.22 records a template-local
 `structural_driver_id` independently of every statement's `assignment_id`,
 dependencies, guards, location and dynamic expression. The query binds writer
 identity to the instance; distinct generate blocks, processes and continuous
@@ -2550,7 +2557,7 @@ normal public route instead of changing the mutable current session.
 `src/dynamic_evidence.py` defines a bounded typed expression contract.
 `src/npi_dynamic.py` obtains cell/port, mux polarity and edge facts from NPI and
 expands generated nets to declared signals/constants. `src/slang_dynamic.py`
-projects typed AST guards, priority and timing into Connectivity IR 1.4;
+projects typed AST guards, priority and timing into Connectivity IR 1.5;
 `src/source_graph_dynamic.py` binds statements and positive port paths to one
 prepared artifact. Old IR versions are cache misses, not implicit dynamic proof.
 The LSF `dynamic_step` request calls the same NPI core. NPI's active-design
@@ -2572,8 +2579,8 @@ reconstruct missing storage. `src/dynamic_selection.py` preserves the entire
 arithmetic computation before projecting result bits, including carries.
 Only an exact reference can establish passthrough; equal numeric values cannot.
 Index differences and changing selected dependencies remain explicit.
-Source Graph build/worker is 3.2, projector schema 1.8, query mapping 1.4 and
-adapter 3.13, so prior expression/cache capabilities cannot silently carry over.
+Source Graph build/worker is 3.4, projector schema 1.22, query mapping 1.8 and
+adapter 3.15, so prior expression/cache capabilities cannot silently carry over.
 
 `src/dynamic_observe.py` separates output observation, triggering edge and strict
 predecessor samples; it does not infer simulation scheduling order from integer
@@ -2620,9 +2627,12 @@ Legacy explicit hierarchy routes and trusted NPI priority remain available.
 ## Bounded X History
 
 `trace_x_source` preserves the same-time `snapshot` mode and adds opt-in `history`.
-History requires `history_start_ps` and a current hierarchy for `compile_log`;
-optional `compile_context` binds an exact hierarchy handle/top as in divergence
-tracing. The compile log must agree with the outer request. The caller still
+History requires `history_start_ps` and either an independent `design_handle`
+or the legacy compile/hierarchy context. A prepared handle needs no full
+hierarchy; see [Prepared traces and packed layouts](#prepared-traces-and-packed-layouts).
+For the legacy route, optional `compile_context` binds an exact hierarchy
+handle/top as in divergence tracing, and its compile log must agree with the
+outer request. The caller still
 owns the waveform-to-compile version relationship; a matching source snapshot
 does not prove a historical waveform came from that compilation. All time
 inputs use the existing TimeSpec resolver. `signal_path` names an exact dump
@@ -3365,7 +3375,8 @@ transaction core. Two byte vectors carry reset/uncertain-history boundaries,
 without copying samples or inventing a reset signal. Its private
 `TransactionSampleInput` binds the original parser/epoch, file identity, actual
 declarations and ordered selected bits, roles and ordered payload fields,
-clock/edge/window, fixed 1 ps sample offset, reset polarity and semantic version.
+clock/edge/window, strict-before-edge sampling with zero offset, reset polarity
+and semantic version.
 Identity is captured before sampling and checked again before correlation;
 untyped sample dictionaries, changed files, reopened parsers and incompatible
 mappings cannot be reused. Semantic/layout export remains a separate capability;
@@ -3527,3 +3538,101 @@ waits for its bounded native call to return. Metadata binding runs under the
 wave lock after semantic work finishes. A dependency failure cannot change the
 original backend or erase its driver facts. Choose a time window and phase in
 a separate cycle query; query a direct data input for another explicit hop.
+
+## Runtime log formats
+
+### Custom checker messages
+
+`parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
+
+If your messages share a label but the text after it varies, matching that label is enough:
+
+```text
+MY_CHECK_FAIL @ 12.5 ns expected=0x12 actual=0x34
+MY_CHECK_FAIL @ 20 ns timeout waiting for response
+```
+
+Replace the default `patterns: []` with the following, or append the rule to your existing `patterns` list:
+
+```yaml
+patterns:
+  - name: my_checker
+    severity: ERROR
+    regex: '^MY_CHECK_FAIL'
+```
+
+`^` means the start of the line; everything after the label may vary, with no extra regex needed. If a timestamp or other text precedes the label, use `regex: 'MY_CHECK_FAIL'` to match it anywhere in the line.
+
+- `name` identifies the failure group. `severity` defaults to `ERROR`; `FATAL` and `WARNING` are also supported. Matched custom warnings are included in runtime failure counts. `description` is for maintainers.
+- `regex` matches one log line at a time. Use YAML single quotes to preserve backslashes. Built-in assertion and UVM parsing runs first, followed by custom rules in list order (first match wins), then the generic `ERROR` fallback. Recognized compile / elaboration diagnostics remain excluded.
+
+The `expected=0x12 actual=0x34` format above is already recognized automatically, so the simple label rule is enough and no named captures are needed. Suppose your log uses its own field names instead:
+
+```text
+MY_CHECK_FAIL @ 12.5 ns want=0x12 have=0x34
+```
+
+`regex: '^MY_CHECK_FAIL'` still recognizes the error and preserves the full message. To also extract `want` and `have` as the expected and actual values, replace the `regex` in the rule above with:
+
+```yaml
+regex: '^MY_CHECK_FAIL.*want=(?P<expected>\S+)\s+have=(?P<actual>\S+)'
+```
+
+Repository installations use the root `custom_patterns.yaml` by default. To keep project rules elsewhere, or when using the PyPI installation, save the YAML above in your own file and pass its absolute path to the MCP server process:
+
+```bash
+export TRACEWEAVE_CUSTOM_PATTERNS_FILE="/absolute/path/to/custom_patterns.yaml"
+```
+
+This selects that file instead of the default custom rules; built-in formats remain active. The MCP client must inherit or explicitly forward the variable. Restart or reconnect the server after changing it, then parse the log again. Edits to the selected YAML are loaded on the next `parse_sim_log` call.
+
+### Verilator runtime logs
+
+`parse_sim_log(log_path=..., simulator="verilator")` recognizes native runtime
+assertions / `$error` / `$fatal` / `$stop`, cocotb test failures with bounded Python
+tracebacks, X-HEEP `example_dma` comparisons and software exit values, and
+OpenTitan software comparisons / status failures. Compiler warnings and errors,
+`ERROR:cocotb:` logger wrappers, source echoes, normal `$finish`, and software
+exit zero are excluded. Other custom TB text needs explicit custom patterns.
+
+Bare native timestamps stay `time_ps=None` unless `native_time_unit="ps"` (or
+fs/ns/us/ms/s) is supplied with independently verified TB/context evidence.
+This setting applies only to native/custom/UVM bare simulation timestamps.
+Explicit units take precedence. Conversion uses exact decimal arithmetic and
+rounds up sub-ps time to integer ps. Cycle counts, UART rows, and host wallclock
+time do not acquire waveform timestamps. Optional TraceWeave acceptance
+observers provide software-exit or termination anchors, not the first bad RTL
+transaction. Detection source locations are checker locations, not root causes.
+Use the same verified unit setting in analysis and snapshot/log diff calls;
+snapshots with different settings cannot be compared. Unknown-time analysis
+returns log context without querying 0ps.
+
+Verilator discovery reads bounded head/tail log samples, including delayed cocotb
+banners. Hierarchy and structural analysis require a real HDL invocation
+(`verilator --cc/--xml-only ...`) with an explicit `--top-module`, the execution
+cwd (for example Make's entering-directory line), and available ordered
+`-f`/`-F` inputs. Include paths, macros, and top parameter overrides are replayed
+into the existing Source Graph frontend; C++ files and `.vlt` controls are not
+HDL. Waiver/trace/optimizer controls are fingerprinted support inputs; unmodeled
+controls stay explicit coverage exclusions. Missing HDL commands, filelists,
+or tops remain gaps. A C++ build log alone does not provide HDL context; there
+is no automatic unrelated-sidecar or vendor-tree recovery.
+
+Run `get_sim_paths`, then `prepare_design_context` and `scan_structural_risks` in
+parallel on that same compile log before parsing/analyzing the run. Failed runs
+with waveforms require `sweep_handshakes`; zero/partial coverage does not exclude
+OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
+synthetic waveform `TOP.` prefix is not an HDL instance (remove it only after
+confirming the following segment is the compiled top). Static/Source Graph
+coverage remains bounded. An existing external KDB can be declared through
+`prepare_design_context(kdb_path=...)`, including for Verilator inputs; it must
+pass the same candidate/load checks and is not assumed to match current sources.
+
+Use the returned `design_handle` for on-demand source and tracing queries.
+`get_diagnostic_snapshot(design_handle=...)` reports observed context metadata;
+it does not revalidate source/KDB identity or imply complete semantic coverage.
+Multiple contexts for the same primary log require an explicit selection.
+`build_tb_hierarchy` remains the explicit legacy full-tree option; when used,
+run it alongside the same structural scan. Expired driver actions retain their
+historical identity tokens during recovery; preparing current inputs does not
+prove a historical source association.

@@ -1,6 +1,6 @@
 # SV / Verilog 表达式查询
 
-更新：2026-09-23。复用现有 MCP 工具，不新增表达式工具或持久化虚拟信号。
+复用现有 MCP 工具，不新增表达式工具或持久化虚拟信号。
 普通字符串仍表示实际信号路径；公式必须放在显式 `expr` 对象中。
 
 ## 直接运行客户端示例
@@ -53,6 +53,11 @@ b 改为 4 后得到 5。返回 `expressions` receipt，记录推导类型、真
 没有结束时间时默认读取 16 拍，有结束时间且省略拍数时读取窗口内最多 256 拍。
 读取 `effective_num_cycles` / `capped`：`capped=true` 表示没有返回整个请求范围，
 用最后一行的 `cycle + 1` 作为下一次 `start_cycle` 继续查询。
+
+以上为默认 `cycle_index_origin: "global"` 的全局编号。若只关心局部时间窗，
+可用 `cycle_index_origin: "window"` 配合 `start_time_ps`，在有界窗口内从 0 编号，
+无需读取全部时钟历史。读取 `local_coverage`；遇到时钟未知、记录缺口或预算上限
+时只返回可信前缀。局部编号不能作为全局 `start_cycle` 续查，下一窗口须重新指定时间。
 
 `sample_phase` 默认 `after`，在边沿后 `sample_offset_ps`（默认 1ps）读取。
 需要该沿采纳的输入时，指定 `sample_phase: "before"`，省略偏移或设为 0：
@@ -259,12 +264,12 @@ MCP `isError=false` 判定求值成功。表达式错误保留 `error`，并增�
 以及 `recovery: {action,message}`。`position` 是表达式文本的零起始字符偏移。
 MCP 层直接拒绝不符合 inputSchema 的参数时，请先按该 schema 修正；请求尚未进入求值器。
 
-周期查询的负 `sample_offset_ps` 和定位轴冲突会返回
+周期查询的负 `sample_offset_ps`、定位轴冲突，以及沿前模式的非零偏移会返回
 `error_code="invalid_cycle_arguments"`、`issues` 清单和字符串 `recovery`，
 且 `sampling_executed=false`。一次修正清单中所有问题：起点选择
-`start_cycle` 或 `start_time_ps`，范围选择 `num_cycles` 或 `end_time_ps`。
-沿后采样默认偏移为 1 ps；沿前值用所需沿前时间的点查询读取，不应把沿后值
-当作该沿接受的输入。
+`start_cycle` 或 `start_time_ps`；`end_time_ps` 可与 `num_cycles` 同时使用，后者限制
+窗口内返回的拍数。沿后采样默认偏移为 1 ps；读取该沿接受的输入时使用
+`sample_phase: "before"`，省略 `sample_offset_ps` 或设为 0，排除同一物理时间戳的更新。
 
 | error_code | 客户端下一步 |
 |---|---|

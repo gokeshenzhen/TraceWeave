@@ -112,9 +112,12 @@ Key reminders that the tools encode for you:
 Rule 4 always means "verify the side you did *not* already suspect." What the two
 sides *are* depends on the module:
 
-- **Protocol / bus:** initiator/producer (drives `valid`/HTRANS/payload) vs.
-  responder/consumer (drives `ready`/HREADY). See the role table in
-  `docs/workflow.md`.
+- **Protocol / bus:** the channel producer (drives `valid`/payload) vs. the
+  channel consumer (drives `ready`). On AXI AW/AR/W the producer is the master;
+  on R/B it is the slave. On AHB, the master drives HTRANS/address control and
+  the responder side supplies HREADY. Determine the role per channel before
+  interpreting `attribution`; a producer hold violation does not implicate the
+  ready driver. See `docs/workflow.md`.
 - **Datapath / algorithm:** input stimulus (is the operand/control word correct
   at the input boundary?) vs. the compute logic (does the block transform a known
   input wrong?) vs. the reference/expected model (is the *expectation* wrong?).
