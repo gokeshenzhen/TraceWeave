@@ -54,6 +54,7 @@ def collect_source_catalog(projector, root):
     limited = False
     stop_reason = None
     coordinates = {}
+    processed = set()
     coordinate_bytes = 0
     top_instances, semantic_tops = [], []
     classes = None
@@ -79,6 +80,36 @@ def collect_source_catalog(projector, root):
             spelling = str((projector.options.source_root or Path.cwd()) / path)
         return aliases.get(spelling)
 
+    def coordinate(buffer, path):
+        """Index a requested physical buffer once, under the shared envelope.
+
+        A real declaration already supplies its native buffer. It need not
+        wait for every unrelated expansion buffer to be inventoried first.
+        """
+        nonlocal coordinate_bytes
+        existing = coordinates.get(buffer)
+        if existing is not None:
+            return existing
+        charge()
+        raw = projector.source_manager.getSourceText(buffer).encode('utf-8')
+        required = len(raw) + 512
+        if coordinate_bytes + required > search.source_max_bytes:
+            raise Limit('source_catalog_coordinate_byte_limit')
+        coordinate_bytes += required
+        starts = [0]
+        offset = raw.find(b'\n')
+        while offset >= 0:
+            charge()
+            if coordinate_bytes + 64 > search.source_max_bytes:
+                raise Limit('source_catalog_coordinate_byte_limit')
+            coordinate_bytes += 64
+            starts.append(offset + 1)
+            offset = raw.find(b'\n', offset + 1)
+        result = (starts, len(raw))
+        coordinates[buffer] = result
+        processed.add(path)
+        return result
+
     def location(value, *, expanded=False):
         if value is None:
             return None
@@ -91,10 +122,9 @@ def collect_source_catalog(projector, root):
             # this is frontend evidence, not a live filesystem resolution.
             path = (binding(str(manager.getFullPath(original.buffer)))
                     or binding(str(manager.getFileName(original))))
-            coordinate = coordinates.get(original.buffer)
-            if coordinate is None:
+            if path not in files:
                 return None
-            starts, size = coordinate
+            starts, size = coordinate(original.buffer, path)
             offset = int(original.offset)
             if not 0 <= offset <= size:
                 return None
@@ -320,9 +350,21 @@ def collect_source_catalog(projector, root):
             coordinate_bytes += required
             semantic_tops.append(name)
             top_instances.append(instance)
+        # Retain real namespace declarations before global buffer accounting
+        # can consume the finite member budget. Locations lazily index only
+        # requested native physical buffers, with the same byte/visit caps.
+        definitions = list(root.compilation.getDefinitions())
+        for symbol in definitions:
+            charge()
+            declaration(symbol, None, None)
+        packages = []
+        for package in root.compilation.getPackages():
+            charge()
+            declaration(package, None, None)
+            packages.append(package)
         # Buffers prove empty/header files were processed; membership alone
         # cannot establish that the frontend parsed a file or its language.
-        processed = set()
+        # Every buffer, including expansions, remains charged and cancellable.
         for buffer in projector.source_manager.getAllBuffers():
             charge()
             if str(projector.source_manager.getBufferKind(buffer).name) in {'Macro', 'MacroArg'}:
@@ -331,35 +373,13 @@ def collect_source_catalog(projector, root):
             if path is not None:
                 processed.add(path)
             if path in files:
-                raw = projector.source_manager.getSourceText(buffer).encode('utf-8')
-                starts = [0]
-                # Coordinate indexing reads only already parsed frontend
-                # buffers. Bytes and newline entries have one cumulative cap.
-                required = len(raw) + 512
-                if coordinate_bytes + required > search.source_max_bytes:
-                    raise Limit('source_catalog_coordinate_byte_limit')
-                coordinate_bytes += required
-                offset = raw.find(b'\n')
-                while offset >= 0:
-                    charge()
-                    if coordinate_bytes + 64 > search.source_max_bytes:
-                        raise Limit('source_catalog_coordinate_byte_limit')
-                    coordinate_bytes += 64
-                    starts.append(offset + 1)
-                    offset = raw.find(b'\n', offset + 1)
-                coordinates[buffer] = (starts, len(raw))
+                coordinate(buffer, path)
         for path in files:
             if path not in processed:
                 gap(path, "source_file_not_processed_by_frontend")
-        definitions = list(root.compilation.getDefinitions())
-        for symbol in definitions:
-            charge()
-            declaration(symbol, None, None)
         for index, unit in enumerate(root.compilationUnits):
             enqueue(unit, None, None, 0, ("compilation_unit", index))
-        for package in root.compilation.getPackages():
-            charge()
-            declaration(package, None, None)
+        for package in packages:
             enqueue(package, identity(package), None, 0)
         for instance in top_instances:
             charge()

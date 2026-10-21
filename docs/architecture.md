@@ -585,6 +585,14 @@ Verification
   original parsed source buffer; a bounded byte-offset/newline index supplies
   physical coordinates even with line directives. Macro expansion usage leaves
   an explicit caller-side usage/import gap instead of a complete negative.
+  Definition and package declarations precede global buffer bookkeeping;
+  their requested native physical buffers receive lazy, shared coordinate
+  indexes. All buffers, including macro expansions, still consume the same
+  finite visit budget. A later buffer frontier preserves earlier positive
+  declarations while marking inventory/import/usage coverage partial. Index
+  creation and every indexed newline also consume that budget and retain
+  cancellation and byte-limit checks. Projector identity `1.20` prevents reuse of
+  artifacts produced by the previous collection order.
   Coordinate-index, retained top proof and class/type parameter observation bytes share the artifact byte limit
   and request accounting; top proof also consumes the member-visit budget.
   Declaration IDs bind the
