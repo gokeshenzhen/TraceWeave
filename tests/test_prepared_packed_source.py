@@ -1,6 +1,7 @@
 """Real isolated Slang layout queries. VCD declarations are authored fixtures."""
 from dataclasses import replace
 import json
+import traceback
 from pathlib import Path
 
 import pytest
@@ -86,7 +87,8 @@ def test_layout_purpose_is_exact_capability_and_roundtrips():
     layout = replace(scope, semantic_search=SemanticScopeSearch(purpose='packed_layout'))
     assert type(layout).from_dict(layout.to_dict()) == layout
     for purpose in ('connectivity', 'hierarchy', 'trace'):
-        other = replace(scope, semantic_search=SemanticScopeSearch(purpose=purpose))
+        other = replace(scope, semantic_search=SemanticScopeSearch(purpose=purpose,
+            **({'roots': (scope.top,), 'depth': 0} if purpose == 'hierarchy' else {})))
         assert compare_source_graph_artifact_scopes(layout, other).value == 'unproven'
         assert compare_source_graph_artifact_scopes(other, layout).value == 'unproven'
 
@@ -237,17 +239,40 @@ async def test_cached_connection_and_hierarchy_cannot_supply_layout(tmp_path, mo
     result = await packed(tmp_path, handle, wave)
     assert result['status'] == 'resolved' and len(builds) == before + 1, result
     entry = entries[-1]
+    # Preserve the real producer before testing the earliest rejecting boundary.
+    (tmp_path / 'layout-producer.raw.json').write_bytes(entry.ir_json_bytes)
+    def observed_rejection(label, scope, action):
+        (tmp_path / f'{label}.scope.json').write_text(json.dumps(scope.to_dict()))
+        try:
+            return action()
+        except BaseException as exc:
+            (tmp_path / f'{label}.exception.json').write_text(json.dumps({
+                'type': type(exc).__name__, 'message': str(exc)}))
+            (tmp_path / f'{label}.exception.txt').write_text(traceback.format_exc())
+            raise
+
     for purpose in ('hierarchy', 'connectivity'):
         scope = replace(entry.artifact_identity.scope, semantic_search=replace(
-            entry.artifact_identity.scope.semantic_search, purpose=purpose))
-        poisoned = replace(entry, artifact_identity=replace(entry.artifact_identity, scope=scope),
-            artifact_scope_receipt=replace(entry.artifact_scope_receipt, scope=scope))
-        with pytest.raises(ValueError, match='artifact_type_layout_capability_missing'):
-            packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
+            entry.artifact_identity.scope.semantic_search, purpose=purpose,
+            **({'roots': (entry.artifact_identity.scope.top,), 'depth': 0}
+               if purpose == 'hierarchy' else {})))
+        def attempt():
+            poisoned = replace(entry, artifact_identity=replace(entry.artifact_identity, scope=scope),
+                artifact_scope_receipt=replace(entry.artifact_scope_receipt, scope=scope))
+            return packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
+        expected = ('hierarchy artifact contains missing or mixed facts' if purpose == 'hierarchy'
+                    else 'artifact_type_layout_capability_missing')
+        with pytest.raises(ValueError, match=expected):
+            observed_rejection('poison-' + purpose, scope, attempt)
     metadata = dict(entry.ir.metadata); metadata['semantic_assignment_paths'] = '[]'
-    poisoned = replace(entry, ir=replace(entry.ir, metadata=tuple(metadata.items())))
+    def missing_layout():
+        changed_ir = replace(entry.ir, metadata=tuple(metadata.items()))
+        (tmp_path / 'poison-layout.ir.raw.json').write_bytes(changed_ir.to_json_bytes())
+        poisoned = replace(entry, ir=changed_ir)
+        return packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
     with pytest.raises(ValueError, match='port_binding_only_scope_has_no_complete_type_layout'):
-        packed_field_selections(poisoned, 'top.active.small_bus.bus', 'dump', ['valid'])
+        observed_rejection('poison-layout', entry.artifact_identity.scope, missing_layout)
+
 
 
 @pytest.mark.anyio

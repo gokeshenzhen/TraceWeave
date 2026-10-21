@@ -51,7 +51,7 @@ def isolation(monkeypatch, tmp_path):
     capture_failed = threading.Event()
     original_load = source_graph_runtime.SourceGraphRuntime._load_cache_entry
 
-    def capture_load(runtime, request, key, worker):
+    def capture_load(runtime, request, key, worker, **kwargs):
         directory = None
         inputs_saved = False
         def capture_error():
@@ -93,7 +93,7 @@ def isolation(monkeypatch, tmp_path):
             except BaseException:
                 capture_error()
         try:
-            result = original_load(runtime, request, key, worker)
+            result = original_load(runtime, request, key, worker, **kwargs)
         except BaseException as exc:
             finish("raised", exc, traceback.format_exc())
             raise
