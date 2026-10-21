@@ -59,7 +59,8 @@ def asked(request, *, root='sg_top.child', hint='sg_top.child', foreign=False, c
     search = replace(request.scope.semantic_search, roots=(root,), assignment_candidates=(hint,),
                      depth=8 if complete else 0, hierarchy_mode='complete' if complete else 'bounded')
     return _request(scope=replace(_scope(signal_path=root + '.signal', ancestors=('sg_top', root),
-        cone_paths=paths, boundary_paths=paths), semantic_search=search))
+        cone_paths=paths, boundary_paths=paths), semantic_search=search,
+        elaboration_candidates=('sg_top.foreign',) if foreign else ()))
 
 
 def decision(entry, query):
