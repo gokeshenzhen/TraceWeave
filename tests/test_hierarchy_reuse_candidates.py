@@ -7,9 +7,11 @@ import asyncio
 from dataclasses import replace
 import hashlib
 import json
+import traceback
 
 import pytest
 
+from src.connectivity_ir import ConnectivityIR
 from src.hierarchy_source_ir import HierarchyQueryBudget
 from src.slang_hierarchy_source import SlangHierarchyProvider
 from src.source_graph_contract import compute_source_graph_build_key
@@ -21,17 +23,35 @@ from tests.test_source_graph_runtime import _request, _scope, ImmediateWorker
 
 
 def producer(tmp, *, limited=False):
-    request, ready = fixture('hierarchy', limited=limited)
-    search = replace(request.scope.semantic_search, assignment_candidates=('sg_top',))
-    request = _request(scope=replace(request.scope, semantic_search=search))
-    payload = json.loads(dict(ready.ir.metadata)['hierarchy_scopes_v2'])
-    payload['search_sha256'] = hashlib.sha256(json.dumps(search.to_dict(), sort_keys=True,
-        separators=(',', ':')).encode()).hexdigest()
-    ir = replace(ready.ir, metadata=(('hierarchy_scopes_v2', json.dumps(payload, sort_keys=True)),))
-    ready = WorkerBuildResult.ready(ir, replace(ready.scope_receipt, scope=request.artifact_identity.scope))
-    (tmp / 'producer.request.json').write_text(json.dumps(request.to_dict()))
-    (tmp / 'producer.ir.raw.json').write_bytes(ready.ir_json_bytes)
-    return request, ready
+    # Factory evidence starts before constructing its source fixture. These are
+    # control inputs, distinct from the serialized runtime request saved below.
+    (tmp / 'producer.control.json').write_text(json.dumps(dict(kind='hierarchy', limited=limited)))
+    try:
+        request, ready = fixture('hierarchy', limited=limited)
+        (tmp / 'source.request.json').write_text(json.dumps(request.to_dict()))
+        (tmp / 'source.ir.raw.json').write_bytes(ready.ir_json_bytes)
+        (tmp / 'source.ready.json').write_text(json.dumps(dict(status=ready.status.value,
+            ir_fingerprint_sha256=ready.ir_fingerprint_sha256,
+            scope_receipt=ready.scope_receipt.to_dict(), metrics=ready.metrics.to_dict())))
+        decoded = ConnectivityIR.from_json_bytes(ready.ir_json_bytes)
+        search = replace(request.scope.semantic_search, assignment_candidates=('sg_top',))
+        request = _request(scope=replace(request.scope, semantic_search=search))
+        (tmp / 'producer.request.json').write_text(json.dumps(request.to_dict()))
+        payload = json.loads(dict(decoded.metadata)['hierarchy_scopes_v2'])
+        payload['search_sha256'] = hashlib.sha256(json.dumps(search.to_dict(), sort_keys=True,
+            separators=(',', ':')).encode()).hexdigest()
+        ir = replace(decoded, metadata=(('hierarchy_scopes_v2', json.dumps(payload, sort_keys=True)),))
+        (tmp / 'producer.ir.raw.json').write_bytes(ir.to_json_bytes())
+        ready = WorkerBuildResult.ready(ir, replace(ready.scope_receipt, scope=request.artifact_identity.scope))
+        (tmp / 'producer.ready.json').write_text(json.dumps(dict(status=ready.status.value,
+            ir_fingerprint_sha256=ready.ir_fingerprint_sha256,
+            scope_receipt=ready.scope_receipt.to_dict(), metrics=ready.metrics.to_dict())))
+        return request, ready
+    except BaseException as exc:
+        (tmp / 'producer.exception.json').write_text(json.dumps(dict(
+            type=type(exc).__name__, message=str(exc))))
+        (tmp / 'producer.exception.txt').write_text(traceback.format_exc())
+        raise
 
 
 def asked(request, *, root='sg_top.child', hint='sg_top.child', foreign=False, complete=False):
