@@ -69,10 +69,10 @@ async def test_native_cross_file_parent_and_nested_scope_identity_across_artifac
 @pytest.mark.anyio
 async def test_native_declaration_anchor_does_not_merge_type_specializations(tmp_path):
     handle = await prepare(tmp_path, class_support.materialize(tmp_path), 'source', class_support.TOP)
+    classes = await _call(tmp_path, handle, 'get_tb_class_hierarchy')
     details = {}
     for name in ('external.sv', 'classes.sv'):
         details[name] = await _call(tmp_path, handle, path=str(tmp_path / name))
-    classes = await _call(tmp_path, handle, 'get_tb_class_hierarchy')
     repeated = await _call(tmp_path, handle, 'get_tb_class_hierarchy')
     _save(tmp_path, 'canonical_and_declaration_identity.raw.json', dict(
         details=details, classes=classes, repeat=repeated))
@@ -80,7 +80,8 @@ async def test_native_declaration_anchor_does_not_merge_type_specializations(tmp
     # The frozen class oracle checks native matching for distinct nominal
     # arguments, an actual alias and same-declaration nested specializations.
     inner = [row for row in rows if row['name'] == 'Inner' and row['source_line'] == 15]
-    assert len(inner) == 2 and len({row['type_id'] for row in inner}) == 2
+    assert len(inner) == class_support.ORACLE['nested_actual_type_count']
+    assert len({row['type_id'] for row in inner}) == len(inner)
     assert len({row['declaration_id'] for row in inner}) == 1
     assert repeated['artifact_identity'] == classes['artifact_identity']
     assert repeated['backend_status']['source_graph']['metrics']['actual_build_count'] == 0
