@@ -158,13 +158,14 @@ def _catalog(root, label, manager, native_root, search):
 
 def test_native_out_of_domain_parent_anchor_needs_no_foreign_line_index(tmp_path):
     manager, native_root, search, owners = _native_parent(tmp_path, long_parent=True)
+    search = replace(search, max_members=1024)
     small, reads = _catalog(tmp_path, 'child_small', manager, native_root, search)
     parent_search = replace(search, source_files=(str(tmp_path / 'parent.sv'),), max_members=50000)
     parent, parent_reads = _catalog(tmp_path, 'parent_large', manager, native_root, parent_search)
     child = _named(small['files'][str(tmp_path / 'child.svh')]['symbols'], 'parent::Child')
     package = _named(parent['files'][str(tmp_path / 'parent.sv')]['symbols'], 'parent')
     assert child['scope_key'] == package['declaration_key']
-    assert not small['limited'] and small['member_visits'] <= 256
+    assert not small['limited'] and small['member_visits'] <= search.max_members
     assert small['coordinate_bytes'] < 4096
     assert reads == [str(tmp_path / 'child.svh')]
     assert str(tmp_path / 'parent.sv') in parent_reads
