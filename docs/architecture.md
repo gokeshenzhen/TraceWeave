@@ -591,12 +591,17 @@ Verification
   finite visit budget. A later buffer frontier preserves earlier positive
   declarations while marking inventory/import/usage coverage partial. Index
   creation and every indexed newline also consume that budget and retain
-  cancellation and byte-limit checks. Projector identity `1.20` prevents reuse of
-  artifacts produced by the previous collection order.
+  cancellation and byte-limit checks. Projector identity `1.21` isolates the declaration ordering and native-anchor
+  identity semantics from earlier artifacts.
   Coordinate-index, retained top proof and class/type parameter observation bytes share the artifact byte limit
   and request accounting; top proof also consumes the member-visit budget.
   Declaration IDs bind the
-  captured context plus semantic scope/kind/location; symbol IDs remain local
+  captured content context plus native semantic scope/kind/name and a captured
+  fully-original physical owner/byte-offset anchor. This anchor is independent
+  of requested files and retained coordinate indexes; out-of-domain parent
+  identities do not read foreign source text. Unbound native ownership remains
+  unknown rather than receiving a name-only identity. Canonical class/type
+  specialization identity retains native matching. Symbol IDs remain local
   to the exact artifact. Applicable file-detail/filter queries reuse one exact
   artifact; another file domain requires honest new work unless an explicit
   compatible catalog superset is available. Catalog subset reuse preserves all

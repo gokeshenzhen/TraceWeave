@@ -38,6 +38,34 @@ _USAGE_EXPRESSIONS = {
 }
 
 
+def _declaration_identity(symbol, manager, binding, charge, kind_name):
+    """Bounded native anchor, independent of retained files and line indexes.
+
+    The provider adds the captured content-context identity to this key.
+    Display locations and canonical specialization keys are separate facts.
+    """
+    charge()
+    value = symbol.location
+    if value is None or not value:
+        return None
+    try:
+        original = manager.getFullyOriginalLoc(value)
+        if not original:
+            return None
+        if str(manager.getBufferKind(original.buffer).name) not in {
+                'DesignFile', 'IncludeFile', 'LibraryFile'}:
+            return None
+        owner = binding(str(manager.getFullPath(original.buffer)))
+        offset = int(original.offset)
+    except (ValueError, RuntimeError):
+        return None
+    if owner is None or offset < 0:
+        return None
+    return hashlib.sha256(json.dumps([
+        'native_original_offset_v1', kind_name(symbol), str(symbol.lexicalPath),
+        str(symbol.name), {'file': owner, 'offset': offset}], sort_keys=True).encode()).hexdigest()
+
+
 def collect_source_catalog(projector, root):
     from .slang_connectivity_projector import _kind_name
     from pyslang.ast import AssertionExpr, Constraint, Expression, Pattern, Symbol, VisitAction
@@ -154,9 +182,9 @@ def collect_source_catalog(projector, root):
             return None
 
     def identity(symbol, where=None):
-        where = source(symbol) if where is None else where
-        return hashlib.sha256(json.dumps([_kind_name(symbol), str(symbol.lexicalPath),
-                                         str(symbol.name), where], sort_keys=True).encode()).hexdigest()
+        # Keep the ClassCollector callback shape; public `where` is never an
+        # identity input because it is intentionally filtered to this query.
+        return _declaration_identity(symbol, projector.source_manager, binding, charge, _kind_name)
 
     def gap(path, label, domains=("inventory", "imports", "usage")):
         targets = files.values() if path is None else (files[path],) if path in files else ()
@@ -218,7 +246,7 @@ def collect_source_catalog(projector, root):
             elif item.isVirtualInterface or item.isCovergroup or item.isTypeRefType:
                 gap(path, "source_type_usage_domain_uncovered", ("usage",))
 
-    def declaration(symbol, scope_key, owner_file):
+    def declaration(symbol, scope_key, owner_file, *, scope_identity_unknown=False):
         kind, where = _kind_name(symbol), source(symbol)
         public = (_KINDS.get(kind) if kind != "Definition" else
                   str(symbol.definitionKind.name).lower())
@@ -238,12 +266,22 @@ def collect_source_catalog(projector, root):
         if row is None:
             return
         key = identity(symbol, where)
+        if key is None:
+            gap(where['file'], 'source_declaration_identity_unbound', ('inventory',))
+            if classes is not None:
+                classes.gaps.add('source_class_declaration_identity_unbound')
+            return
         if classes is not None:
             classes.declaration(symbol, scope_key)
         gaps = []
+        if scope_identity_unknown:
+            gaps.append('source_scope_identity_unbound')
+            gap(where['file'], gaps[-1], ('inventory',))
+            if classes is not None:
+                classes.gaps.add(gaps[-1])
         if kind == "GenericClassDef":
             gaps.append("source_generic_class_members_not_enumerated")
-            gap(where["file"], gaps[0])
+            gap(where["file"], "source_generic_class_members_not_enumerated")
         row["symbols"].setdefault(key, dict(key=key, name=str(symbol.name),
             qualified_name=str(symbol.lexicalPath) or str(symbol.name), kind=public,
             location=where, scope_key=scope_key, declaration_key=key,
@@ -293,7 +331,8 @@ def collect_source_catalog(projector, root):
             gap(path, 'source_expression_usage_domain_uncovered', ('usage',))
 
     def enqueue(scope, scope_key, path, depth, key=None):
-        pending.append((scope, scope_key, path, depth, key))
+        pending.append((scope, scope_key, path, depth, key,
+                        scope_key is None and key is None))
 
     if "class_inheritance" in search.source_capabilities:
         from .slang_class_catalog import ClassCollector
@@ -311,12 +350,12 @@ def collect_source_catalog(projector, root):
                                  max_depth=search.source_max_depth, depth_limit=class_depth_limit,
                                  parameter_limit=class_parameter_limit, reserve=class_reserve)
 
-    def expression_walk(value, scope_key, path, depth):
+    def expression_walk(value, scope_key, path, depth, *, scope_identity_unknown=False):
         if value is None:
             return
-        work = [(value, scope_key, depth)]
+        work = [(value, scope_key, depth, scope_identity_unknown)]
         while work:
-            value, current_scope, level = work.pop()
+            value, current_scope, level, current_scope_unknown = work.pop()
             if level > search.source_max_depth:
                 raise Limit('source_catalog_depth_limit')
             def callback(node):
@@ -326,10 +365,11 @@ def collect_source_catalog(projector, root):
                     block_key = identity(block) if block is not None else current_scope
                     if block is not None:
                         enqueue(block, block_key, path, level + 1)
-                    work.append((node.body, block_key, level + 1))
+                    work.append((node.body, block_key, level + 1,
+                                 block_key is None if block is not None else current_scope_unknown))
                     return VisitAction.Skip
                 if isinstance(node, Symbol):
-                    declaration(node, current_scope, path)
+                    declaration(node, current_scope, path, scope_identity_unknown=current_scope_unknown)
                     if node.isScope and _kind_name(node) in _SCOPE_KINDS:
                         enqueue(node, identity(node), path, level + 1)
                         return VisitAction.Skip
@@ -388,12 +428,19 @@ def collect_source_catalog(projector, root):
             enqueue(instance.body, key, None, 0)
         while pending:
             charge()
-            scope, scope_key, owner_file, depth, explicit_key = pending.popleft()
+            scope, scope_key, owner_file, depth, explicit_key, scope_identity_unknown = pending.popleft()
             if depth > search.source_max_depth:
                 raise Limit("source_catalog_depth_limit")
             # CU ordinal, semantic source owner and actual elaborated path are
             # distinct. Never collapse empty-path compilation units.
-            key = explicit_key or (_kind_name(scope), identity(scope), str(scope.hierarchicalPath))
+            if explicit_key is not None:
+                key = explicit_key
+            else:
+                anchor = identity(scope)
+                # This fallback is private traversal state, never a public
+                # declaration/scope key. `owners` prevents Python-ID reuse.
+                key = (_kind_name(scope), anchor if anchor is not None else
+                       ('unbound_native_scope', id(scope)), str(scope.hierarchicalPath))
             if key in seen_scopes:
                 continue
             if scope_visits >= search.source_max_scopes:
@@ -407,7 +454,7 @@ def collect_source_catalog(projector, root):
                     continue
                 kind, where = _kind_name(symbol), source(symbol)
                 path = where["file"] if where is not None else source_owner(symbol.location) or owner_file
-                declaration(symbol, scope_key, path)
+                declaration(symbol, scope_key, path, scope_identity_unknown=scope_identity_unknown)
                 observe(symbol, path)
                 if kind == "Instance":
                     definition_key = identity(symbol.definition)
@@ -431,14 +478,18 @@ def collect_source_catalog(projector, root):
                     enqueue(symbol, identity(symbol), path, depth + 1)
                     if kind == "Subroutine":
                         observe_type(symbol.returnType, path)
-                        expression_walk(symbol.body, identity(symbol), path, depth + 1)
+                        symbol_key = identity(symbol)
+                        expression_walk(symbol.body, symbol_key, path, depth + 1,
+                                        scope_identity_unknown=symbol_key is None)
                 elif kind == 'ProceduralBlock':
                     for block in symbol.blocks:
                         charge()
                         enqueue(block, identity(block), path, depth + 1)
-                    expression_walk(symbol.body, scope_key, path, depth + 1)
+                    expression_walk(symbol.body, scope_key, path, depth + 1,
+                                    scope_identity_unknown=scope_identity_unknown)
                 elif kind == 'ContinuousAssign':
-                    expression_walk(symbol.assignment, scope_key, path, depth + 1)
+                    expression_walk(symbol.assignment, scope_key, path, depth + 1,
+                                    scope_identity_unknown=scope_identity_unknown)
                 elif kind not in {*_KINDS, "Definition", "ExplicitImport", "WildcardImport", *_NO_USAGE}:
                     # An unknown compiler leaf with neither a source nor
                     # syntax nor captured owner is outside the source inventory.
@@ -448,7 +499,8 @@ def collect_source_catalog(projector, root):
                             or bool(symbol.isScope)):
                         gap(path, "source_symbol_domain_uncovered")
                 if hasattr(symbol, "initializer"):
-                    expression_walk(symbol.initializer, scope_key, path, depth + 1)
+                    expression_walk(symbol.initializer, scope_key, path, depth + 1,
+                                    scope_identity_unknown=scope_identity_unknown)
         for definition in definitions:
             charge()
             where = source(definition)

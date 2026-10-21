@@ -56,6 +56,9 @@ class ClassCollector:
         if where is None or where["file"] not in self.files:
             return
         key = self.identity(symbol, where)
+        if key is None:
+            self.gaps.add('source_class_declaration_identity_unbound')
+            return
         self.declarations[key] = symbol
         row = dict(key=key, declaration_key=key, type_key=None,
             name=str(symbol.name), qualified_name=str(symbol.lexicalPath) or str(symbol.name),
@@ -93,6 +96,8 @@ class ClassCollector:
         declaration = generic if generic is not None else value
         where = self.source(declaration)
         declaration_key = self.identity(declaration, where) if where is not None else None
+        if where is not None and declaration_key is None:
+            self.gaps.add('source_class_declaration_identity_unbound')
         specialized = generic is not None
         # A nested non-generic class inside two different specializations can
         # share its declaration location and lexical path while being two
@@ -103,7 +108,7 @@ class ClassCollector:
             return key
         name = str(declaration.name)
         qualified = str(declaration.lexicalPath) or name
-        bound = where is not None and where["file"] in self.files
+        bound = where is not None and where["file"] in self.files and declaration_key is not None
         # An out-of-domain base remains a positive reference, not a recovered
         # declaration. Retain the canonical owner for links and type equality.
         if not bound:
