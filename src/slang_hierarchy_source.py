@@ -7,7 +7,7 @@ from .connectivity_ir import SourceLocation
 from .hierarchy_source_ir import HierarchyScope, ScopeLookup, semantic_fact_id, HierarchyBudgetExceeded
 from .prepared_source_connectivity import build_prepared_source_plan
 from .source_graph_contract import SemanticScopeSearch
-from .slang_hierarchy_codec import decode_hierarchy, validate_hierarchy_artifact
+from .semantic_query_view import semantic_query_view
 
 
 _LIMITS = {'source_hierarchy_member_limit': 'native_call_limit',
@@ -87,11 +87,12 @@ class SlangHierarchyProvider:
     def __init__(self, entry, context, budget):
         self.artifact_identity = entry.build_key.digest
         self.top, self.budget = context.selected_top, budget
-        scope = entry.artifact_identity.scope
-        validate_hierarchy_artifact(entry.ir, scope, checkpoint=budget.checkpoint)
-        payload = decode_hierarchy(dict(entry.ir.metadata)['hierarchy_scopes_v2'],
-                                   scope.semantic_search, self.top, checkpoint=budget.checkpoint)
-        self.facts, self.children = {}, {}
+        budget.checkpoint()
+        view = semantic_query_view(entry, budget.checkpoint)
+        view.bind_ownership(context, budget.checkpoint)
+        self.view = view
+        scope, payload = view.scope, view.payload
+        self.facts, self.children = view.by_path, view.children
         self.gaps = set()
         if entry.ir.coverage.blocking_diagnostic_count:
             self.gaps.add('source_hierarchy_frontend_diagnostics')
@@ -100,38 +101,26 @@ class SlangHierarchyProvider:
         if payload['limited']:
             self.gaps.add('source_hierarchy_projection_limit')
         self.analysis_limits = (() if payload['stop_reason'] is None else (_LIMITS[payload['stop_reason']],))
-        self.complete = set(payload['complete_children'])
-        if self.gaps:
-            self.complete.clear()
-        if payload['member_visits'] > budget.max_calls - budget.call_count:
-            raise HierarchyBudgetExceeded('native_call_limit')
-        budget.call_count += payload['member_visits']
-        # Worker-retained facts/coordinates and public copied facts share the
-        # request envelope. Public traversal charges its own row copies later.
-        budget.reserve_bytes(payload['retained_bytes'])
-        captured = {record.path for record in context.snapshot.records}
-        for row in payload['rows']:
-            budget.checkpoint()
-            for name in ('location', 'definition_location'):
-                if row[name] is not None and row[name]['file'] not in captured:
-                    raise ValueError('hierarchy source location escaped captured ownership')
-            fact = HierarchyScope(
-                scope_id=semantic_fact_id(self.origin, self.artifact_identity, row['kind'], row['path']),
-                path=row['path'], name=row['name'], kind=row['kind'], parent_path=row['parent_path'],
-                definition_id=row['definition_id'], definition_name=row['definition_name'],
-                location=SourceLocation(**row['location']) if row['location'] is not None else None,
-                definition_location=(SourceLocation(**row['definition_location'])
-                                     if row['definition_location'] is not None else None),
-                parameterization=tuple(map(tuple, row['parameterization'])), gaps=tuple(row['gaps']))
-            self.facts[fact.path] = fact
-            self.children.setdefault(fact.parent_path, []).append(fact)
+        self.complete = frozenset() if self.gaps else view.complete_children
         self.global_complete = (scope.semantic_search.hierarchy_mode == 'complete'
             and scope.semantic_search.roots == (self.top,) and not self.gaps
-            and bool(self.facts) and set(self.facts) == self.complete)
+            and bool(self.facts) and len(self.facts) == len(self.complete))
+
+    def _fact(self, row):
+        if row is None:
+            return None
+        return HierarchyScope(
+            scope_id=semantic_fact_id(self.origin, self.artifact_identity, row['kind'], row['path']),
+            path=row['path'], name=row['name'], kind=row['kind'], parent_path=row['parent_path'],
+            definition_id=row['definition_id'], definition_name=row['definition_name'],
+            location=SourceLocation(**row['location']) if row['location'] is not None else None,
+            definition_location=(SourceLocation(**row['definition_location'])
+                                 if row['definition_location'] is not None else None),
+            parameterization=row['parameterization'], gaps=row['gaps'])
 
     def lookup_scope(self, path, budget):
         budget.call()
-        fact = self.facts.get(path)
+        fact = self._fact(self.facts.get(path))
         complete = not self.gaps and (fact is not None or self.global_complete)
         gaps = self.gaps | ({'source_scope_not_in_projected_domain'} if fact is None and not complete else set())
         return ScopeLookup(fact, complete, tuple(sorted(gaps)))
@@ -140,6 +129,7 @@ class SlangHierarchyProvider:
     def open_children(self, scope, budget):
         budget.call()
         children = iter(self.children.get(scope.path, ()))
+        convert = self._fact
         complete = scope.path in self.complete
 
         class Stream:
@@ -151,7 +141,7 @@ class SlangHierarchyProvider:
             def __next__(self):
                 budget.call()
                 try:
-                    return next(children)
+                    return convert(next(children))
                 except StopIteration:
                     self.complete = complete
                     raise

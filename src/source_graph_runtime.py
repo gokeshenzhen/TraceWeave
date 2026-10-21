@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from enum import Enum
 from functools import cached_property
 import json
@@ -30,6 +30,8 @@ from typing import Any, Mapping, Protocol
 from .connectivity_ir import ConnectivityIR, CoverageStatus
 from .connectivity_query import ConnectivityQueryEngine
 from .hierarchy_provider import ConnectivityIRHierarchyProvider
+from .semantic_query_view import SemanticQueryView
+from .cancellation import check_cancelled
 from .slang_source_codec import validate_source_catalog_artifact
 from .slang_hierarchy_codec import validate_hierarchy_artifact
 from .source_graph_contract import (
@@ -44,6 +46,7 @@ from .source_graph_contract import (
     compute_source_graph_build_key,
     source_graph_artifact_design_matches,
     source_graph_artifact_identity_covers,
+    source_graph_artifact_inputs_cover,
 )
 from .source_graph_disk_cache import (
     DiskArtifact,
@@ -678,8 +681,10 @@ class SourceGraphCacheEntry:
     ir_bytes: int
     cache_bytes: int
     artifact_identity: SourceGraphArtifactIdentity | None = None
+    semantic_view: Any = field(default=None, init=False, repr=False, compare=False)
+    semantic_checkpoint: InitVar[Any] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, semantic_checkpoint) -> None:
         if (
             self.artifact_identity is not None
             and self.artifact_identity.scope != self.artifact_scope_receipt.scope
@@ -688,6 +693,23 @@ class SourceGraphCacheEntry:
                 "cache artifact identity and scope receipt must describe "
                 "the same scope"
             )
+
+        search = self.artifact_scope_receipt.scope.semantic_search
+        if search is not None and search.purpose in {'hierarchy', 'source_catalog'}:
+            view = SemanticQueryView(self.ir, self.artifact_scope_receipt.scope, semantic_checkpoint or (lambda: None))
+            object.__setattr__(self, 'semantic_view', view)
+            object.__setattr__(self, 'cache_bytes', max(self.cache_bytes, self.ir_bytes + view.cache_bytes))
+
+    def reuse_for(self, requested):
+        match = self.artifact_scope_receipt.reuse_for(requested)
+        if match.reusable or self.semantic_view is None or not self.semantic_view.covers_hierarchy(requested):
+            return match
+        return ScopeReuseDecision(
+            relation=ScopeRelation.SUPERSET, reusable=True,
+            coverage_status=self.coverage_status,
+            complete_for_request=self.coverage_status is CoverageStatus.COMPLETE,
+            reason=('coverage_complete' if self.coverage_status is CoverageStatus.COMPLETE
+                    else f'coverage_preserved_{self.coverage_status.value}'))
 
     @property
     def coverage_status(self) -> CoverageStatus:
@@ -904,6 +926,13 @@ class _IncompleteHandoff:
     entry: SourceGraphCacheEntry
     expires_at: float
     expiry_handle: asyncio.TimerHandle | None = None
+
+
+def _flight_load_checkpoint(flight):
+    # Shared work belongs to the last-waiter lifetime, not the ContextVar
+    # inherited when the first caller created the flight task.
+    if flight.worker_cancel_event.is_set():
+        raise DiskCacheCancelled('shared semantic artifact load cancelled')
 
 
 class SourceGraphRuntime:
@@ -1322,7 +1351,11 @@ class SourceGraphRuntime:
                 request,
                 key,
                 worker,
+                checkpoint=lambda: _flight_load_checkpoint(flight),
             )
+        except DiskCacheCancelled:
+            return self._flight_failure(flight, PrepareStatus.CANCELLED,
+                code='request_cancelled', stage='cache_load')
         except Exception as exc:
             return self._flight_failure(
                 flight,
@@ -1484,6 +1517,9 @@ class SourceGraphRuntime:
                 flight,
                 disk_result.artifact,
             )
+        except DiskCacheCancelled:
+            return self._flight_failure(flight, PrepareStatus.CANCELLED,
+                code='request_cancelled', stage='disk_load')
         except Exception:  # noqa: BLE001
             flight.disk_validation_outcome = (
                 DiskValidationOutcome.IR_SCHEMA_MISMATCH.value
@@ -1567,6 +1603,7 @@ class SourceGraphRuntime:
             ir_bytes=artifact.ir_bytes,
             cache_bytes=artifact.ir_bytes,
             artifact_identity=artifact.identity,
+            semantic_checkpoint=lambda: _flight_load_checkpoint(flight),
         )
 
     async def _publish_disk_entry(
@@ -1738,7 +1775,9 @@ class SourceGraphRuntime:
         request: SourceGraphBuildRequest,
         key: SourceGraphBuildKey,
         worker: WorkerBuildResult,
+        *, checkpoint=lambda: None,
     ) -> SourceGraphCacheEntry:
+        checkpoint()
         assert worker.ir_json_bytes is not None
         assert worker.ir_fingerprint_sha256 is not None
         assert worker.scope_receipt is not None
@@ -1753,8 +1792,8 @@ class SourceGraphRuntime:
             raise ValueError("worker frontend version mismatch")
         if ir.ir_version != artifact_identity.source.ir_schema_version:
             raise ValueError("worker IR schema version mismatch")
-        source_catalog = validate_source_catalog_artifact(ir, artifact_identity.scope)
-        hierarchy = validate_hierarchy_artifact(ir, artifact_identity.scope)
+        source_catalog = validate_source_catalog_artifact(ir, artifact_identity.scope, checkpoint=checkpoint)
+        hierarchy = validate_hierarchy_artifact(ir, artifact_identity.scope, checkpoint=checkpoint)
         if not source_catalog and not hierarchy and artifact_identity.scope.top not in ir.top_instances:
             raise ValueError("worker IR does not contain the requested top")
         if isinstance(worker.scope_receipt, SourceGraphArtifactScopeReceipt):
@@ -1783,6 +1822,7 @@ class SourceGraphRuntime:
             ir_bytes=len(worker.ir_json_bytes),
             cache_bytes=len(worker.ir_json_bytes),
             artifact_identity=artifact_identity,
+            semantic_checkpoint=checkpoint,
         )
 
     async def lookup_prepared(self, request: SourceGraphBuildRequest) -> SourceGraphCacheEntry | None:
@@ -1808,7 +1848,9 @@ class SourceGraphRuntime:
         if (not key.cross_request_reusable or worker.status is not PrepareStatus.READY
                 or len(worker.ir_json_bytes or b"") > min(self._max_cache_bytes, 32 * 1024 * 1024)):
             return False
-        entry = await asyncio.to_thread(self._load_cache_entry, request, key, worker)
+        entry = await asyncio.to_thread(self._load_cache_entry, request, key, worker, checkpoint=check_cancelled)
+        if entry.cache_bytes > self._max_cache_bytes:
+            return False
         async with self._state_lock:
             self._publish_cache_entry_locked(key.digest, entry)
         return True
@@ -1884,7 +1926,7 @@ class SourceGraphRuntime:
     ) -> tuple[SourceGraphCacheEntry, CacheDisposition, ScopeReuseDecision] | None:
         exact = self._cache.get(build_key.digest)
         if exact is not None:
-            match = exact.artifact_scope_receipt.reuse_for(
+            match = exact.reuse_for(
                 request.artifact_identity.scope
             )
             if match.relation is ScopeRelation.EXACT and match.reusable:
@@ -1899,13 +1941,12 @@ class SourceGraphRuntime:
             )
             if not same_build_semantics:
                 if entry.artifact_identity is None or not (
-                    source_graph_artifact_identity_covers(
-                        entry.artifact_identity,
-                        request.artifact_identity,
+                    source_graph_artifact_inputs_cover(
+                        entry.artifact_identity, request.artifact_identity
                     )
                 ):
                     continue
-            match = entry.artifact_scope_receipt.reuse_for(
+            match = entry.reuse_for(
                 request.artifact_identity.scope
             )
             if (

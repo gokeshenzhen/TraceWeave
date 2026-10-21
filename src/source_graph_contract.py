@@ -29,7 +29,7 @@ from .connectivity_ir import CONNECTIVITY_IR_VERSION, CoverageStatus
 SOURCE_GRAPH_BUILD_CONTRACT_VERSION = "3.4"
 SOURCE_GRAPH_WORKER_PROTOCOL_VERSION = "3.4"
 SOURCE_GRAPH_PROJECTOR_NAME = "slang_connectivity_projector"
-SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.21"
+SOURCE_GRAPH_PROJECTOR_SCHEMA_VERSION = "1.22"
 SOURCE_GRAPH_ARTIFACT_IDENTITY_VERSION = "1.2"
 SOURCE_GRAPH_SEMANTIC_CONTEXT_VERSION = "1.0"
 SOURCE_GRAPH_QUERY_IDENTITY_VERSION = "1.0"
@@ -1803,22 +1803,32 @@ def _chain_covered_by(
 
 
 def _catalog_search_scope_covers(available: dict, requested: dict) -> bool:
-    """Allow only a topology-free catalog's explicit capability/file subset.
+    """Compare fact domains, independently of historical construction budgets.
 
-    All remaining identity, domain, alias, version and work limits stay exact.
-    A connectivity/hierarchy artifact can never be promoted to a catalog.
+    Work limits remain in producer identity and codec validation. A warm query
+    pays its own actual traversal/output costs, never the producer's work again.
     """
     left, right = available.get('semantic_search'), requested.get('semantic_search')
-    if (not isinstance(left, dict) or not isinstance(right, dict)
-            or left.get('purpose') != 'source_catalog' or right.get('purpose') != 'source_catalog'):
+    if not isinstance(left, dict) or not isinstance(right, dict):
         return available == requested
-    if (not set(right['source_files']).issubset(left['source_files'])
-            or not set(right['source_capabilities']).issubset(left['source_capabilities'])):
+    if left.get('purpose') != right.get('purpose'):
         return False
+    purpose = left.get('purpose')
+    if purpose not in {'hierarchy', 'source_catalog'}:
+        return available == requested
     available, requested = dict(available), dict(requested)
     available['semantic_search'], requested['semantic_search'] = dict(left), dict(right)
+    if purpose == 'source_catalog':
+        if (not set(right['source_files']).issubset(left['source_files'])
+                or not set(right['source_capabilities']).issubset(left['source_capabilities'])):
+            return False
+        ignored = ('source_files', 'source_capabilities', 'max_instances', 'max_members',
+                   'source_max_scopes', 'source_max_depth', 'source_max_bytes')
+    else:
+        ignored = ('max_instances', 'max_members', 'hierarchy_max_bytes')
     for value in (available['semantic_search'], requested['semantic_search']):
-        value.pop('source_files'); value.pop('source_capabilities')
+        for key in ignored:
+            value.pop(key, None)
     return available == requested
 
 
@@ -1965,7 +1975,7 @@ def _compile_projection_covers(
     return set(requested.ordered_inputs).issubset(available.ordered_inputs)
 
 
-def source_graph_artifact_identity_covers(
+def source_graph_artifact_inputs_cover(
     available: SourceGraphArtifactIdentity,
     requested: SourceGraphArtifactIdentity,
 ) -> bool:
@@ -1978,8 +1988,13 @@ def source_graph_artifact_identity_covers(
             requested.compile_projection,
             manifest=available.source.compile_inputs,
         )
-        and _artifact_scope_covers(available.scope, requested.scope)
     )
+
+
+def source_graph_artifact_identity_covers(available, requested) -> bool:
+    """Prove compile inputs and the declared artifact domain cover a request."""
+    return (source_graph_artifact_inputs_cover(available, requested)
+            and _artifact_scope_covers(available.scope, requested.scope))
 
 
 def compare_source_graph_artifact_scopes(

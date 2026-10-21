@@ -140,7 +140,7 @@ def decode_hierarchy(raw, search, top, *, checkpoint=lambda: None):
     return payload
 
 
-def validate_hierarchy_artifact(ir, scope, *, checkpoint=lambda: None):
+def validate_hierarchy_artifact(ir, scope, *, checkpoint=lambda: None, return_payload=False):
     metadata, search = dict(ir.metadata), scope.semantic_search
     raw = metadata.get('hierarchy_scopes_v2')
     if search is None or search.purpose != 'hierarchy':
@@ -160,4 +160,4 @@ def validate_hierarchy_artifact(ir, scope, *, checkpoint=lambda: None):
             ('source_hierarchy_facts_incomplete' not in codes and not
              (payload['limited'] and payload['stop_reason'] in codes))):
         raise ValueError('hierarchy partial facts missing from artifact coverage')
-    return True
+    return payload if return_payload else True

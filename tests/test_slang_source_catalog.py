@@ -85,7 +85,8 @@ def test_catalog_scope_identity_and_exact_isolation():
                     search(source_aliases=(('/alias/a.sv', '/rtl/a.sv'),))):
         other = replace(identity, scope=replace(identity.scope, semantic_search=changed))
         assert compute_source_graph_artifact_key(other).digest != key
-        assert compare_source_graph_artifact_scopes(identity.scope, other.scope).value == 'unproven'
+        assert compare_source_graph_artifact_scopes(identity.scope, other.scope).value == (
+            'unproven' if changed.source_aliases else 'superset')
     connection = replace(identity.scope, semantic_search=SemanticScopeSearch())
     assert compare_source_graph_artifact_scopes(identity.scope, connection).value == 'unproven'
     assert compare_source_graph_artifact_scopes(connection, identity.scope).value == 'unproven'

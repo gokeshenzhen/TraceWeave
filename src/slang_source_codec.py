@@ -203,7 +203,7 @@ def _decode_classes(value, catalog, checkpoint):
             tuple(row['base_type_parameter_bindings']), 'artifact_canonical')
 
 
-def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None):
+def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None, return_payload=False):
     """Validate the topology-free capability envelope at every load boundary.
 
     Return False for ordinary IR, which still requires the caller's normal
@@ -226,4 +226,4 @@ def validate_source_catalog_artifact(ir, scope, *, checkpoint=lambda: None):
     payload = decode_source_catalog(raw, search, checkpoint=checkpoint)
     if scope.top not in payload['semantic_tops']:
         raise ValueError('source catalog frontend did not elaborate the requested top')
-    return True
+    return payload if return_payload else True

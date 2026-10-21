@@ -504,6 +504,18 @@ Verification
   child completion promotes a global negative, and blocking diagnostics retain
   partial coverage. Different hierarchy ranges have exact identities; global
   module search and full-tree export share the same top-complete request.
+  Construction work limits remain in producer artifact identity and strict codec
+  validation, but do not gate warm hierarchy or source-catalog reuse. Queries
+  reuse compatible captured facts independently of either producer/consumer
+  limit ordering. Validated immutable payloads and scope/file indexes are retained
+  with the runtime cache byte/eviction budget. Readers convert only visited rows
+  and pay current lookup, traversal and output costs; historical native visits,
+  coordinates and whole-artifact size are not charged again. Wider hierarchy
+  reuse needs actual parent/depth or complete-children evidence; partial positives
+  retain unknowns and never establish an unvisited complete negative. Source
+  catalogs retain explicit file/capability coverage and captured ownership.
+  Exact disk lookup, producer raw identity, cold budgets, final-waiter cancellation
+  and source/policy validation retain their existing contracts.
   Default prepared failure consumers use one artifact and never rebuild the
   lexical full tree on source unavailability. NPI and explicit legacy paths
   preserve their existing priority and capabilities. The internal

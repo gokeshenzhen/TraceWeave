@@ -81,8 +81,9 @@ def test_catalog_class_superset_reuses_only_requested_files_capabilities_and_exa
     narrow = replace(base, semantic_search=narrow_search)
     assert compare_source_graph_artifact_scopes(broad, narrow).value == 'superset'
     assert compare_source_graph_artifact_scopes(narrow, broad).value == 'subset'
-    for changed in (replace(narrow_search, source_max_depth=127),
-                    replace(narrow_search, source_aliases=(('/alias/a.sv', '/rtl/a.sv'),)),
+    assert compare_source_graph_artifact_scopes(broad, replace(base,
+        semantic_search=replace(narrow_search, source_max_depth=127))).value == 'superset'
+    for changed in (replace(narrow_search, source_aliases=(('/alias/a.sv', '/rtl/a.sv'),)),
                     replace(narrow_search, source_files=('/rtl/c.sv',)),
                     SemanticScopeSearch(roots=(base.top,), depth=2, purpose='hierarchy')):
         assert compare_source_graph_artifact_scopes(broad, replace(base, semantic_search=changed)).value == 'unproven'

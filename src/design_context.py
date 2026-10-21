@@ -6,6 +6,8 @@ verified association with a KDB. They never own source bodies or frontend state.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
+from types import MappingProxyType
 import json
 import os
 import time
@@ -51,6 +53,21 @@ class DesignContext:
     # Extra lookup observations made when verifying a historical source token.
     # They include readable candidates, unlike negative input observations.
     path_observations: tuple[tuple[str, tuple], ...] = ()
+
+    @cached_property
+    def semantic_ownership_index(self):
+        """Captured metadata only; shared by queries, never a frontend load."""
+        paths, aliases, unavailable = set(), {}, set()
+        for record in self.snapshot.records:
+            check_cancelled()
+            paths.add(record.path)
+        for spelling, canonical in self.aliases:
+            check_cancelled()
+            aliases[spelling] = canonical
+        for spelling, _ in self.unavailable:
+            check_cancelled()
+            unavailable.add(aliases.get(spelling, spelling))
+        return frozenset(paths), MappingProxyType(aliases), frozenset(unavailable)
 
     def compile_result(self) -> dict:
         """A mutable caller copy; nested metadata cannot alter this context."""
@@ -111,4 +128,5 @@ class DesignContext:
             self.environment, self.replay_environment, self.gaps, self.requested_kdb_path,
             self.path_observations,
         )
-        return 4096 + 4 * len(json.dumps(payload, ensure_ascii=False).encode())
+        return (4096 + 4 * len(json.dumps(payload, ensure_ascii=False).encode())
+                + 256 * (len(self.snapshot.records) + len(self.aliases) + len(self.unavailable)))

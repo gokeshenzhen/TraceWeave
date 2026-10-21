@@ -229,8 +229,13 @@ def test_hierarchy_identity_keeps_modes_ranges_aliases_limits_and_capabilities_s
     from src.source_graph_contract import compare_source_graph_artifact_scopes
     scope = replace(_request().artifact_identity.scope, semantic_search=search())
     assert SemanticScopeSearch.from_dict(search().to_dict()) == search()
+    for changed in (replace(search(), max_members=5000), replace(search(), hierarchy_max_bytes=100000)):
+        other = replace(scope, semantic_search=changed)
+        from src.source_graph_contract import compute_source_graph_artifact_key
+        identity = replace(_request().artifact_identity, scope=scope)
+        assert compute_source_graph_artifact_key(replace(identity, scope=other)).digest != compute_source_graph_artifact_key(identity).digest
+        assert compare_source_graph_artifact_scopes(scope, other).value == 'superset'
     for changed in (replace(search(), depth=9), replace(search(), hierarchy_mode='bounded'),
-                    replace(search(), max_members=5000), replace(search(), hierarchy_max_bytes=100000),
                     replace(search(), hierarchy_aliases=(('/alias/a.sv', '/rtl/a.sv'),)),
                     SemanticScopeSearch(roots=('sg_top',), depth=2)):
         assert compare_source_graph_artifact_scopes(scope, replace(scope, semantic_search=changed)).value == 'unproven'
@@ -425,7 +430,8 @@ def test_worker_ir_scope_receipt_and_public_counts_share_the_hierarchy_frontier(
         ir = ConnectivityIR.from_json_bytes(raw)
         budget = HierarchyQueryBudget()
         entry = NS(ir=ir, build_key=NS(digest='a' * 64), artifact_identity=request.identity)
-        context = NS(selected_top='sg_top', snapshot=NS(records=[NS(path='/rtl/a.sv')]))
+        context = NS(selected_top='sg_top', snapshot=NS(records=[NS(path='/rtl/a.sv')]),
+                     aliases=current.hierarchy_aliases, unavailable=())
         provider = SlangHierarchyProvider(entry, context, budget)
         result = HierarchySourceService(provider).subtree(depth=-1, count_mode='exact', budget=budget)
         (tmp_path / 'public.raw.json').write_text(json.dumps(result) + '\n')
