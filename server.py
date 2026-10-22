@@ -71,7 +71,7 @@ import src.cancellation as cancellation
 import src.operation_metrics as operation_metrics
 from src.cancellation import OperationCancelled
 from src.clock_edge_cache import discard_clock_edges
-from src.log_parser import SimLogParser, diff_failure_events, get_error_context
+from src.log_parser import SimLogParser, diff_failure_events, get_error_context, observe_failure_events
 from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fst_runtime import FST_BASIC_TOOLS, FST_SUPPORTED_TOOLS, FstError, fst_runtime_info
@@ -387,16 +387,11 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
             step, tool_name, args
         ):
             if step == "build_tb_hierarchy" and tool_name not in _HANDLE_TOOL_NAMES:
-                suggested = _build_suggested_call("prepare_design_context")
-                supplied = {key: args[key] for key in (
-                    "compile_log", "simulator", "supplementary_compile_logs", "top_hint") if key in args}
-                if "compile_log" in supplied:
-                    suggested["arguments"] = supplied
                 return schemas.PrerequisiteBlockResult(
-                    ok=False, error_code="missing_prerequisite", missing_step="prepare_design_context",
+                    ok=False, error_code="missing_prerequisite", missing_step="compile_metadata",
                     required_before=tool_name,
-                    reason="Prepare the requested compile context, then pass its design_handle to this query. Full hierarchy is optional.",
-                    suggested_call=suggested)
+                    reason="Provide compile_log, or kdb_path with top_hint, for native-first querying. An explicit design_handle retains strict source identity.",
+                    suggested_call={"tool": "get_sim_paths", "arguments": {}})
             block = {
                 "ok": False,
                 "error_code": "missing_prerequisite",
@@ -607,6 +602,8 @@ _NPI_SKIPPED_BY_POLICY = "npi_skipped_by_policy"
 
 
 def _resolve_session_simulator(args: dict) -> str:
+    if args.get("_native_query") is not None:
+        return args["_native_query"].context.simulator
     explicit = args.get("simulator")
     if explicit and explicit != "auto":
         return explicit
@@ -832,7 +829,7 @@ async def _resolve_connectivity_hierarchy_context(
 ) -> tuple[dict | None, str, dict | None, str | None]:
     """Prefer a full hierarchy, then optionally prove a bounded one."""
 
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     bound = args.get("_bound_context")
     if bound is not None:
         return bound.hierarchy, bound.snapshot, None, None
@@ -1591,12 +1588,24 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
 
 
 def reset_session_state():
-    global _design_context_store
+    global _design_context_store, _source_fallback_runtime, _native_failure_memory
+    if "_source_fallback_runtime" in globals():
+        _source_fallback_runtime.close()
+    from src.source_fallback_runtime import SourceFallbackRuntime
+    from src.native_query import NativeFailureMemory
+    _source_fallback_runtime = SourceFallbackRuntime()
+    _native_failure_memory = NativeFailureMemory()
     _design_context_store = design_context_runtime.DesignContextStore()
     _session_state["get_sim_paths"] = None
     _session_state["build_tb_hierarchy"] = None
     _clear_simulation_result_state()
     _clear_formal_result_state()
+
+
+from src.source_fallback_runtime import SourceFallbackRuntime
+from src.native_query import NativeFailureMemory
+_source_fallback_runtime = SourceFallbackRuntime()
+_native_failure_memory = NativeFailureMemory()
 
 
 SERVER_INSTRUCTIONS = """
@@ -1630,11 +1639,14 @@ Simulation waveform debug workflow:
      identity, supported tools and recording gaps. Missing observations and
      partial coverage never establish a clean analysis.
 
-2. Call prepare_design_context AND scan_structural_risks in parallel on the same
-   compile_log before analyzing failures. Preparation returns design_handle;
-   use it for the six hierarchy/source tools, tracing and failure consumers.
-   It captures inputs without a full hierarchy, Slang run or KDB load. Inspect
-   source/include coverage separately from each query's semantic coverage.
+2. Run scan_structural_risks on the selected compile_log as usual. Pass that
+   compile_log to connectivity, hierarchy/source, trace and failure tools:
+   native_first queries healthy NPI without capturing or validating full source.
+   Ordinary native unavailability automatically prepares source in that request;
+   native_route returns the real source_design_handle. Source association stays
+   unverified. Explicit prepare_design_context remains available for deliberate
+   source analysis, strict source identity and recovery; changed/expired source
+   handles require explicit preparation. Scan coverage remains independent.
    - build_tb_hierarchy remains an explicit compatibility/full-tree option.
      If chosen, run it in parallel with scan_structural_risks on the same log.
      Use the selected primary compile_log and simulator from step 1. In a split
@@ -2047,9 +2059,15 @@ async def _run_in_cancellable_thread(fn: Callable):
 
 
 async def _call_connectivity_backend(backend, fn: Callable):
-    if getattr(backend, "uses_external_worker", False):
-        return await _run_in_cancellable_thread(fn)
-    return fn()
+    started = time.monotonic()
+    try:
+        if getattr(backend, "uses_external_worker", False):
+            return await _run_in_cancellable_thread(fn)
+        return fn()
+    finally:
+        metrics = getattr(backend, "_native_metrics", None)
+        if metrics is not None:
+            metrics["npi_ms"] += (time.monotonic() - started) * 1000
 
 
 async def _handle_prepare_design_context(args: dict):
@@ -3218,9 +3236,25 @@ async def _bind_wave_design_root(args, simulator, signal_key="signal_path"):
     from src.wave_design_binding import bind_root
     if not args.get("wave_path") or not str(args.get(signal_key, "")).startswith("TOP."):
         return None
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     if prepared is not None:
         compile_result = prepared.context.compile_result()
+        if compile_result is None:
+            from src.wave_design_binding import bind_kdb_root
+            from src.hierarchy_source_ir import HierarchyQueryBudget
+            remaining = prepared.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            if not getattr(prepared, "top_proven", False):
+                proof = await _query_prepared_hierarchy(prepared, "find_tb_instance",
+                    {"path": prepared.context.selected_top}, HierarchyQueryBudget(timeout_sec=remaining))
+                hits = proof.get("hits", ())
+                if (len(hits) != 1 or hits[0]["path"] != prepared.context.selected_top
+                        or hits[0].get("parent") is not None or proof.get("facts_origin") != "verdi_npi"):
+                    raise ValueError("wave_design_mapping_requires_native_top_proof")
+                prepared.top_proven = True
+            return await _run_in_wave_thread(args["wave_path"], lambda: bind_kdb_root(
+                _get_parser(args["wave_path"]), args[signal_key], kdb_top=prepared.context.selected_top))
     else:
         bound = args.get("_bound_context")
         hierarchy, _ = ((bound.hierarchy, bound.snapshot) if bound is not None
@@ -3299,8 +3333,19 @@ def _select_prepared_backend(entry, deferred):
     except Exception:
         return deferred, status, "npi_backend_initialization_failed"
     if getattr(backend, "name", None) == "verdi_npi":
-        backend.bind_compile_context(entry.context.compile_result())
+        if getattr(entry, "native", False):
+            if hasattr(backend, "bind_native_inputs"):
+                backend.bind_native_inputs(entry.context)
+            elif entry.context.compile_result_json is not None:
+                backend.bind_compile_context(entry.context.compile_result())
+            else:
+                raise ValueError("backend lacks native input binding")
+        else:
+            backend.bind_compile_context(entry.context.compile_result())
         backend.bind_kdb_anchor(binding.anchor)
+        if getattr(entry, "native", False):
+            backend._request_deadline = entry.deadline
+            backend._native_metrics = entry.metrics
     return backend, status, None
 
 
@@ -3473,7 +3518,7 @@ async def _route_public_connectivity(
     )
 
     bound = args.get("_bound_context")
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
     if prepared is not None:
@@ -3524,6 +3569,11 @@ async def _route_public_connectivity(
                 )
             )
         if npi_result is not None:
+            from src.native_query import native_budget_exhausted
+            positive = (_npi_driver_result_has_positive_fact(npi_result) if operation == "driver"
+                        else bool(npi_result.get("loads")))
+            if args.get("_native_query") is not None and native_budget_exhausted(npi_result) and not positive:
+                raise design_context_runtime.ContextUnavailable("native_analysis_limit")
             npi_kdb_status = _npi_kdb_status(npi_backend)
             execution = npi_result.get("_npi_execution_status")
             if isinstance(execution, dict):
@@ -3600,6 +3650,10 @@ async def _route_public_connectivity(
                 reason=fallback_reason,
             )
         )
+
+    if args.get("_native_query") is not None:
+        from src.native_query import NativeFallback
+        raise NativeFallback(attempts)
 
     config = get_source_graph_execution_config()
     if prepared is not None and config.enabled and config.valid:
@@ -4326,7 +4380,7 @@ async def _route_public_signal_path(
         select_backend,
     )
 
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     deferred = DeferredConnectivityFallbackBackend()
     npi_selection_reason: str | None = None
     if prepared is not None:
@@ -4443,6 +4497,10 @@ async def _route_public_signal_path(
                 reason=fallback_reason,
             )
         )
+
+    if args.get("_native_query") is not None:
+        from src.native_query import NativeFallback
+        raise NativeFallback(attempts)
 
     config = get_source_graph_execution_config()
     if prepared is not None and config.enabled and config.valid:
@@ -4944,6 +5002,10 @@ async def _run_trace_x_attempt(
             and _npi_kdb_degraded(kdb_status=current_kdb_status)
             and not _npi_driver_result_has_positive_fact(raw)
         )
+        from src.native_query import native_budget_exhausted
+        if (getattr(backend, "_native_metrics", None) is not None
+                and native_budget_exhausted(raw) and not _npi_driver_result_has_positive_fact(raw)):
+            raise design_context_runtime.ContextUnavailable("native_analysis_limit")
         if abort_on_backend_fallback and (
             fallback_reason
             or fallback_deferred
@@ -5000,18 +5062,19 @@ async def _handle_trace_x_source(args: dict, simulator: str):
     """Route X-trace through NPI -> one Source Graph artifact -> Static."""
 
     mode = args.get("mode", "snapshot")
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     if mode == "history":
         from src.x_history import trace_x_history
         if prepared is not None:
-            from src.prepared_trace_context import PreparedTraceContext
+            from src.prepared_trace_context import PreparedTraceContext, NativeTraceContext
             history_args = {k: v for k, v in args.items() if k not in {
                 "design_handle", "_prepared_design", "supplementary_compile_logs",
-                "_design_query_started", "_prepared_source_execution",
+                "_design_query_started", "_prepared_source_execution", "_native_query", "_trace_budget", "_trace_deadline",
             }}
             return await trace_x_history(
                 sys.modules[__name__], {**history_args, "simulator": simulator},
-                bound_context=PreparedTraceContext(prepared, args["design_handle"], args.get("_prepared_source_execution")),
+                bound_context=(NativeTraceContext(prepared) if args.get("_native_query") else
+                    PreparedTraceContext(prepared, args["design_handle"], args.get("_prepared_source_execution"), args.get("_trace_budget"), native_input_contract=args.get("_trace_deadline") is not None)),
                 started_at=args.get("_design_query_started"),
             )
         return await trace_x_history(sys.modules[__name__], {**args, "simulator": simulator})
@@ -5209,12 +5272,16 @@ async def _handle_trace_x_source(args: dict, simulator: str):
             )
         )
 
+    if args.get("_native_query") is not None:
+        from src.native_query import NativeFallback
+        raise NativeFallback(attempts)
+
     config = args.get("_prepared_source_execution") or get_source_graph_execution_config()
     trace_plan_state = None
     if prepared is not None:
         from src.prepared_source_trace import PreparedTracePlan, PreparedTraceArtifactGuard
         trace_plan_state = PreparedTracePlan(prepared.context, config,
-            args["_design_query_started"] + config.timeout_sec, max_depth)
+            min(args.get("_trace_deadline", float("inf")), args["_design_query_started"] + config.timeout_sec), max_depth)
 
     async def validate_source_trace():
         if trace_plan_state is None:
@@ -6068,7 +6135,7 @@ async def _resolve_packed_fields(args):
     root_binding = await _bind_wave_design_root(args, simulator)
     if root_binding:
         args = {**args, 'source_signal': root_binding.to_design(args['source_signal'])}
-    prepared, result = args.get("_prepared_design"), None
+    prepared, result = args.get("_prepared_design") or args.get("_native_query"), None
     if prepared is not None:
         budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30))
         budget.deadline = args.get("_design_query_started", budget.started) + args.get("timeout_sec", 30)
@@ -6082,10 +6149,13 @@ async def _resolve_packed_fields(args):
                 name: {"path": args["signal_path"], "bits": bits} for name, bits in native["field_bits"].items()},
                 "evidence": {"source_signal": args["source_signal"], "declared_range": native["declared_range"],
                     "layout_source": "verdi_npi_bit_identity", "artifact_identity": native["artifact_identity"],
-                    "native_query": native, "validity": "current_compile_snapshot; re-resolve after input changes"}}
+                    "native_query": native, "validity": ("kdb_only; source_association_unverified" if args.get("_native_query") else "current_compile_snapshot; re-resolve after input changes")}}
         elif native["analysis_limits"]:
             return blocked(native["analysis_limits"][0])
     if result is None:
+        if args.get("_native_query") is not None:
+            from src.native_query import NativeFallback
+            raise NativeFallback(status.model_dump().get("attempted_backends", []) if status else [])
         result, reason = await _resolve_source_packed_fields(args, simulator)
         if status is not None:
             raw_status = status.model_dump(mode="json", exclude_unset=True)
@@ -6124,7 +6194,7 @@ async def _resolve_source_packed_fields(args, simulator):
     config = get_source_graph_execution_config()
     if not config.enabled or not config.valid:
         return None, "semantic_runtime_unavailable"
-    prepared = args.get("_prepared_design")
+    prepared = args.get("_prepared_design") or args.get("_native_query")
     if prepared is not None:
         from src.prepared_source_connectivity import SourceQueryBudget, build_prepared_source_plan
         from src.source_graph_contract import SemanticScopeSearch
@@ -6960,40 +7030,7 @@ async def list_tools():
         Tool(
             name="explain_signal_driver",
             description=(
-                "Pass design_handle from prepare_design_context to query a fixed design without "
-                "a full hierarchy prerequisite. compile_log may then be omitted; supplied compile "
-                "arguments must match. Source fallback uses the captured compile context and "
-                "bounded semantic instance planning without a full hierarchy build. "
-                "An expired explicit compile_context can also recover a bound design when a KDB "
-                "candidate is available; inspect hierarchy_recovery.design_handle and status. "
-                "Trace a waveform signal to its RTL driver and file:line (assignments, "
-                "procedural blocks, module outputs); recursive=true crosses instances.\n\n"
-                "Default traceweave.driver.compact.v1 is lossless: all retained evidence is in "
-                "this response. In result.driver_chain/bit_provenance, "
-                "statement_semantics_ref indexes evidence_tables.statement_semantics; "
-                "statement_evidence_ref indexes {locations_ref,evidence_indices_ref} pairs in "
-                "evidence_tables. Preserve row/index order; table entries and location occurrences "
-                "are not writer counts. output_format='full' restores the original shape/indentation.\n\n"
-                "include_dependencies=true adds one-hop data/control/clock/reset candidates with "
-                "exact waveform selections and gaps. No sampled values or active-branch verdict: "
-                "sample the relevant window/clock phase. Omit for source lookup only.\n\n"
-                "Default route: trusted Verdi NPI -> bounded Source Graph -> Legacy Static. "
-                "Source Graph preserves per-bit port mappings and instance hierarchy; Static "
-                "cannot resolve composite port mappings. On legacy compile-log calls, allow_bounded_bootstrap without full "
-                "hierarchy returns proved positive Source Graph facts only; inconclusive results "
-                "never trigger a full-source Static scan.\n\n"
-                "If a boundary remains unresolved, continue reading verified compiled source with "
-                "client file tools. Cite each inferred connection separately from backend facts and "
-                "check runtime claims against waveform/log evidence.\n\n"
-                "Read backend_status.actual_backend, traversal limits/reasons, and source_info_origin "
-                "per hop. claim_semantics separates positive_fact_confidence/target_bit_coverage "
-                "from global_coverage_status; legacy confidence combines fact confidence and coverage. "
-                "Partial/truncated facts are not exhaustive. Require exclusive_driver_proved for "
-                "uniqueness and negative_claim_allowed for no driver. Structural multiple_driver "
-                "does not prove value conflict; unknown does not prove floating.\n\n"
-                "driver_status='testbench_driven' with cross_check.conflict=true identifies a "
-                "consumer/load alias. Investigate the TB/BFM/virtual-interface driver; do not blame "
-                "the DUT consumer or infer a mis-wire."
+                "Trace a signal to RTL drivers/file:line; recursive crosses instances. Route: trusted NPI -> bounded Source Graph -> Static. Read actual_backend, source_info_origin, traversal and claim_semantics: partial facts are not exhaustive; uniqueness requires exclusive_driver_proved, absence requires negative_claim_allowed. multiple_driver does not prove value conflict. testbench_driven with cross_check.conflict identifies a consumer alias; investigate TB/BFM. Default traceweave.driver.compact.v1 is lossless: statement_semantics_ref indexes evidence_tables.statement_semantics; statement_evidence_ref indexes {locations_ref,evidence_indices_ref} pairs. Preserve order; entries/locations are not writer counts. full restores the original shape. include_dependencies adds one-hop data/control/clock/reset candidates, without sampled values or active-branch verdict. Verify runtime hypotheses with waveforms. Unresolved source inferences must be cited separately from backend facts. Explicit compile_context retains historical recovery; inspect hierarchy_recovery."
             ),
             inputSchema={
                 "type": "object",
@@ -7031,35 +7068,7 @@ async def list_tools():
         Tool(
             name="find_signal_loads",
             description=(
-                "An explicit design_handle permits a fixed-design query without a full hierarchy "
-                "prerequisite; compile_log may be omitted. Source fallback uses the captured compile "
-                "context and bounded semantic instance planning. "
-                "List places that consume (load) a signal: child instance input ports, "
-                "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
-                "When a Verdi KDB is detected, an NPI backend transparently engages and "
-                "resolves the cross-hierarchy / interface-positional / generate-block cases "
-                "that the static source-regex backend cannot reach. If NPI is unavailable or "
-                "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
-                "on-demand Source Graph; Legacy Static remains the normal final fallback "
-                "(shallow_only). On legacy compile-log calls, when allow_bounded_bootstrap=true and no full hierarchy exists, "
-                "only proved positive Source Graph facts are returned; an inconclusive/blocker "
-                "does not trigger a whole-source Static rescan. backend_status preserves the complete attempt chain and Source "
-                "Graph coverage/build receipt. claim_semantics separates confidence in returned "
-                "positive load facts from whole-artifact coverage; exhaustive_search is required "
-                "before treating the list as all loads, and negative_claim_allowed is required "
-                "before claiming there are none. A complete Source Graph not_connected is distinct "
-                "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. "
-                "Every backend publishes enumeration.{returned_count, output_limit, "
-                "output_truncated, search_exhaustive, incomplete_reasons, "
-                "continuation_supported}. High-fanout output is capped at 256; capped "
-                "positive loads remain usable but are not a complete list, and no backend "
-                "currently promises a continuation token. "
-                "Each load query normalizes trailing numeric selects for Legacy Static matching, while "
-                "Source Graph validates the selected bits against the declaration. Each load "
-                "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
-                "which provenance produced its file:line. For unresolved/shallow boundaries, continue "
-                "with client file reads of verified compiled sources; label manual connections as "
-                "source inference and verify runtime behavior with waveform/log evidence."
+                "Find consuming ports, assignment RHS and sensitivity lists. Route: trusted NPI -> bounded Source Graph -> Static. Read actual_backend, source_info_origin and claim_semantics. Returned positive facts need not cover all loads: require exhaustive_search for completeness and negative_claim_allowed for absence. enumeration reports returned/output limits, truncation, search coverage and continuation support; at most 256 loads, no promised continuation. Source Graph validates selected bits; Static normalizes numeric selects. A complete not_connected differs from inconclusive no-match. Legacy bounded bootstrap never invokes a full-source Static rescan. Cite manual source inferences separately and verify runtime behavior with waveform evidence."
             ),
             inputSchema={
                 "type": "object",
@@ -7104,24 +7113,7 @@ async def list_tools():
         Tool(
             name="trace_signal_path",
             description=(
-                "An explicit design_handle permits a fixed-design NPI or Source Graph query without a full hierarchy "
-                "prerequisite; compile_log may be omitted. Read backend_status for fallback coverage. "
-                "Find a structural connectivity path between two signals. A "
-                "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
-                "bounded, dual-endpoint Source Graph before Legacy Static. "
-                "Source Graph follows only projected IR facts across bindings and "
-                "supported combinational dependencies. claim_semantics reports confidence in a "
-                "proved positive path independently from global coverage; a found path is not an "
-                "exhaustive enumeration. A no-path result is exact only when "
-                "negative_claim_allowed=true. If no usable path result is available, final Static "
-                "can report unsupported_reason='static_backend_no_path_api'; bounded Source Graph "
-                "results may instead retain their incomplete coverage. Unsupported or incomplete results "
-                "do not prove disconnection. Continue with driver/load queries where useful and client "
-                "file reads of verified compiled sources; trace assignments, port bindings and bit "
-                "ranges manually, cite file:line, and label this as source inference rather than a "
-                "backend-proved path. Do not repeat an unchanged unsupported query. This is "
-                "connectivity, NOT temporal driver direction — use "
-                "explain_signal_driver for driver semantics."
+                "Find structural connectivity between signals through trusted NPI, bounded dual-endpoint Source Graph, then Static. A found path is positive evidence, not exhaustive enumeration or temporal driver direction. Absence requires negative_claim_allowed; incomplete/unsupported cannot prove disconnection. Static may report static_backend_no_path_api. Read actual_backend, coverage and claim_semantics; use driver/load queries or cite verified source inferences at unresolved boundaries. Do not repeat an unchanged unsupported call."
             ),
             inputSchema={
                 "type": "object",
@@ -7194,35 +7186,7 @@ async def list_tools():
         Tool(
             name="trace_x_source",
             description=(
-                "Start from a real signal path; supported RTL expressions are extracted internally. "
-                "Accepts compile_log with the legacy hierarchy, or an explicit design_handle from "
-                "prepare_design_context for both modes. A healthy bound NPI route needs no full "
-                "hierarchy. Source Graph plans bounded snapshot/history traces from the same captured "
-                "context, restarts from the original signal when its artifact scope expands, and "
-                "retains explicit partial frontiers. "
-                "At an unsupported boundary, continue reading verified compiled source with client "
-                "file tools and use waveform evidence to check inferred propagation and timing. "
-                "When a signal shows X/Z at a target time, trace its propagation "
-                "chain through upstream driver logic. Uses the selected connectivity "
-                "route (trusted local/LSF NPI, bounded Source Graph, then Static). "
-                "A Source Graph trace may expand to bounded direct-child frontiers "
-                "when an unresolved parent net can be driven by a child output. Any "
-                "backend or artifact change discards the partial chain and restarts "
-                "from the original signal, so one returned chain never mixes "
-                "provenance. Connectivity queries run outside waveform locks. "
-                "backend_status reports selected versus actual backend; "
-                "trace_restarted reports a whole-trace retry. Source Graph chain nodes preserve "
-                "claim_semantics, so an exact positive edge can be used without implying global "
-                "coverage or exclusive drive. NPI testbench-driven/cross-check evidence is "
-                "preserved on the node. Default mode=snapshot keeps the same-time chain. "
-                "mode=history requires history_start_ps and returns history.nodes/edges/frontier: "
-                "observed X/Z intervals, supported register sampling/hold and combinational evidence. "
-                "Same-edge data predecessors may extend a labelled candidate path while retaining "
-                "the scheduling gap; ambiguous controls or clocks still stop expansion. "
-                "Typed NPI async boundaries expose control assertions and clock observations "
-                "without inferring the reset/set assignment value or a causal relation. "
-                "Missing history, ambiguous scheduling, CDC or unsupported asynchronous controls "
-                "remain boundaries; observed dump onset is never asserted to be the true first origin."
+                "Trace X/Z upstream from a real signal. snapshot follows same-time propagation; history requires history_start_ps and returns observed intervals, sampling/hold evidence and partial frontiers. Native/backend/artifact changes discard the chain and restart at the original target/window. Connectivity runs outside wave locks. Read actual_backend, trace_restarted and node claim_semantics: a positive edge does not prove exclusive drive or global coverage. Keep TB-driver cross-checks. Same-edge predecessors retain scheduling gaps; ambiguous controls/clocks, CDC, missing history and unsupported asynchronous controls stop expansion. Async evidence does not infer assignment values or causality; dump onset is not a proven first origin. Cite source inference separately and verify timing against waveforms."
             ),
             inputSchema={
                 "type": "object",
@@ -7268,17 +7232,7 @@ async def list_tools():
         Tool(
             name="get_tb_subtree",
             description=(
-                "Return a slice of the component_tree starting at `root` (dotted instance path) "
-                "with up to `depth` levels. Use a legacy handle for the compiled-source tree, or "
-                "design_handle from prepare_design_context for on-demand NPI hierarchy facts without "
-                "a full hierarchy build. The design_handle route returns schema_version=2; default "
-                "count_mode=bounded stops at display frontiers and returns a lower bound when descendants "
-                "remain unvisited. count_mode=exact explicitly traverses undisplayed descendants within "
-                "the query budget. max_nodes includes the root. Locations retain raw NPI paths; "
-                "*_location_unbound row gaps identify paths not bound to captured inputs. "
-                "Source preference or ordinary NPI unavailability uses a bounded isolated Slang "
-                "hierarchy artifact; unsupported scopes retain explicit coverage gaps. "
-                "Legacy handles retain their existing result shape."
+                "Return root plus depth levels; max_nodes includes root. New routes return schema_version=2; legacy handle shape is retained. bounded count is a lower bound at unvisited frontiers; exact traverses undisplayed descendants within work/time budgets. Raw NPI locations with *_location_unbound gaps are unverified locators. Inspect coverage/count limits; source fallback uses a bounded semantic artifact."
             ),
             inputSchema={
                 "type": "object",
@@ -7314,17 +7268,7 @@ async def list_tools():
         Tool(
             name="lookup_tb_files",
             description=(
-                "Query compiled files with AND filters; at least one filter is required. "
-                "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
-                "schema_version=2 captured file ownership and on-demand semantic symbols. Basename/name/path-only "
-                "filters never probe, select or load a semantic backend, and semantic fields remain null. "
-                "has_module/contains_uvm/file_type require semantic evidence; an unknown filter result "
-                "is not a negative match. NPI file mapping may walk global namespaces within the request "
-                "budget; inspect semantic_work_scope, coverage gaps and unknown_filter_files. "
-                "count_mode=bounded stops after an omitted match; exact requests all candidates within budgets. "
-                "Healthy NPI has priority; source preference or ordinary NPI unavailability uses a bounded "
-                "Slang declaration artifact. Declaration, import and UVM-usage coverage are separate; "
-                "unelaborated bodies and unprocessed files stay unknown. Legacy handles retain their existing shape."
+                "AND compiled-file filters; at least one required. Name/path-only filters use metadata without KDB/backend work; semantic fields stay null. has_module/contains_uvm/file_type need semantic evidence: unknown is not a negative match. Read ownership_basis, unknown_filter_files, semantic_work_scope and separate declaration/import/UVM coverage. bounded stops at an omitted match; exact inspects all candidates within budgets. New schema_version=2; legacy handle shape remains."
             ),
             inputSchema={
                 "type": "object",
@@ -7361,17 +7305,7 @@ async def list_tools():
         Tool(
             name="find_tb_instance",
             description=(
-                "Locate instances by exact path OR module name; path and module are mutually exclusive. "
-                "Use a legacy handle for the compiled-source tree, or design_handle from prepare_design_context "
-                "for on-demand NPI facts without a full hierarchy build. The design_handle route returns "
-                "schema_version=2 with semantic identities, separate instance/definition locations and "
-                "coverage/count limits. Locations retain raw NPI paths; *_location_unbound row gaps "
-                "mean the path is not bound to captured inputs and is not a verified source locator. "
-                "Exact path queries do not enumerate children. Module searches "
-                "are bounded; count_mode=exact requests a complete count within the query budget. "
-                "Source preference or ordinary NPI unavailability uses a bounded isolated Slang "
-                "hierarchy artifact; unsupported scopes retain explicit coverage gaps. "
-                "Legacy handles retain their existing result shape."
+                "Find by exact path OR module, never both. Exact paths do not enumerate children; module searches are bounded. exact count requests complete counting within budgets. New schema_version=2 carries semantic identities, separate instance/definition locations, count and coverage limits; legacy handle shape remains. Raw *_location_unbound paths are unverified source locators."
             ),
             inputSchema={
                 "type": "object",
@@ -7398,16 +7332,7 @@ async def list_tools():
         Tool(
             name="get_tb_file_detail",
             description=(
-                "Return symbols (modules/classes/interfaces) defined in a single compiled file. "
-                "Use handle for legacy scan facts, or design_handle from prepare_design_context for "
-                "schema_version=2 captured file ownership and on-demand semantic declarations. Only an exact "
-                "captured path or alias binds a file; a nonmember returns basename suggestions without "
-                "probing or loading a backend. Native mapping may walk global namespaces within the query "
-                "budget and does not prove all uninstantiated declarations, imports or variables were recovered. "
-                "Inspect semantic_work_scope, symbol_inventory_complete and coverage gaps. "
-                "Source preference or ordinary NPI unavailability uses an isolated bounded Slang declaration "
-                "artifact with exact captured file ownership. Read symbol_inventory_complete and semantic_gaps; "
-                "an unelaborated body or unprocessed file cannot prove absence. Legacy handles retain their existing shape."
+                "Read module/class/interface declarations for an exact compiled path or alias. Nonmembers return basename suggestions without backend work. New schema_version=2 reports ownership_basis, semantic_work_scope, symbol_inventory_complete and semantic_gaps; legacy handle shape remains. Budgeted native namespace lookup may omit uninstantiated declarations/imports/variables; unprocessed files and unelaborated bodies cannot prove absence."
             ),
             inputSchema={
                 "type": "object",
@@ -7425,22 +7350,7 @@ async def list_tools():
         Tool(
             name="get_tb_class_hierarchy",
             description=(
-                "Return static class inheritance, including UVM bases, rather than runtime UVM objects. "
-                "Use handle for the legacy source-scan view, or design_handle from prepare_design_context "
-                "for schema_version=2 declarations with qualified identities and actual base bindings. "
-                "base_relation=declaration identifies the declared base; its defaults are not derived "
-                "actuals. base_value_parameters carries observed constant extends arguments; inspect "
-                "base_parameter_status/binding_gaps, not a complete specialized type identity. "
-                "root_class accepts a symbol ID, qualified name, or an unambiguous short name. "
-                "Discovering derived classes can require a budgeted namespace inventory even for one root. "
-                "total counts rendered nodes; class_inventory_* describes declaration coverage. "
-                "Reference-only external bases are not recovered declarations. Raw source paths outside "
-                "captured inputs carry npi_class_location_unbound. Source preference or ordinary NPI "
-                "unavailability uses a bounded Slang catalog of declarations and actually referenced "
-                "specializations. Slang canonical type IDs/type_parameter_bindings are artifact-local; "
-                "declaration_id agrees with file declarations. base_relation=specialization binds the "
-                "actual specialized base, including base_type_parameter_bindings. Generic bodies "
-                "without an actual binding retain gaps; this is a static type graph, not UVM topology."
+                "Static inheritance, not runtime UVM topology. root_class accepts symbol ID, qualified name or unambiguous short name. New schema_version=2; legacy shape remains. Derived discovery may need budgeted global inventory. total counts rendered nodes; class_inventory_* describes declaration coverage. External reference bases are not recovered declarations. declaration bases carry observed base_value_parameters/status/gaps; specialization bases carry actual type bindings. Generic defaults are not derived actuals; Slang canonical IDs are artifact-local. Raw npi_class_location_unbound paths are unverified locators."
             ),
             inputSchema={
                 "type": "object",
@@ -7460,15 +7370,7 @@ async def list_tools():
         Tool(
             name="dump_tb_section",
             description=(
-                "Export one named hierarchy/source section. Use handle for the legacy raw section, or "
-                "design_handle from prepare_design_context for schema_version=2 captured metadata or NPI facts. "
-                "compile_result/include_tree/filelist_tree do not probe or load a backend. Semantic sections "
-                "may require global traversal within work/time budgets; max_items limits output only. "
-                "component_tree_full requests exact descendant counting within those budgets. "
-                "export_complete=false means the export is partial or truncated even if its count is exact. "
-                "Class sections describe static inheritance; file/interface sections retain declaration "
-                "coverage gaps. Source preference or ordinary NPI unavailability uses the corresponding "
-                "bounded Slang hierarchy, file or class artifact."
+                "Export one named section. compile_result/include_tree/filelist_tree use metadata without backend work. Semantic sections may traverse globally within work/time budgets; max_items limits display only. component_tree_full requests exact descendant counting. export_complete=false remains partial even with exact counts. Class sections describe static inheritance; declarations retain coverage gaps. New schema_version=2; legacy handle shape remains."
             ),
             inputSchema={
                 "type": "object",
@@ -8315,12 +8217,7 @@ async def list_tools():
                 "max_wait_cycles": {"type": "integer", "minimum": 0, "default": 16},
             }, "required": ["wave_path", "clock"]}),
         Tool(name="resolve_packed_fields", description=(
-            "Resolve requested packed members from a prepared design and exact dump declaration. "
-            "NPI uses actual type membership and bit identity; unsupported native layouts may use "
-            "the bounded Source Graph worker. design_handle avoids a full hierarchy prerequisite; "
-            "compile_log alone prepares an independent context. Returns mapping_required when "
-            "identity, active instance specialization, type or range cannot be proved. Returned explicit "
-            "selections are a compile snapshot: re-resolve after input changes. No waveform/source version inferred."),
+            "Resolve packed members using actual compiled type membership, instance specialization, bit identity and exact dump range. Unsupported NPI layouts may use bounded Source Graph. mapping_required means identity/type/range could not be proved. Returned selections are a compile observation: re-resolve after input changes; no waveform/source version association is inferred."),
             inputSchema={"type": "object", "properties": {
                 "wave_path": {"type": "string"}, "compile_log": {"type": "string"},
                 "design_handle": {"type": "string"},
@@ -8333,6 +8230,31 @@ async def list_tools():
             }, "required": ["wave_path", "signal_path", "source_signal", "fields"],
             "anyOf": [{"required": ["compile_log"]}, {"required": ["design_handle"]}]}),
     ])
+    from src.native_query import NATIVE_TOOLS
+    native_properties = {
+        "compile_log": {"type": "string", "minLength": 1},
+        "supplementary_compile_logs": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 16},
+        "simulator": {"type": "string", "enum": ["auto", "vcs", "xcelium", "verilator"], "default": "auto"},
+        "top_hint": {"type": "string", "minLength": 1},
+        "kdb_path": {"type": "string", "minLength": 1},
+        "backend_preference": {"type": "string", "enum": ["auto", "source"], "default": "auto"},
+        "retry_npi": {"type": "boolean", "default": False},
+        "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 300, "default": 30},
+    }
+    native_selector = {"anyOf": [{"required": ["compile_log"]}, {"required": ["kdb_path", "top_hint"]}],
+        "not": {"anyOf": [{"required": [k]} for k in ("handle", "design_handle", "compile_context")]}}
+    for tool in _tools:
+        if tool.name in NATIVE_TOOLS:
+            if tool.name in {"analyze_failure_event", "recommend_failure_debug_next_steps"}:
+                tool.description += " KDB-only log consumers require an explicit simulator."
+            tool.inputSchema["properties"].update(native_properties)
+            tool.inputSchema["required"] = [k for k in tool.inputSchema.get("required", []) if k != "compile_log"]
+            if "oneOf" in tool.inputSchema:
+                tool.inputSchema["oneOf"].append(native_selector)
+            elif "anyOf" in tool.inputSchema:
+                tool.inputSchema["anyOf"].append(native_selector)
+            tool.description = (
+                "compile_log or kdb_path+top_hint: NPI, then automatic source fallback. " + tool.description)
     for tool in _tools:
         properties = tool.inputSchema["properties"]
         if tool.name == "get_waveform_summary":
@@ -8393,7 +8315,7 @@ async def list_tools():
 
 
 @recover_tool_input_errors(app)
-@app.call_tool()
+@app.call_tool(validate_input=False)  # Wrapper validates every input with checked schemas.
 async def call_tool(name: str, arguments: dict):
     start = time.perf_counter()
     attribution = usage_telemetry.begin_call(arguments)
@@ -8653,8 +8575,13 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
     from src.hierarchy_source_request import prepare_source_query
     from src.npi_hierarchy_source import NpiHierarchyUnavailable
 
+    from src.native_query import NativeFallback, NATIVE_IDENTITY_ERRORS
+    from src.hierarchy_source_request import prepare_native_source_query
+    from src.hierarchy_source_metadata import observation_identity
+    native = getattr(entry, "native", False)
     context = entry.context
-    plan = plan if plan is not None else prepare_source_query(context, operation, arguments, budget=budget)
+    identity = observation_identity(context)
+    plan = plan if plan is not None else (prepare_native_source_query if native else prepare_source_query)(context, operation, arguments, budget=budget)
     backend, status, selection_reason = _select_prepared_backend(entry, DeferredConnectivityFallbackBackend())
     selected = getattr(backend, "name", None) == "verdi_npi"
     reason = selection_reason or status.pop("_npi_selection_reason", None) or "npi_kdb_unavailable"
@@ -8670,8 +8597,14 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                 TimeoutError, design_context_runtime.ContextUnavailable):
             raise
         except NpiHierarchyUnavailable as exc:
+            if native and exc.reason in NATIVE_IDENTITY_ERRORS:
+                raise design_context_runtime.ContextUnavailable("native_identity_or_result_invalid") from exc
             reason = _sanitize_npi_fallback_reason(exc.reason)
             execution = getattr(exc, "execution_status", None)
+        except (TypeError, ValueError, KeyError) as exc:
+            if native:
+                raise design_context_runtime.ContextUnavailable("native_result_invalid") from exc
+            reason = "npi_query_failed"
         except Exception:
             reason = "npi_query_failed"
         kdb_status = _npi_kdb_status(backend)
@@ -8699,7 +8632,7 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                     raise ValueError("npi_source_result_class_root_mismatch")
             if (operation in {"lookup_tb_files", "get_tb_file_detail"}
                     or section in {"files_full", "interfaces"}) and "error" not in raw:
-                if raw.get("ownership_identity") != context.identity_sha256:
+                if raw.get("ownership_identity") != identity or (native and raw.get("ownership_basis") != "compile_metadata"):
                     raise ValueError("npi_source_result_ownership_mismatch")
                 expected_file = (plan.catalog.find_file(arguments["path"])
                                  if operation == "get_tb_file_detail" else None)
@@ -8710,6 +8643,8 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                         if row["source_file"] is None or plan.catalog.find_file(row["source_file"]) is None:
                             raise ValueError("npi_source_result_file_mismatch")
                         continue
+                    if native and row.get("source_status") != "not_captured":
+                        raise ValueError("native_source_content_claim_invalid")
                     member = plan.catalog.find_file(row["path"])
                     if (member is None or row["path"] != member.path
                             or row["file_id"] != member.file_id
@@ -8722,14 +8657,19 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
                 expected = hashlib.sha256((anchor.identity_sha256 + "\0" + context.selected_top).encode()).hexdigest()
                 evidence = raw.get("kdb_binding") or {}
                 if (raw["artifact_identity"] != expected
-                        or raw.get("context_identity_sha256") != context.identity_sha256
+                        or (not native and raw.get("context_identity_sha256") != identity)
+                        or (native and "context_identity_sha256" in raw)
                         or evidence.get("identity_sha256") != anchor.identity_sha256
                         or evidence.get("load_status") != "loaded"):
                     raise ValueError("npi_source_result_identity_mismatch")
                 from src.hierarchy_source_metadata import mark_unbound_source_locations
-                mark_unbound_source_locations(raw, context)
-            elif (origin != "compile_metadata" or raw["artifact_identity"] != context.identity_sha256
-                  or raw.get("context_identity_sha256") not in (None, context.identity_sha256)):
+                if native:
+                    from src.native_dispatch import mark_native_locations
+                    mark_native_locations(raw)
+                else:
+                    mark_unbound_source_locations(raw, context)
+            elif (origin != "compile_metadata" or raw["artifact_identity"] != identity
+                  or raw.get("context_identity_sha256") not in (None, identity)):
                 raise ValueError("npi_source_result_origin_mismatch")
             attempts.append(_backend_attempt("verdi_npi", "success" if origin == "verdi_npi" else "inconclusive",
                                              coverage_status=raw["coverage_status"]))
@@ -8740,6 +8680,8 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
             "source_backend_requested", "npi_previous_load_failure",
         } else "unavailable", reason=reason))
     if raw is None:
+        if native and allow_source:
+            raise NativeFallback(attempts)
         try:
             if allow_source:
                 raw, source_receipt = await _query_slang_hierarchy(entry, plan, arguments, budget)
@@ -8752,7 +8694,8 @@ async def _query_prepared_hierarchy(entry, operation, arguments, budget, *, plan
             **({"coverage_status": raw["coverage_status"]} if available else
                {"reason": "source_hierarchy_provider_unavailable"})))
     actual = {"verdi_npi": "verdi_npi", "slang": "source_graph"}.get(raw["facts_origin"])
-    raw["context_identity_sha256"] = context.identity_sha256
+    if not native:
+        raw["context_identity_sha256"] = identity
     raw["backend_status"] = _finalize_public_connectivity_status(
         backend_status=status, selected_backend="verdi_npi" if selected else "source_graph",
         actual_backend=actual, attempts=attempts,
@@ -8771,16 +8714,21 @@ async def _failure_source_context(args, event):
     A source query uses the exact log scope (or bounded top when absent).
     Native partial/empty results retain priority; neither route builds a tree.
     """
-    entry = args.get("_prepared_design")
+    entry = args.get("_prepared_design") or args.get("_native_query")
     if entry is None or event is None:
         return {}, None
     from src.hierarchy_source_ir import HierarchyQueryBudget
+    from src.hierarchy_source_metadata import observation_identity
     context = entry.context
+    identity = (context.compile_metadata_identity_sha256 if getattr(entry, "native", False)
+                else observation_identity(context))
+    identity_key = ("compile_metadata_identity_sha256" if getattr(entry, "native", False)
+                    else "context_identity_sha256")
     if context.selected_top is None:
         return {"source_correlation": {
             "facts_origin": "log_only", "coverage_status": "partial",
             "coverage_gaps": sorted(set(context.gaps) | {"compile_tops_unresolved"}),
-            "context_identity_sha256": context.identity_sha256,
+            identity_key: identity,
             "full_hierarchy_fallback": False, "queries": [],
         }}, None
     budget = HierarchyQueryBudget(timeout_sec=args.get("timeout_sec", 30),
@@ -8815,7 +8763,7 @@ async def _failure_source_context(args, event):
             return {"source_correlation": {
                 "facts_origin": "log_only", "coverage_status": "partial",
                 "coverage_gaps": sorted(gaps), "analysis_limits": result["analysis_limits"],
-                "context_identity_sha256": context.identity_sha256,
+                identity_key: identity,
                 "full_hierarchy_fallback": False, "queries": receipts,
             }}, status
         origin = result["facts_origin"]
@@ -8838,12 +8786,13 @@ async def _failure_source_context(args, event):
             break
     return {"instance_candidates": list(candidates.values()), "source_correlation": {
         "facts_origin": origin, "coverage_status": "partial", "coverage_gaps": sorted(gaps),
-        "context_identity_sha256": context.identity_sha256, "candidate_count": len(candidates),
+        identity_key: identity, "candidate_count": len(candidates),
         "selection": "exact_log_path_or_bounded_top" if origin == "slang" else "exact_log_path_and_top_direct_children", "full_hierarchy_fallback": False,
         "queries": receipts}}, status
 
 
-async def _dispatch_design_query(name: str, args: dict, *, started=None):
+async def _dispatch_design_query(name: str, args: dict, *, started=None, deadline=None, trace_budget=None,
+                                 publish=True, failure_events_observation=None):
     """Own one independent context across binding, query and publication.
 
     All source/KDB validation runs outside wave locks. Abandoned preparation
@@ -8896,10 +8845,12 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
             return schemas.ToolErrorResult(error=str(exc), error_code=code)
 
     def remaining(limit):
-        deadline = source_budget.deadline if source_budget is not None else history_deadline
-        if deadline is None:
+        effective_deadline = source_budget.deadline if source_budget is not None else history_deadline
+        if deadline is not None:
+            effective_deadline = min(effective_deadline, deadline) if effective_deadline else deadline
+        if effective_deadline is None:
             return limit
-        value = deadline - time.monotonic()
+        value = effective_deadline - time.monotonic()
         if value <= 0:
             raise TimeoutError
         return min(limit, value)
@@ -8939,7 +8890,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 history_args = {k: v for k, v in args.items() if k not in {
                     "design_handle", "supplementary_compile_logs",
                 }}
-                history_request = schemas.XHistoryInput.model_validate({
+                history_request = (schemas.NativeXHistoryInput if deadline is not None else schemas.XHistoryInput).model_validate({
                     **history_args, "compile_log": context.ordered_compile_logs[0],
                     "simulator": context.simulator, "top_hint": context.selected_top,
                 })
@@ -8975,10 +8926,16 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 "simulator": context.simulator, "top_hint": context.selected_top,
                 "_prepared_design": entry,
             }
+            if failure_events_observation is not None:
+                resolved["_failure_events_observation"] = failure_events_observation
             if name in {"explain_signal_driver", "find_signal_loads"}:
                 resolved.setdefault("allow_bounded_bootstrap", True)
             if history_deadline is not None:
                 resolved["_design_query_started"] = started
+            if trace_budget is not None:
+                resolved["_trace_budget"] = trace_budget
+            if deadline is not None:
+                resolved["_trace_deadline"] = deadline
             if connectivity_query or name in {"resolve_packed_fields", "trace_x_source"}:
                 resolved["_prepared_source_execution"] = prepared_source_execution
             phase = time.monotonic()
@@ -9047,7 +9004,7 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
                 raw["backend_status"]["design_context"]["metrics"]["total_ms"] = (
                     time.monotonic() - started) * 1000
                 return raw
-            if name == "recommend_failure_debug_next_steps":
+            if name == "recommend_failure_debug_next_steps" and publish:
                 _result_cache[name] = result
                 _result_provenance[name] = _build_result_provenance(name, resolved, result)
             return result
@@ -9069,31 +9026,31 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None):
 
 
 async def _dispatch(name: str, args: dict):
-    if any(key in args for key in ("_prepared_design", "_design_query_started")):
-        return schemas.ToolErrorResult(error="Reserved design argument.", error_code="invalid_design_context_arguments")
+    if any(key.startswith("_") for key in args):
+        return schemas.ToolErrorResult(error="Reserved internal argument.", error_code="invalid_design_context_arguments")
     if name == "get_diagnostic_snapshot":
         return await _dispatch_inner(name, args)
+    from src.native_query import NATIVE_TOOLS
+    hierarchy_tools = {"get_tb_subtree", "find_tb_instance", "lookup_tb_files", "get_tb_file_detail",
+                       "get_tb_class_hierarchy", "dump_tb_section"}
     if "design_handle" in args:
-        if name not in {"explain_signal_driver", "find_signal_loads", "trace_signal_path", "trace_x_source",
-                        "find_tb_instance", "get_tb_subtree", "lookup_tb_files", "get_tb_file_detail",
-                        "get_tb_class_hierarchy", "dump_tb_section", "analyze_failure_event",
-                        "recommend_failure_debug_next_steps", "resolve_packed_fields"}:
-            return schemas.ToolErrorResult(error="This tool does not yet accept design_handle.", error_code="design_handle_tool_unsupported")
+        if name not in NATIVE_TOOLS:
+            return schemas.ToolErrorResult(error="This tool does not accept design_handle.", error_code="design_handle_tool_unsupported")
+        if "retry_npi" in args or ("handle" in args and name not in {
+            "get_tb_subtree", "find_tb_instance", "lookup_tb_files", "get_tb_file_detail",
+            "get_tb_class_hierarchy", "dump_tb_section"}):
+            return schemas.ToolErrorResult(error="Conflicting identity modes.", error_code="design_context_arguments_mismatch")
         return await _dispatch_design_query(name, args)
-    if name == "resolve_packed_fields" and args.get("compile_log"):
-        # Preserve an explicitly built legacy view, including its historical
-        # source-change rejection. Only a caller without that view is prepared
-        # automatically; an explicit design_handle never borrows this cache.
-        hierarchy, _ = _resolve_hierarchy_context(args["compile_log"], _resolve_session_simulator(args))
-        if hierarchy is not None:
-            return await _dispatch_inner(name, args)
-    if name in {"analyze_failure_event", "recommend_failure_debug_next_steps", "resolve_packed_fields"} and args.get("compile_log"):
-        started = time.monotonic()
-        prepared = await _handle_prepare_design_context({key: args[key] for key in (
-            "compile_log", "supplementary_compile_logs", "simulator", "top_hint", "timeout_sec") if key in args})
-        if isinstance(prepared, schemas.ToolErrorResult):
-            return prepared
-        return await _dispatch_design_query(name, {**args, "design_handle": prepared.design_handle}, started=started)
+    if name in NATIVE_TOOLS and (
+        ("handle" in args and name not in hierarchy_tools)
+        or ("compile_context" in args and name not in {"explain_signal_driver", "trace_x_source"})
+        or ("retry_npi" in args and ("handle" in args or "compile_context" in args))
+    ):
+        return schemas.ToolErrorResult(error="Conflicting or unsupported identity inputs.", error_code="invalid_native_query_arguments")
+    if (name in NATIVE_TOOLS and not any(key in args for key in ("handle", "compile_context"))
+            and (args.get("compile_log") or args.get("kdb_path"))):
+        from src.native_dispatch import dispatch_native_query
+        return await dispatch_native_query(sys.modules[__name__], name, args)
     return await _dispatch_inner(name, args)
 
 
@@ -9148,7 +9105,7 @@ async def _dispatch_inner(name: str, args: dict):
             return result
         args = {**args, "_bound_context": bound, "simulator": bound.context["simulator"],
                 "top_hint": bound.context.get("top_hint")}
-    block = None if bound is not None or args.get("_prepared_design") is not None else _check_prerequisites(name, args)
+    block = None if bound is not None or args.get("_prepared_design") is not None or args.get("_native_query") is not None else _check_prerequisites(name, args)
     if block is not None:
         return schemas.PrerequisiteBlockResult.model_validate(block)
 
@@ -9944,9 +9901,21 @@ async def _dispatch_inner(name: str, args: dict):
         parse_cache = _get_compatible_recommend_parse_cache(request_context)
         sweep_cache = _get_compatible_recommend_sweep_cache(request_context)
         from src.analyzer import select_primary_failure
-        events = await _run_in_cancellable_thread(lambda: SimLogParser(
-            args["log_path"], simulator, args.get("native_time_unit")).parse_failure_events())
-        source, backend_status = await _failure_source_context(args, select_primary_failure(events))
+        observation = None
+        if args.get("_native_query") is not None or args.get("_failure_events_observation") is not None:
+            observation = await _run_in_cancellable_thread(lambda: observe_failure_events(
+                args["log_path"], simulator, args.get("native_time_unit"),
+                previous=args.get("_failure_events_observation")))
+            events = observation.events
+        else:
+            events = await _run_in_cancellable_thread(lambda: SimLogParser(
+                args["log_path"], simulator, args.get("native_time_unit")).parse_failure_events())
+        from src.native_query import NativeFallback
+        try:
+            source, backend_status = await _failure_source_context(args, select_primary_failure(events))
+        except NativeFallback as fallback:
+            fallback.failure_events_observation = observation
+            raise
         def analyze():
             return WaveformAnalyzer(
                 log_path=args["log_path"],
@@ -10031,7 +10000,7 @@ async def _dispatch_inner(name: str, args: dict):
             result["degraded_reason"] = None
             result["required_next_call"] = None
         validated = schemas.RecommendNextStepsResult.model_validate(result)
-        if args.get("_prepared_design") is None:
+        if args.get("_prepared_design") is None and args.get("_native_query") is None:
             _result_cache["recommend_failure_debug_next_steps"] = validated
             _result_provenance["recommend_failure_debug_next_steps"] = (
                 _build_result_provenance(name, resolved_args, validated)
@@ -10638,8 +10607,8 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
         "native_time_unit": args.get("native_time_unit"),
         "wave_path": args.get("wave_path"),
         "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
-        "compile_log": args.get("compile_log")
-        or sim_state.get("compile_log"),
+        "compile_log": (args.get("compile_log") if args.get("_native_query") is not None
+                        else args.get("compile_log") or sim_state.get("compile_log")),
     }
 
 
@@ -10951,7 +10920,7 @@ def _build_result_provenance(
                 log_size = stat_result.st_size
             except OSError:
                 pass
-        prepared = args.get("_prepared_design")
+        prepared = args.get("_prepared_design") or args.get("_native_query")
         correlation = getattr(result, "source_correlation", None) or {}
         return {
             "log_path": log_path,
@@ -11207,43 +11176,6 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             }
         )
 
-    # Suggest build_kdb when the active simulator is Xcelium and the
-    # probe positively confirms there is no KDB. We deliberately do
-    # *not* surface this when the compile log fails to parse — that
-    # signals a degraded probe, not a missing KDB.
-    try:
-        from config import AUTO_KDB_BUILD  # noqa: PLC0415
-    except Exception:
-        AUTO_KDB_BUILD = False
-    if (
-        AUTO_KDB_BUILD
-        and sim_result is not None
-        and getattr(sim_result, "simulator", None) == "xcelium"
-        and selected_design is None
-    ):
-        cl_entries = getattr(sim_result, "compile_logs", []) or []
-        compile_log_path = cl_entries[0].path if cl_entries else None
-        if compile_log_path:
-            try:
-                _cr = parse_compile_log(compile_log_path, "xcelium")
-                _probe = probe_verdi_backend(_cr, compile_log_path=compile_log_path)
-                _probe_ok = True
-            except Exception:
-                _probe_ok = False
-                _probe = {}
-            if _probe_ok and not _probe.get("kdb_path"):
-                missing_steps.append(
-                    {
-                        "tool": "build_kdb",
-                        "arguments": {"compile_log": compile_log_path},
-                        "reason": (
-                            "Xcelium flow has no Verdi KDB yet; running build_kdb "
-                            "produces one so the NPI backend can answer cross-hierarchy "
-                            "driver/load/path queries."
-                        ),
-                    }
-                )
-
     hier_result = None if case_mismatch else _result_cache.get("build_tb_hierarchy")
     if hier_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
@@ -11274,17 +11206,10 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             available=False,
             summary={"view": "legacy_full_hierarchy", "optional": True},
         )
-    if (anchor is not None and selected_design is None
-            and (hier_result is None or sections["hierarchy"].stale)):
-        suggested = _build_suggested_call("prepare_design_context")
-        sections["design_context"].suggested_call = suggested
-        missing_steps.append(
-            {
-                "tool": "prepare_design_context",
-                "arguments": suggested["arguments"],
-                "reason": "Select an explicit matching design_handle or prepare a current compile context for on-demand source queries.",
-            }
-        )
+    if anchor is not None and selected_design is None and anchor.get("compile_log"):
+        sections["design_context"].suggested_call = {
+            "tool": "get_tb_subtree", "arguments": {
+                "compile_log": anchor["compile_log"], "simulator": anchor.get("simulator") or "auto"}}
 
     log_result = None if case_mismatch else _result_cache.get("parse_sim_log")
     compatible_log_result = None

@@ -61,7 +61,7 @@ def query_source_over_lsf(backend, plan):
     mandatory binding validation all contribute to the original query budget.
     """
     from .npi_lsf import (
-        HierarchySourceWorkerRequest, NPI_EXECUTION_STATUS_KEY, SourceWorkerLimits,
+        HierarchySourceWorkerRequest, NativeSourceWorkerRequest, NPI_EXECUTION_STATUS_KEY, SourceWorkerLimits,
         _attach_execution_receipt,
     )
 
@@ -92,16 +92,23 @@ def query_source_over_lsf(backend, plan):
     if not backend._config.valid or backend._config.mode != "lsf":
         raise LsfSourceUnavailable("npi_lsf_config_invalid")
 
+    from .hierarchy_source_request import NativeSourceRequest
+    native = isinstance(plan, NativeSourceRequest)
     started = time.monotonic()
     try:
         # Reject already exhausted work budgets before copying the transport.
         _remaining_limits(budget)
-        payload = encode_design_context(plan.context)
+        if native:
+            from .native_query_codec import encode_native_inputs
+            payload = encode_native_inputs(plan.context)
+        else:
+            payload = encode_design_context(plan.context)
         payload_bytes = len(json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii"))
-        request = HierarchySourceWorkerRequest(
+        request = (NativeSourceWorkerRequest if native else HierarchySourceWorkerRequest)(
             kdb_path=anchor.path, top=plan.context.selected_top,
             kdb_identity_sha256=anchor.identity_sha256, kdb_identity_max_bytes=anchor.max_bytes,
-            tool=plan.operation, arguments=json.loads(plan.arguments_json), context_payload=payload,
+            tool=plan.operation, arguments=json.loads(plan.arguments_json),
+            **({"metadata_payload": payload} if native else {"context_payload": payload}),
             limits=SourceWorkerLimits(**_remaining_limits(budget)),
         )
         budget.checkpoint()

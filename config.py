@@ -206,6 +206,10 @@ NPI_ALLOW_DEGRADED_KDB = _env_flag(
     True,
 )
 
+# Opt-in process-local proxy exceptions for the NPI SDK's vendor communication.
+# Requires direct connectivity; it does not disable requests or their timeouts.
+NPI_VENDOR_DIRECT = _env_flag("TRACEWEAVE_NPI_VENDOR_DIRECT", False)
+
 
 # Cache root for TraceWeave-managed artifacts (generated KDBs, build
 # scripts, build logs). Honour XDG_CACHE_HOME / TRACEWEAVE_CACHE_DIR

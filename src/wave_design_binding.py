@@ -15,6 +15,7 @@ class RootBinding:
     wave_root: str
     design_root: str
     wave_identity: tuple
+    evidence_basis: tuple = ("verilator_compile_top", "exact_wave_declaration")
 
     def to_design(self, path):
         return self.design_root + path[len(self.wave_root):] if path.startswith(self.wave_root + '.') else path
@@ -25,7 +26,7 @@ class RootBinding:
     def receipt(self, path):
         return dict(status='bound', wave_signal=path, source_signal=self.to_design(path),
                     wave_root=self.wave_root, design_root=self.design_root,
-                    evidence=['verilator_compile_top', 'exact_wave_declaration'],
+                    evidence=list(self.evidence_basis),
                     historical_source_identity='not_proven')
 
 
@@ -41,6 +42,18 @@ def bind_root(parser, path, compile_result, *, top_hint=None):
             or tops[0] == 'TOP' or not path.startswith('TOP.' + tops[0] + '.')
             or top_hint not in (None, tops[0]) or '\\' in tops[0]):
         return None
+    return _bind_verified_root(parser, path, tops[0], ("verilator_compile_top", "exact_wave_declaration"))
+
+
+def bind_kdb_root(parser, path, *, kdb_top):
+    """Use a caller-verified native top, never a guessed compile record."""
+    if (not isinstance(kdb_top, str) or kdb_top == "TOP" or "\\" in kdb_top
+            or not path.startswith("TOP." + kdb_top + ".")):
+        return None
+    return _bind_verified_root(parser, path, kdb_top, ("exact_kdb_top", "exact_wave_declaration"))
+
+
+def _bind_verified_root(parser, path, top, evidence):
     identity = file_identity(parser.file_path)
     try:
         declaration = parser.get_signal_declaration(path)
@@ -56,7 +69,7 @@ def bind_root(parser, path, compile_result, *, top_hint=None):
         return None
     if identity != file_identity(parser.file_path):
         raise ValueError('wave_design_binding_changed')
-    return RootBinding('TOP.' + tops[0], tops[0], identity)
+    return RootBinding('TOP.' + top, top, identity, evidence)
 
 
 def bind_source_expression(parser, expr, binding=None, *, engine=None):

@@ -24,6 +24,7 @@ from .dynamic_observe import observe_step
 from .observation_session import ObservationSession
 from .schemas import TraceDivergenceInput, TraceDivergenceResult
 from .kdb_anchor import KdbBindingChanged
+from .native_query import NativeFallback, NativeInputChanged
 
 _COMPETING = [
     "upstream_input_difference",
@@ -33,7 +34,10 @@ _COMPETING = [
 
 
 def _context(side):
-    return {k: v for k, v in side.items() if k not in {"wave_path", "signal_path"}}
+    legacy = any(side.get(k) is not None for k in ("hierarchy_handle", "snapshot_sha256",
+        "source_snapshot_sha256", "compile_log_identity_sha256"))
+    return {k: v for k, v in side.items() if k not in {"wave_path", "signal_path"}
+            and (not legacy or k not in {"kdb_path", "backend_preference", "retry_npi"})}
 
 
 def _design_id(bound):
@@ -122,9 +126,9 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
             )
         except OperationCancelled as exc:
             raise asyncio.CancelledError from exc
-        except (CaptureAborted, ContextUnavailable, KdbBindingChanged,
+        except (CaptureAborted, ContextUnavailable, NativeInputChanged, KdbBindingChanged,
                 ExecutionBindingChanged, TimeoutError) as exc:
-            code = (exc.code if isinstance(exc, ContextUnavailable)
+            code = ("compile_metadata_changed" if isinstance(exc, NativeInputChanged) else exc.code if isinstance(exc, ContextUnavailable)
                     else "design_context_changed" if isinstance(exc, CaptureAborted) and exc.code == "input_changed"
                     else "design_context_" + exc.code if isinstance(exc, CaptureAborted)
                     else "kdb_identity_changed" if isinstance(exc, KdbBindingChanged)
@@ -206,6 +210,8 @@ async def _trace_divergence(services, request, budget, designs, *, route_factory
         for label, side in sides.items():
             if side.get("design_handle") is not None:
                 bound, reason = await designs.resolve(label), "ready"
+            elif designs.native_eligible(label):
+                bound, reason = await designs.resolve_native(label), "ready"
             else:
                 bound, reason = await budget.run(
                     lambda side=side: services._run_in_cancellable_thread(
@@ -320,6 +326,18 @@ async def _trace_divergence(services, request, budget, designs, *, route_factory
                         observations,
                     )
                     break
+                except NativeFallback as fallback:
+                    observations.clear()
+                    budget.restart("npi_source_context_fallback")
+                    label = fallback.side
+                    bounds[label] = await designs.ensure_native_source(label, fallback.attempts)
+                    ids = {s: _design_id(bound) for s, bound in bounds.items()}
+                    for selected in sides:
+                        result["contexts"][selected].update(
+                            compile_context=bounds[selected].context, design_identity_sha256=ids[selected])
+                    mapping = Mapping(request["signal_pairs"], request["scope_pairs"],
+                        sides["a"]["signal_path"], sides["b"]["signal_path"], ids["a"] == ids["b"])
+                    routes = {s: route_factory(services, s, side, bounds[s], budget) for s, side in sides.items()}
                 except TraceRestart as restart:
                     observations.clear()
                     (
@@ -356,7 +374,7 @@ async def _trace_divergence(services, request, budget, designs, *, route_factory
     # Raw source/map checks for independent designs run in a worker, once per
     # unique handle. Their post-budget cost remains part of this request.
     changed = await designs.validate_final(bounds, routes, wave_ids)
-    if changed and designs.entries:
+    if changed and (designs.entries or designs.native_bounds):
         # Mixed calls also discard all old-side facts when either side changes.
         raise ContextUnavailable(changed[0][1])
     if changed:

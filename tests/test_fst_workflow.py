@@ -36,7 +36,7 @@ def test_log_wave_workflow_with_partial_protocol_coverage(tmp_path,monkeypatch):
     r=call('recommend_failure_debug_next_steps',**common)
     assert 'error' not in r,r
     assert r['runtime_protocol_coverage']['coverage_status']=='zero_coverage'
-    r=call('explain_signal_driver',**ctx,wave_path=str(fst),signal_path='top.q',time_ps=36)
+    r=call('explain_signal_driver',**ctx,wave_path=str(fst),signal_path='top.q')
     assert 'error' not in r,r
     assert r['format']=='traceweave.driver.compact.v1'
     r=expand_compact_result(r)

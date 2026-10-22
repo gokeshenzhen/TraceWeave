@@ -1,3 +1,4 @@
+# Legacy-route algorithm regressions; native public dispatch is tested in test_native_first_*.py.
 import os
 from pathlib import Path
 
@@ -77,7 +78,7 @@ endmodule
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         {
             "signal_path": "top_tb.u0.K_sub",
@@ -136,7 +137,7 @@ endmodule
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         {
             "signal_path": "top_tb.u0.K_sub",
@@ -202,7 +203,7 @@ endmodule
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         {
             "signal_path": "top_tb.u0.K_sub",
@@ -248,7 +249,7 @@ endmodule
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         {
             "signal_path": "top_tb.u0.K_sub",
@@ -294,7 +295,7 @@ endmodule
 
     monkeypatch.setattr("src.signal_driver.parse_compile_log", fake_parse_compile_log)
 
-    await server._dispatch(
+    await server._dispatch_inner(
         "explain_signal_driver",
         {
             "signal_path": "top_tb.u0.K_sub",
@@ -348,7 +349,7 @@ async def test_trace_x_source_build_only_session_uses_build_hierarchy_provenance
     monkeypatch.setattr(server, "_get_parser", lambda wave_path: _FakeParser())
     monkeypatch.setattr(server, "trace_x_source", fake_trace_x_source)
 
-    await server._dispatch(
+    await server._dispatch_inner(
         "trace_x_source",
         {
             "signal_path": "top_tb.u0.sig",
@@ -403,7 +404,7 @@ async def test_trace_x_source_build_only_stale_compile_log_falls_back_to_auto(mo
     monkeypatch.setattr(server, "_get_parser", lambda wave_path: _FakeParser())
     monkeypatch.setattr(server, "trace_x_source", fake_trace_x_source)
 
-    await server._dispatch(
+    await server._dispatch_inner(
         "trace_x_source",
         {
             "signal_path": "top_tb.u0.sig",
@@ -444,7 +445,7 @@ async def test_trace_x_source_dispatch_receives_auto_injected_simulator(monkeypa
     monkeypatch.setattr(server, "_get_parser", lambda wave_path: _FakeParser())
     monkeypatch.setattr(server, "trace_x_source", fake_trace_x_source)
 
-    await server._dispatch(
+    await server._dispatch_inner(
         "trace_x_source",
         {
             "signal_path": "top_tb.u0.sig",
@@ -465,7 +466,7 @@ async def test_get_sim_paths_resets_downstream_cache_when_session_identity_chang
     (first_root / "elab.log").write_text("xrun\nxmelab\n")
     (first_case / "irun.log").write_text("module_a ERROR issue @ 1 ns\n")
 
-    await server._dispatch("get_sim_paths", {"verif_root": str(first_root), "case_name": "case0"})
+    await server._dispatch_inner("get_sim_paths", {"verif_root": str(first_root), "case_name": "case0"})
 
     server._result_cache["build_tb_hierarchy"] = server.schemas.BuildTbHierarchyResult.model_validate(
         {
@@ -481,6 +482,6 @@ async def test_get_sim_paths_resets_downstream_cache_when_session_identity_chang
     (second_root / "elab.log").write_text("Chronologic VCS\n")
     (second_case / "irun.log").write_text("module_b ERROR issue @ 2 ns\n")
 
-    await server._dispatch("get_sim_paths", {"verif_root": str(second_root), "case_name": "case1"})
+    await server._dispatch_inner("get_sim_paths", {"verif_root": str(second_root), "case_name": "case1"})
 
     assert server._result_cache["build_tb_hierarchy"] is None

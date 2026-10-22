@@ -1,13 +1,56 @@
-"""Narrow recoverable rejections before the SDK's unchanged input validator."""
+"""Recoverable input errors and bounded reuse of checked JSON schemas."""
 
+from collections import OrderedDict
 from itertools import islice
+import json
 
+import jsonschema
 from mcp import types
 from pydantic import ValidationError
 
 from config import SIGNAL_SEARCH_MAX_KEYWORDS
 from src.schemas import CycleInputErrorResult, KeywordLimitErrorResult, WaveformExpression, ExpressionToolErrorResult
 from src.expression_errors import ExpressionError, input_validation_issues
+
+
+class ToolInputValidators:
+    """Cache schema validators, never request arguments or validation results.
+
+    The SDK's jsonschema.validate checks the entire schema on every call.
+    Check each exact schema once and retain its private decoded copy. Encoding
+    on lookup also detects in-place changes to a published tool definition.
+    Bounds apply to entry count and retained serialized schema bytes.
+    """
+
+    def __init__(self, *, max_entries=128, max_bytes=256 * 1024):
+        self.max_entries, self.max_bytes = max_entries, max_bytes
+        self.entries = OrderedDict()
+        self.bytes = 0
+
+    def validate(self, name, schema, arguments):
+        encoded = json.dumps(schema, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        previous = self.entries.get(name)
+        if previous is not None and previous[0] == encoded:
+            self.entries.move_to_end(name)
+            validator = previous[1]
+        else:
+            snapshot = json.loads(encoded)
+            cls = jsonschema.validators.validator_for(snapshot)
+            cls.check_schema(snapshot)
+            validator = cls(snapshot)
+            size = len(encoded.encode("utf-8"))
+            if previous is not None:
+                self.bytes -= self.entries.pop(name)[2]
+            if self.max_entries > 0 and size <= self.max_bytes:
+                while self.entries and (len(self.entries) >= self.max_entries
+                                        or self.bytes + size > self.max_bytes):
+                    self.bytes -= self.entries.popitem(last=False)[1][2]
+                self.entries[name] = (encoded, validator, size)
+                self.bytes += size
+        # Match jsonschema.validate's error selection, including anyOf/oneOf.
+        error = jsonschema.exceptions.best_match(validator.iter_errors(arguments))
+        if error is not None:
+            raise error
 
 
 def expression_input_error(arguments):
@@ -61,14 +104,15 @@ def cycle_input_error(arguments):
 def recover_tool_input_errors(app):
     """Decorate an already registered call_tool handler without replacing it.
 
-    This precheck only rejects requests; it never admits a request or invokes
-    the tool. Every other request still goes through the SDK's original schema
-    validation, exception handling and output normalization. Like SDK input
-    failures, these rejections do not enter the tool-handler telemetry.
+    Register the SDK handler with validate_input=False: this wrapper performs
+    the same jsonschema instance validation using checked, bounded validators.
+    SDK exception handling and output normalization remain in place. Rejected
+    inputs do not enter tool-handler telemetry.
     """
 
     def decorate(func):
         sdk_handler = app.request_handlers[types.CallToolRequest]
+        validators = ToolInputValidators()
 
         async def handler(request):
             arguments = request.params.arguments or {}
@@ -101,6 +145,14 @@ def recover_tool_input_errors(app):
                     )],
                     structuredContent=error.model_dump(exclude_none=True),
                 ))
+            try:
+                tool = await app._get_cached_tool_definition(request.params.name)
+                if tool is not None:
+                    validators.validate(tool.name, tool.inputSchema, arguments)
+            except jsonschema.ValidationError as exc:
+                return app._make_error_result(f"Input validation error: {exc.message}")
+            except Exception as exc:
+                return app._make_error_result(str(exc))
             return await sdk_handler(request)
 
         app.request_handlers[types.CallToolRequest] = handler

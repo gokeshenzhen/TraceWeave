@@ -320,7 +320,8 @@ async def _dispatch_child_query(
 ) -> dict[str, Any]:
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
-    result = await server._dispatch(tool, dict(args))
+    # Replay this gate's legacy routing contract; native-first has a separate benchmark.
+    result = await server._dispatch_inner(tool, dict(args))
     wall_ms = (time.perf_counter_ns() - wall_started) / 1_000_000
     cpu_ms = (time.process_time_ns() - cpu_started) / 1_000_000
     compact = phase3b._compact_result(
@@ -903,7 +904,7 @@ async def _run_x_trace_disk_probe(temp_root: Path) -> dict[str, Any]:
         runtime=cold_runtime,
         static_backend=static,
     ):
-        cold_result = await server._dispatch("trace_x_source", args)
+        cold_result = await server._dispatch_inner("trace_x_source", args)
     _reset_source_graph_adapter_cache_for_tests()
     disk_worker = phase3c.ReadyWorker()
     disk_runtime = SourceGraphRuntime(
@@ -915,7 +916,7 @@ async def _run_x_trace_disk_probe(temp_root: Path) -> dict[str, Any]:
         runtime=disk_runtime,
         static_backend=static,
     ):
-        disk_result = await server._dispatch("trace_x_source", args)
+        disk_result = await server._dispatch_inner("trace_x_source", args)
 
     cold = cold_result.model_dump(mode="json")
     disk = disk_result.model_dump(mode="json")

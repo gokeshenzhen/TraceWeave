@@ -103,6 +103,7 @@ class CompileSourceCatalog:
     gaps: tuple[str, ...]
     metadata_bytes: int
     preparation_ms: float
+    ownership_basis: str = "captured_source"
 
     def find_file(self, path: str, *, checkpoint=check_cancelled) -> CompileSourceFile | None:
         """Only an observed spelling is an alias; never query current realpath."""
@@ -165,13 +166,37 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
     """
     if not isinstance(context, DesignContext):
         raise TypeError("a prepared DesignContext is required")
+    return _build_catalog(context.compile_result(), context.identity_sha256,
+        context.aliases, {r.path for r in context.snapshot.records},
+        context.unavailable, context.include_resolutions, context.gaps,
+        context.include_resolution_complete, max_files=max_files,
+        max_bytes=max_bytes, checkpoint=checkpoint)
+
+
+def build_native_source_catalog(inputs, *, max_files=32768, max_bytes=16 * 1024 * 1024,
+                                checkpoint=check_cancelled):
+    if inputs.compile_result_json is None:
+        raise ValueError("compile_log is required for compile file ownership")
+    return _build_catalog(inputs.compile_result(), inputs.compile_metadata_identity_sha256,
+        (), set(), (), (), inputs.gaps, False, max_files=max_files,
+        max_bytes=max_bytes, checkpoint=checkpoint, ownership_basis="compile_metadata")
+
+
+def observation_identity(context):
+    from .native_query import NativeQueryInputs
+    return ((context.compile_metadata_identity_sha256 or "unavailable") if isinstance(context, NativeQueryInputs)
+            else context.identity_sha256)
+
+
+def _build_catalog(result, identity, observed_aliases, available, unavailable_observations,
+                   include_resolutions, context_gaps, include_complete, *, max_files, max_bytes,
+                   checkpoint, ownership_basis="captured_source"):
     for value, ceiling in ((max_files, 100000), (max_bytes, 64 * 1024 * 1024)):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= ceiling:
             raise ValueError("invalid metadata catalog limit")
     checkpoint()
     started = time.monotonic()
-    result = context.compile_result()
-    aliases = dict(context.aliases)
+    aliases = dict(observed_aliases)
     cwd = result.get("compile_cwd")
     records, gaps = {}, set()
     retained_bytes = 0
@@ -213,7 +238,7 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
         if path not in records:
             if len(records) >= max_files:
                 raise HierarchyBudgetExceeded("metadata_file_limit")
-            charge(("file", path, context.identity_sha256))
+            charge(("file", path, identity))
             records[path] = {"aliases": set(), "categories": set(), "types": set(),
                              "roles": set(), "includes": [], "unit": False,
                              "included": False, "dependency": False}
@@ -246,34 +271,33 @@ def build_compile_source_catalog(context: DesignContext, *, max_files=32768,
             include_edge(parent, child)
     for item in evidence.get("ordered_includes", []):
         include_edge(item.get("parent"), item.get("path"))
-    for item in context.include_resolutions:
+    for item in include_resolutions:
         if item.selected is not None:
             add(item.selected_spelling or item.selected, dependency=True)
-    for spelling, path in context.aliases:
+    for spelling, path in observed_aliases:
         checkpoint()
         if path in records and spelling not in records[path]["aliases"]:
             charge(spelling)
             records[path]["aliases"].add(spelling)
 
-    available = {item.path for item in context.snapshot.records}
-    unavailable = {canonical(path) for path, _ in context.unavailable}
+    unavailable = {canonical(path) for path, _ in unavailable_observations}
     files = []
     for path, item in records.items():
         checkpoint()
         files.append(CompileSourceFile(
-            semantic_fact_id("compile_metadata", context.identity_sha256, "file", path), path,
+            semantic_fact_id("compile_metadata", identity, "file", path), path,
             tuple(sorted(item["aliases"])), tuple(sorted(item["categories"])),
             tuple(sorted(item["types"])), tuple(sorted(item["roles"])), tuple(item["includes"]),
             item["unit"], item["included"], item["dependency"],
             "captured" if path in available else "unavailable" if path in unavailable else "not_captured",
         ))
-    if "compile_inputs_incomplete" in context.gaps:
+    if "compile_inputs_incomplete" in context_gaps:
         gaps.add("compile_inputs_incomplete")
-    if not context.include_resolution_complete:
+    if not include_complete:
         gaps.add("include_inventory_incomplete")
     checkpoint()
-    return CompileSourceCatalog(context.identity_sha256, tuple(files), tuple(sorted(gaps)),
-                                retained_bytes, (time.monotonic() - started) * 1000)
+    return CompileSourceCatalog(identity, tuple(files), tuple(sorted(gaps)),
+                                retained_bytes, (time.monotonic() - started) * 1000, ownership_basis)
 
 
 def export_compile_metadata(context: DesignContext, section: str, *, checkpoint=check_cancelled) -> dict:
@@ -284,10 +308,12 @@ def export_compile_metadata(context: DesignContext, section: str, *, checkpoint=
     result = context.compile_result()
     data = result if section == "compile_result" else result.get(section, {})
     checkpoint()
+    from .native_query import NativeQueryInputs
+    gaps = sorted(set(context.gaps) | ({"include_inventory_incomplete"} if isinstance(context, NativeQueryInputs) else set()))
     return {
         "section": section, "data": data, "facts_origin": "compile_metadata",
-        "artifact_identity": context.identity_sha256, "semantic_status": "not_run",
+        "artifact_identity": observation_identity(context), "semantic_status": "not_run",
         "coverage_domain": "reported_compile_record", "record_export_complete": True,
-        "coverage_status": "partial" if context.gaps else "complete",
-        "coverage_gaps": list(context.gaps),
+        "coverage_status": "partial" if gaps else "complete",
+        "coverage_gaps": gaps,
     }

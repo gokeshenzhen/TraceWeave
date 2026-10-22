@@ -133,6 +133,8 @@ def test_cache_discovery_honors_cumulative_capture_budget(tmp_path, dimension, e
 
 @pytest.mark.parametrize("failure", ["cancel", "timeout", "input_changed"])
 def test_cache_extractor_abort_is_never_downgraded_to_cache_miss(tmp_path, monkeypatch, failure):
+    # A present cache namespace admits extraction; an absent one is a cheap miss.
+    (config.TRACEWEAVE_CACHE_ROOT / config.KDB_CACHE_SUBDIR).mkdir(parents=True)
     metadata, log, _ = _inputs(tmp_path)
     capture = CompileInputCapture()
     error = OperationCancelled() if failure == "cancel" else CaptureAborted(failure)
@@ -219,6 +221,7 @@ def test_setup_has_independent_64k_precheck(tmp_path, size):
 @pytest.mark.parametrize("role", ["setup", "source", "filelist"])
 @pytest.mark.parametrize("kind", ["fifo", "directory"])
 def test_special_inputs_abort_without_a_blocking_open(tmp_path, monkeypatch, role, kind):
+    (config.TRACEWEAVE_CACHE_ROOT / config.KDB_CACHE_SUBDIR).mkdir(parents=True)
     name = {"setup": "synopsys_sim.setup", "source": "special.sv", "filelist": "special.f"}[role]
     path = tmp_path / name
     path.mkdir() if kind == "directory" else os.mkfifo(path)

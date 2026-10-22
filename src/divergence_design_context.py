@@ -41,6 +41,9 @@ class DivergenceDesigns:
         self.parser_changes = set()
         self.wave_ids = {}
         self.services = _TraceServices(self)
+        self.native_bounds = {}
+        self.native_receipts = {}
+        self.native_keys = {}
 
     def __enter__(self):
         return self
@@ -95,10 +98,85 @@ class DivergenceDesigns:
                 self.prepare_ms += (time.monotonic() - phase) * 1000
         return PreparedTraceContext(entry, handle, self.source_execution)
 
+    def native_eligible(self, label):
+        side = self.sides[label]
+        return side.get("design_handle") is None and not any(side.get(k) is not None for k in (
+            "hierarchy_handle", "snapshot_sha256", "source_snapshot_sha256", "compile_log_identity_sha256"))
+
+    async def resolve_native(self, label):
+        from .native_query import RequestBudget, read_native_inputs
+        from .native_dispatch import NativeEntry
+        from .design_backend_binding import prepare_native_binding
+        from .prepared_trace_context import NativeTraceContext
+        side = self.sides[label]
+        started = time.monotonic()
+        inputs = await self.budget.run(lambda: self.base._run_in_cancellable_thread(
+            lambda: read_native_inputs(side, timeout_sec=self.budget.remaining)))
+        metadata_ms = (time.monotonic() - started) * 1000
+        if inputs.selected_top is None:
+            raise ContextUnavailable("compile_tops_unresolved")
+        binding = await self.budget.run(lambda: self.base._run_in_cancellable_thread(
+            lambda: prepare_native_binding(inputs, timeout_sec=self.budget.remaining)))
+        await self.budget.run(lambda: self.base._run_in_cancellable_thread(
+            lambda: inputs.require_current(timeout_sec=self.budget.remaining)))
+        binding.require_policy_current()
+        key = self.base._native_failure_memory.key(inputs, binding)
+        entry = NativeEntry(inputs, binding, self.base._native_failure_memory.get(key,
+            retry=side.get("retry_npi", False)), deadline=self.budget.deadline)
+        bound = NativeTraceContext(entry, source_execution=self.source_execution)
+        self.native_bounds[label], self.native_keys[label] = bound, key
+        side.update(compile_log=inputs.ordered_compile_logs[0] if inputs.ordered_compile_logs else None,
+                    simulator=inputs.simulator, top_hint=inputs.selected_top)
+        metrics = {k: 0 for k in self.base.schemas.NativeRouteMetrics.model_fields}
+        bm = dict(binding.metrics)
+        metrics.update(metadata_ms=metadata_ms, kdb_discovery_ms=bm["discovery_ms"],
+            kdb_validation_ms=bm["anchor_ms"], cached_kdb_source_read_bytes=bm["cached_source_read_bytes"])
+        entry.metrics = metrics
+        self.native_receipts[label] = dict(entry="native_first",
+            input_validation="kdb_only" if not inputs.ordered_compile_logs else
+                "compile_metadata_and_kdb" if binding.anchor else "compile_metadata_only",
+            compile_metadata_identity_sha256=inputs.compile_metadata_identity_sha256,
+            kdb_identity_sha256=binding.anchor.identity_sha256 if binding.anchor else None,
+            source_context_status="not_required", source_design_handle=None,
+            source_context_identity_sha256=None, source_association="unverified", metrics=metrics)
+        return bound
+
+    async def ensure_native_source(self, label, attempts):
+        from .native_query import RequestBudget
+        bound = self.native_bounds[label]
+        inputs, binding = bound.prepared.context, bound.prepared.binding
+        self.budget.check()
+        await self.budget.run(lambda: self.base._run_in_cancellable_thread(
+            lambda: inputs.require_current(timeout_sec=self.budget.remaining)))
+        await self.budget.run(lambda: self.base._run_in_cancellable_thread(
+            lambda: binding.require_current(timeout_sec=min(5, self.budget.remaining))))
+        self.base._native_failure_memory.note(self.native_keys[label], attempts)
+        if not inputs.ordered_compile_logs:
+            raise ContextUnavailable("source_context_required")
+        budget = RequestBudget(self.budget.limits["timeout_sec"], started=self.budget.started)
+        phase = time.monotonic()
+        handle, status, count, nbytes = await self.base._source_fallback_runtime.resolve(
+            inputs, self.store, budget, self.base._run_in_cancellable_thread, self.base._require_design_store_owner)
+        if handle not in self.entries:
+            entry = self.pins.enter_context(self.store.pin(handle))
+            self.entries[handle], self.owners[handle] = entry, label
+            self.metrics[handle] = dict.fromkeys(DesignQueryMetrics.model_fields, 0)
+            self.previous_failure[handle] = entry.npi_failure
+        self.sides[label]["design_handle"] = handle
+        receipt = self.native_receipts[label]
+        receipt.update(source_context_status=status, source_design_handle=handle,
+            source_context_identity_sha256=self.entries[handle].context.identity_sha256)
+        receipt["metrics"].update(source_prepare_ms=(time.monotonic() - phase) * 1000,
+            source_prepare_count=count, source_capture_read_bytes=nbytes)
+        from dataclasses import replace
+        return replace(await self.resolve(label), prior_attempts=tuple(attempts))
+
     def require_owner(self):
         check_cancelled()
         if self.entries:
             self.base._require_design_store_owner(self.store)
+        for bound in self.native_bounds.values():
+            bound.prepared.binding.require_policy_current()
         for entry in self.entries.values():
             if entry.binding is not None:
                 entry.binding.require_policy_current()
@@ -148,6 +226,9 @@ class DivergenceDesigns:
                     changed.append((label, "compile_context_changed"))
 
         def contents():
+            for bound in self.native_bounds.values():
+                bound.prepared.context.require_current(timeout_sec=5)
+                bound.prepared.binding.require_current(timeout_sec=5)
             for handle, entry in self.entries.items():
                 phase = time.monotonic()
                 try:
@@ -189,6 +270,9 @@ class DivergenceDesigns:
             self.final_ms += (time.monotonic() - started) * 1000
 
     def describe(self, contexts):
+        for label, receipt in self.native_receipts.items():
+            receipt["metrics"]["total_ms"] = (time.monotonic() - self.budget.started) * 1000
+            contexts.setdefault(label, {})["native_route"] = receipt
         for label, side in self.sides.items():
             handle = side.get("design_handle")
             if handle not in self.entries:

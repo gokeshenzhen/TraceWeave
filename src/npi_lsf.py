@@ -44,7 +44,7 @@ from .verdi_backend import (
 
 _LOG = logging.getLogger(__name__)
 
-NPI_WORKER_PROTOCOL_VERSION: Literal["4.0"] = "4.0"
+NPI_WORKER_PROTOCOL_VERSION: Literal["5.0"] = "5.0"
 NPI_EXECUTION_STATUS_KEY = "_npi_execution_status"
 _MAX_REQUEST_BYTES = 1 * 1024 * 1024
 # Source observations include bounded snapshots, never source bodies. Other
@@ -61,7 +61,7 @@ class _ProtocolModel(BaseModel):
 
 
 class _WorkerRequestBase(_ProtocolModel):
-    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0", "5.0"] = NPI_WORKER_PROTOCOL_VERSION
 
 
 class _ConnectivityWorkerRequestBase(_WorkerRequestBase):
@@ -125,6 +125,27 @@ class HierarchySourceWorkerRequest(_ConnectivityWorkerRequestBase):
         return self
 
 
+class NativeSourceWorkerRequest(_ConnectivityWorkerRequestBase):
+    protocol_version: Literal["5.0"] = "5.0"
+    operation: Literal["native_source"] = "native_source"
+    kdb_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool: Literal["get_tb_subtree", "find_tb_instance", "lookup_tb_files",
+                  "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section", "resolve_packed_fields"]
+    arguments: dict[str, Any]
+    metadata_payload: dict[str, Any]
+    limits: SourceWorkerLimits
+
+    @model_validator(mode="after")
+    def valid_query(self):
+        from .hierarchy_source_request import validate_source_query
+        from .native_query_codec import decode_native_inputs
+        validate_source_query(self.tool, self.arguments)
+        inputs = decode_native_inputs(self.metadata_payload)
+        if inputs.selected_top != self.top or inputs.requested_kdb_path not in (None, self.kdb_path):
+            raise ValueError("worker top or explicit KDB mismatch")
+        return self
+
+
 class BuildKdbWorkerRequest(_WorkerRequestBase):
     operation: Literal["build_kdb"] = "build_kdb"
     compile_log: str = Field(min_length=1, max_length=16_384)
@@ -142,6 +163,7 @@ NpiWorkerRequest = Annotated[
     | FindLoadsWorkerRequest
     | FindPathWorkerRequest
     | HierarchySourceWorkerRequest
+    | NativeSourceWorkerRequest
     | BuildKdbWorkerRequest,
     Field(discriminator="operation"),
 ]
@@ -149,21 +171,21 @@ _REQUEST_ADAPTER = TypeAdapter(NpiWorkerRequest)
 
 
 class WorkerSuccess(_ProtocolModel):
-    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0", "5.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["ok"] = "ok"
     result: dict[str, Any]
     kdb_load_quality: Literal["clean", "degraded"] | None = None
 
 
 class WorkerUnavailable(_ProtocolModel):
-    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0", "5.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["npi_unavailable"] = "npi_unavailable"
     error_code: Literal["npi_load_failed"] = "npi_load_failed"
     stage: Literal["load"] = "load"
 
 
 class WorkerError(_ProtocolModel):
-    protocol_version: Literal["4.0"] = NPI_WORKER_PROTOCOL_VERSION
+    protocol_version: Literal["4.0", "5.0"] = NPI_WORKER_PROTOCOL_VERSION
     status: Literal["error"] = "error"
     error_code: Literal[
         "request_invalid",
@@ -275,7 +297,7 @@ class LsfNpiTransport:
         _write_private_text(
             request_path,
             _REQUEST_ADAPTER.dump_json(request).decode("utf-8"),
-            max_bytes=(MAX_WORKER_REQUEST_BYTES if isinstance(request, HierarchySourceWorkerRequest)
+            max_bytes=(MAX_WORKER_REQUEST_BYTES if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest))
                        else _MAX_REQUEST_BYTES),
         )
 
@@ -342,10 +364,16 @@ class LsfNpiTransport:
 
         response = _read_worker_response(response_path)
         if response is None:
+            if request.protocol_version == "5.0" and (response_path.exists() or proc is not None and proc.returncode == 0):
+                return LsfExecutionResult(None, "completed", "failed", "npi_lsf_protocol_invalid")
             if proc is not None and proc.returncode == 0:
                 return _worker_failed_execution()
             return _failed_execution("npi_lsf_worker_failed")
+        if response.protocol_version != request.protocol_version:
+            return LsfExecutionResult(None, "completed", "failed", "npi_lsf_protocol_mismatch")
         if isinstance(response, WorkerError):
+            if request.protocol_version == "5.0" and response.error_code in {"request_invalid", "result_invalid"}:
+                return LsfExecutionResult(None, "completed", "failed", "npi_lsf_result_invalid")
             # A valid error envelope proves that the scheduled worker started
             # and finished its protocol handling, even though it exits nonzero.
             if response.error_code in {"kdb_identity_changed", "kdb_identity_timeout",
@@ -358,7 +386,8 @@ class LsfNpiTransport:
         if isinstance(response, WorkerSuccess):
             result = _validate_operation_result(request, response.result)
             if result is None:
-                return _worker_failed_execution()
+                return (LsfExecutionResult(None, "completed", "failed", "npi_lsf_result_invalid")
+                        if isinstance(request, NativeSourceWorkerRequest) else _worker_failed_execution())
             return LsfExecutionResult(
                 result=result,
                 scheduler_status="completed",
@@ -533,6 +562,11 @@ class LsfConnectivityBackend:
         if hasattr(self._fallback, "bind_compile_context"):
             self._fallback.bind_compile_context(compile_result)
 
+    def bind_native_inputs(self, inputs):
+        self._native_inputs = inputs
+        if inputs.compile_result_json is not None:
+            self.bind_compile_context(inputs.compile_result())
+
     def bind_kdb_anchor(self, anchor: KdbAnchor) -> None:
         validate_query_anchor(anchor)
         self._bound_kdb_anchor = anchor
@@ -552,6 +586,7 @@ class LsfConnectivityBackend:
         return result
 
     def _execute_bound_request(self, request, *, deadline=None):
+        deadline = deadline if deadline is not None else getattr(self, "_request_deadline", None)
         check_cancelled()
         anchor = getattr(self, "_bound_kdb_anchor", None)
         if anchor is not None:
@@ -566,6 +601,10 @@ class LsfConnectivityBackend:
                 anchor.require_current()
             raise
         check_cancelled()
+        if getattr(self, "_native_inputs", None) is not None and outcome.fallback_reason in {
+            "npi_lsf_protocol_mismatch", "npi_lsf_result_invalid", "npi_lsf_protocol_invalid"}:
+            from .design_context_runtime import ContextUnavailable
+            raise ContextUnavailable(outcome.fallback_reason)
         if outcome.fallback_reason == "kdb_identity_changed":
             raise KdbBindingChanged()
         if outcome.fallback_reason == "kdb_identity_timeout":
@@ -793,14 +832,14 @@ class LsfConnectivityBackend:
             return None, "npi_lsf_config_invalid"
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
-            if compile_result is None:
+            if compile_result is None and getattr(self, "_native_inputs", None) is None:
                 compile_result = parse_compile_log(compile_log, simulator)
             if anchor is not None:
                 kdb_path = anchor.path
             else:
                 status = probe_verdi_backend(compile_result, compile_log_path=compile_log)
                 kdb_path = status.get("kdb_path")
-            tops = compile_result.get("top_modules") or []
+            tops = (compile_result or {}).get("top_modules") or []
             top = top_hint or (tops[0] if tops else None)
         except (OperationCancelled, CaptureAborted, KdbBindingChanged):
             raise
@@ -888,14 +927,19 @@ class LsfConnectivityBackend:
         ))
 
 
-def execute_worker_request(
+def execute_worker_request(request, *, backend=None):
+    response = _execute_worker_request(request, backend=backend)
+    return response.model_copy(update={"protocol_version": request.protocol_version})
+
+
+def _execute_worker_request(
     request: NpiWorkerRequest,
     *,
     backend: Any | None = None,
 ) -> NpiWorkerResponse:
     """Execute one licensed worker request, never a local parent fallback."""
 
-    if isinstance(request, HierarchySourceWorkerRequest):
+    if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest)):
         # This path must acquire the Language owner BEFORE loading a KDB.
         # The old connectivity pre-load path below cannot own Language handles.
         from .npi_source_worker import execute_source_worker
@@ -1011,7 +1055,7 @@ def _validate_operation_result(
     """Validate and normalize a worker result on both protocol boundaries."""
 
     try:
-        if isinstance(request, HierarchySourceWorkerRequest):
+        if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest)):
             from .npi_source_worker import validate_source_worker_result
             return validate_source_worker_result(request, result)
         if isinstance(request, BuildKdbWorkerRequest):
@@ -1053,7 +1097,7 @@ def parse_worker_request_bytes(data: bytes) -> NpiWorkerRequest:
         raise ValueError("request too large")
     raw = json.loads(data.decode("utf-8"))
     if (not isinstance(raw, dict)
-            or (raw.get("operation") != "hierarchy_source" and len(data) > _MAX_REQUEST_BYTES)):
+            or (raw.get("operation") not in {"hierarchy_source", "native_source"} and len(data) > _MAX_REQUEST_BYTES)):
         raise ValueError("invalid or oversized worker request")
     return _REQUEST_ADAPTER.validate_python(raw)
 
@@ -1061,7 +1105,7 @@ def parse_worker_request_bytes(data: bytes) -> NpiWorkerRequest:
 def write_worker_response(path: Path, response: NpiWorkerResponse) -> None:
     payload = _RESPONSE_ADAPTER.dump_json(response).decode("utf-8")
     if len(payload.encode("utf-8")) > _MAX_RESPONSE_BYTES:
-        response = WorkerError(error_code="result_invalid", stage="response")
+        response = WorkerError(protocol_version=response.protocol_version, error_code="result_invalid", stage="response")
         payload = _RESPONSE_ADAPTER.dump_json(response).decode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(

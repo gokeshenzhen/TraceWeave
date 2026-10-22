@@ -343,7 +343,10 @@ async def test_post_query_changes_discard_the_whole_tree(tmp_path, controls, fai
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('reason', ['source', 'unavailable'])
-async def test_unavailable_source_planner_cannot_become_empty_native_tree(tmp_path, controls, reason):
+async def test_unavailable_source_planner_cannot_become_empty_native_tree(tmp_path, controls, reason, monkeypatch):
+    from dataclasses import replace
+    unavailable_config = replace(server.get_source_graph_execution_config(), enabled=False)
+    monkeypatch.setattr(server, "get_source_graph_execution_config", lambda: unavailable_config)
     handle, _, _, _ = await setup(tmp_path, controls, backend_preference='source' if reason == 'source' else 'auto')
     if reason == 'unavailable':
         def unavailable(path, index): raise NpiHierarchyUnavailable('npi_load_failed')

@@ -48,7 +48,7 @@ class DynamicRoute:
         self.guard = None
         self.config = getattr(bound, "source_execution", None) or get_source_graph_execution_config()
         self.targets = [side["signal_path"]]
-        self.attempts = []
+        self.attempts = list(getattr(bound, "prior_attempts", ()))
         self.receipt = {}
         self.artifact = None
         self.kdb_identity = None
@@ -56,20 +56,26 @@ class DynamicRoute:
         self.execution = {}
         self.probe = {}
         self.source_receipt = None
-        self.selected_backend = "source_graph"
+        self.selected_backend = "verdi_npi" if self.attempts else "source_graph"
         self.retain_async_controls = False
         self.root_binding = None
         self.prepared = getattr(bound, "prepared", None)
         self.npi_backend = None
         self.trace_plan = None
         self.query_ledger = None
-        if self.prepared is not None:
+        self.native = getattr(self.prepared, "native", False)
+        if self.prepared is not None and not self.native:
             from .prepared_source_trace import PreparedTracePlan
             self.trace_plan = PreparedTracePlan(self.prepared.context, self.config,
                                                budget.deadline, budget.limits['max_depth'])
 
     async def initialize(self):
-        if str(self.side['signal_path']).startswith('TOP.'):
+        if self.native and str(self.side['signal_path']).startswith('TOP.'):
+            self.root_binding = await self.budget.run(lambda: self.s._bind_wave_design_root(
+                {**self.side, "_native_query": self.prepared}, self.bound.context["simulator"]))
+            if self.root_binding:
+                self.targets = [self.root_binding.to_design(p) for p in self.targets]
+        if str(self.side['signal_path']).startswith('TOP.') and not self.native:
             from .wave_design_binding import bind_root
             self.root_binding = await self.budget.run(lambda: self.s._run_in_wave_thread(
                 self.side['wave_path'], lambda: bind_root(
@@ -121,16 +127,21 @@ class DynamicRoute:
                 if self.probe.get("connectivity_route") == "source_graph"
                 else "npi_kdb_unavailable"
             )
-            self.attempts.append(
-                dict(backend="verdi_npi", status=("failed" if selection_reason else
-                    "skipped" if self.prepared is not None and (
-                        self.prepared.binding.disposition == "source_policy" or self.prepared.npi_failure
-                    ) else "unavailable"), reason=reason)
-            )
-            self.fallback_reason = reason
+            if not self.attempts:
+                self.attempts.append(
+                    dict(backend="verdi_npi", status=("failed" if selection_reason else
+                        "skipped" if self.prepared is not None and (
+                            self.prepared.binding.disposition == "source_policy" or self.prepared.npi_failure
+                        ) else "unavailable"), reason=reason)
+                )
+            self.fallback_reason = self.attempts[0].get("reason") or reason
             self.stage = "source_graph"
 
     async def _validate_source(self):
+        if self.native:
+            from .native_query import NativeFallback
+            self.budget.check()
+            raise NativeFallback(self.attempts, side=self.label, budget=self.budget)
         if self.prepared is None:
             return
         self.budget.check()
@@ -348,6 +359,9 @@ class DynamicRoute:
                     and result.get('clock') and result.get('boundary') == 'sequential'
                     and gaps <= {'temporal_context_unavailable', 'async_control_value_unmodeled', 'driver_set_incomplete'}):
                     terminal.add('async_control_value_unmodeled')
+                from .native_query import native_budget_exhausted
+                if self.native and native_budget_exhausted(result):
+                    raise BudgetExceeded("native_analysis_limit")
                 if not result.get("complete") and not (gaps & terminal):
                     reason = next(
                         iter(sorted(gaps)), "npi_dynamic_evidence_unavailable"
@@ -359,6 +373,9 @@ class DynamicRoute:
                     if self.prepared is not None and note_failure is not None:
                         note_failure(self.bound.design_handle, reason)
                     self.fallback_reason = reason
+                    if self.native:
+                        from .native_query import NativeFallback
+                        raise NativeFallback(self.attempts, side=self.label, budget=self.budget)
                     self.stage = "source_graph"
                     self.backend = None
                     self.guard = None

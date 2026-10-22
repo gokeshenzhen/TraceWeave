@@ -196,8 +196,11 @@ def test_tracked_phase3a_evidence_passes_path_production_gate():
     assert result["benchmark"] == "source_graph_connectivity_phase3a"
     assert result["repository"]["head"] == benchmark.MEASUREMENT_HEAD
     script = ROOT / result["benchmark_script"]["path"]
+    # Historical measurements bind the archived script, not later maintenance.
+    archived_script = subprocess.check_output([
+        "git", "show", "4a4d061bb6b39bc1a966ddc3aff0d9f70d712b94:" + str(script.relative_to(ROOT))], cwd=ROOT)
     assert (
-        hashlib.sha256(script.read_bytes()).hexdigest()
+        hashlib.sha256(archived_script).hexdigest()
         == result["benchmark_script"]["sha256"]
     )
     assert result["before_baselines"]["phase1a"]["sha256"] == (

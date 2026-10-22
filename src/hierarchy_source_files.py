@@ -178,7 +178,7 @@ def query_file_detail(catalog: CompileSourceCatalog, provider=None, *, path,
     return dict(row, schema_version=HIERARCHY_TOOL_SCHEMA_VERSION,
                 facts_origin=provider.origin if provider is not None else "compile_metadata",
                 artifact_identity=provider.artifact_identity if provider is not None else catalog.context_identity,
-                ownership_identity=catalog.context_identity, coverage_domain="provider_file_declarations",
+                ownership_identity=catalog.context_identity, ownership_basis=catalog.ownership_basis, coverage_domain="provider_file_declarations",
                 coverage_status="complete" if row["semantic_status"] == "complete" and not catalog.gaps else "partial",
                 coverage_gaps=gaps, query_metrics=budget.metrics())
 
@@ -262,7 +262,7 @@ def lookup_source_files(catalog: CompileSourceCatalog, provider=None, *, basenam
     identity = provider.artifact_identity if semantic_queries else catalog.context_identity
     return {
         "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "facts_origin": origin,
-        "artifact_identity": identity, "ownership_identity": catalog.context_identity,
+        "artifact_identity": identity, "ownership_identity": catalog.context_identity, "ownership_basis": catalog.ownership_basis,
         "semantic_status": ("not_run" if not semantic or examined == 0 else "unavailable" if provider is None
                             else "partial" if semantic_partial or limits or not complete else "complete"),
         "matches": matches, "total": count if complete else None, "count_lower_bound": count,

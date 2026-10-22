@@ -313,16 +313,15 @@ class TestDiagnosticSnapshot:
         assert result.structural_scan is None
         assert result.recommended_next.available is False
         assert result.simulator == "xcelium"
-        assert len(result.missing_steps) == 4
+        assert len(result.missing_steps) == 3
         assert {step["tool"] for step in result.missing_steps} == {
-            "prepare_design_context",
             "scan_structural_risks",
             "parse_sim_log",
             "recommend_failure_debug_next_steps",
         }
         assert result.log_analysis.suggested_call["arguments"]["log_path"] == sim.sim_logs[0].path
         assert result.hierarchy.suggested_call is None
-        assert result.design_context.suggested_call["tool"] == "prepare_design_context"
+        assert result.design_context.suggested_call["tool"] == "get_tb_subtree"
         assert result.recommended_next.suggested_call["arguments"]["compile_log"] == sim.compile_logs[0].path
 
     def test_all_available(self):

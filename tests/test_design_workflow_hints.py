@@ -224,11 +224,11 @@ async def test_real_public_prepare_then_readonly_diagnostic_does_not_set_build_s
     assert server._handle_store.resolve("tbh_any") is None
 
 
-def test_discovery_only_suggests_prepare_scan_and_recommend_without_legacy_tree(case):
+def test_discovery_suggests_scan_and_native_recommend_without_legacy_tree(case):
     case.discover_state()
     result = server._handle_diagnostic_snapshot({"case_dir": str(case.case)})
     assert result.design_context.available is False and result.hierarchy.available is False
-    assert "prepare_design_context" in tools_in(result) and "scan_structural_risks" in tools_in(result)
+    assert "prepare_design_context" not in tools_in(result) and "scan_structural_risks" in tools_in(result)
     assert "build_tb_hierarchy" not in tools_in(result)
     assert result.recommended_next.suggested_call == {
         "tool": "recommend_failure_debug_next_steps", "arguments": dict(
@@ -236,14 +236,14 @@ def test_discovery_only_suggests_prepare_scan_and_recommend_without_legacy_tree(
 
 
 @pytest.mark.anyio
-async def test_cached_discovery_anchor_without_session_still_suggests_executable_prepare(case):
+async def test_cached_discovery_anchor_without_session_suggests_native_query(case):
     case.discover_state()
     server._session_state["get_sim_paths"] = None
     # Diagnostics must use the visible cache anchor, without restoring/mutating
     # mutable workflow state merely to construct an executable suggestion.
     result = server._handle_diagnostic_snapshot({"case_dir": str(case.case)})
     call = result.design_context.suggested_call
-    assert call == {"tool": "prepare_design_context", "arguments": dict(
+    assert call == {"tool": "get_tb_subtree", "arguments": dict(
         compile_log=str(case.primary), simulator="vcs")}
     schema = next(item.inputSchema for item in await server.list_tools() if item.name == call["tool"])
     jsonschema.validate(call["arguments"], schema)
@@ -262,7 +262,7 @@ def test_implicit_diagnostic_never_selects_latest_of_multiple_contexts(case, var
     assert result.design_context.available is False
     assert result.design_context.summary["status"] == "ambiguous"
     assert {row["design_handle"] for row in result.design_context.summary["candidates"]} == {first, second}
-    assert result.top_module is None and "prepare_design_context" in tools_in(result)
+    assert result.top_module is None and "prepare_design_context" not in tools_in(result)
     assert "build_tb_hierarchy" not in tools_in(result)
 
 
@@ -324,7 +324,7 @@ def test_selected_xcelium_context_never_runs_legacy_parse_or_probe(tmp_path, mon
     assert "build_kdb" not in tools_in(result)
 
 
-def test_unselected_xcelium_context_retains_only_readonly_optional_kdb_hint(tmp_path, monkeypatch):
+def test_unselected_xcelium_diagnostic_never_probes_kdb(tmp_path, monkeypatch):
     case = Case(tmp_path, "xcelium")
     case.discover_state()
     monkeypatch.setattr(config, "AUTO_KDB_BUILD", True)
@@ -332,8 +332,8 @@ def test_unselected_xcelium_context_retains_only_readonly_optional_kdb_hint(tmp_
     monkeypatch.setattr(server, "parse_compile_log", lambda path, sim: observed.append((path, sim)) or {"simulator": sim})
     monkeypatch.setattr(server, "probe_verdi_backend", lambda cr, **kw: {"kdb_path": None})
     result = server._handle_diagnostic_snapshot({})
-    assert observed == [(str(case.primary), "xcelium")]
-    assert "build_kdb" in tools_in(result) and "prepare_design_context" in tools_in(result)
+    assert observed == []
+    assert "build_kdb" not in tools_in(result) and "prepare_design_context" not in tools_in(result)
     assert not result.design_context.available
 
 
@@ -432,18 +432,19 @@ def test_recent_tree_is_never_used_as_recommend_request_compile_identity(case):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("tool", TRACKING)
-async def test_legacy_tracking_gate_suggests_executable_requested_prepare_not_ambient_tree(case, tool):
+async def test_native_tracking_entry_rejects_missing_requested_metadata_not_ambient_tree(case, tool):
     case.discover_state()
     requested = dict(compile_log="/requested/compile.log", simulator="verilator", top_hint="requested_top",
                      supplementary_compile_logs=["/requested/phase0.log", "/requested/phase1.log"])
     args = {**requested, "wave_path": str(case.wave), "signal_path": "top.q"}
-    if tool == "trace_signal_path": args.update(from_signal="top.q", to_signal="top.r")
+    if tool == "trace_signal_path":
+        args.pop("signal_path")
+        args.update(from_signal="top.q", to_signal="top.r")
     if tool == "trace_x_source": args["time_ps"] = 10
     result = await public(tool, args)
-    assert result["ok"] is False and result["missing_step"] == "prepare_design_context"
-    assert result["suggested_call"] == {"tool": "prepare_design_context", "arguments": requested}
-    tools = {item.name: item.inputSchema for item in await server.list_tools()}
-    jsonschema.validate(result["suggested_call"]["arguments"], tools["prepare_design_context"])
+    assert result["error_code"] == "compile_metadata_unavailable"
+    assert "suggested_call" not in result
+    assert result["native_route"]["source_context_status"] == "not_required"
     assert server._session_state["build_tb_hierarchy"] is None
 
 
@@ -462,7 +463,7 @@ async def test_legacy_handle_gate_retains_explicit_full_build_compatibility(case
 
 
 @pytest.mark.parametrize("logs", ["elaborate", "compile_only", "none"])
-def test_discovery_next_step_is_prepare_without_probe_or_context_creation(case, monkeypatch, logs):
+def test_discovery_next_step_is_scan_without_probe_or_context_creation(case, monkeypatch, logs):
     monkeypatch.setattr(path_discovery, "get_fsdb_runtime_info", lambda: {"enabled": False})
     monkeypatch.setattr(path_discovery, "fst_runtime_info", lambda: {})
     compile_logs = [] if logs == "none" else [entry(case.primary, phase="elaborate" if logs == "elaborate" else "compile")]
@@ -472,8 +473,8 @@ def test_discovery_next_step_is_prepare_without_probe_or_context_creation(case, 
     if logs == "none": assert "next_required_step" not in result
     else:
         step = result["next_required_step"]
-        assert step["tool"] == "prepare_design_context" and step["compile_log"] == str(case.primary)
-        assert step["simulator"] == "vcs" and "scan_structural_risks" in step["reason"]
+        assert step["tool"] == "scan_structural_risks" and step["compile_log"] == str(case.primary)
+        assert step["simulator"] == "vcs" and "native-first" in step["reason"]
         schemas.NextRequiredStep.model_validate(step)
     assert server._design_context_store.summaries() == []
     assert server._session_state["build_tb_hierarchy"] is None

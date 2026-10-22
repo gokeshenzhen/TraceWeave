@@ -35,7 +35,11 @@ def _clock_key(step):
 
 
 async def trace_x_history(services, raw, *, route_factory=DynamicRoute, bound_context=None, started_at=None):
-    request = XHistoryInput.model_validate(raw).model_dump(exclude_none=True)
+    from .schemas import NativeXHistoryInput
+    native = bound_context is not None and getattr(bound_context.prepared, "native", False)
+    request = (NativeXHistoryInput if native or getattr(bound_context, "native_input_contract", False) else XHistoryInput).model_validate(raw).model_dump(exclude_none=True)
+    if native:
+        request.setdefault("compile_log", None)
     if bound_context is not None:
         # Internal relay only: raw public input was validated before injection.
         request['design_handle'] = bound_context.design_handle
@@ -44,7 +48,7 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute, bound_co
     if start > time:
         raise ValueError('history window requires history_start_ps <= time_ps')
     limits = {k: request[k] for k in ('max_depth', 'max_nodes', 'max_events', 'max_read_bytes', 'timeout_sec')}
-    budget = HistoryBudget(limits)
+    budget = getattr(bound_context, "history_budget", None) or HistoryBudget(limits)
     if started_at is not None:
         # Independent context preparation belongs to this request's deadline.
         # Final identity checks still run after an exhausted analysis budget.
@@ -63,7 +67,9 @@ async def trace_x_history(services, raw, *, route_factory=DynamicRoute, bound_co
     parser_generation = None
     context = request.get('compile_context') or {
         k: request[k] for k in ('compile_log', 'simulator', 'top_hint') if k in request}
-    if os.path.realpath(context['compile_log']) != os.path.realpath(request['compile_log']):
+    if context.get('compile_log') != request.get('compile_log') and (
+            not context.get('compile_log') or not request.get('compile_log') or
+            os.path.realpath(context['compile_log']) != os.path.realpath(request['compile_log'])):
         raise ValueError('compile_context_mismatch')
 
     def frontier(node, reason, **facts):

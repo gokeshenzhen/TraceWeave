@@ -808,7 +808,8 @@ def _compact_trace(result, *, wall_ms: float, cpu_ms: float) -> dict[str, Any]:
 async def _dispatch_trace(args: Mapping[str, Any]) -> dict[str, Any]:
     started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
-    result = await server._dispatch("trace_x_source", dict(args))
+    # Replay this gate's legacy routing contract; native-first has a separate benchmark.
+    result = await server._dispatch_inner("trace_x_source", dict(args))
     return _compact_trace(
         result,
         wall_ms=(time.perf_counter_ns() - started) / 1_000_000,
@@ -1121,7 +1122,7 @@ async def _measure_concurrency(workload: TraceWorkload) -> dict[str, Any]:
         if not await asyncio.to_thread(worker.entered.wait, 2):
             raise BenchmarkError("single-flight worker did not start")
         light_started = time.perf_counter_ns()
-        light_result = await server._dispatch("cursor_list", {})
+        light_result = await server._dispatch_inner("cursor_list", {})
         light_wall_ms = (time.perf_counter_ns() - light_started) / 1_000_000
         for _ in range(400):
             if runtime.stats_snapshot()["coalesced_waiter_count"] == 1:

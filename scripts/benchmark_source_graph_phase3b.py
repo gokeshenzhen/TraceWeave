@@ -528,7 +528,8 @@ async def _dispatch_timed(
 ) -> dict[str, Any]:
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
-    result = await server._dispatch(tool, dict(args))
+    # Replay this gate's legacy routing contract; native-first has a separate benchmark.
+    result = await server._dispatch_inner(tool, dict(args))
     wall_ms = (time.perf_counter_ns() - wall_started) / 1_000_000
     cpu_ms = (time.process_time_ns() - cpu_started) / 1_000_000
     return _compact_result(
@@ -878,7 +879,7 @@ async def _measure_query_cancellation(
         server.SourceGraphConnectivityBackend = CancellingSourceGraphBackend
         try:
             try:
-                await server._dispatch("explain_signal_driver", workload.driver_args())
+                await server._dispatch_inner("explain_signal_driver", workload.driver_args())
             except asyncio.CancelledError:
                 cancelled = True
         finally:
@@ -948,7 +949,7 @@ async def _measure_mixed_provenance_rejection(
     ):
         server.SourceGraphConnectivityBackend = MixedSourceGraphBackend
         try:
-            result = await server._dispatch(
+            result = await server._dispatch_inner(
                 "explain_signal_driver", workload.driver_args()
             )
         finally:

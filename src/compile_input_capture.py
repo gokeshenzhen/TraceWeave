@@ -78,6 +78,7 @@ class CompileInputCapture:
         self._unavailable: dict[str, tuple] = {}
         self._total_bytes = 0
         self._read_bytes = 0
+        self._path_read_bytes = {}
         self._closed = False
 
     def __enter__(self):
@@ -154,6 +155,8 @@ class CompileInputCapture:
                 self.checkpoint()
                 chunk = stream.read(min(1024 * 1024, byte_limit - consumed + 1))
                 self._read_bytes += len(chunk)
+                if chunk:
+                    self._path_read_bytes[path] = self._path_read_bytes.get(path, 0) + len(chunk)
                 if not chunk:
                     break
                 consumed += len(chunk)
@@ -187,6 +190,11 @@ class CompileInputCapture:
             raise CaptureAborted("reference_limit")
         self._aliases[spelling] = canonical
         return canonical
+
+    def observe_metadata_path(self, path):
+        # Full source preparation retains its historical replay/negative-input
+        # rules; only the native metadata reader opts into this parser hook.
+        self.checkpoint()
 
     def read_bytes(self, path: str | os.PathLike) -> bytes:
         spelling = os.path.abspath(path)
@@ -292,6 +300,12 @@ _capture: ContextVar[CompileInputCapture | None] = ContextVar("compile_input_cap
 def resolve_compile_path(path: str | os.PathLike) -> str:
     capture = _capture.get()
     return capture.observe_path(path) if capture is not None else os.path.realpath(path)
+
+
+def observe_compile_metadata_path(path):
+    capture = _capture.get()
+    if capture is not None:
+        capture.observe_metadata_path(path)
 
 
 def validate_captured_inputs(

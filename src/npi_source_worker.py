@@ -53,12 +53,41 @@ def validate_source_worker_result(request, result):
         if (payload["source_signal"] != request.arguments["source_signal"] or
                 payload["status"] == "resolved" and set(payload["field_bits"]) != set(request.arguments["fields"])):
             raise ValueError("worker packed query mismatch")
-    identity = request.context_payload["context"]["identity_sha256"]
-    if payload.get("context_identity_sha256") != identity:
+    from .npi_lsf import NativeSourceWorkerRequest
+    native = isinstance(request, NativeSourceWorkerRequest)
+    if native:
+        from .native_query_codec import decode_native_inputs
+        inputs = decode_native_inputs(request.metadata_payload)
+        identity = inputs.compile_metadata_identity_sha256 or "unavailable"
+        if "context_identity_sha256" in payload:
+            raise ValueError("native worker cannot claim a source context")
+    else:
+        identity = request.context_payload["context"]["identity_sha256"]
+    if native:
+        arguments = request.arguments
+        if request.tool == "find_tb_instance":
+            for row in payload.get("hits", ()):
+                if (arguments.get("path") and row["path"] != arguments["path"] or
+                    arguments.get("module") and row.get("module") != arguments["module"]):
+                    raise ValueError("worker instance query mismatch")
+        if request.tool == "get_tb_subtree" and "root" in payload:
+            if payload["root"] != (arguments.get("root") or request.top):
+                raise ValueError("worker subtree root mismatch")
+        if request.tool == "dump_tb_section" and payload.get("section") != arguments["section"]:
+            raise ValueError("worker section mismatch")
+        if request.tool == "get_tb_file_detail" and "file_id" in payload:
+            from .hierarchy_source_metadata import build_native_source_catalog
+            catalog = build_native_source_catalog(inputs)
+            entry = catalog.find_file(arguments["path"])
+            if entry is None or payload["file_id"] != entry.file_id or payload["path"] != entry.path:
+                raise ValueError("worker file mismatch")
+    if not native and payload.get("context_identity_sha256") != identity:
         raise ValueError("worker source context mismatch")
+    if native and "ownership_identity" in payload and payload.get("ownership_basis") != "compile_metadata":
+        raise ValueError("native ownership basis mismatch")
     if payload.get("ownership_identity", identity) != identity:
         raise ValueError("worker compile ownership mismatch")
-    if any(key in payload for key in ("handle", "design_handle", "design_context", "backend_status")):
+    if any(key in payload for key in ("handle", "design_handle", "design_context", "backend_status", "native_route")):
         raise ValueError("worker cannot publish parent handles or routing receipts")
     origin = payload["facts_origin"]
     if origin == "verdi_npi":
@@ -82,7 +111,7 @@ def validate_source_worker_result(request, result):
     return payload
 
 
-def _error(exc, *, stage):
+def _error(exc, *, stage, native=False):
     from .npi_lsf import WorkerError, WorkerUnavailable
     if isinstance(exc, OperationCancelled):
         raise exc
@@ -96,6 +125,9 @@ def _error(exc, *, stage):
     if isinstance(exc, TimeoutError):
         return WorkerError(error_code="query_timeout", stage=stage)
     if isinstance(exc, NpiHierarchyUnavailable):
+        from .native_query import NATIVE_IDENTITY_ERRORS
+        if native and exc.reason in NATIVE_IDENTITY_ERRORS:
+            return WorkerError(error_code="result_invalid", stage=stage)
         if exc.reason == "npi_load_failed":
             return WorkerUnavailable()
         return WorkerError(error_code="hierarchy_source_unavailable", stage=stage)
@@ -109,7 +141,13 @@ def execute_source_worker(request, *, backend=None):
     budget = HierarchyQueryBudget(**request.limits.model_dump())
     started = time.monotonic()
     try:
-        context = decode_design_context(request.context_payload)
+        from .npi_lsf import NativeSourceWorkerRequest
+        native = isinstance(request, NativeSourceWorkerRequest)
+        if native:
+            from .native_query_codec import decode_native_inputs
+            context = decode_native_inputs(request.metadata_payload)
+        else:
+            context = decode_design_context(request.context_payload)
         if context.selected_top != request.top or context.backend_preference != "auto":
             raise ValueError("worker requires the selected NPI context")
     except OperationCancelled:
@@ -121,7 +159,9 @@ def execute_source_worker(request, *, backend=None):
     source_ms = anchor_ms = 0.0
     stage = "query"
     try:
-        plan = prepare_source_query(context, request.tool, request.arguments, budget=budget)
+        from .hierarchy_source_request import prepare_native_source_query
+        plan = (prepare_native_source_query if native else prepare_source_query)(
+            context, request.tool, request.arguments, budget=budget)
         try:
             budget.checkpoint()
             started = time.monotonic()
@@ -145,7 +185,10 @@ def execute_source_worker(request, *, backend=None):
                 if backend is None:
                     from .verdi_npi_backend import VerdiNpiBackend
                     backend = VerdiNpiBackend()
-                backend.bind_compile_context(context.compile_result())
+                if native:
+                    backend.bind_native_inputs(context)
+                else:
+                    backend.bind_compile_context(context.compile_result())
                 backend.bind_kdb_anchor(anchor)
                 stage = "query"
                 # query_source acquires the exclusive owner before SDK load.
@@ -163,9 +206,11 @@ def execute_source_worker(request, *, backend=None):
             started = time.monotonic()
             anchor.require_current()
             anchor_ms += (time.monotonic() - started) * 1000
-        result["context_identity_sha256"] = context.identity_sha256
+        if not native:
+            result["context_identity_sha256"] = context.identity_sha256
         result["query_metrics"].update(
-            worker_context_decode_ms=decode_ms, worker_source_validation_ms=source_ms,
+            worker_context_decode_ms=decode_ms,
+            **({"worker_metadata_validation_ms": source_ms} if native else {"worker_source_validation_ms": source_ms}),
             worker_kdb_validation_ms=anchor_ms,
         )
         stage = "result"
@@ -178,7 +223,7 @@ def execute_source_worker(request, *, backend=None):
         quality = (result.get("kdb_binding") or {}).get("load_quality")
         return WorkerSuccess(result=result, kdb_load_quality=quality)
     except (OperationCancelled, SourceContextInvalid, KdbBindingChanged, CaptureAborted, TimeoutError) as exc:
-        return _error(exc, stage=stage)
+        return _error(exc, stage=stage, native=native)
     except Exception as exc:
         # An ordinary query failure cannot hide source/KDB mutation and invite
         # a fallback on a different observation. Typed fatal errors above keep
@@ -188,7 +233,7 @@ def execute_source_worker(request, *, backend=None):
             if anchor is not None:
                 anchor.require_current()
         except (OperationCancelled, SourceContextInvalid, KdbBindingChanged, CaptureAborted, TimeoutError) as failure:
-            return _error(failure, stage=stage)
+            return _error(failure, stage=stage, native=native)
         if stage == "result" and isinstance(exc, (TypeError, ValueError, KeyError)):
             return WorkerError(error_code="result_invalid", stage="result")
-        return _error(exc, stage=stage)
+        return _error(exc, stage=stage, native=native)

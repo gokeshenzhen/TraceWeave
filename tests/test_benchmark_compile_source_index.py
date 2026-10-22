@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 
 from scripts.benchmark_compile_source_index import (
     BENCHMARK_NAME,
@@ -26,7 +27,26 @@ def _write_fixture(root: Path) -> Path:
     return compile_log
 
 
-def test_trial_reports_shared_index_and_stable_path_free_oracles(tmp_path):
+def test_trial_reports_shared_index_and_stable_path_free_oracles(tmp_path, monkeypatch):
+    # gather() alone does not guarantee overlapping leases for a one-file
+    # fixture: one consumer may finish before the other's parse is scheduled.
+    # Admit both consumers before either preload, keeping the sharing oracle
+    # strict without imposing a retention delay on the production runtime.
+    from src.compile_source_runtime import CompileSourceIndexRuntime
+    original_acquire = CompileSourceIndexRuntime.acquire
+    arrived = 0
+    both_ready = asyncio.Event()
+
+    async def overlapping_acquire(self, *args, **kwargs):
+        nonlocal arrived
+        if arrived < 2:
+            arrived += 1
+            if arrived == 2:
+                both_ready.set()
+            await both_ready.wait()
+        return await original_acquire(self, *args, **kwargs)
+
+    monkeypatch.setattr(CompileSourceIndexRuntime, "acquire", overlapping_acquire)
     compile_log = _write_fixture(tmp_path)
     parser = build_argument_parser()
     enabled_args = parser.parse_args(

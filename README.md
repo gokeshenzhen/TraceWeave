@@ -106,6 +106,14 @@ Other MCP clients supporting stdio can use these connection settings:
 | Repository | `<absolute-repository-path>/.venv/bin/python` | `["<absolute-repository-path>/server.py"]` |
 | PyPI | `traceweave-mcp`, or its absolute path | `[]` |
 
+If a proxy slows NPI SDK initialization and direct vendor access is available,
+set `TRACEWEAVE_NPI_VENDOR_DIRECT=1` in the MCP server environment and reconnect.
+It defaults to off; startup commands stay the same. Before the first SDK import,
+it appends `srv1.sw.synopsys.com` and `.updates.synopsys.com` to the process's
+`NO_PROXY`/`no_proxy`, preserving existing entries. It does not edit proxy
+configuration or disable SDK communication/retries; offline environments have
+no guaranteed benefit. For LSF, the worker environment must also receive the flag.
+
 ### LSF-only NPI licenses
 
 If Verdi/NPI licenses are available only on LSF compute nodes, provide these settings to the MCP server process. Replace `digital` with your queue:
@@ -190,6 +198,40 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 |  | `cursor_list` | List session cursors |
 |  | `cursor_delete` | Delete a time cursor |
 | EDA integration | `build_kdb` | Build and cache a Verdi KDB |
+
+### Native-first design queries
+
+After `get_sim_paths`, run `scan_structural_risks` as usual, then continue log
+and waveform investigation. Connectivity, hierarchy/file/class queries, X traces,
+packed layouts and failure correlation accept `compile_log` directly. They try
+healthy NPI using bounded metadata and an existing KDB, without full source
+capture or source validation. With no log, provide `kdb_path` and `top_hint`;
+compile file ownership and source fallback still require a log. KDB-only failure
+analysis/recommendation also requires an explicit `simulator` for log parsing.
+
+```python
+find_tb_instance(compile_log="/project/compile.log", path="tb.dut")
+explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
+                      top_hint="tb", signal_path="tb.dut.q", wave_path="/project/run.fsdb")
+```
+
+Ordinary native unavailability prepares source within the same request. Inspect
+`native_route`: metadata, KDB and source identities are separate; the KDB/source
+association stays `unverified`. Fallback returns a real `source_design_handle`
+for explicit reuse. A changed source observation fails strictly; explicitly
+prepare a new context and pass its new handle. `backend_preference="source"`
+skips KDB discovery. `retry_npi=true` retries a remembered load failure for the
+same KDB generation; per-tool capability gaps never disable other native tools.
+All phases share `timeout_sec` (finite, at most 300 seconds).
+
+`prepare_design_context` remains the explicit full source identity/recovery API.
+Legacy handles and historical actions keep their original contracts. File
+results distinguish `ownership_basis="compile_metadata"`/`source_status="not_captured"`
+from captured source ownership. Metadata name/path filters and the three compile
+record exports need neither KDB nor a semantic provider. Cached KDB discovery
+still performs its exact source hash and reports that cost separately. No KDB
+is automatically built. Scan and failed-run waveform sweep coverage remain
+independent requirements; zero coverage is never a clean result.
 
 ## FAQ
 

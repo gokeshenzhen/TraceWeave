@@ -1,3 +1,6 @@
+# These tests exercise the retained legacy artifact orchestrator directly.
+# Native-first public routing and cancellation use real compile metadata in
+# test_native_first_server/test_native_first_consumers.
 from __future__ import annotations
 
 import asyncio
@@ -288,8 +291,8 @@ async def test_source_graph_multi_node_trace_builds_once_and_repeats_exact_warm(
     static = TraceStaticBackend()
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
-    first = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
-    second = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    first = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
+    second = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert first.trace_status == "driver_unresolved"
     assert [node.signal_path for node in first.propagation_chain] == [
@@ -349,7 +352,7 @@ async def test_trusted_npi_terminal_result_skips_source_graph_and_static(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert result.trace_status == "testbench_driven"
     assert result.backend_status.actual_backend == "verdi_npi"
@@ -392,7 +395,7 @@ async def test_explicit_source_graph_route_skips_npi_for_trace_with_usable_kdb(
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")
     monkeypatch.setattr(connectivity_backend, "select_backend", policy_selector)
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     status = result.backend_status
     assert status.kdb_validation_status == "usable"
@@ -460,7 +463,7 @@ async def test_npi_internal_fallback_discards_partial_chain_and_restarts_source_
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert npi_calls == [
         f"{_leaf_path()}.data_q",
@@ -536,7 +539,7 @@ async def test_degraded_npi_incomplete_driver_discards_chain_and_restarts(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert npi_calls == [
         f"{_leaf_path()}.data_q",
@@ -570,7 +573,7 @@ async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
     static = TraceStaticBackend()
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "trace_x_source",
         _trace_args(
             compile_log,
@@ -598,7 +601,7 @@ async def test_scope_expansion_restarts_source_graph_with_one_final_artifact(
     )
     assert worker.calls == 2
 
-    covered = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    covered = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     covered_receipt = covered.backend_status.source_graph
     assert covered.backend_status.actual_backend == "source_graph"
     assert covered_receipt.artifact_reuse == "dominating_hit"
@@ -624,7 +627,7 @@ async def test_trace_scope_expansion_respects_frontier_instance_cap(
         lambda: replace(_source_config(), frontier_max_instances=1),
     )
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "trace_x_source",
         _trace_args(
             compile_log,
@@ -670,14 +673,14 @@ async def test_fresh_runtime_x_trace_restarts_using_only_exact_disk_artifacts(
         signal_path="uart_deep_x_tb.apb_prdata",
     )
 
-    cold = await server._dispatch("trace_x_source", args)
+    cold = await server._dispatch_inner("trace_x_source", args)
     disk_worker = ReadyWorker(ir=_deep_ir())
     disk_runtime = SourceGraphRuntime(
         disk_worker,
         disk_cache=SourceGraphDiskCache(cache_root),
     )
     monkeypatch.setattr(server, "get_source_graph_runtime", lambda config: disk_runtime)
-    disk = await server._dispatch("trace_x_source", args)
+    disk = await server._dispatch_inner("trace_x_source", args)
 
     receipt = disk.backend_status.source_graph
     assert cold.backend_status.actual_backend == "source_graph"
@@ -725,7 +728,7 @@ async def test_inconclusive_negative_discards_source_chain_and_restarts_static(
     static = TraceStaticBackend()
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert result.backend_status.actual_backend == "static"
     assert result.backend_status.fallback_reason == (
@@ -758,7 +761,7 @@ async def test_source_graph_build_failure_restarts_static_and_retry_is_safe(
     runtime = SourceGraphRuntime(worker)
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
-    failed = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    failed = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert failed.backend_status.actual_backend == "static"
     assert failed.backend_status.source_graph.prepare_status == "build_failed"
@@ -769,7 +772,7 @@ async def test_source_graph_build_failure_restarts_static_and_retry_is_safe(
 
     retry_static = TraceStaticBackend()
     _patch_route(monkeypatch, runtime=runtime, static=retry_static)
-    retried = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    retried = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert retried.backend_status.actual_backend == "source_graph"
     assert worker.calls == 2
@@ -806,7 +809,7 @@ async def test_source_graph_query_runs_outside_wave_lock_and_wave_reads_hold_it(
     monkeypatch.setattr(parser, "get_value_at_time", checked_value)
     monkeypatch.setattr(server, "_get_parser", lambda path: parser)
 
-    result = await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+    result = await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
 
     assert result.backend_status.actual_backend == "source_graph"
     assert query_calls == 2
@@ -827,7 +830,7 @@ async def test_cold_trace_build_is_single_flight_and_does_not_block_light_calls(
 
     tasks = [
         asyncio.create_task(
-            server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+            server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
         )
         for _ in range(2)
     ]
@@ -871,10 +874,10 @@ async def test_one_cancelled_trace_waiter_does_not_cancel_survivor(
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
     first = asyncio.create_task(
-        server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     )
     second = asyncio.create_task(
-        server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     for _ in range(200):
@@ -912,7 +915,7 @@ async def test_sole_cancelled_trace_waiter_stops_worker_without_fallback(
     _patch_route(monkeypatch, runtime=runtime, static=static)
 
     task = asyncio.create_task(
-        server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     task.cancel()
@@ -936,7 +939,7 @@ async def test_cached_query_cancellation_does_not_fallback_or_pollute_artifact(
     _patch_route(monkeypatch, runtime=runtime, static=static)
     args = _trace_args(compile_log, wave)
 
-    ready = await server._dispatch("trace_x_source", args)
+    ready = await server._dispatch_inner("trace_x_source", args)
     original = SourceGraphConnectivityBackend.find_driver
 
     def cancelled_query(self, *query_args, **query_kwargs):
@@ -945,9 +948,9 @@ async def test_cached_query_cancellation_does_not_fallback_or_pollute_artifact(
 
     monkeypatch.setattr(SourceGraphConnectivityBackend, "find_driver", cancelled_query)
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("trace_x_source", args)
+        await server._dispatch_inner("trace_x_source", args)
     monkeypatch.setattr(SourceGraphConnectivityBackend, "find_driver", original)
-    warm = await server._dispatch("trace_x_source", args)
+    warm = await server._dispatch_inner("trace_x_source", args)
 
     assert ready.backend_status.actual_backend == "source_graph"
     assert warm.backend_status.source_graph.artifact_reuse == "exact_hit"
@@ -981,7 +984,7 @@ async def test_npi_cancellation_never_enters_source_graph_or_static(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     assert static.calls == []
 
 
@@ -1000,7 +1003,7 @@ async def test_adapter_cancellation_never_enters_runtime_or_static(
     monkeypatch.setattr(server, "build_source_graph_trace_plan", cancelled_adapter)
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     assert static.calls == []
 
 
@@ -1022,7 +1025,7 @@ async def test_wave_sampling_cancellation_after_prepare_never_falls_back(
     monkeypatch.setattr(server, "_get_parser", lambda path: CancelledParser())
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
     assert worker.calls == 1
     assert static.calls == []
 
@@ -1049,7 +1052,7 @@ async def test_scope_restart_cancellation_discards_partial_trace_without_fallbac
     monkeypatch.setattr(server, "build_source_graph_trace_plan", cancel_second_plan)
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch(
+        await server._dispatch_inner(
             "trace_x_source",
             _trace_args(
                 compile_log,
@@ -1073,7 +1076,7 @@ async def test_trace_metrics_are_identity_free_numeric_or_fixed_labels(
     metrics = operation_metrics.OperationMetrics()
     token = operation_metrics.push(metrics)
     try:
-        await server._dispatch("trace_x_source", _trace_args(compile_log, wave))
+        await server._dispatch_inner("trace_x_source", _trace_args(compile_log, wave))
         operation_metrics.set_value(
             "source_graph_trace_signal", f"{_leaf_path()}.data_q"
         )

@@ -3,8 +3,8 @@
 ## Overview
 
 The default simulation investigation is:
-`get_diagnostic_snapshot → get_sim_paths → prepare_design_context + scan_structural_risks
-(parallel) → parse_sim_log → sweep_handshakes → recommend_failure_debug_next_steps`.
+`get_diagnostic_snapshot → get_sim_paths → scan_structural_risks
+→ parse_sim_log → sweep_handshakes → recommend_failure_debug_next_steps`.
 Reuse current cached steps when the snapshot confirms them. The sweep applies to
 failed runs with a waveform; standalone waveform queries need neither discovery
 nor a hierarchy build. Inspect the tool's current MCP schema for exact arguments.
@@ -122,19 +122,18 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │  - Only proceed to step 3 when `sim_logs` is non-empty
 │
 ▼
-Step 2 (parallel): prepare_design_context(compile_log, simulator,
-                                      supplementary_compile_logs?)
-                   + scan_structural_risks(compile_log, simulator)
-│  Run both independently on the SAME primary compile log before analyzing
-│  failures. Do not wait for one before starting the other. In a split VCS
-│  flow only context preparation receives the supplementary logs.
+Step 2: scan_structural_risks(compile_log, simulator)
+│  Keep the same scan scope and coverage requirements. Pass the selected
+│  compile_log, ordered supplementary_compile_logs and top_hint to subsequent
+│  design queries. Native-first uses an existing KDB before full source work.
+│  Ordinary unavailability prepares source within the request; native_route
+│  returns its source_design_handle. KDB/source association stays unverified.
 │
-├─ prepare_design_context captures inputs and returns design_handle.
-│  It does not build a full tree, run Slang or load KDB. Use design_handle for
-│  the six hierarchy/source tools and tracing/failure consumers. Inspect each
-│  query's actual backend, partial coverage, limits and identity receipt.
-│  Before reading source, verify compile ownership through lookup_tb_files or
-│  get_tb_file_detail. Query an exact instance or shallow subtree first.
+│  Explicit prepare_design_context remains available for strict source identity
+│  and recovery. Run it alongside the scan when explicitly preparing source.
+│  A changed/expired source observation requires explicit preparation; healthy
+│  NPI never consults that source alias. Verify compile ownership with
+│  lookup_tb_files/get_tb_file_detail before reading a source file.
 │
 │  Explicit compatibility option: build_tb_hierarchy, alongside the same scan.
 │  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
@@ -488,9 +487,8 @@ get_diagnostic_snapshot (reuse current cached steps)
 
 get_sim_paths
   ├─ provides compile_log / simulator / log_path / wave_path to downstream tools
-  ├─ prepare_design_context ───┐
-  └─ scan_structural_risks ─────┤  (parallel, same compile_log)
-                                └─ parse_sim_log
+  └─ scan_structural_risks
+       └─ parse_sim_log
                                      └─ sweep_handshakes
                                           └─ recommend_failure_debug_next_steps
                                                └─ search_signals
@@ -601,3 +599,18 @@ frontiers. Retain upstream input, local logic/control, and reference/mapping as
 competing explanations. A local candidate is never an exclusive root-cause verdict.
 Only `no_difference` denotes complete agreement in the declared comparison mode;
 clock-mode agreement does not exclude between-edge transients.
+
+Native-first inputs also support `kdb_path` + `top_hint` without a log. File
+ownership and source fallback then report the missing log explicitly. Name/path
+file filters and `compile_result`/`include_tree`/`filelist_tree` exports read only
+reported metadata. `not_captured` is an evidence state, never proof of a failed
+native query. The seven section exports retain their output and analysis caps.
+
+Native and source stages share one finite `timeout_sec` (maximum 300 seconds).
+Only confirmed load failures are remembered per KDB/top/execution/environment;
+`retry_npi=true` retries one matching generation. Capabilities, truncation,
+query failures and budget stops do not become persistent load failures.
+Cancellation, identity/policy changes and exhausted native budgets do not start
+a new backend. A trace changing artifact restarts from its original target and
+resolved time/window, with cumulative history budgets. Divergence binds each
+side independently; explicit historical tokens retain their strict recovery.

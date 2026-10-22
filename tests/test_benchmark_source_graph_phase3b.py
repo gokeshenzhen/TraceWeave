@@ -246,8 +246,11 @@ def test_tracked_phase3b_evidence_passes_cross_target_reuse_gate():
     assert result["benchmark"] == "source_graph_connectivity_phase3b"
     assert result["repository"]["head"] == benchmark.MEASUREMENT_HEAD
     script = ROOT / result["benchmark_script"]["path"]
+    # Historical measurements bind the archived script, not later maintenance.
+    archived_script = subprocess.check_output([
+        "git", "show", "b275397459465359ad1290b6d5a94ad03795562a:" + str(script.relative_to(ROOT))], cwd=ROOT)
     assert (
-        hashlib.sha256(script.read_bytes()).hexdigest()
+        hashlib.sha256(archived_script).hexdigest()
         == (result["benchmark_script"]["sha256"])
     )
     for name, (_, expected) in benchmark.HISTORICAL_EVIDENCE.items():

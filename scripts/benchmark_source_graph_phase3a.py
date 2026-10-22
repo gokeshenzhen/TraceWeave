@@ -677,7 +677,8 @@ def _compact_path_result(result: Any, wall_ms: float, cpu_ms: float) -> dict[str
 async def _dispatch_path_timed(workload: PathWorkload, **overrides: Any):
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
-    result = await server._dispatch(
+    # Replay this gate's legacy routing contract; native-first has a separate benchmark.
+    result = await server._dispatch_inner(
         "trace_signal_path", workload.path_args(**overrides)
     )
     wall_ms = (time.perf_counter_ns() - wall_started) / 1_000_000
@@ -1178,7 +1179,7 @@ async def _measure_driver_load_unchanged_probe(
         config=config,
         static_backend=static,
     ):
-        driver = await server._dispatch(
+        driver = await server._dispatch_inner(
             "explain_signal_driver",
             {
                 "signal_path": "sg_top.u_producer.seed",
@@ -1190,7 +1191,7 @@ async def _measure_driver_load_unchanged_probe(
                 "max_depth": 64,
             },
         )
-        loads = await server._dispatch(
+        loads = await server._dispatch_inner(
             "find_signal_loads",
             {
                 "signal_path": "sg_top.u_producer.seed",

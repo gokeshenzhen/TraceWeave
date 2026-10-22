@@ -482,11 +482,11 @@ def _build_discovery_result(
     target_log = elaborate_log or (compile_logs[0] if compile_logs else None)
     if target_log:
         result["next_required_step"] = {
-            "tool": "prepare_design_context",
+            "tool": "scan_structural_risks",
             "compile_log": target_log["path"],
             "simulator": simulator or "auto",
-            "reason": "Prepare an independent design_handle and run scan_structural_risks in parallel. "
-                      "Query hierarchy and source facts on demand; "
+            "reason": "Run scan_structural_risks, then pass compile_log to native-first queries. "
+                      "Source fallback is prepared automatically when needed; "
                       "verify any file path via lookup_tb_files / get_tb_file_detail "
                       "before reading source.",
         }

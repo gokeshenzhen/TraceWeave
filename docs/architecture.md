@@ -3105,7 +3105,8 @@ Cycle results expose `transition_data_truncated` and affected signals; structure
 cycle queries reject an incomplete full-clock read. Window inspections can
 instead return partial evidence over a narrower interval.
 
-Discovery and missing-context trace gates suggest `prepare_design_context`.
+Discovery suggests `scan_structural_risks`; subsequent design queries accept
+compile metadata directly. Explicit source recovery still uses `prepare_design_context`.
 The diagnostic snapshot has separate prepared-context and legacy-hierarchy
 sections. It copies bounded registry metadata without source hashing, native
 loading, pins or LRU updates; all context identities are explicitly unvalidated
@@ -3618,21 +3619,82 @@ controls stay explicit coverage exclusions. Missing HDL commands, filelists,
 or tops remain gaps. A C++ build log alone does not provide HDL context; there
 is no automatic unrelated-sidecar or vendor-tree recovery.
 
-Run `get_sim_paths`, then `prepare_design_context` and `scan_structural_risks` in
-parallel on that same compile log before parsing/analyzing the run. Failed runs
-with waveforms require `sweep_handshakes`; zero/partial coverage does not exclude
-OBI failures. Source queries use the actual elaborated HDL top path: Verilator's
-synthetic waveform `TOP.` prefix is not an HDL instance (remove it only after
-confirming the following segment is the compiled top). Static/Source Graph
-coverage remains bounded. An existing external KDB can be declared through
-`prepare_design_context(kdb_path=...)`, including for Verilator inputs; it must
-pass the same candidate/load checks and is not assumed to match current sources.
+Run `get_sim_paths`, then the usual `scan_structural_risks`, log parsing and
+failed-run waveform sweep. Pass `compile_log` (plus ordered supplementary logs,
+simulator and optional top) to design consumers. Native-first is independent of
+legacy hierarchy caches. A pure KDB request uses explicit `kdb_path` + `top_hint`;
+compile ownership and source fallback still require a log. Explicit design
+handles, legacy handles and historical action tokens retain their identity and
+recovery contracts. Structural scan budgets/coverage remain separate.
 
-Use the returned `design_handle` for on-demand source and tracing queries.
-`get_diagnostic_snapshot(design_handle=...)` reports observed context metadata;
-it does not revalidate source/KDB identity or imply complete semantic coverage.
-Multiple contexts for the same primary log require an explicit selection.
-`build_tb_hierarchy` remains the explicit legacy full-tree option; when used,
-run it alongside the same structural scan. Expired driver actions retain their
-historical identity tokens during recovery; preparing current inputs does not
-prove a historical source association.
+`native_query.py` captures only consumed logs/filelists and environment. Declared
+source paths do not become current-source conditions. Discovery configuration
+observations and bounded KDB anchors are checked before and after work. Native
+candidates bypass cached KDB source hashing; the exact cache discovery fallback
+still hashes sources and reports actual read bytes, including validation.
+No new KDB is built. Local NPI retains the synchronous native owner; LSF retains
+its cancellable worker and namespaced placement configuration.
+
+`native_dispatch.py` adapts the existing connectivity, Language, file/class,
+packed and failure engines. Native results omit the full-source design receipt;
+`native_route` distinguishes compile metadata, KDB and separately captured source
+identity, always retaining unverified KDB/source association. Metadata name/path
+filters and three compile-record exports do not select a native provider.
+`ownership_basis` separates compile metadata from captured source. Raw native
+locations retain unbound/content-unverified evidence. Partial positives, exact
+versus lower-bound counts, generate/array/bind parents and qualified classes keep
+the shared engines' existing semantics.
+
+An allowed fallback creates a real source context through
+`source_fallback_runtime.py`: at most eight handle aliases, four live flights and
+one capture admission. It retains references/tasks, never RTL bodies or another
+source cache. Exact metadata identities may reuse a retained observation; every
+use pins and strictly validates it before/after semantic work. Changed and expired
+observations fail instead of silently recapturing. Incomplete identities share
+only a live flight. Waiters cannot extend the producer deadline; one cancellation
+preserves other waiters, while the final cancellation stops owned work. The event
+loop publishes a validated registration ticket only for its current store and a
+live waiter. Capacity failures remain atomic. Reset cancels the old coordinator.
+
+A separate 32-entry LRU remembers only confirmed `npi_load_failed` and
+`npi_lsf_npi_unavailable` for exact KDB/top/execution/route/runtime environment.
+`retry_npi` clears one matching entry. Capability gaps, ordinary query failures,
+truncation, timeout and native analysis limits never become sticky load failures.
+All native-first phases share the original finite deadline, including fallback
+and final validation. X history reuses its cumulative budget across the complete
+restart; divergence binds sides separately and restarts discarded graphs from
+the original targets. Source preparation/validation never holds a waveform lock.
+
+Worker protocol 5.0 adds `native_source`, carrying bounded metadata, KDB identity,
+top, business arguments and remaining limits, without DesignContext or source
+bodies. Native workers never discover another KDB or run a fallback backend.
+The strict 4.0 decoder remains valid for old operations; 4.0 rejects the new
+operation. Responses echo the accepted request version, and parent boundaries
+reject version, identity, ownership, query and work-count mismatches. Old full
+context source requests retain their source validation. Real LSF deployment is
+separate from controlled codec/transport verification.
+
+`benchmark_native_first.py` compares frozen workloads over real MCP stdio servers.
+It retains raw requests/responses, instrumented source prepare/current/read and
+frontend counters, server CPU, wall time and sampled process-tree RSS. Fresh and
+warm samples are distinct; OS page caches are uncontrolled. The harness preserves
+venv executable spellings, fixes a common server/frontend working directory and
+journals raw responses (including non-JSON errors) before final aggregation.
+Journal serialization/write time is reported separately and excluded from query
+and prelude wall time; unadjusted elapsed time and each MCP call remain available.
+For comparisons between two native-first revisions, a workload may set
+`baseline_native_first=true`; the default baseline still prepares an explicit
+source handle. Business queries and investigation steps remain identical.
+Scan/prepare overlap
+uses elapsed wall time, never summed parallel durations. License checkout/release
+remain unobserved unless measured independently. Identity/evidence-state
+normalizations are listed beside fact/coverage comparisons; no speedup is implied
+by route counters alone.
+
+MCP input validation reuses checked JSON Schema validators in a process-local
+LRU (128 entries, 256 KiB of serialized schemas). The key includes the exact
+schema content, and validators own private decoded schemas, so changed tool
+definitions cannot reuse old rules. Every request still runs full instance
+validation with the SDK's error selection. Only repeated schema self-validation
+is avoided; request arguments/results, design identities, KDB/source guards and
+native sessions are not cached here. SDK output handling remains unchanged.

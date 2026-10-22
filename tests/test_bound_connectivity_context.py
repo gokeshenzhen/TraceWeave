@@ -237,7 +237,7 @@ def test_bound_queries_use_fixed_anchor_and_deep_copied_metadata_without_reparse
         assert request.kdb_path == anchor.path and request.top == TOP
         assert request.kdb_identity_sha256 == anchor.identity_sha256
         assert request.kdb_identity_max_bytes == anchor.max_bytes
-        assert request.protocol_version == "4.0"
+        assert request.protocol_version == "5.0"
         field = {"driver": "recursive", "loads": "include_expr", "path": "expand_assigns", "dynamic": "include_dependency_candidates"}[op]
         assert getattr(request, field) is (False if op == "loads" else True)
 
@@ -445,7 +445,7 @@ REQUESTS = {"driver": npi_lsf.FindDriverWorkerRequest, "loads": npi_lsf.FindLoad
 
 
 def _request(op, anchor, *, bound=True, **overrides):
-    fields = {"kdb_path": anchor.path, "top": TOP}
+    fields = {"kdb_path": anchor.path, "top": TOP, "protocol_version": "4.0"}
     fields.update({"from_signal": f"{TOP}.a", "to_signal": f"{TOP}.y", "expand_assigns": True}
                   if op == "path" else {"signal_path": f"{TOP}.q"})
     if bound:

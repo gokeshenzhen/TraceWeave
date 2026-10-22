@@ -699,7 +699,8 @@ async def _dispatch_timed(operation: str, workload: PublicWorkload):
     args = workload.driver_args() if operation == "driver" else workload.load_args()
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
-    result = await server._dispatch(tool, args)
+    # Replay this gate's legacy routing contract; native-first has a separate benchmark.
+    result = await server._dispatch_inner(tool, args)
     wall_ms = (time.perf_counter_ns() - wall_started) / 1_000_000
     cpu_ms = (time.process_time_ns() - cpu_started) / 1_000_000
     return result, wall_ms, cpu_ms

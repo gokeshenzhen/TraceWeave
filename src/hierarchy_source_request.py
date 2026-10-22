@@ -14,7 +14,7 @@ from .design_context import DesignContext
 from .hierarchy_source_export import METADATA_SECTIONS, export_hierarchy_section, validate_section_query
 from .hierarchy_source_files import lookup_source_files, query_file_detail, validate_file_query
 from .hierarchy_source_ir import HIERARCHY_TOOL_SCHEMA_VERSION, HierarchyBudgetExceeded, HierarchyQueryBudget
-from .hierarchy_source_metadata import CompileSourceCatalog, build_compile_source_catalog
+from .hierarchy_source_metadata import CompileSourceCatalog, build_compile_source_catalog, build_native_source_catalog, observation_identity
 from .hierarchy_source_service import HierarchySourceService, validate_hierarchy_query
 
 
@@ -59,13 +59,13 @@ class HierarchySourceRequest:
         if self.catalog is not None:
             if not isinstance(self.catalog, CompileSourceCatalog):
                 raise TypeError("a captured compile source catalog is required")
-            if self.catalog.context_identity != self.context.identity_sha256:
+            if self.catalog.context_identity != observation_identity(self.context):
                 raise ValueError("file catalog belongs to a different context")
 
     def _unstarted(self, reason):
         return {
             "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "hierarchy_query_incomplete",
-            "facts_origin": "compile_metadata", "artifact_identity": self.context.identity_sha256,
+            "facts_origin": "compile_metadata", "artifact_identity": observation_identity(self.context),
             "semantic_status": "not_run", "coverage_status": "partial",
             "coverage_gaps": list(self.context.gaps), "analysis_limits": [reason],
             "query_metrics": self.budget.metrics(),
@@ -96,7 +96,7 @@ class HierarchySourceRequest:
         if provider is None:
             return {
                 "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "error": "semantic_provider_unavailable",
-                "facts_origin": "compile_metadata", "artifact_identity": self.context.identity_sha256,
+                "facts_origin": "compile_metadata", "artifact_identity": observation_identity(self.context),
                 "semantic_status": "unavailable", "coverage_status": "partial",
                 "coverage_gaps": sorted(set(self.context.gaps) | {"semantic_provider_unavailable"}),
                 "analysis_limits": [], "query_metrics": self.budget.metrics(),
@@ -109,6 +109,22 @@ class HierarchySourceRequest:
         return getattr(HierarchySourceService(provider), method)(budget=self.budget, **arguments)
 
 
+@dataclass(frozen=True)
+class NativeSourceRequest(HierarchySourceRequest):
+    """Independent metadata request; never a partial DesignContext."""
+    def validate(self):
+        from .native_query import NativeQueryInputs
+        if not isinstance(self.context, NativeQueryInputs) or not isinstance(self.budget, HierarchyQueryBudget):
+            raise TypeError("native metadata inputs and a hierarchy budget are required")
+        validate_source_query(self.operation, json.loads(self.arguments_json))
+        if self.catalog is not None and self.catalog.context_identity != self.context.compile_metadata_identity_sha256:
+            raise ValueError("file catalog belongs to different compile metadata")
+
+
+def prepare_native_source_query(inputs, operation, arguments, *, budget=None):
+    return _prepare_query(inputs, operation, arguments, budget=budget, native=True)
+
+
 def prepare_source_query(context, operation, arguments, *, budget=None):
     """Validate and determine semantic demand using captured metadata only.
 
@@ -119,6 +135,10 @@ def prepare_source_query(context, operation, arguments, *, budget=None):
     """
     if not isinstance(context, DesignContext):
         raise TypeError("a prepared DesignContext is required")
+    return _prepare_query(context, operation, arguments, budget=budget)
+
+
+def _prepare_query(context, operation, arguments, *, budget=None, native=False):
     validate_source_query(operation, arguments)
     budget = budget if budget is not None else HierarchyQueryBudget()
     if not isinstance(budget, HierarchyQueryBudget):
@@ -130,13 +150,13 @@ def prepare_source_query(context, operation, arguments, *, budget=None):
         budget.checkpoint()
         if operation == "dump_tb_section" and arguments["section"] in METADATA_SECTIONS:
             needs_provider = False
-        elif operation in {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"} or (
-            operation == "dump_tb_section" and arguments["section"] in {"files_full", "interfaces", "class_hierarchy_full"}
+        elif operation in ({"get_tb_file_detail", "lookup_tb_files"} if native else {"get_tb_file_detail", "lookup_tb_files", "get_tb_class_hierarchy"}) or (
+            operation == "dump_tb_section" and arguments["section"] in ({"files_full", "interfaces"} if native else {"files_full", "interfaces", "class_hierarchy_full"})
         ):
             available = budget.max_bytes - budget.fact_bytes - 512
             if available < 1:
                 raise HierarchyBudgetExceeded("fact_byte_limit")
-            catalog = build_compile_source_catalog(context, max_bytes=min(16 * 1024 * 1024, available),
+            catalog = (build_native_source_catalog if native else build_compile_source_catalog)(context, max_bytes=min(16 * 1024 * 1024, available),
                                                    checkpoint=budget.checkpoint)
             budget.reserve_bytes(512 + catalog.metadata_bytes)
             if operation == "get_tb_file_detail":
@@ -155,5 +175,5 @@ def prepare_source_query(context, operation, arguments, *, budget=None):
     except HierarchyBudgetExceeded as exc:
         preparation_limit, needs_provider = exc.reason, False
         catalog = None
-    return HierarchySourceRequest(context, operation, arguments_json, budget, catalog,
+    return (NativeSourceRequest if native else HierarchySourceRequest)(context, operation, arguments_json, budget, catalog,
                                   needs_provider, preparation_limit)

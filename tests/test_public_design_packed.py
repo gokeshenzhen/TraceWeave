@@ -60,7 +60,8 @@ class Controls:
                     budget=request.budget, require_owner=owner_guard(controls.sdk), cleanup_failed=forbidden) as provider:
                     value = request.execute(provider)
                 self.kdb_status = {'load_quality': 'clean'}
-                value['context_identity_sha256'] = request.context.identity_sha256
+                if hasattr(request.context, 'identity_sha256'):
+                    value['context_identity_sha256'] = request.context.identity_sha256
                 value['kdb_binding'] = dict(self.anchor.receipt(), load_status='loaded', load_quality='clean')
                 if controls.after: controls.after(request)
                 if controls.transform: controls.transform(value)
@@ -113,7 +114,8 @@ async def test_actual_owner_engine_projects_hand_bit_truth_then_checks_real_dump
     assert result['evidence']['declared_range'] == {'left': 7, 'right': 0}
     assert result['evidence']['native_query']['field_bits'] == {'tag': [7, 6, 5], 'payload': [4, 3, 2, 1, 0]}
     assert result['backend_status']['actual_backend'] == 'verdi_npi'
-    assert result['backend_status']['design_context']['artifact']['source_association'] == 'unverified'
+    assert (result['native_route']['source_association'] if automatic else
+        result['backend_status']['design_context']['artifact']['source_association']) == 'unverified'
     assert controls.wave_threads and controls.sdk.global_count == 1
     assert_no_live_capsules(controls.sdk)
     assert server._result_cache['build_tb_hierarchy'] is None and server._session_state['build_tb_hierarchy'] is None
@@ -129,7 +131,7 @@ async def test_explicit_design_never_borrows_most_recent_legacy_hierarchy(contro
 
 
 @pytest.mark.anyio
-async def test_existing_explicit_legacy_view_keeps_its_source_graph_path(controls, monkeypatch):
+async def test_legacy_packed_orchestrator_keeps_its_source_graph_path(controls, monkeypatch):
     # The legacy compatibility entry is an explicit view, never fabricated NPI.
     legacy, entered = {'compile_result': {'primary_top': 'top'}}, []
     monkeypatch.setattr(server, '_resolve_hierarchy_context', lambda *_: (legacy, 'historical-snapshot'))
@@ -141,7 +143,9 @@ async def test_existing_explicit_legacy_view_keeps_its_source_graph_path(control
         return {'status': 'resolved', 'fields': deepcopy(FIELDS), 'evidence': {
             'declared_range': {'left': 7, 'right': 0}, 'layout_source': 'control_source_graph'}}, None
     monkeypatch.setattr(server, '_resolve_source_packed_fields', source)
-    result = await query(controls, compile_log=str(controls.log), simulator='vcs')
+    result = (await server._dispatch_inner('resolve_packed_fields', dict(compile_log=str(controls.log),
+        simulator='vcs', wave_path=str(controls.wave), signal_path='top.packet[7:0]',
+        source_signal='top.packet', fields=['tag', 'payload']))).model_dump(exclude_none=True)
     assert entered == ['legacy-source'] and result['status'] == 'resolved' and result['fields'] == FIELDS
     assert controls.requests == [] and controls.sdk.global_count == 0
 
@@ -265,17 +269,19 @@ async def test_final_identity_failure_discards_completed_mapping(controls, chang
 
 
 @pytest.mark.anyio
-async def test_automatic_prepare_is_part_of_original_packed_deadline(controls, monkeypatch):
-    clock, original, entered = ServerClock(), server._handle_prepare_design_context, []
-    async def prepared(*a, **kw):
-        value = await original(*a, **kw)
+async def test_native_metadata_is_part_of_original_packed_deadline(controls, monkeypatch):
+    from src import native_dispatch, native_query
+    clock, original, entered = ServerClock(), native_dispatch.read_native_inputs, []
+    def read(*a, **kw):
+        value = original(*a, **kw)
         entered.append(value)
         clock.offset = 2
         return value
-    monkeypatch.setattr(server, 'time', clock)
-    monkeypatch.setattr(server, '_handle_prepare_design_context', prepared)
+    monkeypatch.setattr(native_dispatch, 'time', clock)
+    monkeypatch.setattr(native_query, 'time', clock)
+    monkeypatch.setattr(native_dispatch, 'read_native_inputs', read)
     result = await query(controls, compile_log=str(controls.log), timeout_sec=1)
-    assert len(entered) == 1 and result['error_code'] == 'design_context_timeout' and controls.requests == []
+    assert len(entered) == 1 and result['error_code'] == 'native_query_timeout' and controls.requests == []
 
 
 @pytest.mark.anyio

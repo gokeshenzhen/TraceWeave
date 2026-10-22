@@ -79,7 +79,7 @@ endmodule
     runtime = production.get_source_graph_runtime(server.get_source_graph_execution_config())
     assert runtime.stats_snapshot()["cache_entry_count"] == 1
     runtime._worker_runner = NoBuild()
-    queried = await server._dispatch("explain_signal_driver", {
+    queried = await server._dispatch_inner("explain_signal_driver", {
         **args, "signal_path": "top.u.en", "wave_path": str(tmp_path / "unused.vcd"),
     })
     assert queried.backend_status.actual_backend == "source_graph"

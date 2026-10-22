@@ -16,6 +16,9 @@ class PreparedTraceContext:
     prepared: object
     design_handle: str
     source_execution: object | None = None
+    history_budget: object | None = None
+    prior_attempts: tuple = ()
+    native_input_contract: bool = False
 
     @property
     def context(self) -> dict:
@@ -66,3 +69,36 @@ class PreparedTraceWave:
     def require_current(self) -> None:
         if self.identity is None or file_identity(self.path) != self.identity:
             raise ContextUnavailable("waveform_changed")
+
+
+@dataclass(frozen=True)
+class NativeTraceContext:
+    prepared: object
+    design_handle: None = None
+    source_execution: object | None = None
+
+    @property
+    def context(self):
+        inputs = self.prepared.context
+        return dict(compile_log=inputs.ordered_compile_logs[0] if inputs.ordered_compile_logs else None,
+            supplementary_compile_logs=list(inputs.ordered_compile_logs[1:]),
+            simulator=inputs.simulator, top_hint=inputs.selected_top,
+            compile_metadata_identity_sha256=inputs.compile_metadata_identity_sha256)
+
+    @property
+    def compile_result(self):
+        return self.prepared.context.compile_result()
+
+    @property
+    def snapshot(self):
+        import hashlib
+        anchor = self.prepared.binding.anchor
+        return hashlib.sha256(((anchor.identity_sha256 if anchor else "unavailable") + "\0" +
+            self.prepared.context.selected_top).encode()).hexdigest()
+
+    @property
+    def hierarchy(self):
+        return None
+
+    def current(self):
+        return self.prepared.context.current()

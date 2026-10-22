@@ -7,13 +7,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import hashlib
 import os
 import time
 
 import config
 from .cancellation import check_cancelled
-from .compile_input_capture import CaptureAborted, CaptureLimits, CompileInputCapture
+from .compile_input_capture import CaptureAborted, CaptureLimits, CompileInputCapture, validate_captured_inputs
 from .design_context import DesignContext
+from .compile_session_snapshot import CompileSessionSnapshot
 from .kdb_anchor import KdbAnchor, KdbBindingChanged, capture_kdb_anchor, validate_query_anchor
 from .verdi_backend import bounded_kdb_discovery, probe_verdi_backend
 
@@ -23,6 +25,7 @@ _PARTIAL_PROBE = {
     "kdb_discovery_entry_limit", "kdb_setup_byte_limit",
 }
 _RUNTIME_ENV = ("VERDI_HOME", "NOVAS_HOME", "SNPSLMD_LICENSE_FILE", "LM_LICENSE_FILE")
+_NATIVE_RUNTIME_ENV = (*_RUNTIME_ENV, "PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "TRACEWEAVE_NPI_WORKER")
 
 
 class ExecutionBindingChanged(RuntimeError):
@@ -30,20 +33,7 @@ class ExecutionBindingChanged(RuntimeError):
         super().__init__("design_context_execution_changed")
 
 
-@dataclass(frozen=True)
-class DesignBackendBinding:
-    context_identity_sha256: str
-    backend_preference: str
-    anchor: KdbAnchor | None
-    status_json: str
-    execution: config.NpiExecutionConfig
-    route: config.ConnectivityRouteConfig
-    runtime_environment: tuple[tuple[str, str | None], ...]
-    allow_degraded: bool
-    disposition: str
-    gaps: tuple[str, ...]
-    metrics: tuple[tuple[str, int | float], ...]
-
+class _BindingPolicy:
     def backend_status(self, *, npi_failure: str | None = None) -> dict:
         status = json.loads(self.status_json)
         status["kdb_load_status"] = "not_checked"
@@ -71,7 +61,15 @@ class DesignBackendBinding:
 
     def require_current(self, *, timeout_sec: float = 5.0) -> None:
         self.require_policy_current()
-        if self.anchor is not None and not self.anchor.current(timeout_sec=timeout_sec):
+        deadline = time.monotonic() + timeout_sec
+        observations = getattr(self, "discovery_metadata", None)
+        if observations is not None:
+            if not validate_captured_inputs(*observations, timeout_sec=timeout_sec):
+                raise CaptureAborted("input_changed")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CaptureAborted("timeout")
+        if self.anchor is not None and not self.anchor.current(timeout_sec=remaining):
             raise KdbBindingChanged()
         self.require_policy_current()
 
@@ -87,6 +85,36 @@ class DesignBackendBinding:
         }
 
 
+@dataclass(frozen=True)
+class DesignBackendBinding(_BindingPolicy):
+    context_identity_sha256: str
+    backend_preference: str
+    anchor: KdbAnchor | None
+    status_json: str
+    execution: config.NpiExecutionConfig
+    route: config.ConnectivityRouteConfig
+    runtime_environment: tuple[tuple[str, str | None], ...]
+    allow_degraded: bool
+    disposition: str
+    gaps: tuple[str, ...]
+    metrics: tuple[tuple[str, int | float], ...]
+
+
+@dataclass(frozen=True)
+class NativeQueryBinding(_BindingPolicy):
+    backend_preference: str
+    anchor: KdbAnchor | None
+    status_json: str
+    execution: config.NpiExecutionConfig
+    route: config.ConnectivityRouteConfig
+    runtime_environment: tuple[tuple[str, str | None], ...]
+    allow_degraded: bool
+    disposition: str
+    gaps: tuple[str, ...]
+    metrics: tuple[tuple[str, int | float], ...]
+    discovery_metadata: tuple | None = None
+
+
 def prepare_backend_binding(context: DesignContext, *, timeout_sec: float = 30.0) -> DesignBackendBinding:
     """Discover once in a worker; callers validate source identity and publish.
 
@@ -94,6 +122,27 @@ def prepare_backend_binding(context: DesignContext, *, timeout_sec: float = 30.0
     context. Partial probe budgets permit an honest source fallback; timeout,
     cancellation or changing inputs must abort the call instead.
     """
+    values = _prepare_candidate_binding(
+        compile_result=context.compile_result(),
+        compile_log=context.ordered_compile_logs[0], simulator=context.simulator,
+        selected_top=context.selected_top, backend_preference=context.backend_preference,
+        requested_kdb_path=context.requested_kdb_path, timeout_sec=timeout_sec)
+    values.pop("discovery_metadata", None)
+    values["metrics"] = tuple((k, v) for k, v in values["metrics"] if k != "cached_source_read_bytes")
+    return DesignBackendBinding(context.identity_sha256, **values)
+
+
+def prepare_native_binding(inputs, *, timeout_sec=30):
+    return NativeQueryBinding(**_prepare_candidate_binding(
+        compile_result=inputs.compile_result(),
+        compile_log=inputs.ordered_compile_logs[0] if inputs.ordered_compile_logs else None,
+        simulator=inputs.simulator, selected_top=inputs.selected_top,
+        backend_preference=inputs.backend_preference,
+        requested_kdb_path=inputs.requested_kdb_path, timeout_sec=timeout_sec, prefer_native_candidate=True))
+
+
+def _prepare_candidate_binding(*, compile_result, compile_log, simulator, selected_top,
+                               backend_preference, requested_kdb_path, timeout_sec, prefer_native_candidate=False):
     CaptureLimits(timeout_sec=timeout_sec)
     started = time.monotonic()
     deadline = started + timeout_sec
@@ -107,28 +156,30 @@ def prepare_backend_binding(context: DesignContext, *, timeout_sec: float = 30.0
 
     execution = config.get_npi_execution_config()
     route = config.get_connectivity_route_config()
-    environment = tuple((key, os.environ.get(key)) for key in _RUNTIME_ENV)
+    environment = tuple((key, os.environ.get(key)) for key in (
+        _NATIVE_RUNTIME_ENV if prefer_native_candidate else _RUNTIME_ENV))
     allow_degraded = config.NPI_ALLOW_DEGRADED_KDB
-    status = {"simulator": context.simulator, "kdb_path": None, "kdb_flow": "none",
+    status = {"simulator": simulator if simulator != "auto" else "unknown", "kdb_path": None, "kdb_flow": "none",
               "kdb_validation_status": "unavailable"}
     anchor = None
+    discovery_metadata = None
     gaps: set[str] = set()
     metrics = {"discovery_ms": 0.0, "discovery_read_bytes": 0,
-               "discovery_file_count": 0, "discovery_entry_count": 0, "anchor_ms": 0.0}
+               "cached_source_read_bytes": 0, "discovery_file_count": 0, "discovery_entry_count": 0, "anchor_ms": 0.0}
     disposition = "unavailable"
-    if context.backend_preference == "source" or route.mode == "source_graph":
+    if backend_preference == "source" or route.mode == "source_graph":
         disposition = "source_policy"
         status["_npi_selection_reason"] = "source_backend_requested"
     else:
         probe_started = time.monotonic()
-        if context.requested_kdb_path is not None:
-            status.update(kdb_path=context.requested_kdb_path, kdb_flow="explicit")
+        if requested_kdb_path is not None:
+            status.update(kdb_path=requested_kdb_path, kdb_flow="explicit")
         else:
             with CompileInputCapture(CaptureLimits(timeout_sec=remaining())) as capture:
-                with bounded_kdb_discovery(capture, top_hint=context.selected_top) as discovery:
+                with bounded_kdb_discovery(capture, top_hint=selected_top, prefer_native_candidate=prefer_native_candidate) as discovery:
                     try:
                         status = probe_verdi_backend(
-                            context.compile_result(), context.ordered_compile_logs[0],
+                            compile_result, compile_log,
                         )
                         if not capture.validate():
                             raise CaptureAborted("input_changed")
@@ -138,9 +189,23 @@ def prepare_backend_binding(context: DesignContext, *, timeout_sec: float = 30.0
                         gaps.add("kdb_probe_" + exc.code)
                         disposition = "probe_partial"
                         status["_npi_selection_reason"] = "npi_kdb_probe_incomplete"
+                    if prefer_native_candidate:
+                        excluded = discovery["cached_source_paths"]
+                        records = tuple(r for r in capture.records if r.path not in excluded)
+                        unavailable = tuple((p, v) for p, v in capture.unavailable_observations
+                                            if os.path.realpath(p) not in excluded)
+                        metadata_paths = {r.path for r in records} | {os.path.realpath(p) for p, _ in unavailable}
+                        aliases = tuple((p, v) for p, v in capture.aliases if v in metadata_paths)
+                        if records or aliases or unavailable:
+                            fingerprint = hashlib.sha256(json.dumps(
+                                [r.identity_record() for r in records], sort_keys=True).encode()).hexdigest()
+                            snapshot = CompileSessionSnapshot(records, not unavailable, (), fingerprint)
+                            discovery_metadata = (snapshot, aliases, unavailable)
                     metrics.update(discovery_read_bytes=capture.read_bytes_count,
                                    discovery_file_count=len(capture.records),
-                                   discovery_entry_count=discovery["entries"])
+                                   discovery_entry_count=discovery["entries"],
+                                   cached_source_read_bytes=sum(capture._path_read_bytes.get(path, 0)
+                                       for path in discovery["cached_source_paths"]))
         metrics["discovery_ms"] = (time.monotonic() - probe_started) * 1000
         remaining()
         if status.get("kdb_path"):
@@ -165,8 +230,8 @@ def prepare_backend_binding(context: DesignContext, *, timeout_sec: float = 30.0
             )
     remaining()
     metrics["binding_ms"] = (time.monotonic() - started) * 1000
-    return DesignBackendBinding(
-        context.identity_sha256, context.backend_preference, anchor,
-        json.dumps(status, sort_keys=True), execution, route, environment,
-        allow_degraded, disposition, tuple(sorted(gaps)), tuple(metrics.items()),
-    )
+    return dict(backend_preference=backend_preference, anchor=anchor,
+        status_json=json.dumps(status, sort_keys=True), execution=execution, route=route,
+        runtime_environment=environment, allow_degraded=allow_degraded,
+        disposition=disposition, gaps=tuple(sorted(gaps)), metrics=tuple(metrics.items()),
+        discovery_metadata=discovery_metadata)

@@ -116,7 +116,8 @@ class Controls:
                 identity = hashlib.sha256((self.anchor.identity_sha256 + '\0' + request.context.selected_top).encode()).hexdigest()
                 value = request.execute(Provider(controls, identity))
                 self.kdb_status = {'load_quality': 'clean'}
-                value['context_identity_sha256'] = request.context.identity_sha256
+                if hasattr(request.context, 'identity_sha256'):
+                    value['context_identity_sha256'] = request.context.identity_sha256
                 value['kdb_binding'] = dict(self.anchor.receipt(), load_status='loaded', load_quality='clean')
                 if controls.after: controls.after(request, len(controls.requests))
                 return value
@@ -221,12 +222,17 @@ async def test_five_scope_hand_oracle_no_hidden_tree_and_shared_budget(controls,
     assert correlation['selection'] == 'exact_log_path_and_top_direct_children'
     assert 'failure_candidate_scope_bounded' in correlation['coverage_gaps']
     assert controls.wave_threads and controls.thread not in controls.wave_threads
-    assert controls.validation_wave_states and not any(controls.validation_wave_states)
+    assert not any(controls.validation_wave_states)
+    assert bool(controls.validation_wave_states) is (not automatic)
     assert sorted(controls.opened) == sorted(controls.closed)
     assert controls.captures and all(c.body_count == c.resident_bytes == 0 for c in controls.captures)
     assert server._session_state['build_tb_hierarchy'] is None and server._result_cache['build_tb_hierarchy'] is None
-    receipt = result['backend_status']['design_context']
-    assert receipt['artifact']['load_status'] == 'loaded' and receipt['artifact']['source_association'] == 'unverified'
+    if automatic:
+        assert result['native_route']['source_context_status'] == 'not_required'
+        assert 'design_context' not in result['backend_status']
+    else:
+        receipt = result['backend_status']['design_context']
+        assert receipt['artifact']['load_status'] == 'loaded' and receipt['artifact']['source_association'] == 'unverified'
     if tool == TOOLS[1]:
         assert server._result_cache[tool] is not None
         assert result['workflow_incomplete'] and result['required_next_call']['tool'] == 'scan_structural_risks'
@@ -385,19 +391,20 @@ class ServerClock:
 
 
 @pytest.mark.anyio
-async def test_automatic_compile_prepare_consumes_original_total_deadline(controls, monkeypatch):
+async def test_native_metadata_consumes_original_total_deadline(controls, monkeypatch):
+    from src import native_dispatch, native_query
     clock, entered = ServerClock(), []
-    original = server._handle_prepare_design_context
-    async def prepare_then_advance(*a, **kw):
-        result = await original(*a, **kw)
+    original = native_dispatch.read_native_inputs
+    def read_then_advance(*a, **kw):
+        result = original(*a, **kw)
         entered.append(result)
         clock.offset = 2
         return result
-    monkeypatch.setattr(server, 'time', clock)
-    monkeypatch.setattr(server, '_handle_prepare_design_context', prepare_then_advance)
+    monkeypatch.setattr(native_dispatch, 'time', clock)
+    monkeypatch.setattr(native_query, 'time', clock)
+    monkeypatch.setattr(native_dispatch, 'read_native_inputs', read_then_advance)
     result = await invoke(controls, TOOLS[1], compile_log=str(controls.log), timeout_sec=1)
-    assert len(entered) == 1 and not isinstance(entered[0], server.schemas.ToolErrorResult)
-    assert result['error_code'] == 'design_context_timeout'
+    assert len(entered) == 1 and result['error_code'] == 'native_query_timeout'
     assert controls.requests == controls.selections == controls.wave_threads == []
     assert server._result_cache[TOOLS[1]] is None
 

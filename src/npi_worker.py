@@ -47,9 +47,16 @@ def main(argv: list[str] | None = None) -> int:
         request = parse_worker_request_bytes(data)
     except Exception:  # noqa: BLE001
         try:
+            import json
+            raw = json.loads(data.decode("utf-8"))
+            version = raw.get("protocol_version") if isinstance(raw, dict) else None
+        except Exception:
+            version = None
+        try:
             write_worker_response(
                 response_path,
-                WorkerError(error_code="request_invalid", stage="request"),
+                WorkerError(protocol_version=version if version in {"4.0", "5.0"} else "5.0",
+                            error_code="request_invalid", stage="request"),
             )
         except Exception:  # noqa: BLE001
             return 2

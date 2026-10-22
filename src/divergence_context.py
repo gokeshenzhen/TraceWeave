@@ -181,6 +181,15 @@ def driver_action(
         else:
             action["missing_fields"].append(f"side_{side}.compile_log")
         return action
+    if bound is not None and getattr(getattr(bound, "prepared", None), "native", False):
+        inputs = bound.prepared.context
+        arguments.update({key: value for key, value in {
+            "compile_log": inputs.ordered_compile_logs[0] if inputs.ordered_compile_logs else None,
+            "supplementary_compile_logs": list(inputs.ordered_compile_logs[1:]),
+            "simulator": inputs.simulator, "top_hint": inputs.selected_top,
+            "kdb_path": inputs.requested_kdb_path}.items() if value is not None})
+        action.update(status="ready", missing_fields=[])
+        return action
     ctx = DivergenceContext.model_validate(context).model_dump(exclude_none=True)
     arguments.update(
         compile_log=ctx["compile_log"], simulator=ctx["simulator"], compile_context=ctx

@@ -269,7 +269,7 @@ async def discover(case):
     result = await public('get_sim_paths', verif_root=str(case.root), compile_log=str(case.log),
                           sim_log=str(case.run), wave_file=str(case.wave))
     assert 'error' not in result, result
-    assert result['next_required_step']['tool'] == 'prepare_design_context'
+    assert result['next_required_step']['tool'] == 'scan_structural_risks'
     return result
 
 

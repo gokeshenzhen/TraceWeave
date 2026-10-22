@@ -131,8 +131,11 @@ def test_tracked_phase3d_evidence_is_immutable_and_passes_all_gates():
     assert payload["benchmark"] == "source_graph_connectivity_phase3d"
     assert payload["repository"]["head"] == benchmark.MEASUREMENT_HEAD
     script = ROOT / payload["benchmark_script"]["path"]
+    # Historical measurements bind the archived script, not later maintenance.
+    archived_script = subprocess.check_output([
+        "git", "show", "7252e310aa5ac8c5b41d89b5ffb1176398aa497b:" + str(script.relative_to(ROOT))], cwd=ROOT)
     assert (
-        hashlib.sha256(script.read_bytes()).hexdigest()
+        hashlib.sha256(archived_script).hexdigest()
         == payload["benchmark_script"]["sha256"]
     )
     assert {

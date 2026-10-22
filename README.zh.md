@@ -106,6 +106,12 @@ Linux 用户可在服务端 Python 环境安装 `traceweave-mcp[fst]`；仓库�
 | 仓库安装 | `<仓库绝对路径>/.venv/bin/python` | `["<仓库绝对路径>/server.py"]` |
 | PyPI 安装 | `traceweave-mcp`，或该命令的绝对路径 | `[]` |
 
+若代理拖慢 NPI SDK 初始化，且厂商服务可直连，可在 MCP 服务环境中设置
+`TRACEWEAVE_NPI_VENDOR_DIRECT=1` 后重新连接。默认关闭，启动命令不变；首次导入 SDK 前，
+仅在当前进程的 `NO_PROXY`/`no_proxy` 中追加 `srv1.sw.synopsys.com` 和
+`.updates.synopsys.com`，保留已有条目。不修改代理配置，也不关闭 SDK 通信或重试；
+离线环境不保证受益。LSF 模式需确保执行节点的 worker 环境也获得该开关。
+
 ### 仅执行节点可用的 NPI License
 
 如果 Verdi/NPI license 只能在 LSF 执行节点使用，让 MCP 服务进程获得以下设置，将 `digital` 换成你的队列：
@@ -190,6 +196,34 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 |  | `cursor_list` | 列出当前会话游标 |
 |  | `cursor_delete` | 删除时间游标 |
 | EDA 集成 | `build_kdb` | 构建并缓存 Verdi KDB |
+
+### 原生优先查询
+
+`get_sim_paths` 后照常执行 `scan_structural_risks`，继续日志与波形调查。
+连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`：
+健康 NPI 仅校验有界元数据与现成 KDB，不提前捕获或校验完整源码。
+无日志时可提供 `kdb_path` + `top_hint`；编译文件归属与源码回退仍需日志。
+纯 KDB 的失败分析/推荐还须显式提供 `simulator`，用于解析日志。
+
+```python
+find_tb_instance(compile_log="/project/compile.log", path="tb.dut")
+explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
+                      top_hint="tb", signal_path="tb.dut.q", wave_path="/project/run.fsdb")
+```
+
+普通原生不可用会在同一请求内自动准备源码。查看 `native_route`：元数据、KDB、
+源码身份分别记录，KDB 与源码的版本关联始终为 `unverified`。回退返回真实
+`source_design_handle` 供显式复用；已观察源码变化时严格报错，须显式重新准备并
+携带新 handle。`backend_preference="source"` 跳过 KDB 发现；`retry_npi=true`
+重试同一 KDB 代次已记忆的加载失败，单工具能力不足不会禁用其他原生工具。
+解析、原生查询、回退与最终校验共享 `timeout_sec`（有限且不超过 300 秒）。
+
+`prepare_design_context` 保留完整源码身份与恢复用途，旧 handle 和历史 action
+契约不变。文件结果用 `ownership_basis="compile_metadata"` 与
+`source_status="not_captured"` 区分编译记录和已捕获源码。名称/路径过滤与三种
+编译记录导出无需 KDB 或语义 provider。缓存 KDB 发现仍精确 hash 源码，成本单列；
+不会自动构建 KDB。结构扫描及失败波形 sweep 的执行、coverage 解释规则不变，
+零覆盖不能作为干净结论。
 
 ## 常见问题
 

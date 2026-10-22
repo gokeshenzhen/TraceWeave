@@ -1780,7 +1780,7 @@ $enddefinitions $end
 1!
 """
         )
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -1875,7 +1875,7 @@ $enddefinitions $end
         }
         _prefill_sweep_handshakes_cache(str(wave_path))
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -1963,7 +1963,7 @@ $enddefinitions $end
         }
         _prefill_sweep_handshakes_cache(str(wave_path))
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2028,7 +2028,7 @@ $enddefinitions $end
             ],
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2104,7 +2104,7 @@ $enddefinitions $end
             "simulator": "vcs",
         }
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2186,7 +2186,7 @@ $enddefinitions $end
             suggested_next_actions=[],
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2276,7 +2276,7 @@ $enddefinitions $end
             "simulator": "vcs",
         }
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2321,7 +2321,7 @@ $enddefinitions $end
 1!
 """
         )
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2363,7 +2363,7 @@ $enddefinitions $end
             "simulator": "vcs",
         }
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2401,7 +2401,7 @@ $enddefinitions $end
 """
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "recommend_failure_debug_next_steps",
             {
                 "log_path": str(log_path),
@@ -2438,7 +2438,7 @@ $enddefinitions $end
         with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
             server, "_get_parser", return_value=object()
         ):
-            result = await server._dispatch(
+            result = await server._dispatch_inner(
                 "analyze_failures",
                 {
                     "log_path": "/tmp/run.log",
@@ -2490,7 +2490,7 @@ $enddefinitions $end
         with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
             server, "_get_parser", return_value=object()
         ):
-            result = await server._dispatch(
+            result = await server._dispatch_inner(
                 "analyze_failures",
                 {
                     "log_path": "/tmp/run.log",
@@ -2539,7 +2539,7 @@ $enddefinitions $end
         with patch.object(server, "WaveformAnalyzer", _FakeAnalyzer), patch.object(
             server, "_get_parser", return_value=object()
         ):
-            result = await server._dispatch(
+            result = await server._dispatch_inner(
                 "analyze_failures",
                 {
                     "log_path": "/tmp/run.log",
@@ -2579,7 +2579,7 @@ Top Level Modules:
         )
         wave_path.write_text("$date\n$end\n")
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "explain_signal_driver",
             {
                 "signal_path": "top_tb.u0.K_sub",
@@ -2625,7 +2625,7 @@ Top Level Modules:
         )
         wave_path.write_text("$date\n$end\n")
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "explain_signal_driver",
             {
                 "signal_path": "top_tb.u0.S",
@@ -2681,7 +2681,7 @@ x"
 """
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "trace_x_source",
             {
                 "signal_path": "top_tb.u0.out_sig",
@@ -2737,7 +2737,7 @@ $enddefinitions $end
 """
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "trace_x_source",
             {
                 "signal_path": "top_tb.u0.only_sig",
@@ -2823,7 +2823,7 @@ x!
             lambda status: backend,
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "trace_x_source",
             {
                 "signal_path": "top_tb.u0.out_sig",
@@ -2958,7 +2958,7 @@ x"
             lambda: static_backend,
         )
 
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "trace_x_source",
             {
                 "signal_path": "top_tb.u0.out_sig",

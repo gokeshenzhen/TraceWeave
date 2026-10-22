@@ -518,7 +518,7 @@ class TestExternalConnectivityWorker:
                 tg.start_soon(run_trace)
                 assert await anyio.to_thread.run_sync(_wait_event, backend_started, 5)
                 begin = time.perf_counter()
-                await server._dispatch("cursor_list", {})
+                await server._dispatch_inner("cursor_list", {})
                 light_elapsed = time.perf_counter() - begin
                 backend_release.set()
         finally:
@@ -648,7 +648,7 @@ class TestExternalConnectivityWorker:
         try:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(
-                    server._dispatch,
+                    server._dispatch_inner,
                     "explain_signal_driver",
                     {
                         "signal_path": "top_tb.q",
@@ -659,7 +659,7 @@ class TestExternalConnectivityWorker:
                 )
                 assert await anyio.to_thread.run_sync(_wait_event, started, 5)
                 begin = time.perf_counter()
-                await server._dispatch("cursor_list", {})
+                await server._dispatch_inner("cursor_list", {})
                 light_elapsed = time.perf_counter() - begin
                 release.set()
         finally:
@@ -709,7 +709,7 @@ class TestExternalConnectivityWorker:
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(
-                server._dispatch,
+                server._dispatch_inner,
                 "explain_signal_driver",
                 {
                     "signal_path": "top_tb.q",

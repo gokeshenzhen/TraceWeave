@@ -237,6 +237,7 @@ def test_probe_budget_abort_is_explicit_partial_with_released_capture(tmp_path, 
 
 @pytest.mark.parametrize("dimension", ["bytes", "files", "references"])
 def test_real_discovery_capture_budget_is_reported_partial(tmp_path, monkeypatch, dimension):
+    (config.TRACEWEAVE_CACHE_ROOT / config.KDB_CACHE_SUBDIR).mkdir(parents=True)
     context, _, _ = _design(tmp_path, filelist=True)
     keyword = {"bytes": "max_bytes", "files": "max_files", "references": "max_references"}[dimension]
     code = {"bytes": "byte_limit", "files": "file_limit", "references": "reference_limit"}[dimension]
@@ -286,6 +287,7 @@ def test_probe_validation_change_is_fatal_and_total_deadline_covers_probe(tmp_pa
 
 
 def test_real_discovery_metrics_include_capture_and_validation_without_bodies(tmp_path, monkeypatch):
+    (config.TRACEWEAVE_CACHE_ROOT / config.KDB_CACHE_SUBDIR).mkdir(parents=True)
     context, source, _ = _design(tmp_path, filelist=True)
     captures = []
     def capture_factory(limits):

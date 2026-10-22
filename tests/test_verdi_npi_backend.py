@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 import threading
 
@@ -28,6 +30,60 @@ from src.verdi_npi_backend import (
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flag", "upper", "lower", "expected"),
+    [
+        (None, None, None, (None, None)),
+        ("0", "localhost", None, ("localhost", None)),
+        ("false", "upper.local", "lower.local", ("upper.local", "lower.local")),
+        ("1", None, None,
+         ("srv1.sw.synopsys.com,.updates.synopsys.com",) * 2),
+        ("1", "localhost", None,
+         ("localhost,srv1.sw.synopsys.com,.updates.synopsys.com",) * 2),
+        ("1", None, ".internal",
+         (".internal,srv1.sw.synopsys.com,.updates.synopsys.com",) * 2),
+        ("1", "upper.local", "lower.local",
+         ("upper.local,srv1.sw.synopsys.com,.updates.synopsys.com",
+          "lower.local,srv1.sw.synopsys.com,.updates.synopsys.com")),
+        ("1", "SRV1.SW.SYNOPSYS.COM,.updates.synopsys.com", None,
+         ("SRV1.SW.SYNOPSYS.COM,.updates.synopsys.com",) * 2),
+        ("1", "*", "",
+         ("*,srv1.sw.synopsys.com,.updates.synopsys.com",) * 2),
+    ],
+)
+def test_vendor_direct_is_opt_in_and_applied_before_sdk_import(flag, upper, lower, expected):
+    # Fresh processes exercise the real config default without reloading shared
+    # modules or leaking proxy changes into other tests. No SDK/network is used.
+    environment = dict(os.environ)
+    for key, value in (("TRACEWEAVE_NPI_VENDOR_DIRECT", flag),
+                       ("NO_PROXY", upper), ("no_proxy", lower)):
+        environment.pop(key, None)
+        if value is not None:
+            environment[key] = value
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import json, os
+before = dict(os.environ)
+from src import verdi_npi_backend as npi
+assert dict(os.environ) == before, "module import must not configure proxies"
+observed = []
+def fake_import():
+    observed.append([os.environ.get('NO_PROXY'), os.environ.get('no_proxy')])
+    return None
+npi._import_pynpi = fake_import
+for _ in range(2):
+    assert npi.VerdiNpiBackend()._ensure_loaded('/unused', 'top') is False
+assert observed[0] == observed[1], "repeated configuration must be idempotent"
+assert {k: v for k, v in os.environ.items() if k not in ('NO_PROXY', 'no_proxy')} == {
+    k: v for k, v in before.items() if k not in ('NO_PROXY', 'no_proxy')}
+print(json.dumps({'enabled': npi.NPI_VENDOR_DIRECT, 'observed': observed[0]}))
+"""],
+        cwd=os.path.dirname(os.path.dirname(__file__)), env=environment,
+        capture_output=True, text=True, timeout=20, check=True,
+    )
+    assert json.loads(result.stdout) == {"enabled": flag == "1", "observed": list(expected)}
 
 
 @pytest.mark.parametrize(

@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from .cancellation import OperationCancelled
+from .cancellation import OperationCancelled, check_cancelled
 from .compile_input_capture import CaptureAborted, bind_compile_input_capture
 
 
@@ -43,7 +43,7 @@ _discovery_capture = ContextVar("kdb_discovery_capture", default=None)
 
 
 @contextmanager
-def bounded_kdb_discovery(capture, *, max_entries: int = 4096, top_hint: str | None = None):
+def bounded_kdb_discovery(capture, *, max_entries: int = 4096, top_hint: str | None = None, prefer_native_candidate=False):
     """Bound the existing filesystem probe without changing legacy callers.
 
     Directory entries share one call-local cap. Compile replay/cache hashing
@@ -52,7 +52,7 @@ def bounded_kdb_discovery(capture, *, max_entries: int = 4096, top_hint: str | N
     """
     if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
         raise ValueError("discovery entry limit must be positive")
-    state = {"capture": capture, "max_entries": max_entries, "entries": 0, "top_hint": top_hint}
+    state = {"capture": capture, "max_entries": max_entries, "entries": 0, "top_hint": top_hint, "cached_source_read_bytes": 0, "cached_source_paths": set(), "prefer_native_candidate": prefer_native_candidate}
     token = _discovery_capture.set(state)
     try:
         with bind_compile_input_capture(capture):
@@ -123,7 +123,8 @@ def probe_verdi_backend(
     # ``build_kdb`` tool, a cached elaborated KDB lives under
     # ``$TRACEWEAVE_CACHE/kdb/<hash>/kdb.elab++``. Pick it up so NPI
     # finds it transparently on subsequent driver/load queries.
-    if kdb_path is None or _elab_kdb_has_errors(kdb_path):
+    if kdb_path is None or (_elab_kdb_has_errors(kdb_path) and not (
+            discovery and discovery["prefer_native_candidate"])):
         cached = _probe_traceweave_cached_kdb(compile_result, compile_log_path)
         if cached and (
             kdb_path is None
@@ -310,10 +311,22 @@ def _probe_traceweave_cached_kdb(
     except Exception:
         return None
     try:
+        check_cancelled()
+        # Recheck on every query so a subsequently created cache is visible.
+        # An absent namespace cannot contain an exact input-keyed artifact.
+        if not (TRACEWEAVE_CACHE_ROOT / KDB_CACHE_SUBDIR).is_dir():
+            return None
         state = _discovery_capture.get()
+        def read_cached_source(path):
+            state["cached_source_paths"].add(os.path.realpath(path))
+            before = state["capture"].read_bytes_count
+            try:
+                return state["capture"].read_bytes(path)
+            finally:
+                state["cached_source_read_bytes"] += state["capture"].read_bytes_count - before
         inputs = _extract_build_inputs(
             compile_result, top_hint=state["top_hint"] if state else None,
-            **({"source_reader": state["capture"].read_bytes} if state else {}),
+            **({"source_reader": read_cached_source} if state else {}),
         )
     except (OperationCancelled, CaptureAborted):
         raise
@@ -445,6 +458,13 @@ def _read_bounded_text(path: str, max_bytes: int, *, tail: bool = False) -> str:
 
 
 def _read_synopsys_sim_setup(path: str, case_dir: str) -> str | None:
+    state = _discovery_capture.get()
+    if state is not None and state["prefer_native_candidate"]:
+        from .compile_input_capture import _availability
+        capture = state["capture"]
+        capture.observe_path(path)
+        if not os.path.exists(path):
+            capture._unavailable[os.path.abspath(path)] = _availability(path)
     if not os.path.exists(path):
         return None
     try:

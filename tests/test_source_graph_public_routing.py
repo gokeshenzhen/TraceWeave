@@ -1,3 +1,4 @@
+# Legacy-route algorithm regressions; native public dispatch is tested in test_native_first_*.py.
 from __future__ import annotations
 
 import asyncio
@@ -652,7 +653,7 @@ async def test_bounded_bootstrap_returns_positive_load_without_full_hierarchy(
         }
     )
 
-    result = await server._dispatch("find_signal_loads", args)
+    result = await server._dispatch_inner("find_signal_loads", args)
 
     assert result.backend == "source_graph"
     assert result.loads
@@ -699,7 +700,7 @@ async def test_npi_success_skips_source_graph_and_static(monkeypatch, tmp_path):
         with_kdb=True,
     )
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "verdi_npi"
@@ -764,7 +765,7 @@ async def test_npi_bounded_partial_driver_facts_remain_authoritative(
         with_kdb=True,
     )
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log)
     )
 
@@ -815,7 +816,7 @@ async def test_npi_partial_driver_without_returned_fact_routes_onward(
         with_kdb=True,
     )
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log)
     )
 
@@ -850,7 +851,7 @@ async def test_npi_load_success_skips_source_graph_and_static(monkeypatch, tmp_p
         with_kdb=True,
     )
 
-    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+    result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
 
     assert result.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "verdi_npi"
@@ -898,7 +899,7 @@ async def test_degraded_npi_positive_loads_are_used_with_partial_receipt(
         with_kdb=True,
     )
 
-    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+    result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
 
     assert result.backend == "verdi_npi"
     assert result.completeness == "approximate"
@@ -941,7 +942,7 @@ async def test_degraded_npi_empty_loads_are_inconclusive_and_route_onward(
         with_kdb=True,
     )
 
-    result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+    result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.kdb_degraded is True
@@ -985,7 +986,7 @@ async def test_degraded_npi_testbench_driver_claim_routes_onward(
         with_kdb=True,
     )
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log),
     )
@@ -1018,13 +1019,13 @@ async def test_explicit_source_graph_route_skips_npi_with_usable_kdb(
     monkeypatch.setattr(connectivity_backend, "select_backend", policy_selector)
 
     if operation == "driver":
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "explain_signal_driver", _driver_args(compile_log)
         )
     elif operation == "loads":
-        result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+        result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
     else:
-        result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+        result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     status = result.backend_status
     assert result.backend == "source_graph"
@@ -1069,7 +1070,7 @@ async def test_degraded_kdb_escape_hatch_reason_survives_source_graph_route(
         },
     )
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log),
     )
@@ -1096,7 +1097,7 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     if tool == "driver":
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "explain_signal_driver", _driver_args(compile_log)
         )
         assert result.driver_status == "resolved"
@@ -1105,7 +1106,7 @@ async def test_npi_unavailable_routes_public_driver_and_loads_to_source_graph(
         payload_backends = {hop.backend for hop in result.driver_chain or []}
         assert payload_backends <= {"source_graph"}
     else:
-        result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+        result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
         assert result.loads
         assert {item.backend for item in result.loads} == {"source_graph"}
         assert {item.source_info_origin for item in result.loads} == {"source_graph"}
@@ -1155,7 +1156,7 @@ async def test_split_compile_elaboration_context_routes_to_source_graph(
         encoding="utf-8",
     )
 
-    hierarchy = await server._dispatch(
+    hierarchy = await server._dispatch_inner(
         "build_tb_hierarchy",
         {
             "compile_log": str(compile_log),
@@ -1170,17 +1171,17 @@ async def test_split_compile_elaboration_context_routes_to_source_graph(
     if tool == "driver":
         query_args = _driver_args(str(compile_log))
         query_args["simulator"] = "vcs"
-        result = await server._dispatch("explain_signal_driver", query_args)
+        result = await server._dispatch_inner("explain_signal_driver", query_args)
         assert result.driver_status == "resolved"
     elif tool == "loads":
         query_args = _load_args(str(compile_log))
         query_args["simulator"] = "vcs"
-        result = await server._dispatch("find_signal_loads", query_args)
+        result = await server._dispatch_inner("find_signal_loads", query_args)
         assert result.loads
     else:
         query_args = _path_args(str(compile_log))
         query_args["simulator"] = "vcs"
-        result = await server._dispatch("trace_signal_path", query_args)
+        result = await server._dispatch_inner("trace_signal_path", query_args)
         assert result.found is True
 
     assert hierarchy.project["compile_context"]["status"] == "complete"
@@ -1201,8 +1202,8 @@ async def test_warm_public_request_reuses_compile_snapshot_and_ir(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    first = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
-    second = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    first = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
+    second = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert first.backend_status.source_graph.cache_disposition == "miss"
     assert second.backend_status.source_graph.cache_disposition == "hit_exact"
@@ -1236,7 +1237,7 @@ async def test_single_endpoint_driver_expands_only_dynamic_sibling_frontier(
     args = _driver_args(compile_log, "top.u.data_i[31:0]")
     args["top_hint"] = "top"
 
-    result = await server._dispatch("explain_signal_driver", args)
+    result = await server._dispatch_inner("explain_signal_driver", args)
 
     assert result.backend == "source_graph"
     assert result.driver_status == "resolved"
@@ -1317,7 +1318,7 @@ async def test_dynamic_frontier_retains_covering_semantic_context(
     args = _driver_args(compile_log, "top.u.data_i[31:0]")
     args["top_hint"] = "top"
 
-    result = await server._dispatch("explain_signal_driver", args)
+    result = await server._dispatch_inner("explain_signal_driver", args)
 
     assert result.backend == "source_graph"
     assert observed_context == selected_context
@@ -1353,7 +1354,7 @@ async def test_initial_expanded_plan_queries_one_artifact_without_reactive_build
     args = _driver_args(compile_log, "top.u.data_i[31:0]")
     args["top_hint"] = "top"
 
-    result = await server._dispatch("explain_signal_driver", args)
+    result = await server._dispatch_inner("explain_signal_driver", args)
 
     assert result.backend == "source_graph"
     assert result.driver_status == "resolved"
@@ -1405,7 +1406,7 @@ async def test_initial_scope_anchor_is_retained_for_later_frontier_union(
     args = _driver_args(compile_log, "top.u.data_i[31:0]")
     args["top_hint"] = "top"
 
-    result = await server._dispatch("explain_signal_driver", args)
+    result = await server._dispatch_inner("explain_signal_driver", args)
 
     assert result.backend == "source_graph"
     assert observed[0] == seed
@@ -1427,7 +1428,7 @@ async def test_single_endpoint_load_expands_to_sibling_consumer(monkeypatch, tmp
     args["signal_path"] = "top.payload[23:0]"
     args["top_hint"] = "top"
 
-    result = await server._dispatch("find_signal_loads", args)
+    result = await server._dispatch_inner("find_signal_loads", args)
 
     assert result.backend == "source_graph"
     assert [load.load_path for load in result.loads] == ["top.u.sink"]
@@ -1454,7 +1455,7 @@ async def test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact
     )
     _patch_common(monkeypatch, runtime=cold_runtime, static=static)
 
-    cold = await server._dispatch(
+    cold = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
     disk_worker = ReadyWorker()
@@ -1471,11 +1472,11 @@ async def test_fresh_runtime_public_driver_load_and_path_use_exact_disk_artifact
         to_signal=signal,
     )
 
-    driver = await server._dispatch(
+    driver = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
-    loads = await server._dispatch("find_signal_loads", load_args)
-    path = await server._dispatch("trace_signal_path", path_args)
+    loads = await server._dispatch_inner("find_signal_loads", load_args)
+    path = await server._dispatch_inner("trace_signal_path", path_args)
 
     assert cold.backend_status.source_graph.cache_tier == "build"
     assert cold.backend_status.source_graph.artifact_reuse == "cold"
@@ -1524,7 +1525,7 @@ async def test_npi_failure_uses_source_graph_before_static(monkeypatch, tmp_path
         with_kdb=True,
     )
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.selected_backend == "verdi_npi"
@@ -1560,7 +1561,7 @@ async def test_raised_npi_failure_still_routes_to_source_graph(monkeypatch, tmp_
         with_kdb=True,
     )
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.fallback_reason == "npi_query_failed"
@@ -1583,7 +1584,7 @@ async def test_npi_backend_initialization_failure_still_tries_source_graph(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("private init")),
     )
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.attempted_backends[0].status == "failed"
@@ -1619,7 +1620,7 @@ async def test_npi_cancellation_never_continues_to_source_graph_or_static(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert static.driver_calls == 0
 
@@ -1639,7 +1640,7 @@ async def test_source_graph_prepare_cancellation_never_falls_back(
     _patch_common(monkeypatch, runtime=CancelledRuntime(), static=static)
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert static.driver_calls == 0
 
@@ -1671,7 +1672,7 @@ async def test_source_graph_prepare_failures_fall_back_to_legacy_static(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "static"
     assert result.resolved_module == "legacy_static_module"
@@ -1709,7 +1710,7 @@ async def test_partial_positive_stays_partial_and_does_not_fall_back(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.confidence == "partial"
@@ -1755,13 +1756,13 @@ async def test_opaque_vhdl_gap_keeps_positive_source_graph_facts(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     if operation == "driver":
-        result = await server._dispatch(
+        result = await server._dispatch_inner(
             "explain_signal_driver", _driver_args(compile_log)
         )
         assert result.driver_status == "resolved"
         assert static.driver_calls == 0
     else:
-        result = await server._dispatch("find_signal_loads", _load_args(compile_log))
+        result = await server._dispatch_inner("find_signal_loads", _load_args(compile_log))
         assert result.loads
         assert static.load_calls == 0
 
@@ -1800,7 +1801,7 @@ async def test_opaque_vhdl_gap_falls_back_only_for_inconclusive_signal(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log, "sg_top.runtime_force"),
     )
@@ -1826,7 +1827,7 @@ async def test_complete_not_connected_and_inconclusive_no_match_are_distinct(
     complete_runtime = SourceGraphRuntime(ReadyWorker())
     complete_static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=complete_runtime, static=complete_static)
-    complete = await server._dispatch(
+    complete = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
 
@@ -1860,7 +1861,7 @@ async def test_complete_not_connected_and_inconclusive_no_match_are_distinct(
         runtime=inconclusive_runtime,
         static=inconclusive_static,
     )
-    inconclusive = await server._dispatch(
+    inconclusive = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
 
@@ -1889,7 +1890,7 @@ async def test_inconclusive_driver_survives_unsupported_static_without_merging(m
 
     static = Unsupported()
     _patch_common(monkeypatch, runtime=runtime, static=static)
-    r = await server._dispatch("explain_signal_driver", _driver_args(compile_log, signal))
+    r = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log, signal))
     assert r.backend == "source_graph" and r.driver_status == "partial"
     assert r.bit_provenance[0].resolution == "unknown"
     assert "runtime_force_not_modeled" in r.bit_provenance[0].reason_codes
@@ -1916,7 +1917,7 @@ async def test_source_graph_signal_resolution_blockers_are_exact(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
 
@@ -1935,7 +1936,7 @@ async def test_public_route_reports_truncated_ancestor_and_unprojected_instance(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log, "sg_top.u_missing.target_sig"),
     )
@@ -1985,7 +1986,7 @@ async def test_public_route_accepts_dotted_packed_member_endpoint(
     _patch_common(monkeypatch, runtime=runtime, static=static)
     signal = "sg_top.lane_data.low[7:0]"
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "explain_signal_driver", _driver_args(compile_log, signal)
     )
 
@@ -2037,7 +2038,7 @@ async def test_explicit_mixed_npi_provenance_is_discarded(monkeypatch, tmp_path)
         with_kdb=True,
     )
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "source_graph"
     assert {hop.backend for hop in result.driver_chain or []} <= {"source_graph"}
@@ -2089,7 +2090,7 @@ async def test_mixed_source_graph_provenance_is_rejected_as_a_whole(
 
     monkeypatch.setattr(server, "SourceGraphConnectivityBackend", MixedSourceBackend)
 
-    result = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    result = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert result.backend == "static"
     assert result.backend_status.actual_backend == "static"
@@ -2114,7 +2115,7 @@ async def test_same_key_public_concurrent_requests_build_once(monkeypatch, tmp_p
 
     tasks = [
         asyncio.create_task(
-            server._dispatch("explain_signal_driver", _driver_args(compile_log))
+            server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
         )
         for _ in range(4)
     ]
@@ -2147,10 +2148,10 @@ async def test_one_public_waiter_cancel_does_not_cancel_other_waiter(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     first = asyncio.create_task(
-        server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
     )
     second = asyncio.create_task(
-        server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     for _ in range(200):
@@ -2184,7 +2185,7 @@ async def test_sole_public_waiter_cancel_terminates_worker_without_fallback(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     task = asyncio.create_task(
-        server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     task.cancel()
@@ -2207,8 +2208,8 @@ async def test_public_failure_does_not_poison_cache_and_retry_is_ready(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    failed = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
-    retried = await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+    failed = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
+    retried = await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
 
     assert failed.backend == "static"
     assert retried.backend == "source_graph"
@@ -2230,12 +2231,12 @@ async def test_cold_public_build_does_not_block_light_call_or_hold_wave_lock(
     wave_lock = server._wave_locks_for(["/private/wave.fsdb"])[0]
 
     task = asyncio.create_task(
-        server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     assert wave_lock.locked() is False
     started = time.perf_counter()
-    light = await server._dispatch("cursor_list", {})
+    light = await server._dispatch_inner("cursor_list", {})
     elapsed = time.perf_counter() - started
     release.set()
     result = await task
@@ -2257,7 +2258,7 @@ async def test_source_graph_operation_metrics_are_numeric_or_fixed_labels_only(
     metrics = operation_metrics.OperationMetrics()
     token = operation_metrics.push(metrics)
     try:
-        await server._dispatch("explain_signal_driver", _driver_args(compile_log))
+        await server._dispatch_inner("explain_signal_driver", _driver_args(compile_log))
         operation_metrics.set_value("source_graph_signal", "sg_top.secret")
     finally:
         operation_metrics.pop(token)
@@ -2300,10 +2301,10 @@ async def test_driver_load_path_and_expand_toggle_reuse_same_bounded_artifact(
         expand_assigns=True,
     )
 
-    driver = await server._dispatch("explain_signal_driver", driver_args)
-    loads = await server._dispatch("find_signal_loads", load_args)
-    path = await server._dispatch("trace_signal_path", path_args)
-    toggled = await server._dispatch(
+    driver = await server._dispatch_inner("explain_signal_driver", driver_args)
+    loads = await server._dispatch_inner("find_signal_loads", load_args)
+    path = await server._dispatch_inner("trace_signal_path", path_args)
+    toggled = await server._dispatch_inner(
         "trace_signal_path", {**path_args, "expand_assigns": False}
     )
 
@@ -2373,13 +2374,13 @@ async def test_incomplete_driver_then_load_uses_one_session_handoff(
     metrics = operation_metrics.OperationMetrics()
     token = operation_metrics.push(metrics)
     try:
-        driver = await server._dispatch(
+        driver = await server._dispatch_inner(
             "explain_signal_driver",
             _driver_args(compile_log, signal),
         )
         load_args = _load_args(compile_log)
         load_args["signal_path"] = signal
-        loads = await server._dispatch("find_signal_loads", load_args)
+        loads = await server._dispatch_inner("find_signal_loads", load_args)
     finally:
         operation_metrics.pop(token)
 
@@ -2415,7 +2416,7 @@ async def test_cancelled_cached_query_does_not_fallback_or_pollute_artifact(
     _patch_common(monkeypatch, runtime=runtime, static=static)
     args = _driver_args(compile_log, "sg_top.u_producer.seed[7:0]")
 
-    ready = await server._dispatch("explain_signal_driver", args)
+    ready = await server._dispatch_inner("explain_signal_driver", args)
     original = SourceGraphConnectivityBackend.find_driver
 
     def cancelled_query(self, *query_args, **query_kwargs):
@@ -2428,9 +2429,9 @@ async def test_cancelled_cached_query_does_not_fallback_or_pollute_artifact(
         cancelled_query,
     )
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("explain_signal_driver", args)
+        await server._dispatch_inner("explain_signal_driver", args)
     monkeypatch.setattr(SourceGraphConnectivityBackend, "find_driver", original)
-    warm = await server._dispatch("explain_signal_driver", args)
+    warm = await server._dispatch_inner("explain_signal_driver", args)
 
     assert ready.backend == "source_graph"
     assert warm.backend == "source_graph"
@@ -2451,8 +2452,8 @@ async def test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold(
     _patch_common(monkeypatch, runtime=runtime, static=static)
     cross_scope_path = _path_args(compile_log)
 
-    path = await server._dispatch("trace_signal_path", cross_scope_path)
-    endpoint = await server._dispatch(
+    path = await server._dispatch_inner("trace_signal_path", cross_scope_path)
+    endpoint = await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log, "sg_top.u_producer.seed[7:0]"),
     )
@@ -2471,11 +2472,11 @@ async def test_larger_path_artifact_dominates_endpoint_but_reverse_is_cold(
     second_worker = ReadyWorker()
     second_runtime = SourceGraphRuntime(second_worker)
     _patch_common(monkeypatch, runtime=second_runtime, static=TrackingStaticBackend())
-    await server._dispatch(
+    await server._dispatch_inner(
         "explain_signal_driver",
         _driver_args(compile_log, "sg_top.u_producer.seed[7:0]"),
     )
-    larger = await server._dispatch("trace_signal_path", cross_scope_path)
+    larger = await server._dispatch_inner("trace_signal_path", cross_scope_path)
 
     assert larger.backend == "source_graph"
     assert larger.backend_status.source_graph.artifact_reuse == "cold"
@@ -2531,7 +2532,7 @@ async def test_path_npi_authoritative_results_skip_source_graph_and_static(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.backend == "verdi_npi"
     assert result.backend_status.actual_backend == "verdi_npi"
@@ -2581,7 +2582,7 @@ async def test_degraded_npi_found_path_is_positive_partial_evidence(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.found is True
     assert result.backend == "verdi_npi"
@@ -2616,7 +2617,7 @@ async def test_degraded_npi_negative_path_routes_to_source_graph(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.found is True
     assert result.backend == "source_graph"
@@ -2635,7 +2636,7 @@ async def test_path_npi_unavailable_routes_to_source_graph_found(monkeypatch, tm
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.found is True
     assert result.backend == "source_graph"
@@ -2686,7 +2687,7 @@ async def test_path_internal_npi_fallback_defers_static_until_after_source_graph
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.selected_backend == "verdi_npi"
@@ -2708,7 +2709,7 @@ async def test_path_source_graph_complete_negative_is_authoritative(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "trace_signal_path",
         _path_args(
             compile_log,
@@ -2750,7 +2751,7 @@ async def test_path_source_graph_partial_positive_remains_usable(monkeypatch, tm
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.found is True
     assert result.backend == "source_graph"
@@ -2792,7 +2793,7 @@ async def test_path_source_graph_inconclusive_negative_falls_back_to_static(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "trace_signal_path",
         _path_args(
             compile_log,
@@ -2838,7 +2839,7 @@ async def test_path_source_graph_prepare_failures_use_static_whole_result(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.backend == "static"
     assert result.unsupported_reason == "static_backend_no_path_api"
@@ -2873,7 +2874,7 @@ async def test_path_npi_cancellation_never_falls_back(monkeypatch, tmp_path):
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await server._dispatch("trace_signal_path", _path_args(compile_log))
+        await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
     assert static.path_calls == 0
 
 
@@ -2927,7 +2928,7 @@ async def test_path_mixed_source_graph_provenance_is_rejected_as_whole(
 
     monkeypatch.setattr(server, "SourceGraphConnectivityBackend", MixedBackend)
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.backend == "static"
     assert result.path == []
@@ -2954,7 +2955,7 @@ async def test_concurrent_exact_path_requests_single_flight_one_build(
 
     tasks = [
         asyncio.create_task(
-            server._dispatch("trace_signal_path", _path_args(compile_log))
+            server._dispatch_inner("trace_signal_path", _path_args(compile_log))
         )
         for _ in range(4)
     ]
@@ -2988,10 +2989,10 @@ async def test_path_waiter_cancellation_does_not_cancel_surviving_waiter(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     cancelled = asyncio.create_task(
-        server._dispatch("trace_signal_path", _path_args(compile_log))
+        server._dispatch_inner("trace_signal_path", _path_args(compile_log))
     )
     surviving = asyncio.create_task(
-        server._dispatch("trace_signal_path", _path_args(compile_log))
+        server._dispatch_inner("trace_signal_path", _path_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     await asyncio.sleep(0.05)
@@ -3020,12 +3021,12 @@ async def test_cold_path_build_does_not_block_light_call_or_hold_wave_lock(
     wave_lock = server._wave_locks_for(["/private/wave.fsdb"])[0]
 
     task = asyncio.create_task(
-        server._dispatch("trace_signal_path", _path_args(compile_log))
+        server._dispatch_inner("trace_signal_path", _path_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     assert wave_lock.locked() is False
     started = time.perf_counter()
-    light = await server._dispatch("cursor_list", {})
+    light = await server._dispatch_inner("cursor_list", {})
     elapsed = time.perf_counter() - started
     release.set()
     result = await task
@@ -3047,7 +3048,7 @@ async def test_path_operation_metrics_exclude_endpoint_and_path_content(
     metrics = operation_metrics.OperationMetrics()
     token = operation_metrics.push(metrics)
     try:
-        await server._dispatch("trace_signal_path", _path_args(compile_log))
+        await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
         operation_metrics.set_value("source_graph_path", "sg_top.secret")
     finally:
         operation_metrics.pop(token)
@@ -3097,7 +3098,7 @@ async def test_raised_npi_path_failure_still_routes_to_source_graph(
         with_kdb=True,
     )
 
-    result = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    result = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert result.backend == "source_graph"
     assert result.backend_status.fallback_reason == "npi_query_failed"
@@ -3113,7 +3114,7 @@ async def test_dotted_path_suffix_is_rejected_by_exact_query_before_static(
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    result = await server._dispatch(
+    result = await server._dispatch_inner(
         "trace_signal_path",
         _path_args(
             compile_log,
@@ -3141,8 +3142,8 @@ async def test_path_build_failure_does_not_poison_retry(monkeypatch, tmp_path):
     static = TrackingStaticBackend()
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
-    failed = await server._dispatch("trace_signal_path", _path_args(compile_log))
-    retried = await server._dispatch("trace_signal_path", _path_args(compile_log))
+    failed = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
+    retried = await server._dispatch_inner("trace_signal_path", _path_args(compile_log))
 
     assert failed.backend == "static"
     assert retried.backend == "source_graph"
@@ -3168,7 +3169,7 @@ async def test_sole_path_waiter_cancellation_terminates_worker_without_fallback(
     _patch_common(monkeypatch, runtime=runtime, static=static)
 
     task = asyncio.create_task(
-        server._dispatch("trace_signal_path", _path_args(compile_log))
+        server._dispatch_inner("trace_signal_path", _path_args(compile_log))
     )
     assert await asyncio.to_thread(entered.wait, 2)
     task.cancel()

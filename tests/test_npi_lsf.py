@@ -752,7 +752,7 @@ def test_lsf_transport_rejects_malformed_response(monkeypatch, tmp_path):
     assert outcome.result is None
     assert outcome.scheduler_status == "completed"
     assert outcome.worker_status == "failed"
-    assert outcome.fallback_reason == "npi_lsf_worker_failed"
+    assert outcome.fallback_reason == "npi_lsf_protocol_invalid"
 
 
 def test_lsf_transport_rejects_invalid_operation_result(

@@ -1,3 +1,4 @@
+# Legacy-route algorithm regressions; native public dispatch is tested in test_native_first_*.py.
 """Independent recorded time tables for history X tracing; no simulator oracle reuse."""
 import asyncio
 from contextlib import contextmanager
@@ -64,7 +65,7 @@ async def setup(tmp_path, source=RTL, **wave_options):
     log = tmp_path / 'compile.log'
     log.write_text(f"Chronologic VCS simulator\nCommand: vcs -sverilog {source_path} -top top\nParsing design file '{source_path}'\nTop Level Modules:\n       top\n")
     ctx = dict(compile_log=str(log), simulator='vcs')
-    await asyncio.gather(server._dispatch('build_tb_hierarchy', ctx), server._dispatch('scan_structural_risks', ctx))
+    await asyncio.gather(server._dispatch_inner('build_tb_hierarchy', ctx), server._dispatch_inner('scan_structural_risks', ctx))
     wave = tmp_path / 'wave.vcd'
     write_wave(wave, **wave_options)
     return dict(**ctx, wave_path=str(wave), signal_path='top.q', time_ps=36,
@@ -72,7 +73,7 @@ async def setup(tmp_path, source=RTL, **wave_options):
 
 
 async def run(args):
-    return (await server._dispatch('trace_x_source', args)).history
+    return (await server._dispatch_inner('trace_x_source', args)).history
 
 
 @pytest.mark.anyio
@@ -236,7 +237,7 @@ async def test_source_or_wave_change_discards_all_old_evidence(tmp_path, monkeyp
         assert not r.nodes and not r.edges and not r.candidates
         assert r.status == 'inconclusive'
         assert any('changed' in f['reason'] for f in r.frontier)
-        await server._dispatch('build_tb_hierarchy', {k: args[k] for k in ('compile_log', 'simulator')})
+        await server._dispatch_inner('build_tb_hierarchy', {k: args[k] for k in ('compile_log', 'simulator')})
 
 
 def test_required_native_history_budget_timeout_cancel_cleanup(monkeypatch, require_fsdb_runtime):

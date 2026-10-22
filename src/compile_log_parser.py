@@ -10,7 +10,7 @@ import shlex
 from copy import deepcopy
 from pathlib import Path
 
-from .compile_input_capture import open_compile_text, read_compile_text, resolve_compile_path
+from .compile_input_capture import open_compile_text, read_compile_text, resolve_compile_path, observe_compile_metadata_path
 from .filelist_tokenizer import tokenize_filelist
 from .hdl_suffixes import (
     FRONTEND_HDL_SUFFIXES,
@@ -736,6 +736,7 @@ def _expand_vcs_filelist(
     if depth > _VCS_FILELIST_MAX_DEPTH:
         warnings.append(f"VCS filelist depth limit exceeded: {filelist_path}")
         return
+    observe_compile_metadata_path(filelist_path)
     if not os.path.isfile(filelist_path):
         if _ENV_REF_RE.search(raw_path):
             warnings.append(

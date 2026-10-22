@@ -88,8 +88,7 @@ b101010101 b
     assert r.evidence["parameterization"]
     source.write_text(source.read_text().replace(".W(5)", ".W(6)"))
     stale = await server._dispatch("resolve_packed_fields", query)
-    assert stale.status == "mapping_required" and stale.fields == {}
-    assert "compile_session_snapshot_changed" in stale.reasons
+    assert stale.error_code == "design_context_changed"
 
 
 @pytest.mark.anyio

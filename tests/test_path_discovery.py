@@ -950,7 +950,7 @@ class TestNextRequiredStep:
             result = discover_sim_paths(str(work_root), "case0")
 
             nrs = result["next_required_step"]
-            assert nrs["tool"] == "prepare_design_context"
+            assert nrs["tool"] == "scan_structural_risks"
             assert nrs["compile_log"] == str(elab_log.resolve())
             assert nrs["simulator"] == "vcs"
 
@@ -966,7 +966,7 @@ class TestNextRequiredStep:
             result = discover_sim_paths(str(work_root), "case0")
 
             nrs = result["next_required_step"]
-            assert nrs["tool"] == "prepare_design_context"
+            assert nrs["tool"] == "scan_structural_risks"
             assert nrs["compile_log"] == str(compile_log.resolve())
 
     def test_no_compile_log_omits_next_required_step(self):

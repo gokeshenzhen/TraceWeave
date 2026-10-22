@@ -34,6 +34,38 @@ class SchemaModel(BaseModel):
         return iter(self._as_dict())
 
 
+class NativeRouteMetrics(SchemaModel):
+    metadata_ms: float = Field(ge=0)
+    kdb_discovery_ms: float = Field(ge=0)
+    kdb_validation_ms: float = Field(ge=0)
+    npi_ms: float = Field(ge=0)
+    source_prepare_ms: float = Field(ge=0)
+    source_validation_ms: float = Field(ge=0)
+    total_ms: float = Field(ge=0)
+    source_prepare_count: int = Field(ge=0)
+    source_capture_read_bytes: int = Field(ge=0)
+    cached_kdb_source_read_bytes: int = Field(ge=0)
+
+
+class NativeRouteReceipt(SchemaModel):
+    entry: Literal["native_first"] = "native_first"
+    input_validation: Literal["compile_metadata_and_kdb", "kdb_only", "compile_metadata_only"]
+    compile_metadata_identity_sha256: str | None
+    kdb_identity_sha256: str | None
+    source_context_status: Literal["not_required", "prepared", "reused", "unavailable", "changed", "expired"]
+    source_design_handle: str | None
+    source_context_identity_sha256: str | None
+    source_association: Literal["unverified"] = "unverified"
+    metrics: NativeRouteMetrics
+
+    @model_serializer(mode="plain")
+    def serialize_native_receipt(self):
+        # Null identities explicitly distinguish no source observation from
+        # omitted legacy receipts, including nested exclude_none serializers.
+        return {name: (self.metrics.model_dump() if name == "metrics" else getattr(self, name))
+                for name in type(self).model_fields}
+
+
 TOKEN_BUDGET_SOFT_LIMIT = 80_000
 
 
@@ -1058,6 +1090,7 @@ class TimeAnchor(SchemaModel):
 
 
 class AnalyzeFailureEventResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     failure_event: dict[str, Any]
     time_anchor: TimeAnchor
     likely_instances: list[dict[str, Any]] = Field(default_factory=list)
@@ -1080,6 +1113,7 @@ class StructuralRiskCorrelation(SchemaModel):
 
 
 class RecommendNextStepsResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     primary_failure_target: dict[str, Any] | None = None
     recommended_signals: list[dict[str, Any]] = Field(default_factory=list)
     recommended_instances: list[dict[str, Any]] = Field(default_factory=list)
@@ -1302,6 +1336,7 @@ class HierarchyRecoveryReceipt(SchemaModel):
 
 
 class ExplainDriverResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     hierarchy_recovery: HierarchyRecoveryReceipt | None = None
     dependency_context: dict[str, Any] | None = None
     wave_design_binding: dict[str, Any] | None = None
@@ -1898,6 +1933,7 @@ class LoadEnumerationReceipt(SchemaModel):
 
 
 class FindSignalLoadsResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     wave_design_binding: dict[str, Any] | None = None
     signal_path: str
     resolved_rtl_name: str
@@ -1945,6 +1981,7 @@ _TRACE_SIGNAL_PATH_DIRECTION_NOTE = (
 
 
 class TraceSignalPathResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     wave_design_binding: dict[str, Any] | None = None
     from_signal: str
     to_signal: str
@@ -2025,6 +2062,7 @@ class XHistoryEvidence(SchemaModel):
 
 
 class TraceXSourceResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     wave_design_binding: dict[str, Any] | None = None
     start_signal: str
     start_time_ps: int
@@ -2051,6 +2089,7 @@ class PrerequisiteBlockResult(SchemaModel):
 
 
 class ToolErrorResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     error: str
     error_code: str | None = None
     hierarchy_recovery: HierarchyRecoveryReceipt | None = None
@@ -2145,7 +2184,7 @@ class DivergenceQueryContext(DivergenceContext):
     @model_validator(mode="after")
     def explicit_design_identity(self):
         if self.design_handle is None:
-            if self.compile_log is None:
+            if self.compile_log is None and not (getattr(self, "kdb_path", None) and self.top_hint):
                 raise ValueError("compile_log_or_design_handle_required")
         elif any(getattr(self, key) is not None for key in (
             "hierarchy_handle", "snapshot_sha256", "source_snapshot_sha256",
@@ -2764,6 +2803,7 @@ class TlulInspectResult(SchemaModel):
 
 
 class PackedFieldsResult(SchemaModel):
+    native_route: NativeRouteReceipt | None = None
     status: Literal["resolved", "mapping_required"]
     fields: dict[str, WaveformSelection] = Field(default_factory=dict)
     reasons: list[str] = Field(default_factory=list)
@@ -2833,7 +2873,22 @@ class XHistoryInput(SchemaModel):
     timeout_sec: float = Field(default=30, gt=0, le=120)
 
 
+class NativeXHistoryInput(XHistoryInput):
+    compile_log: str | None = Field(default=None, min_length=1)
+    timeout_sec: float = Field(default=30, gt=0, le=300)
+
+
 class DivergenceSide(DivergenceQueryContext):
+    kdb_path: str | None = Field(default=None, min_length=1)
+    backend_preference: Literal["auto", "source"] = "auto"
+    retry_npi: bool = False
+
+    @model_validator(mode="after")
+    def native_identity_mode(self):
+        if self.design_handle and (self.kdb_path is not None or "retry_npi" in self.model_fields_set):
+            raise ValueError("design_handle_conflicts_with_native_identity")
+        return self
+
     wave_path: str = Field(min_length=1)
     signal_path: str = Field(min_length=1)
 
@@ -3078,6 +3133,7 @@ class SourceQueryMetrics(SourceFactModel):
     query_with_cleanup_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_context_decode_ms: Annotated[float, Field(ge=0)] | None = None
     worker_source_validation_ms: Annotated[float, Field(ge=0)] | None = None
+    worker_metadata_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_kdb_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_result_validation_ms: Annotated[float, Field(ge=0)] | None = None
     worker_query_ms: Annotated[float, Field(ge=0)] | None = None
@@ -3093,6 +3149,7 @@ class SourceKdbBindingEvidence(KdbArtifactEvidence):
 
 
 class SourceQueryEnvelope(SourceFactModel):
+    native_route: NativeRouteReceipt | None = None
     schema_version: Literal[2]
     facts_origin: Literal["compile_metadata", "verdi_npi", "slang", "static_inference"]
     artifact_identity: SourceFactName
@@ -3105,6 +3162,7 @@ class SourceQueryEnvelope(SourceFactModel):
     coverage_domain: SourceFactLabel | None = None
     context_identity_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     ownership_identity: SourceFactName | None = None
+    ownership_basis: Literal["compile_metadata", "captured_source"] | None = None
     kdb_binding: SourceKdbBindingEvidence | None = None
     handle: str | None = None
     design_handle: str | None = None

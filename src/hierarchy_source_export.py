@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .hierarchy_source_files import _budget, _collect_file, _metadata_row
 from .hierarchy_source_ir import HIERARCHY_TOOL_SCHEMA_VERSION, HierarchyBudgetExceeded
-from .hierarchy_source_metadata import build_compile_source_catalog, export_compile_metadata
+from .hierarchy_source_metadata import build_compile_source_catalog, export_compile_metadata, observation_identity
 from .hierarchy_source_service import HierarchySourceService
 
 
@@ -75,7 +75,7 @@ def _file_export(catalog, provider, section, max_items, budget):
     return {
         "data": rows, "facts_origin": provider.origin if provider is not None and examined else "compile_metadata",
         "artifact_identity": provider.artifact_identity if provider is not None and examined else catalog.context_identity,
-        "ownership_identity": catalog.context_identity,
+        "ownership_identity": catalog.context_identity, "ownership_basis": catalog.ownership_basis,
         "coverage_domain": "provider_file_declarations" if section == "files_full" else "provider_interface_declarations",
         "semantic_status": ("not_run" if not examined else "unavailable" if provider is None
                             else "complete" if complete else "partial"),
@@ -107,7 +107,7 @@ def export_hierarchy_section(context, provider=None, *, section, max_items=5000,
         return {
             "schema_version": HIERARCHY_TOOL_SCHEMA_VERSION, "section": section,
             "data": None, "error": "section_export_incomplete", "export_complete": False,
-            "facts_origin": "compile_metadata", "artifact_identity": context.identity_sha256,
+            "facts_origin": "compile_metadata", "artifact_identity": observation_identity(context),
             "semantic_status": "not_run", "coverage_status": "partial",
             "coverage_gaps": list(context.gaps), "analysis_limits": [exc.reason], "output_truncated": False,
             "query_metrics": budget.metrics(),
@@ -135,13 +135,13 @@ def _export_section(context, provider, section, max_items, catalog, budget):
             catalog = build_compile_source_catalog(context, max_bytes=min(16 * 1024 * 1024, available),
                                                    checkpoint=budget.checkpoint)
             budget.reserve_bytes(512 + catalog.metadata_bytes)
-        if catalog.context_identity != context.identity_sha256:
+        if catalog.context_identity != observation_identity(context):
             raise ValueError("file catalog belongs to a different context")
         result = _file_export(catalog, provider, section, max_items, budget)
     else:
         if provider is None:
             result = {
-                "data": None, "facts_origin": "compile_metadata", "artifact_identity": context.identity_sha256,
+                "data": None, "facts_origin": "compile_metadata", "artifact_identity": observation_identity(context),
                 "semantic_status": "unavailable", "coverage_status": "partial",
                 "coverage_gaps": ["semantic_provider_unavailable"], "analysis_limits": [],
                 "output_truncated": False, "query_metrics": budget.metrics(),

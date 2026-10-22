@@ -377,7 +377,7 @@ async def test_real_isolated_worker_matches_recovered_and_no_handle_queries(monk
     monkeypatch.setattr(backends, "select_backend", lambda _, *, fallback:fallback)
     args = dict(**ctx, signal_path="bank.S",wave_path="synthetic.vcd",recursive=True)
     recovered = await server._dispatch("explain_signal_driver", {**args,"compile_context":ctx})
-    plain = await server._dispatch("explain_signal_driver", args)
+    plain = await server._dispatch_inner("explain_signal_driver", args)
     assert recovered.hierarchy_recovery.status == "rebuilt"
     assert recovered.backend == plain.backend == "source_graph"
     assert (recovered.resolved_bit_count, recovered.unresolved_bit_count, recovered.multi_driver_bit_count) == counts

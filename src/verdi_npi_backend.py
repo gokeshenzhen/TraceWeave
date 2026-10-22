@@ -30,7 +30,7 @@ import threading
 import time
 from typing import Any
 
-from config import NPI_ALLOW_DEGRADED_KDB
+from config import NPI_ALLOW_DEGRADED_KDB, NPI_VENDOR_DIRECT
 from .cancellation import OperationCancelled, check_cancelled
 from .compile_input_capture import CaptureAborted
 from .compile_log_parser import parse_compile_log
@@ -363,6 +363,14 @@ class VerdiNpiBackend:
         if hasattr(self._fallback, "bind_compile_context"):
             self._fallback.bind_compile_context(compile_result)
 
+    def bind_native_inputs(self, inputs) -> None:
+        from .native_query import NativeQueryInputs
+        if not isinstance(inputs, NativeQueryInputs):
+            raise TypeError("native metadata inputs required")
+        self._native_inputs = inputs
+        if inputs.compile_result_json is not None:
+            self.bind_compile_context(inputs.compile_result())
+
     def bind_kdb_anchor(self, anchor: KdbAnchor) -> None:
         validate_query_anchor(anchor)
         previous = getattr(self, "_bound_kdb_anchor", None)
@@ -442,7 +450,9 @@ class VerdiNpiBackend:
 
         result = self._query_language(execute, top=request.context.selected_top,
                                       budget=request.budget)
-        result["context_identity_sha256"] = request.context.identity_sha256
+        from .hierarchy_source_request import NativeSourceRequest
+        if not isinstance(request, NativeSourceRequest):
+            result["context_identity_sha256"] = request.context.identity_sha256
         result["kdb_binding"] = dict(self._bound_kdb_anchor.receipt(), load_status="loaded",
                                       load_quality=self.kdb_load_quality)
         return result
@@ -458,7 +468,8 @@ class VerdiNpiBackend:
         if not isinstance(budget, HierarchyQueryBudget):
             raise TypeError("a hierarchy query budget is required")
         anchor = getattr(self, "_bound_kdb_anchor", None)
-        if anchor is None or getattr(self, "_bound_compile_result", None) is None:
+        if anchor is None or (getattr(self, "_bound_compile_result", None) is None
+                              and getattr(self, "_native_inputs", None) is None):
             raise NpiHierarchyUnavailable("npi_prepared_context_required")
         budget.checkpoint()
         self._last_query_kdb_status = None
@@ -521,7 +532,7 @@ class VerdiNpiBackend:
         self._last_query_kdb_status = None
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
-            if compile_result is None:
+            if compile_result is None and getattr(self, "_native_inputs", None) is None:
                 compile_result = parse_compile_log(compile_log, simulator)
             kdb = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
@@ -552,7 +563,7 @@ class VerdiNpiBackend:
         self._last_query_kdb_status = None
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
-            if compile_result is None:
+            if compile_result is None and getattr(self, "_native_inputs", None) is None:
                 compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
@@ -607,7 +618,7 @@ class VerdiNpiBackend:
         self._last_query_kdb_status = None
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
-            if compile_result is None:
+            if compile_result is None and getattr(self, "_native_inputs", None) is None:
                 compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
@@ -650,7 +661,7 @@ class VerdiNpiBackend:
         self._last_query_kdb_status = None
         try:
             compile_result = getattr(self, "_bound_compile_result", None)
-            if compile_result is None:
+            if compile_result is None and getattr(self, "_native_inputs", None) is None:
                 compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
             top = top_hint or self._top_from(compile_result)
@@ -1209,6 +1220,17 @@ class VerdiNpiBackend:
         if self._state == "failed":
             return False
         if self._npi_modules is None:
+            if NPI_VENDOR_DIRECT:
+                # Configure before importing the SDK. Seed an empty/absent
+                # spelling from the other to preserve existing proxy exceptions.
+                for key, other in (("NO_PROXY", "no_proxy"), ("no_proxy", "NO_PROXY")):
+                    current = os.environ.get(key) or os.environ.get(other, "")
+                    entries = {item.strip().lower() for item in current.split(",")}
+                    missing = [
+                        domain for domain in ("srv1.sw.synopsys.com", ".updates.synopsys.com")
+                        if domain not in entries
+                    ]
+                    os.environ[key] = current + ("," if current and missing else "") + ",".join(missing)
             modules = _import_pynpi()
             if modules is None:
                 self._state = "failed"

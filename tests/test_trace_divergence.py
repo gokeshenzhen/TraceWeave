@@ -87,7 +87,11 @@ async def setup_case(tmp_path, source=RTL):
     assert built.build_status == "completed", built
     wave = tmp_path / "wave.vcd"
     write_wave(wave)
+    # Explicit log identity keeps these historical-action regressions on the
+    # retained legacy route; native dual-side dispatch has its own suite.
+    from src.divergence_context import log_identity
     common = {"compile_log": str(log), "simulator": "vcs", "wave_path": str(wave)}
+    common["compile_log_identity_sha256"] = log_identity(common)
     return {
         "side_a": {**common, "signal_path": "top.qa"},
         "side_b": {**common, "signal_path": "top.qb"},
@@ -159,12 +163,13 @@ async def missing_context_actions(tmp_path):
         context = {
             "compile_log": side["compile_log"], "simulator": side["simulator"],
             "supplementary_compile_logs": [],
+            "compile_log_identity_sha256": side["compile_log_identity_sha256"],
         }
         assert r.contexts[action.side]["status"] == "hierarchy_unavailable"
         assert action.status == "ready" and action.missing_fields == []
         assert action.tool == "explain_signal_driver"
         assert action.arguments == {
-            **side, "recursive": False, "compile_context": context,
+            **{k: v for k, v in side.items() if k != "compile_log_identity_sha256"}, "recursive": False, "compile_context": context,
         }
         assert action.evidence["context_status"] == "hierarchy_unavailable"
         assert action.evidence["context_recovery"] == "required_before_query"
