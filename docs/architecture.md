@@ -2795,6 +2795,17 @@ scopes through bounded Language `iterate`/`scan`, inside the existing exclusive
 native owner. It uses `Port`, exact direction, `HighConn` / `LowConn`, and native
 binary values. Verified forms include literal and parameter constants, folding
 of constant-only operations, X/Z, and constant regions of equal-width concatenations.
+Interface/hierarchical reference wrappers resolve through their native `Actual`
+relationship before type/width inspection. Single-dimension packed bit/part
+selections preserve ascending/descending ranges, signed bounds and X/Z; mixed
+concatenations retain only their constant regions. Packed dimensions come from
+the native typespec. For SDK bit objects without an `Index` relationship, only
+a canonical decimal suffix of the exact native parent identity is accepted;
+the index must lie within the verified packed range. Variable indexes, out-of-range
+selections and unresolved or multidimensional types remain gaps. Procedural
+`For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
+`GenScope` instances are still visited. The native capability receipt is
+`npi_input_ports_v2`.
 `constant_regions.lsb_offset` counts from the port's least significant position;
 each region's `bits` is MSB first, matching Slang. Unequal actual/port widths,
 unmodeled selections/expressions, unknown directions, unresolved array/scope forms
