@@ -9,14 +9,17 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import re
 import time
 
 from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyQueryBudget
 from .npi_hierarchy_source import _LanguageIterator, NpiHierarchyUnavailable
 from .structural_semantic_router import NPI_PORT_CATEGORIES
 
-CAPABILITY_VERSION = "npi_input_ports_v1"
+CAPABILITY_VERSION = "npi_input_ports_v2"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar"}
+_CONSTANTS = {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst'}
+_SELECTS = {'npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit', 'npiPartSelect'}
 _SCOPES = {"npiModule", "npiInterface", "npiProgram", "npiGenScope"}
 # InternalScope also exposes procedural statement scopes. They cannot contain
 # elaborated module input bindings; generate scopes have their own npiGenScope
@@ -73,6 +76,90 @@ def scan_native_ports(provider, options):
             return None
         return bits.lower()
 
+    def index_value(handle, depth):
+        if handle is None:
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        size, rows, complete = parts(handle, depth + 1)
+        if not complete or len(rows) != 1 or set(rows[0]['bits']) - set('01'):
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        signed = p.scalar(handle, 'signed')
+        if signed not in (0, 1):
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        bits = rows[0]['bits']
+        value = int(bits, 2)
+        return value - (1 << size) if signed == 1 and bits[0] == '1' else value
+
+    def packed_range(handle, size, depth):
+        ts = p.one(handle, 'typespec_handle')
+        if ts is None:
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        kind = p.scalar(ts, 'type')
+        # The installed SDK exposes packed dimensions under the typespec, not
+        # LeftRange/RightRange directly on a Reg/Parameter. Reject aggregate and
+        # multidimensional types rather than guessing their flattened order.
+        if kind in {'npiIntTypespec', 'npiIntegerTypespec'} and size == 32:
+            return 31, 0
+        if kind not in {'npiLogicTypespec', 'npiBitTypespec'}:
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        it = _LanguageIterator(p, p.low.Range, ts)
+        try:
+            r = it.read()
+            if r is None or it.read() is not None:
+                raise _UnsupportedPort('npi_selection_range_unavailable')
+            left = index_value(p.one(r, 'left_range_handle'), depth)
+            right = index_value(p.one(r, 'right_range_handle'), depth)
+        finally:
+            p.close_iterator(it)
+        if abs(left - right) + 1 != size:
+            raise _UnsupportedPort('npi_selection_range_unavailable')
+        return left, right
+
+    def selection(handle, kind, depth):
+        parent = p.one(handle, 'parent_handle')
+        if parent is None or p.scalar(parent, 'type') not in _DYNAMIC | _CONSTANTS:
+            raise _UnsupportedPort('npi_selection_parent_unmodeled')
+        parent_size, rows, complete = parts(parent, depth + 1)
+        decl_left, decl_right = packed_range(parent, parent_size, depth)
+        if kind == 'npiPartSelect':
+            size = width(handle)
+            left = index_value(p.one(handle, 'left_range_handle'), depth)
+            right = index_value(p.one(handle, 'right_range_handle'), depth)
+            if (abs(left - right) + 1 != size
+                    or size > 1 and (left > right) != (decl_left > decl_right)):
+                raise _UnsupportedPort('npi_selection_range_unavailable')
+        else:
+            size = 1
+            if kind != 'npiBitSelect' and width(handle) != 1:
+                raise _UnsupportedPort('npi_width_unavailable')
+            index = p.one(handle, 'index_handle')
+            if index is not None:
+                left = right = index_value(index, depth)
+            else:
+                # Fixed bit objects in V-2023.12-SP2 have no Index relationship.
+                # Accept only a canonical decimal suffix of the EXACT parent's
+                # native identity, never decompile/parse an expression or name
+                # a new object by a guessed path. Variable indexes remain gaps.
+                path, parent_path = p.scalar(handle, 'full_name'), p.scalar(parent, 'full_name')
+                suffix = path[len(parent_path):] if (isinstance(path, str)
+                         and isinstance(parent_path, str) and parent_path and path.startswith(parent_path)) else ''
+                if (len(suffix) > 32 or not re.fullmatch(r'\[-?(?:0|[1-9][0-9]*)\]', suffix)
+                        or kind == 'npiBitSelect' and p.scalar(handle, 'constant_select') != 1):
+                    raise _UnsupportedPort('npi_selection_index_unavailable')
+                left = right = int(suffix[1:-1])
+        if not (min(decl_left, decl_right) <= min(left, right)
+                <= max(left, right) <= max(decl_left, decl_right)):
+            raise _UnsupportedPort('npi_selection_out_of_range')
+        offset = abs(right - decl_right)
+        selected = []
+        for row in rows:
+            lo = max(offset, row['lsb_offset'])
+            hi = min(offset + size, row['lsb_offset'] + row['width'])
+            if lo < hi:
+                end = row['width'] - (lo - row['lsb_offset'])
+                selected.append({'lsb_offset': lo - offset, 'width': hi - lo,
+                                 'bits': row['bits'][end - (hi - lo):end]})
+        return size, selected, complete
+
     def parts(handle, depth=0):
         if depth > 64:
             raise HierarchyBudgetExceeded('native_expression_depth_limit')
@@ -85,8 +172,10 @@ def scan_native_ports(provider, options):
             if actual is None:
                 raise _UnsupportedPort('npi_reference_unresolved')
             return parts(actual, depth + 1)
+        if kind in _SELECTS:
+            return selection(handle, kind, depth)
         size = width(handle)
-        if kind in {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst'}:
+        if kind in _CONSTANTS:
             bits = binary(handle, size)
             if bits is None:
                 gap('npi_constant_value_unavailable', ['constant_connection'])

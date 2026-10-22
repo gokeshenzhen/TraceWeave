@@ -16,8 +16,23 @@ class Handle:
         self.cps_obj = self
 
 
-def const(bits):
-    return Handle(type='npiConstant', size=len(bits), binary=bits)
+def const(bits, signed=0):
+    return Handle(type='npiConstant', size=len(bits), binary=bits, signed=signed)
+
+
+def integer(value):
+    return const(format(value & 0xffffffff, '032b'), signed=1)
+
+
+def packed(kind, left, right, **data):
+    r = Handle(left_range_handle=integer(left), right_range_handle=integer(right))
+    return Handle(type=kind, size=abs(left-right)+1,
+                  typespec_handle=Handle(type='npiLogicTypespec', Range=[r]), **data)
+
+
+def part(parent, left, right):
+    return Handle(type='npiPartSelect', size=abs(left-right)+1, parent_handle=parent,
+                  left_range_handle=integer(left), right_range_handle=integer(right))
 
 
 def port(name, actual=None, **data):
@@ -35,7 +50,7 @@ class Provider:
         self.child = Handle(type='npiModule', full_name='top.u', scope_handle=self.root, Port=ports, InternalScope=[])
         self.root.data['InternalScope'] = [self.child]
         self.iterators = set(); self.releases = 0; self.iterator_releases = 0
-        self.low = NS(Port='Port', InternalScope='InternalScope', Operand='Operand',
+        self.low = NS(Port='Port', InternalScope='InternalScope', Operand='Operand', Range='Range',
                       BinStrVal='bin', iterate=self.iterate, scan=self.scan,
                       release_handle=self.release, get_value=self.value)
 
@@ -185,3 +200,66 @@ def test_missing_or_cyclic_reference_never_completes_negative():
     p, r = run([port('a', ref)], semantic_categories=['constant_connection'])
     assert r['status'] == 'partial' and not r['facts']
     assert 'native_expression_depth_limit' in r['gaps'] and not p.iterators
+
+
+@pytest.mark.parametrize('left,right,sel_left,sel_right,expected', [
+    (7, 0, 5, 2, 'xz01'), (1, 8, 2, 5, '0xz0'), (-1, -8, -2, -5, '0xz0')])
+def test_parameter_slices_preserve_declared_direction_and_four_state(
+        left, right, sel_left, sel_right, expected):
+    parent = packed('npiParameter', left, right, binary='10xz0101')
+    _, r = run([port('a', part(parent, sel_left, sel_right))],
+               semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete'
+    assert r['facts'][0]['constant_regions'] == [{'lsb_offset': 0, 'width': 4, 'bits': expected}]
+
+
+def test_dynamic_slice_in_concat_does_not_evaluate_register_initial_value():
+    live = packed('npiReg', 7, 0, binary='11111111')
+    expr = Handle(type='npiOperation', size=4, op_type='npiConcatOp',
+                  Operand=[const('10'), part(live, 1, 0)])
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete'
+    assert r['facts'][0]['constant_regions'] == [{'lsb_offset': 2, 'width': 2, 'bits': '10'}]
+
+
+@pytest.mark.parametrize('kind', ['npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit'])
+def test_fixed_bit_native_identity_is_checked_against_parent_range(kind):
+    parent_kind = 'npiParameter' if kind == 'npiParameterBit' else 'npiReg'
+    parent = packed(parent_kind, 7, 0, full_name='top.live', binary='10xz0101')
+    bit = Handle(type=kind, size=-1 if kind == 'npiBitSelect' else 1,
+                 parent_handle=parent, full_name='top.live[2]', constant_select=1)
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete'
+    if kind == 'npiParameterBit':
+        assert r['facts'][0]['constant_regions'][0]['bits'] == '1'
+    else:
+        assert not r['facts']
+    for name in ['top.live[9]', 'top.other[2]', 'top.live[index]', 'top.live[' + '9'*200 + ']']:
+        bit.data['full_name'] = name
+        p, r = run([one], semantic_categories=['constant_connection'])
+        assert r['status'] == 'partial' and not r['facts'] and not p.iterators
+
+
+def test_native_integer_bit_has_intrinsic_packed_range():
+    parent = Handle(type='npiIntegerVar', size=32, full_name='top.i', binary='1'*32,
+                    typespec_handle=Handle(type='npiIntegerTypespec'))
+    bit = Handle(type='npiBitSelect', size=-1, parent_handle=parent,
+                 full_name='top.i[0]', constant_select=1)
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+
+
+def test_ambiguous_or_out_of_range_slices_preserve_partial_coverage():
+    live = packed('npiReg', 7, 0)
+    bad = [part(live, 9, 6), part(live, 2, 5)]
+    for expr in bad:
+        _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+        assert r['status'] == 'partial' and not r['facts']
+    live.data['typespec_handle'].data['Range'] *= 2
+    p, r = run([port('a', part(live, 5, 2))], semantic_categories=['constant_connection'])
+    assert 'npi_selection_range_unavailable' in r['gaps'] and not p.iterators
+    live.data['typespec_handle'].data['Range'] = [Handle(left_range_handle=const('xx'))]
+    _, r = run([port('a', part(live, 5, 2))], semantic_categories=['constant_connection'])
+    assert r['status'] == 'partial' and not r['facts']
