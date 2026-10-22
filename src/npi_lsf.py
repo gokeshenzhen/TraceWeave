@@ -146,6 +146,24 @@ class NativeSourceWorkerRequest(_ConnectivityWorkerRequestBase):
         return self
 
 
+class StructuralScanWorkerRequest(_ConnectivityWorkerRequestBase):
+    protocol_version: Literal["5.0"] = "5.0"
+    operation: Literal["structural_scan"] = "structural_scan"
+    kdb_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    metadata_payload: dict[str, Any]
+    options: dict[str, Any]
+
+    @model_validator(mode="after")
+    def valid_scan(self):
+        from .native_query_codec import decode_native_inputs
+        from .npi_structural_lsf import validate_scan_options
+        validate_scan_options(self.options)
+        inputs = decode_native_inputs(self.metadata_payload)
+        if inputs.selected_top != self.top or inputs.requested_kdb_path not in (None, self.kdb_path):
+            raise ValueError("worker scan top or KDB mismatch")
+        return self
+
+
 class BuildKdbWorkerRequest(_WorkerRequestBase):
     operation: Literal["build_kdb"] = "build_kdb"
     compile_log: str = Field(min_length=1, max_length=16_384)
@@ -164,6 +182,7 @@ NpiWorkerRequest = Annotated[
     | FindPathWorkerRequest
     | HierarchySourceWorkerRequest
     | NativeSourceWorkerRequest
+    | StructuralScanWorkerRequest
     | BuildKdbWorkerRequest,
     Field(discriminator="operation"),
 ]
@@ -297,7 +316,7 @@ class LsfNpiTransport:
         _write_private_text(
             request_path,
             _REQUEST_ADAPTER.dump_json(request).decode("utf-8"),
-            max_bytes=(MAX_WORKER_REQUEST_BYTES if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest))
+            max_bytes=(MAX_WORKER_REQUEST_BYTES if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest, StructuralScanWorkerRequest))
                        else _MAX_REQUEST_BYTES),
         )
 
@@ -387,7 +406,7 @@ class LsfNpiTransport:
             result = _validate_operation_result(request, response.result)
             if result is None:
                 return (LsfExecutionResult(None, "completed", "failed", "npi_lsf_result_invalid")
-                        if isinstance(request, NativeSourceWorkerRequest) else _worker_failed_execution())
+                        if isinstance(request, (NativeSourceWorkerRequest, StructuralScanWorkerRequest)) else _worker_failed_execution())
             return LsfExecutionResult(
                 result=result,
                 scheduler_status="completed",
@@ -939,6 +958,10 @@ def _execute_worker_request(
 ) -> NpiWorkerResponse:
     """Execute one licensed worker request, never a local parent fallback."""
 
+    if isinstance(request, StructuralScanWorkerRequest):
+        from .npi_structural_lsf import execute_scan_worker
+        return execute_scan_worker(request, backend=backend)
+
     if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest)):
         # This path must acquire the Language owner BEFORE loading a KDB.
         # The old connectivity pre-load path below cannot own Language handles.
@@ -1055,6 +1078,9 @@ def _validate_operation_result(
     """Validate and normalize a worker result on both protocol boundaries."""
 
     try:
+        if isinstance(request, StructuralScanWorkerRequest):
+            from .npi_structural_lsf import validate_scan_worker_result
+            return validate_scan_worker_result(request, result)
         if isinstance(request, (HierarchySourceWorkerRequest, NativeSourceWorkerRequest)):
             from .npi_source_worker import validate_source_worker_result
             return validate_source_worker_result(request, result)
@@ -1097,7 +1123,7 @@ def parse_worker_request_bytes(data: bytes) -> NpiWorkerRequest:
         raise ValueError("request too large")
     raw = json.loads(data.decode("utf-8"))
     if (not isinstance(raw, dict)
-            or (raw.get("operation") not in {"hierarchy_source", "native_source"} and len(data) > _MAX_REQUEST_BYTES)):
+            or (raw.get("operation") not in {"hierarchy_source", "native_source", "structural_scan"} and len(data) > _MAX_REQUEST_BYTES)):
         raise ValueError("invalid or oversized worker request")
     return _REQUEST_ADAPTER.validate_python(raw)
 

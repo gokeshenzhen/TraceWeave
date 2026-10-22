@@ -1,0 +1,107 @@
+"""Protocol controls only: no scheduler, license or native SDK is invoked."""
+from copy import deepcopy
+import hashlib
+import json
+from types import SimpleNamespace as NS
+
+import pytest
+
+import config
+from src import npi_lsf
+from src import npi_structural_lsf as scan
+from src.native_query import read_native_inputs
+from src.native_query_codec import encode_native_inputs
+from src.kdb_anchor import capture_kdb_anchor
+from src.npi_structural_scan import scan_budget, scan_native_ports
+from src.structural_semantic_runtime import validate_semantic_options
+from tests.native_first_helpers import project
+from tests.test_npi_structural_scan import Provider, port, const
+
+
+def request(tmp_path):
+    source, log, kdb = project(tmp_path, top='top')
+    inputs = read_native_inputs(dict(compile_log=str(log), top_hint='top'))
+    anchor = capture_kdb_anchor(str(kdb))
+    options = validate_semantic_options(dict(semantic_categories=['constant_connection', 'open_input']))[1]
+    req = npi_lsf.StructuralScanWorkerRequest(kdb_path=str(kdb), top='top',
+        kdb_identity_sha256=anchor.identity_sha256, metadata_payload=encode_native_inputs(inputs), options=options)
+    return req, inputs, anchor, source
+
+
+def worker(req, monkeypatch):
+    backend = NS(kdb_load_quality='clean', bind_native_inputs=lambda i: None, bind_kdb_anchor=lambda a: None)
+    def query(backend, options, *, top, budget):
+        p = Provider([port('a', const('1010'))], options=options); p.budget = budget
+        p.artifact_identity = hashlib.sha256((req.kdb_identity_sha256 + '\0' + req.top).encode()).hexdigest()
+        result = scan_native_ports(p, options)
+        result.pop('query_metrics')
+        result['metrics'].update(native_call_count=budget.call_count, native_instance_count=budget.scope_count,
+                                 native_handle_count=1, estimated_fact_bytes=budget.fact_bytes)
+        result['kdb_binding'] = dict(capture_kdb_anchor(req.kdb_path).receipt(), load_status='loaded', load_quality='clean')
+        return result
+    monkeypatch.setattr(scan, 'query_native_scan', query)
+    return npi_lsf.execute_worker_request(req, backend=backend)
+
+
+def test_new_operation_validates_and_preserves_old_protocol(tmp_path, monkeypatch):
+    req, _, _, _ = request(tmp_path)
+    raw = req.model_dump()
+    assert npi_lsf.parse_worker_request_bytes(req.model_dump_json().encode()).model_dump_json() == req.model_dump_json()
+    raw['protocol_version'] = '4.0'
+    with pytest.raises(ValueError): npi_lsf.parse_worker_request_bytes(json.dumps(raw).encode())
+    r = worker(req, monkeypatch)
+    assert r.status == 'ok' and r.protocol_version == '5.0'
+    assert scan.validate_scan_worker_result(req, r.result)['total_facts'] == 1
+
+
+@pytest.mark.parametrize('field', ['artifact_identity', 'selected_top', 'scope', 'request_fingerprint',
+                                   'category_results', 'facts', 'counts', 'work', 'backend_status'])
+def test_forged_result_rejected(tmp_path, monkeypatch, field):
+    req, _, _, _ = request(tmp_path)
+    response = worker(req, monkeypatch)
+    raw = deepcopy(response.result)
+    if field == 'facts': raw['facts'][0]['instance'] = 'foreign.u'
+    elif field == 'work': raw['metrics']['native_call_count'] = 100001
+    elif field == 'category_results': raw['category_results'] = {}
+    elif field == 'counts': raw['counts'] = {}
+    elif field == 'scope': raw[field] = 'top.foreign'
+    else: raw[field] = 'foreign'
+    assert npi_lsf._validate_operation_result(req, raw) is None
+
+
+def test_wrong_options_and_extra_budget_fields_rejected(tmp_path):
+    req, _, _, _ = request(tmp_path)
+    for extra in ({'scope': '*'}, {'categories': []}, {'arbitrary_budget': 1}, {'timeout_sec': float('nan')}):
+        raw = req.model_dump(); raw['options'].update(extra)
+        with pytest.raises(ValueError): npi_lsf.parse_worker_request_bytes(json.dumps(raw).encode())
+
+
+def test_parent_uses_existing_transport_and_never_local_backend(tmp_path, monkeypatch):
+    req, inputs, anchor, _ = request(tmp_path)
+    response = worker(req, monkeypatch)
+    monkeypatch.setenv('TRACEWEAVE_NPI_EXECUTION', 'lsf')
+    monkeypatch.setenv('TRACEWEAVE_NPI_LSF_QUEUE', 'controlled')
+    received = []
+    class Transport:
+        def execute(self, value, *, deadline=None):
+            assert deadline is not None
+            received.append(value)
+            result = deepcopy(response.result)
+            result['request_fingerprint'] = scan._fingerprint(value)
+            return npi_lsf.LsfExecutionResult(result, 'completed', 'completed', kdb_load_quality='clean')
+    backend = npi_lsf.LsfConnectivityBackend(config.get_npi_execution_config(), transport=Transport())
+    backend.bind_native_inputs(inputs); backend.bind_kdb_anchor(anchor)
+    result = scan.query_scan_over_lsf(backend, inputs, req.options, scan_budget(req.options))
+    assert result['native_execution'] == {'execution_mode': 'lsf', 'scheduler_status': 'completed', 'worker_status': 'completed'}
+    assert received[0].options['timeout_sec'] < req.options['timeout_sec']
+
+
+def test_worker_metadata_change_is_terminal(tmp_path, monkeypatch):
+    req, _, _, source = request(tmp_path)
+    # Sources are outside the metadata observation; changed log is fatal.
+    source.unlink()
+    inputs = scan.decode_native_inputs(req.metadata_payload)
+    from pathlib import Path
+    Path(inputs.ordered_compile_logs[0]).write_text('changed')
+    response = npi_lsf.execute_worker_request(req)
+    assert response.status == 'error' and response.error_code == 'context_identity_changed'
