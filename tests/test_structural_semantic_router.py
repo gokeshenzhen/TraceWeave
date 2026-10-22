@@ -59,3 +59,9 @@ def test_requested_domain_and_checked_top_keep_kdb_binding_separate_from_source(
     assert r.category_coverage[0].checked_scope == 'top'
     assert r.result_groups[0].selected_top == 'top'
     assert r.result_groups[0].kdb_binding['source_association'] == 'unverified'
+
+
+def test_frontend_resource_stop_remains_partial_without_inventing_checked_categories():
+    r = combine_semantics(OPTIONS, source={'status':'partial','gaps':['worker_rss_limit']})
+    assert r['status'] == 'partial' and not r['categories_checked']
+    assert all(c['status'] == 'partial' for c in r['category_coverage'])

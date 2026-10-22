@@ -228,10 +228,10 @@ def scan_native_ports(provider, options):
                 raise NpiHierarchyUnavailable('npi_scope_changed_during_query')
             else:
                 visit(handle, root, 0)
-        if p.degraded:
-            gap('npi_degraded_design')
     except HierarchyBudgetExceeded as exc:
         gap(exc.reason)
+    if p.degraded:
+        gap('npi_degraded_design')
     results = {c: {'status': 'partial' if gaps[c] else 'complete', 'gaps': sorted(gaps[c])} for c in categories}
     for c in set(options['categories']) - categories:
         results[c] = {'status': 'unsupported', 'gaps': ['npi_category_unsupported']}

@@ -133,3 +133,9 @@ def test_cancellation_and_late_native_return_are_not_clean():
     p.low.scan = late
     r = scan_native_ports(p, p.options)
     assert r['status'] == 'partial' and 'timeout_sec' in r['gaps'] and not p.iterators
+
+
+def test_degraded_binding_survives_early_work_limit():
+    p = Provider([]); p.degraded = True; p.budget.max_scopes = 1
+    r = scan_native_ports(p, p.options)
+    assert {'scope_limit', 'npi_degraded_design'} <= set(r['gaps'])

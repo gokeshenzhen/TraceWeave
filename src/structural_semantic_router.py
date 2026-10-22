@@ -19,6 +19,8 @@ def category_result(result, category):
         return result["category_results"][category]
     if result["status"] in {"not_run", "unavailable", "failed", "unsupported"}:
         return {"status": result["status"], "gaps": result.get("gaps", [])}
+    if result["status"] == "partial" and not result.get("categories_checked"):
+        return {"status": "partial", "gaps": result.get("gaps", [])}
     if category not in result.get("categories_checked", []):
         return {"status": "not_run", "gaps": result.get("gaps", []) or ["category_not_checked"]}
     return {"status": result["status"], "gaps": result.get("gaps", [])}
@@ -75,9 +77,11 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
     for group in groups:
         group["selected_categories"] = selected.get(group["backend"], [])
     complete = all(c["status"] == "complete" for c in coverage)
-    checked = [c["category"] for c in coverage if c["status"] in {"complete", "partial"}]
+    selected_raw = {"verdi_npi": native or {}, "slang": source or {}, "none": {}}
+    checked = [c["category"] for c in coverage if c["status"] == "complete" or
+               c["status"] == "partial" and c["category"] in selected_raw[c["backend"]].get("categories_checked", [])]
     statuses = {c["status"] for c in coverage}
-    status = ("complete" if complete else "partial" if checked else
+    status = ("complete" if complete else "partial" if checked or "partial" in statuses else
               "unavailable" if statuses & {"unavailable", "unsupported", "failed"} else "not_run")
     backends = {c["backend"] for c in coverage if c["backend"] != "none"}
     # Preserve existing source fields (propagation, templates, display receipt).
