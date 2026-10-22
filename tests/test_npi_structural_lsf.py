@@ -105,3 +105,14 @@ def test_worker_metadata_change_is_terminal(tmp_path, monkeypatch):
     Path(inputs.ordered_compile_logs[0]).write_text('changed')
     response = npi_lsf.execute_worker_request(req)
     assert response.status == 'error' and response.error_code == 'context_identity_changed'
+
+
+def test_bounded_handle_stop_preserves_exact_attempt_count(tmp_path, monkeypatch):
+    req, _, _, _ = request(tmp_path)
+    response = worker(req, monkeypatch); raw = deepcopy(response.result)
+    raw['metrics']['native_handle_count'] = 16385
+    assert npi_lsf._validate_operation_result(req, raw) is None
+    raw['status'] = 'partial'; raw['gaps'] = ['native_handle_limit']
+    for row in raw['category_results'].values():
+        row.update(status='partial', gaps=['native_handle_limit'])
+    assert scan.validate_scan_worker_result(req, raw)['metrics']['native_handle_count'] == 16385

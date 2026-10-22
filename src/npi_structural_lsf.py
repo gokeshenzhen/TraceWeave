@@ -56,7 +56,9 @@ def validate_scan_worker_result(request, result):
     binding = result['kdb_binding']
     if (binding.get('identity_sha256') != request.kdb_identity_sha256 or binding.get('load_status') != 'loaded'
             or binding.get('identity_status') != 'complete' or binding.get('load_quality') not in {'clean', 'degraded'}
-            or binding.get('source_association') != 'unverified'):
+            or binding.get('source_association') != 'unverified'
+            or binding.get('artifact_status') not in {'elaborated_candidate', 'elaboration_error'}
+            or binding.get('identity_basis') != 'bounded_elaboration_maps'):
         raise ValueError('invalid scan load binding')
     categories = set(request.options['categories'])
     if set(result['category_results']) != categories or set(result['categories_checked']) != categories & {'constant_connection', 'open_input'}:
@@ -106,9 +108,11 @@ def validate_scan_worker_result(request, result):
         raise ValueError('invalid scan work metrics')
     for key, maximum in [('native_instance_count', request.options['limits']['max_instances']),
                          ('native_call_count', 100000), ('native_port_count', 100000),
-                         ('estimated_fact_bytes', 8 * 1024 * 1024), ('native_handle_count', 16384)]:
+                         ('estimated_fact_bytes', 8 * 1024 * 1024), ('native_handle_count', 16385)]:
         if type(metrics.get(key)) is not int or not 0 <= metrics[key] <= maximum:
             raise ValueError('worker scan exceeded work budget')
+    if metrics['native_handle_count'] == 16385 and (result['status'] != 'partial' or 'native_handle_limit' not in result['gaps']):
+        raise ValueError('unreported native handle stop')
     return result
 
 

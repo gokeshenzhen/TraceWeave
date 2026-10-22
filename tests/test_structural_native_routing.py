@@ -9,6 +9,7 @@ import pytest
 import server
 from src import structural_native_runtime as native
 from src.design_backend_binding import ExecutionBindingChanged
+from src.design_context_runtime import ContextUnavailable
 from src.kdb_anchor import KdbBindingChanged
 from src.npi_hierarchy_source import NpiHierarchyUnavailable
 from src.structural_scan_runtime import StructuralScanRuntime
@@ -110,6 +111,7 @@ async def test_source_supplies_only_missing_categories_and_keeps_provenance(setu
     (KdbBindingChanged(), 'kdb_identity_changed'),
     (ExecutionBindingChanged(), 'npi_execution_policy_changed'),
     (TimeoutError(), 'semantic_timeout'),
+    (ContextUnavailable('npi_lsf_result_invalid'), 'npi_lsf_result_invalid'),
 ])
 async def test_terminal_failures_never_fallback_or_publish_native(setup, monkeypatch, failure, reason):
     args, calls, _ = setup

@@ -10,6 +10,7 @@ from .cancellation import OperationCancelled, check_cancelled
 from .compile_input_capture import CaptureAborted
 from .connectivity_backend import select_backend
 from .design_backend_binding import ExecutionBindingChanged, prepare_native_binding
+from .design_context_runtime import ContextUnavailable
 from .kdb_anchor import KdbBindingChanged
 from .native_query import NATIVE_IDENTITY_ERRORS, NativeInputChanged, RequestBudget, read_native_inputs
 from .npi_hierarchy_source import NpiHierarchyUnavailable
@@ -101,7 +102,7 @@ class StructuralNativeRuntime:
                                     raise NativeInputChanged(exc.reason) from exc
                                 await validate()
                                 native = unavailable(options, exc.reason, execution=getattr(exc, 'execution_status', None))
-                            except (OperationCancelled, KdbBindingChanged, NativeInputChanged, ExecutionBindingChanged, CaptureAborted, TimeoutError):
+                            except (OperationCancelled, KdbBindingChanged, NativeInputChanged, ExecutionBindingChanged, ContextUnavailable, CaptureAborted, TimeoutError):
                                 raise
                             except ValueError as exc:
                                 if execution.mode == 'lsf':
@@ -147,6 +148,8 @@ class StructuralNativeRuntime:
             reason = 'compile_metadata_or_native_identity_changed'
         except ExecutionBindingChanged:
             reason = 'npi_execution_policy_changed'
+        except ContextUnavailable as exc:
+            reason = exc.code
         except CaptureAborted as exc:
             reason = 'semantic_timeout' if exc.code == 'timeout' else 'compile_metadata_changed' if exc.code == 'input_changed' else 'semantic_capture_' + exc.code
         except TimeoutError:
