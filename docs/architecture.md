@@ -1214,13 +1214,16 @@ Verification
   identity plus all value parameters form template identity; type parameters
   and external hierarchical dependencies conservatively retain separate
   instance templates. The isolated worker has time/RSS and instance/fact/AST/bit
-  bounds. `fast` stays lexical; default `auto` reuses a compatible completed
-  semantic result or explicitly reports `not_run`. `deep` requests construction.
+  bounds. `fast` stays lexical. `auto` / `deep` first try existing KDBs through
+  NPI; missing categories use this source service. `auto` permits completed
+  memory-result or compatible query-IR reuse only; `deep` also permits construction.
   `analysis_mode` is a per-invocation MCP argument, defaulting to `auto`; no
   environment setting selects this mode. `deep` permits a cold frontend build
   but still reuses an exact completed result. `semantic_scope` limits basic
   fact extraction, not necessarily frontend parsing/elaboration. Reuse requires
-  matching identity, scope, categories and budgets; the category list replaces
+  matching identity, selected top, scope and work/memory budgets; a completed
+  category superset may supply just the missing categories. Unused time allowance
+  does not affect a completed result's identity. The category list replaces
   the default selection rather than extending it. See [Structural Scan Invocation](#structural-scan-invocation)
   for JSON examples. The lexical scan still runs on a semantic miss.
   Lexical and semantic coverage are independent; output trimming preserves
@@ -2749,13 +2752,122 @@ To allow a semantic build when no compatible result is available:
 }
 ```
 
-`fast` runs or reuses lexical rules only. `auto` also reuses compatible semantic
-results; on a semantic miss it reports `semantic.status="not_run"` while the
-lexical scan still runs or reuses its cache. `deep` permits a cold semantic
-build but still reuses compatible completed results. Scope limits basic fact
-extraction, not necessarily frontend parsing or elaboration. Time, memory and
-coverage limits still apply; these modes do not require a full-design
-ConnectivityIR build.
+All modes run or reuse the five lexical rules independently. Semantic routing is:
+
+| Mode | Existing/cached KDB through NPI | Missing semantic categories |
+| --- | --- | --- |
+| `fast` | No discovery, load, license request or LSF submission | Not run; no Slang work |
+| `auto` (default) | Discover, validate, load and inspect within budget | Compatible completed source-memory results or scoped query IR only; no cold Slang build |
+| `deep` | Same native priority, including when source results are cached | Reuse first; permit bounded isolated Slang construction |
+
+Scanning never invokes `build_kdb`, `vericom`, `elabcom` or a simulator. NPI may
+request a commercial license, following `TRACEWEAVE_NPI_EXECUTION` and the
+namespaced LSF settings below. Slang remains license-free. Missing Slang,
+disabled Source Graph or incomplete source capture does not prevent an existing
+bound KDB's input-port observations. Missing KDBs use the source route by mode.
+If compile metadata has no unique top, supply an explicit `top_hint`; NPI verifies
+it exactly rather than selecting the first candidate. The hint also selects the
+source elaboration top. Other compile tops are outside that selected domain.
+
+For example, request native input-port categories explicitly:
+
+```json
+{
+  "compile_log": "/path/to/build.log",
+  "top_hint": "tb",
+  "semantic_scope": "tb.dut",
+  "semantic_categories": ["constant_connection", "open_input"],
+  "analysis_mode": "auto"
+}
+```
+
+The category list replaces the default selection. Defaults remain
+`constant_connection`, `open_input`, `constant_comparison`; NPI does not implement
+comparison, propagated-constant or constant-control checks. Source supplementation
+retains those Slang capabilities. An `auto` cache miss cannot cover a comparison.
+Scope limits basic source fact extraction, not necessarily frontend elaboration;
+these modes do not require a full-design ConnectivityIR build.
+
+### Native port facts and coverage
+
+`npi_structural_scan.py` walks actual elaborated instances and active generate
+scopes through bounded Language `iterate`/`scan`, inside the existing exclusive
+native owner. It uses `Port`, exact direction, `HighConn` / `LowConn`, and native
+binary values. Verified forms include literal and parameter constants, folding
+of constant-only operations, X/Z, and constant regions of equal-width concatenations.
+`constant_regions.lsb_offset` counts from the port's least significant position;
+each region's `bits` is MSB first, matching Slang. Unequal actual/port widths,
+unmodeled selections/expressions, unknown directions, unresolved array/scope forms
+and missing metadata create explicit gaps. Initial/reset register values never
+become permanent port ties. Native `constant_connection` covers input bindings;
+source continuous assignments are a separate evidence domain.
+
+An absent HighConn alone never proves an open input. Positive port-instance
+location and the exact LowConn identify `connection_status="explicit_empty"`.
+This is an empty parent-actual observation: the installed SDK does not reliably
+recover default-port behavior, so `npi_empty_actual_default_semantics_unverified`
+keeps coverage partial. Missing/omitted/default connections without that positive
+syntax evidence remain unresolved. Top inputs are boundaries; output/inout/ref
+ports are excluded. Native locations retain `source_association="unverified"`;
+compile metadata does not establish that current source bytes produced the KDB.
+
+`semantic.category_coverage` carries requested `scope`, actual `checked_scope`,
+status, backend, fact count, gaps and result-group reference. `result_groups`
+preserve the selected top, evidence domain and identity; native groups also retain
+the bounded KDB/load binding, load quality and source-association limitation.
+Complete means every requested category was checked in its declared domain, not
+that the design is defect-free. An unstarted category has no checked scope.
+
+One category selects one inventory: complete NPI has priority; a complete source
+pass can replace partial NPI for that category; two partial inventories are not
+added together. Replaced groups keep their receipts and empty `selected_categories`.
+Every returned fact has a unique `backend` and `result_group`. Combined results
+report `backend="mixed"`; they never claim one shared native/source artifact.
+Cache hits and zero facts do not establish completion. Lexical risk counts and
+semantic fact counts stay separate, including in diagnostic/recommendation summaries.
+Display trimming preserves counts, group identities and category coverage and marks
+`output_truncated`; work stops remain partial. The combined displayed list is also
+capped by `semantic_max_facts`, independently of each backend's extraction bound.
+
+### Native scan lifecycle and limits
+
+`structural_native_runtime.py` uses one semantic deadline (default 15s, maximum
+120s) for metadata/KDB discovery, validation, load, LSF queue/transport, traversal,
+source supplementation and final validation. The lexical pass has its independent
+lifecycle. Cancellation, total timeout, changed KDB/metadata/native generation or
+execution policy terminate the semantic request without starting another backend.
+`termination_reason` reports fixed terminal labels; late/cross-identity facts are
+discarded. An ordinary unavailable/unsupported backend can fall back by mode.
+
+Local NPI remains synchronous on the dispatch thread and serializes through the
+existing Language owner. No new native thread or waveform read/lock is introduced.
+The SDK cannot be interrupted inside a synchronous call; checkpoints reject late
+completion and cleanup still runs. A blocked local call can delay other event-loop
+work. Iterators are released and Language handles cleared on every owner exit.
+At most one successfully validated local backend is retained for loaded-design
+reuse; no native handles or new native scan-result/disk cache are retained.
+A failed reused backend is discarded so later requests can try again.
+
+`semantic_max_instances` bounds native visited scopes (including generate scopes);
+`semantic_max_facts` bounds each extraction. Native work additionally caps explicit
+calls at 100,000, ports at 100,000, hierarchy depth at 128, expression depth at 64,
+operands at 256, widths at 4,096, handles at 16,384, and estimated fact storage at
+8 MiB. The existing owner can observe one final handle while detecting its cap;
+that attempted count is retained with `native_handle_limit`. Work metrics identify
+native calls/ports/scopes separately from Slang AST visits. `semantic_max_rss_mib`
+bounds the isolated Slang worker, not local NPI; process RSS can grow with a loaded KDB.
+No hard native RSS isolation is claimed.
+
+LSF uses the distinct version-5 `structural_scan` worker operation over the existing
+private transport. Requests carry metadata, exact KDB/top/scope/categories and
+remaining duration; the parent retains its original deadline. The worker executes
+only the same NPI core, with no discovery, KDB build, Slang or fallback. Both boundaries
+validate request fingerprint, binding, category/bit shapes, counts and work caps.
+The parent requires matching load quality and completed scheduler/worker receipts;
+identity/protocol mismatches are terminal. `semantic.native_execution` exposes fixed
+`execution_mode`, `scheduler_status`, `worker_status` and failure labels only.
+Source supplementation remains local. Queue cancellation and bounded kill retain
+the existing transport behavior; no local licensed fallback occurs in LSF mode.
 
 ## Client Configuration Reference
 
@@ -2965,10 +3077,10 @@ JSON values are literal too; do not put `"$LSF_QUEUE"` in this static map.
 
 With this mode enabled, explicit connectivity operations
 (`explain_signal_driver`, `find_signal_loads`, `trace_signal_path`,
-`trace_x_source`) and every `build_kdb` cache miss or forced rebuild submit a
-short `bsub -K` worker. Exact KDB cache hits, log parsing, waveform reads,
-structural scans, KDB detection, and Static analysis remain local because they
-do not invoke a licensed Verdi executable. Connectivity-worker failure or
+`trace_x_source`), native structural scans in `auto` / `deep`, and every
+`build_kdb` cache miss or forced rebuild submit a bounded `bsub -K` worker.
+Exact KDB cache hits, log parsing, waveform reads, lexical structural rules,
+source supplementation, KDB detection and Static analysis remain local. Connectivity-worker failure or
 timeout falls through to the local Source Graph and then to Legacy Static if
 that bounded graph is unavailable or inconclusive. A KDB-build worker failure
 does **not** fall back to local `vericom`/`elabcom`; `build_kdb` returns a fixed

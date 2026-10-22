@@ -170,7 +170,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 |  | `analyze_failures` | 关联一组失败的日志与波形证据 |
 |  | `analyze_failure_event` | 关联单个失败的实例、信号与源码线索 |
 |  | `recommend_failure_debug_next_steps` | 推荐调查目标与后续工具调用 |
-| 结构与追踪 | `scan_structural_risks` | 扫描可疑源码结构，支持语义深查 |
+| 结构与追踪 | `scan_structural_risks` | 执行文本规则及 NPI 端口检查，deep 可补齐源码语义 |
 |  | `explain_signal_driver` | 追踪信号驱动及源码位置 |
 |  | `find_signal_loads` | 查找消费者与负载 |
 |  | `trace_signal_path` | 查询信号间的结构连通路径 |
@@ -229,11 +229,13 @@ explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
 
 **没有商业 license 也能用吗？**
 
-日志分析、VCD、可选 FST、结构扫描和 Source Graph 无需商业 license。FSDB 使用站点提供的 Verdi FSDB Reader，须遵守相应协议；NPI 追踪和 KDB 构建需要对应 EDA 环境与 license。
+日志分析、VCD、可选 FST、结构扫描的文本规则及 Slang / Source Graph 无需商业 license。结构扫描的 `auto` / `deep` 会优先尝试已有 KDB 的 NPI 检查，可能在本地或配置的 LSF 节点申请 license；`fast` 仅做文本检查。FSDB 使用站点提供的 Verdi FSDB Reader，须遵守相应协议；NPI 和 KDB 构建需要对应 EDA 环境与 license。
 
 **结构扫描需要仿真结果吗？**
 
-不需要。提供编译/展开日志，以及可访问的源码和 include 文件即可。默认 `auto` 执行文本检查并复用兼容语义结果；需要新做语义检查时用 `deep`。发现项是调查线索，也可能是正常 tie-off。
+不需要。提供编译/展开日志即可。文本检查读取可访问的源码；默认 `auto` 还会优先使用已有或缓存 KDB 做 NPI 输入端口检查，缺失类别只复用兼容的源码语义结果。`deep` 另外允许有界的 Slang 构建。扫描不会自动建 KDB；编译记录没有唯一顶层时可传 `top_hint`。
+
+查看 `semantic.category_coverage` 和 `result_groups`，区分 NPI 端口事实与源码事实的范围和身份。默认的比较检查仍需源码证据；未知表达式、空实际连接的默认值语义、预算截断均保留缺口。零事实和缓存命中不证明完整，发现项也可能是正常 tie-off。详见[扫描模式与限制](docs/architecture.md#structural-scan-invocation)。
 
 **能分析 formal 波形吗？**
 

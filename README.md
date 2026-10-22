@@ -172,7 +172,7 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 |  | `analyze_failures` | Combine log and waveform evidence for a failure group |
 |  | `analyze_failure_event` | Correlate one failure with instance, signal, and source leads |
 |  | `recommend_failure_debug_next_steps` | Suggest investigation targets and next tool calls |
-| Structure and tracing | `scan_structural_risks` | Scan suspicious source structures, with optional deep semantic checks |
+| Structure and tracing | `scan_structural_risks` | Scan text rules and NPI port facts; deep can supplement source semantics |
 |  | `explain_signal_driver` | Trace signal drivers and source locations |
 |  | `find_signal_loads` | Find signal consumers and loads |
 |  | `trace_signal_path` | Query structural connectivity between signals |
@@ -237,11 +237,13 @@ independent requirements; zero coverage is never a clean result.
 
 **Can I use it without a commercial license?**
 
-Log analysis, VCD, optional FST, structural scanning, and Source Graph need no commercial license. FSDB uses your site's Verdi FSDB Reader under its applicable agreement. NPI tracing and KDB builds require the corresponding EDA environment and license.
+Log analysis, VCD, optional FST, lexical structural checks, and Slang / Source Graph analysis need no commercial license. Structural scans in `auto` / `deep` first try an existing KDB through NPI, which can request a license locally or through configured LSF. `fast` performs text checks only. FSDB uses your site's Verdi FSDB Reader under its applicable agreement; NPI and KDB builds require the corresponding EDA environment and license.
 
 **Do I need simulation results for a structural scan?**
 
-No. Supply a compile/elaboration log and accessible sources/includes. The default `auto` mode runs text checks and reuses compatible semantic results; request `deep` for a new semantic scan. Findings are investigation leads, including potentially legitimate tie-offs.
+No. Supply a compile/elaboration log. Text checks use accessible sources; `auto` also tries existing/cached KDBs for NPI input-port checks, then only reuses compatible source semantic results for missing categories. `deep` additionally permits a bounded Slang build. Scans never build a KDB. Supply `top_hint` if compile metadata lacks a unique top.
+
+Read `semantic.category_coverage` and `result_groups`: NPI port facts and source facts retain separate domains and identities. Default comparison checks still need source evidence; unknown expressions, empty-actual default semantics and budget stops remain gaps. Zero facts or a cache hit does not prove completeness. Findings can include legitimate tie-offs. See [scan modes and limits](docs/architecture.md#structural-scan-invocation).
 
 **Can it inspect formal waveforms?**
 

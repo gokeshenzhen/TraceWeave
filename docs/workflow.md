@@ -167,9 +167,9 @@ Step 2: scan_structural_risks(compile_log, simulator)
 │  locations remain compile-log-derived in LSF mode.
 │
 └─ scan_structural_risks independently scans the compiled RTL/TB source set.
-   Its CPU-bound body runs in a lock-free cancellable worker, so preparation
-   worker and lightweight MCP calls remain schedulable while this scan is in
-   flight.
+   Its lexical CPU work runs in a lock-free cancellable worker. Native semantic
+   queries preserve the synchronous local NPI owner; an in-progress native call
+   can delay the event loop. Configured LSF queries use the existing worker path.
    Returns source-anchored structural risks (for example overlap, multi-drive,
    incomplete control, or narrow-condition findings). Risks overlapping the
    eventual failing signal/source path are high-priority root-cause candidates,
@@ -179,9 +179,14 @@ Step 2: scan_structural_risks(compile_log, simulator)
    requested deep scan has incomplete semantics. Complete lexical coverage
    with zero risks only means the covered lexical rules found no risks.
    Default analysis_mode=auto runs/reuses lexical rules and reuses compatible
-   semantic facts without a cold frontend build. semantic.status=not_run is
-   neither a skipped lexical scan nor a semantic pass. Use deep when new
-   semantic evidence is needed; fast performs lexical checks only.
+   semantic facts without a cold Slang build after first attempting existing KDBs
+   through NPI. NPI may request a local/LSF license; scanning never builds a KDB.
+   Use top_hint when compile metadata has no unique top. Read category_coverage,
+   result_groups and native_execution: input-port observations and source checks
+   retain separate domains/identities, and default comparisons remain missing until
+   source evidence covers them. Empty actuals do not establish default behavior.
+   semantic.status=not_run is neither a skipped lexical scan nor a semantic pass.
+   deep permits bounded Slang supplementation; fast never probes or loads NPI.
 │
 ▼
 Step 3: parse_sim_log(log_path, simulator)
