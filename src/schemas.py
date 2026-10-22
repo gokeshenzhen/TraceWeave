@@ -537,6 +537,7 @@ class StructuralCategoryCoverage(SchemaModel):
     backend: Literal["none", "verdi_npi", "slang"]
     result_group: str | None = None
     scope: str | None = None
+    checked_scope: str | None = None
     evidence_domain: str
     total_facts: int = 0
     gaps: list[str] = Field(default_factory=list)
@@ -546,7 +547,10 @@ class StructuralResultGroup(SchemaModel):
     group_id: str
     backend: Literal["verdi_npi", "slang"]
     artifact_identity: str | None = None
+    selected_top: str | None = None
+    kdb_binding: dict[str, Any] | None = None
     scope: str | None = None
+    checked_scope: str | None = None
     evidence_domain: str
     status: str
     categories_checked: list[str] = Field(default_factory=list)

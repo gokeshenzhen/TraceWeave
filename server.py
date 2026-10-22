@@ -9846,6 +9846,8 @@ async def _dispatch_inner(name: str, args: dict):
             )
             await source_guard()
             raw["artifact_identity"] = identity.digest
+            raw["selected_top"] = args.get("top_hint")
+            raw["checked_scope"] = semantic_options["scope"] or args.get("top_hint")
             return raw
 
         def metadata_guard():

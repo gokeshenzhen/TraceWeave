@@ -38,6 +38,9 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
         groups.append({
             "group_id": group_id, "backend": backend,
             "artifact_identity": raw.get("artifact_identity"), "scope": scope,
+            "selected_top": raw.get("selected_top"),
+            "checked_scope": raw.get("checked_scope", scope),
+            "kdb_binding": copy.deepcopy(raw.get("kdb_binding")),
             "evidence_domain": "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics",
             "status": raw["status"], "categories_checked": raw.get("categories_checked", []),
             "selected_categories": [], "total_facts": raw.get("total_facts", 0),
@@ -66,7 +69,7 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
         coverage.append({
             "category": category, "status": receipt["status"], "backend": backend,
             "result_group": backend if raw is not None else None,
-            "scope": scope, "total_facts": len(rows), "gaps": list(receipt.get("gaps", [])),
+            "scope": scope, "checked_scope": (raw or {}).get("checked_scope", scope), "total_facts": len(rows), "gaps": list(receipt.get("gaps", [])),
             "evidence_domain": "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics",
         })
     for group in groups:
@@ -79,7 +82,7 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
     backends = {c["backend"] for c in coverage if c["backend"] != "none"}
     # Preserve existing source fields (propagation, templates, display receipt).
     result = copy.deepcopy(source or {})
-    for key in ("category_results", "artifact_identity", "limitations"):
+    for key in ("category_results", "artifact_identity", "limitations", "selected_top", "checked_scope", "kdb_binding"):
         result.pop(key, None)
     result.update(status=status, scope=scope, backend=(next(iter(backends)) if len(backends) == 1 else "mixed" if backends else "none"),
                   facts=facts, total_facts=len(facts), counts=dict(Counter(f["kind"] for f in facts)),

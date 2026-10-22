@@ -48,3 +48,14 @@ def test_unknown_native_form_preserves_positive_evidence_with_partial_source():
                           categories_checked=OPTIONS['categories'], facts=[], gaps=['source_gap']))
     assert r['status'] == 'partial' and r['facts'][0]['backend'] == 'verdi_npi'
     assert 'native_call_limit' in r['gaps']
+
+
+def test_requested_domain_and_checked_top_keep_kdb_binding_separate_from_source():
+    n = native()
+    n.update(selected_top='top', checked_scope='top',
+             kdb_binding={'identity_sha256': 'kdb', 'load_status':'loaded', 'source_association':'unverified'})
+    r = SemanticScanResult.model_validate(combine_semantics({**OPTIONS, 'scope':None}, n))
+    assert r.category_coverage[0].scope is None
+    assert r.category_coverage[0].checked_scope == 'top'
+    assert r.result_groups[0].selected_top == 'top'
+    assert r.result_groups[0].kdb_binding['source_association'] == 'unverified'

@@ -111,6 +111,9 @@ class StructuralNativeRuntime:
                             except Exception:
                                 await validate()
                                 native = unavailable(options, 'npi_scan_failed')
+                    if inputs is not None:
+                        native['selected_top'] = inputs.selected_top
+                        native['checked_scope'] = options['scope'] or inputs.selected_top
                     attempts.append(dict(backend='verdi_npi', status=native['status'], reason=(native.get('gaps') or ['completed'])[0]))
                 else:
                     native = unavailable(options, 'npi_category_unsupported', status='unsupported')
