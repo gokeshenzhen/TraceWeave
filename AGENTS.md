@@ -184,53 +184,160 @@ If the task involves behavior validation or regression checks, also read:
 
 ## Repository Focus
 
-- `server.py` is the composition root and MCP entry point. `native_query.py`/`native_dispatch.py` route metadata; `source_fallback_runtime.py` retains bounded refs/flights.
-- `explain_signal_driver`, `find_signal_loads`, `trace_signal_path`, and `trace_x_source` route through `trusted Verdi NPI -> bounded on-demand Source Graph -> Legacy Static`. The adapter builds content-fingerprinted requests without full-design enumeration. `compile_session_snapshot` captures private digest/stat/marker facts during hierarchy reads; the first Source Graph call reuses current digests and hashes only unseen inputs, while changed/incomplete capture reports `compile_session_snapshot_changed` and requires a hierarchy rebuild. Production uses isolated workers, bounded compact-IR memory caching, one-build admission, and exact-key single-flight. An incomplete key may share only its live flight; one successful content-anchored result may provide a consumed-once 60-second/512-MiB exact handoff that stays `bypass_incomplete_key`, never dominates another scope, and never enters memory/disk cache. One waiter cancellation preserves shared work; final-waiter cancellation stops it. The bounded persistent Slang semantic session is default-off and gated by `scripts/soak_source_graph_semantic_session.py`. The optional exact disk tier (`TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE=1`) performs no startup scan, validates fresh ordered inputs/options/tops/snapshots before every hit, keeps entries private, and treats corruption as a miss. Adapter/query/Static work never holds a wave lock; cancellation never advances fallback. Receipts expose backend attempts, fixed reasons, coverage/fingerprints, and `effective_timeout_sec`; facts come from one backend/artifact only. `trace_x_source` rebuilds an exact ancestor union and restarts from the original signal whenever a new X target falls outside the current artifact.
-- `src/cancellation.py` + `server._run_in_wave_thread`: synchronous wave scans run off the event loop. Locks are acquired inside the worker—one process-global lock for all FSDB handles, one per VCD path; dual-path diff locks in stable order. `trace_x_source` releases the wave lock before connectivity work. Static/Source Graph are lock-free cancellable workers; local NPI remains synchronous and LSF keeps its worker path. Any backend change discards the partial chain and restarts from the original signal; incomplete positive Source Graph edges remain partial, but only a complete negative may terminate. Cancellation sets a per-call event; long scan/discovery loops checkpoint and re-raise `OperationCancelled`. Native search is interrupted only after the native call returns. A cancelled lock waiter never touches the parser; an interactive FSDB request may preempt a background sweep at its next checkpoint without overlapping FFR access. Operation metrics accept only whitelisted numeric aggregates/fixed phases, never paths/scopes/names/values. Worker results return to the event loop, which remains the sole writer of dispatch/session state. Preserve regressions in `tests/test_server_concurrency.py` and `tests/test_source_graph_trace_public_routing.py`.
-- Full-sweep operation metrics add only privacy-safe aggregates: total sweep time, planned/attempted/completed interface counts, unique clock/signal counts, aggregate/max inspect time, clock-vs-signal transition read count/total/max, edge-extraction/value-sampling time, and transition-truncated interface count. FSDB sweeps also expose aggregate native phase timings, group/fallback counts, transition/output volume, sampling shape, cache peaks, result build/serialization cost, and process RSS start/peak/end. They remain numeric/fixed-label only. They never record paths, scopes, signal names, search keywords, or values.
-- `src/path_discovery.py` owns compile/sim/wave path discovery.
-- `src/compile_source_index.py` + `src/compile_source_runtime.py` provide the
-  transient compile-source sharing layer used by the default parallel
-  `build_tb_hierarchy` / `scan_structural_risks` workflow. Exact compile
-  identities single-flight one bounded preload (128 MiB / 32,768 files by
-  default); both consumers reuse immutable decoded text plus its exact raw-byte
-  digest/stat/marker evidence, and the final lease immediately clears all
-  source bodies. Capacity/config failure is an optimization bypass, not a
-  functional blocker. Cancellation of one waiter preserves other consumers;
-  final-waiter cancellation stops preload. An explicit bounded bootstrap may
-  join an already-active exact index but never creates a full-design preload on
-  a miss. Public metrics contain numeric counters and fixed dispositions only.
-- `src/compile_log_parser.py` and `src/tb_hierarchy_builder.py` drive compile-log-based hierarchy extraction. Repeated module/UVM descendants retain the compatibility nested-dict schema but share immutable children mappings as an internal object DAG. Logical stats memoize shared subtree summaries; build metrics distinguish logical nodes, reachable physical nodes, allocations, cache hits, and reuse. Full-build instance candidates/nodes also carry fixed edge origin/status/gaps: only complete/positive-local edges enter the tree; explicit/implicit generate, instance-array, and bind candidates stay diagnostic rather than becoming fictitious flat paths; parameter overrides keep the safe direct edge while Slang owns specialization; duplicate definitions stop at an ambiguous node without guessed descendants. Query-relevant hierarchy gaps flow into Source Graph objective exclusions, while the parameter-only gap is informational because the semantic frontend elaborates it. Bounded bootstrap uses the same positive-only rule and blocks a direct unresolved semantic edge. The optional path-specific NPI `file:line` overlay detects aliases and uses copy-on-write only on annotated paths, so provenance never bleeds between repeated instances. `scripts/benchmark_hierarchy_materialization.py` provides the fresh-process eager/shared scaling oracle; `scripts/benchmark_tb_hierarchy.py --no-hierarchy-template-sharing` is the real-design A/B control.
-- `src/hierarchy_provider.py` is the internal bounded hierarchy contract. The compile-log provider wraps the compatibility `component_tree` and resolves a target by exact child lookup without sibling/full-design enumeration. The Connectivity-IR provider reuses the prepared query engine's immutable instance/definition indexes, preserves generate scopes and parameter specializations through `InstanceDecl` parent bindings, and lazily indexes direct children. The NPI provider is an explicit development/differential path: before any KDB load it caps the target's dotted prefixes (default 256, hard maximum 1,024), then consumes only exact `get_inst()` + direct definition/source facts; it never performs a top/sibling walk and always carries `npi_hierarchy_fragment_bounded`, so its negative coverage is incomplete. Provider-local stable instance IDs are scoped by immutable design identity. Basic `build_tb_hierarchy` never imports or requires the optional Slang frontend, the normal hierarchy build never invokes the NPI semantic provider, and public hierarchy/Source Graph receipt schemas remain unchanged. `scripts/benchmark_hierarchy_provider_soc.py` is the opt-in fresh-process NPI/Slang differential harness and emits only hashed facts plus numeric resource measurements.
-- `src/analyzer.py` and `src/log_parser.py` contain the core failure analysis logic.
-- `src/signal_driver.py` backtracks RTL drivers from waveform signal paths.
-- `src/signal_load.py` resolves load/fanout for a signal — the symmetric counterpart to `signal_driver`.
-- `src/connectivity_backend.py` defines the `ConnectivityBackend` protocol; `select_backend()` returns local Verdi NPI when a KDB is found, optional LSF NPI when `TRACEWEAVE_NPI_EXECUTION=lsf`, otherwise Static. NPI/worker failures degrade transparently; the dispatch layer never sees Verdi- or scheduler-specific exceptions.
-- `src/verdi_backend.py` probes for Verdi KDB / license environment; emits per-simulator `kdb_hint` when KDB is missing.
-- `src/npi_lsf.py` + `src/npi_worker.py` implement opt-in LSF placement for licensed Verdi/NPI work: explicit NPI driver/load/path queries plus `build_kdb` cache misses and forced rebuilds. Default execution is `local`; `lsf` reads its queue only from the namespaced `TRACEWEAVE_NPI_LSF_QUEUE`. Sites may map a team variable in shell startup (for example `export TRACEWEAVE_NPI_LSF_QUEUE="$LSF_QUEUE"`), but TraceWeave does not interpret generic scheduler variables. The parent writes a versioned request in a private shared staging directory and submits one `bsub -K` worker with `shell=False`. Connectivity workers call the exact local NPI core and never Static; only the parent falls back. KDB workers run the exact `vericom` + `elabcom` builder and never fall back to a local licensed build. Exact KDB cache hits remain local filesystem reads and submit no job. Scheduler wait runs under `server._run_in_cancellable_thread`, and cancellation/timeout uses an identity-free random job name for bounded `bkill -J` plus local waiter termination. Public receipts contain fixed `execution_mode`/`scheduler_status`/`worker_status`/`fallback_reason` labels only — never queue, host, command, or license text. The initial scope deliberately excludes the optional hierarchy source overlay so `build_tb_hierarchy` does not submit an implicit batch job.
-- `src/verdi_npi_backend.py` implements NPI driver/load/path queries and the optional hierarchy `file:line` overlay; it lazily loads `$VERDI_HOME` `pynpi` and reuses loaded designs. NPI may cross instance boundaries with `fan_in_reg_list`; path uses `sig_to_sig_conn_list`, while Static honestly reports `static_backend_no_path_api`. Preserve the TB-driver misattribution guard: before any recursive fan-in, compare NPI's **original** `driver_list` with the same net's own `load_list`, normalized only for bit indexing. A byte-identical driver/load is a consumer alias, not a source; prefer another genuine runtime driver, otherwise return `driver_status="testbench_driven"`, `cross_check.conflict`, and `driver_is_load_real_driver_is_testbench`. Never key this decision on recursive fan-in or widen the comparison to fan-out: the former misses downstream-load aliases and the latter false-positives self-feedback counters. Initial-value blocks are not genuine runtime drivers. Keep this pure logic covered without a live KDB, including `recursive=True`.
-- Recursive NPI driver traversal is bounded inside native `fan_in_reg_list()` through the official global `FAN_IN` callback: at most 4,096 admitted states and 32 public driver facts. Registration/traversal/reset is process-serialized; reset runs on success, failure, and cancellation. Missing or failed callback support never restores an unbounded call. NPI and Source Graph driver results share the additive backend-neutral `traversal` receipt; bounded positive facts use `driver_status="partial"` and remain authoritative, while zero-fact/incomplete negatives continue through the fallback chain. `trace_x_source` preserves that receipt and stops with `driver_traversal_incomplete` rather than presenting a bounded prefix as an exclusive root cause.
-- `src/connectivity_query.py` uses deterministic BFS with one selection and predecessor per discovered state, then reconstructs the shortest path once with cancellation checkpoints. Never queue full path prefixes: the 4,096-edge comb exposed superlinear CPU and about 2x RSS. Preserve ordering, coverage, caps, schemas and fingerprints.
-- `src/kdb_builder.py` provides the `build_kdb` MCP tool: when a Verdi KDB is missing (typical for Xcelium / `xrun` flows), it runs `vericom -kdb` + `elabcom -elab kdb` against the file list parsed from the compile log, caches the result under `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/`, and writes a runnable `build.sh` reproducer. In `TRACEWEAVE_NPI_EXECUTION=lsf` mode, a cache miss or forced rebuild is sent through the LSF worker and cannot silently build locally; a cache hit stays local because it invokes no Verdi executable or license. The probe in `verdi_backend.py` picks up the cache transparently as `kdb_flow: "traceweave_cached"`. Default-on; opt out with `TRACEWEAVE_AUTO_KDB=0`.
-- `src/waveform_batch.py` exposes `WaveformBatchReader` for time-window multi-signal reads, with FSDB and VCD implementations sharing one shape.
-- `src/structural_scanner.py` and `src/x_trace.py` are first-class analysis capabilities.
-- `src/cycle_query.py` provides cycle-index slicing and time-window edge sampling through one private core. Compatibility sweeps use `EdgeSamplingSession` per clock group: reuse clock transitions/edges/sample times, cache only shared signals and evict after their final consumer. Groups run serially; standalone behavior, cancellation, truncation and schemas remain unchanged. `annotate_center_transients` post-processes `get_signals_around_time`: only the dip-and-return `X→glitch→X` pattern marks a sub-cycle transient, adding `transient_note`, `center_transient`, `center_settles_to` and `center_settle_ps`. `server.call_tool` applies it automatically so a ~1ns mux idle glitch at an edge is not mistaken for settled protocol state. Zero-FP: only the dip-and-return signature is flagged.
-- `src/fsdb_sweep_stream.py` bounds capable FSDB sweeps by event pages (1,024 records / 256 KiB) and sample blocks (2,048 edges / 8 MiB logical bytes). `HandshakeConsumer` preserves stalls, payload/valid latches, X episodes, AHB write/data phases, counters and finding quotas across blocks; finish only at request end or a reported stop. Strict-before/raw-fs ordering, same-tick groups, cancellation and the global FFR lock remain. A private single-transition fast path retains generic folding for uncertain groups. Request work is separately capped at 50M page records / 32 GiB logical work / 300s; stops remain partial. Failed/unsupported groups use compatibility sampling. Native RSS can still grow with FFR sessions. See `docs/architecture.md` for packing, coverage gaps and cleanup.
-- `src/schemas.py` is the single source of truth for tool output contracts.
-- `src/problem_hints.py` provides lightweight failure symptom annotations.
-- `src/hierarchy_handles.py` owns the in-process `HandleStore` and content-addressed handle derivation. `build_tb_hierarchy` returns a slim payload + `hierarchy_handle`; the full hierarchy is registered here and resolved by the handle tools. Handles are not persisted — server restart drops them.
-- `src/handle_tools.py` implements `get_tb_subtree`, `lookup_tb_files`, `find_tb_instance`, `get_tb_file_detail`, `get_tb_class_hierarchy`, `dump_tb_section` as pure functions over a resolved full hierarchy dict. `lookup_tb_files` requires at least one filter; `get_tb_file_detail` returns `did_you_mean` basename suggestions when the path is not in the compile set (multi-version safety net).
-- `src/fsdb_parser.py` and `native/fsdb/fsdb_wrapper.cpp` define the Python/native FSDB boundary. FSDB tags are **tick counts, not picoseconds** (real time = tick x header scale, read at `fsdb_open` via `ffrGetScaleUnit()`, e.g. `100fs`); every tick<->ps conversion goes through exactly two helpers in `native/fsdb/fsdb_wrapper.cpp` (`_ToTag` floor on input / `_TagToPs` ceil on output, integer-fs internal base so sub-ps scales lose no precision) — never hand-roll a `<<32|` time conversion. An unreadable scale refuses time-based queries (`FSDB_ERR_SCALE_UNKNOWN`) instead of assuming 1ps; `get_waveform_summary` exposes `scale_unit`/`scale_fs_per_tick` as the self-check. Public `get_signal_transitions.transitions` is a strict closed-window list on both FSDB and VCD; the last value-change strictly before the start is a separate `predecessor` field. `cycle_query` must seed first-edge direction and pre-first-sample values from that field before falling back to a point query — especially inside an active FSDB group, where an independent point query would load/unload and invalidate resident group state. `get_signals_around_time` likewise keeps strict in-window transitions separate from chronological pre-window history. For compatibility FSDB sweeps, the optional transition-group ABI loads a bounded signal group once, reads through the reusable 64 MiB buffer, and unloads in `finally`; the default group cap is 16 (`TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS`, clamped 1..256). Oversized groups, begin errors, and old wrappers fall back to legacy per-signal loading. Cancellation and exceptions must still unload, and no native group may outlive the process-global FSDB lock. Cross-scale regression lives in `tests/test_fsdb_timescale.py` (fixtures `scale_100fs.fsdb`/`scale_1ns.fsdb`).
-- `src/cursor_store.py` owns the in-process `CursorStore` — named, process-scoped time anchors (`cursor_set`/`cursor_list`/`cursor_delete`). Same lifetime semantics as `HandleStore`: not persisted, dropped on restart, no "active cursor" (references are always explicit `@name`).
-- `src/timespec.py` resolves a TimeSpec (raw ps int, `@cursor` ref, or unit literal like `12.34ns`) to picoseconds. `server._resolve_time` wires it into every time-taking tool input (`get_signal_at_time`, `get_signal_transitions`, `get_signals_around_time`, `trace_x_source`, `diff_first_divergence`, `period`). Arithmetic (`@c ± cycle(clk)`) is intentionally NOT implemented yet (reserved for a future Lark grammar).
-- `src/verify_condition.py` implements `diff_first_divergence`, `period`, and `inspect_handshake`; all read existing waveforms and register an evidence cursor. `inspect_handshake` reports cycle-level stalls/backpressure, payload-hold violations, and premature valid/htrans deassertion before acceptance. For AHB, derive valid with `valid_htrans` + `htrans_rule`; its payload is address-phase control only. `x_while_valid` applies only to AHB control, not literal-valid data lanes that may legally be X. Check HWDATA via the separate `hwrite` + `write_data` data-phase hold check, and only on a mechanically confirmed initiator/producer bundle. Read `protocol_semantics`, `coverage`, `accepted_before_deassert`, and `violating_signal`; coverage names only checks actually run. X-while-valid, payload-hold, and premature deassertion are one-sided producer/valid-driver violations: the ready driver is exonerated, so follow `next_actions` to the producer (master on AXI AW/AR/W, slave on R/B; AHB HTRANS is master-driven). A UVM producer may correctly resolve as `testbench_driven`; do not reinterpret a landed DUT load as its driver. A plain stall remains two-sided and targets `ready`. `diff_value_distribution` remains intentionally unregistered; do not expose it without a demonstrated use case.
-- `src/window_verify.py` implements `verify_window`: templated temporal checks, not a DSL. Terms are `{signal,op,value}`, predicates are implicit AND, and modes are `always`, `never`, `eventually`, `implication`, and `sequence`. Use `overlap=false` (`|=>`, `within_cycles>=1`) for hold/stability properties; the default overlapping form can pass vacuously on the antecedent cycle, so never use a reported `vacuous=true`/`VACUOUS PASS` as exclusion evidence. `sequence.delta` supports caller-supplied `modulo` for WRAP and `restart_when` for burst starts; first/restart beats seed, gate-false waits preserve the predecessor, and X/Z breaks continuity. Unknown and end-window implication cases remain explicit (`unknown_cycles`/`inconclusive_count`). A sequence violation links its `violating_signal` to `explain_signal_driver`; protocol-side attribution and hypothesis generation remain the LLM's job.
-- `src/handshake_suggest.py` provides `suggest_handshakes` (T2 of the protocol-debug plan, the "self-serve multiplier"): reads bounded scope metadata pages (legacy wrappers use `search_signals`) and proposes ready-to-use `inspect_handshake` bundles — pairs `*valid`/`*ready` by scope + stem, locates the clock (same scope or nearest ancestor), and groups unambiguous same-channel payload fields with compatible directions. It also provides `suggest_protocol_bundles` for AHB/APB discovery: AHB returns `valid_htrans`-based `inspect_handshake` args (payload = address-phase control only — HADDR/HWRITE/HSIZE/HBURST/HPROT; HWDATA/HRDATA are excluded as data-phase, so payload-hold cannot false-positive on the address/data phase offset — HWDATA is instead surfaced as `hwrite`+`write_data` for the write data-phase hold check, but ONLY on a mechanically-confirmed initiator-side interface: on a responder/consumer interface HWDATA is a combinational interconnect-mux output that glitches to its idle value for ~1 cycle at each clock edge, which the edge sampler reads as a spurious change, so hwrite/write_data are withheld on responder/unknown interfaces to keep the check zero-FP); APB returns `psel`/`penable`/`pready` facts and marks the missing derived-valid step. AHB results also carry a `next_step` field with a copy-paste-ready `inspect_handshake(...)` call per candidate (via `_inspect_handshake_relay`) — discovery only LOCATES the interface, `inspect_handshake` is the analysis; weak models stop at discovery unless the next call is spelled out at the one point its args first exist (here, not at parse time — parse has no signal paths). Direction tags are emitted only from discovery-layer mechanical evidence and degrade to `unknown` rather than guessing. Core proposal functions are pure over `{path,name,width,var_type}` descriptors (fully unit-tested).
-- `src/handshake_sweep.py` implements `sweep_handshakes`, the whole-design anomaly scan over every discovered valid/ready and AHB interface (APB lacks the required derived-valid form and is excluded). Clocking-block `*_cb` mirrors are dropped. It returns an ordered comparative fact table, not a root-cause verdict: on a backpressured pipeline the top row may be the propagation front, while the cause is at the stall-to-starvation boundary. `ready_without_valid` is legal idle-ready behavior in both families and is excluded from flags and ranking. Preserve one cursor, public schemas, shared per-clock sampling, bounded FSDB grouping, the process-global FSDB lock, and cancellation checks. Always interpret `coverage_status`: `zero_coverage` checked nothing; `truncated` exceeded `max_interfaces`; `degraded` has skipped/incomplete rows; only `complete` supports a clean conclusion. Retry only a suggested action that changes scope/window/edge/interface cap; otherwise report the missing prerequisite instead of replaying the same call.
-- Discovery uses bounded native/VCD scope pages and one request snapshot shared by both sweep families. Preserve exact scope/index identity, byte/visit/memory caps, `discovery.scope_total` versus its lower bound, and legacy-wrapper fallback. Port suffix normalization retains paths/directions; ambiguous clocks/payload stay unresolved. Req/ack naming requires explicit valid-hold semantics; idle-ready counts never contribute sweep flags/ranking. A bounded FSDB transition prefix sets per-row `transition_data_truncated=true`, increments `transition_truncated_count`, and forces non-`complete` coverage.
-- `src/txn_reconstruct.py` provides `reconstruct_transactions` (the id-correlated transaction layer): walks a request handshake channel + a completion channel over the whole window, matches accepted beats by an `id` field, and returns per-transaction latency + aggregate facts. **One generic core, not a tool per protocol**: AXI read = AR→R (`cmp_last`=rlast, id=arid/rid); AXI write = AW→B (id=awid/bid) PLUS an optional unindexed W-data channel (`data_valid`/`data_ready`/`data_last` + `data_fields`; W carries no id so beats attach in order to the oldest data-incomplete request, matching real interconnect); any id'd req/resp; CHI-like. `req_id`/`cmp_id` are optional — omit both for an unindexed in-order stream (AXI-Lite, APB), which pairs requests and completions in FIFO order and reports txn id as null. AHB/APB phase tracking is otherwise out of scope. An optional `reset` (`reset_active_low`) clears in-flight state so a txn straddling reset is not a phantom hang (correctness, emits `reset_clears`); `capture_beats` (off by default → only `beat_count`) returns per-beat `data_beats[]` for data-integrity debug. An optional `req_len` (AxLEN = arlen/awlen) checks each txn's observed `beat_count` against `req_len+1`: a mismatch (early/late LAST, dropped/extra beat) is a real burst-length violation surfaced per-txn (`expected_beats`, `beat_count_mismatch`) and as `beat_count_mismatch_count` (x/z len → not checked, never a FP; with no `req_len` the count is 0 = "not checked", not a clean verdict). Facts not verdict: `latency` distribution (min/median/max/mean) not an "outlier" label; `outstanding_at_end`/`max_outstanding`/`max_outstanding_per_id`; `reorder_count` (informational, legal in AXI); `timeout_cycles`→`slow_count`; unmatched req/cmp surfaced loudly (the hang signature); one cursor (first never-completed request > peak outstanding). Out-of-order completion across ids via per-id FIFO. Returns objective facts only and leaves protocol-semantic interpretation (response-code decode, burst-type decode, outlier judgement) to the caller. Reuses `sample_signals_on_edges` + `_resolve_signal_path` + `_hs_truth`/`_hs_repr`.
-- `src/usage_telemetry.py` provides passive, local-only usage telemetry: when enabled, `server.call_tool` appends JSONL to `$TRACEWEAVE_CACHE_DIR/telemetry/usage.jsonl` (tool, arg keys + fixed decision labels, bytes, latency, ok/blocked, classified errors; never argument values/paths or exception text). SDK/client validation failures are outside this handler recorder. Long wave calls may include the privacy-safe `operation_metrics` diagnostics above. Source Graph's independent persistent allowlist accepts numeric timings/counts/bytes and fixed phase/cache-tier/disk-validation labels; it rejects fingerprints, paths, signal/scope/value content and free-form diagnostics. `aggregate()` and `scripts/telemetry_report.py` report tier/tool counts, exact disk hit rate, validation outcomes, build skips, capacity/evictions and p50/p95 tier latency without scanning caches. Adjacent same-session calls within 60 seconds give an upper-bound semantic-session opportunity, not proof of eligible context. `src/telemetry_context.py` privately registers exact simulation/formal discovery files with stat identities and random session ids; shared readers pin the requested artifact at entry and recheck versions at completion. Unknown, changed or conflicting ownership never inherits the most recent case. Retention caps at 128 owners/4,096 bindings, then stays unknown until restart. New records have fixed artifact-domain/attribution labels and no case basename. Readback counters distinguish returned point/batch/cycle state from metadata-only sessions, without claiming model use; new unknown calls have no session denominator. Recording is best-effort, default-off and never an MCP tool; opt in with `TRACEWEAVE_TELEMETRY=1` and restart/reconnect.
-- `config.py` centralizes environment-sensitive paths and behavior constants.
+Detailed implementation contracts and resource limits live in `docs/architecture.md`;
+workflow and evidence interpretation live in `docs/workflow.md` and
+`docs/debug-discipline.md`. Keep this file focused on invariants that edits must preserve.
+
+- `server.py` composes tools and owns dispatch/session publication on the event loop.
+  `native_query.py` / `native_dispatch.py` route compile metadata;
+  `source_fallback_runtime.py` retains bounded references and live flights.
+- Connectivity routes through trusted Verdi NPI, bounded on-demand Source Graph,
+  then Legacy Static. Facts belong to one backend/artifact; receipts retain attempts,
+  fixed reasons, fingerprints, coverage and effective timeout. Source association
+  is separate from KDB identity. Cancellation never advances fallback.
+- Source Graph uses isolated workers, bounded compact IR, one-build admission and
+  exact-key single-flight. Changed/incomplete compile snapshots require rebuilding
+  the hierarchy. An incomplete key shares only its live flight, with at most one
+  consumed-once 60s/512MiB exact handoff: never cache it or broaden its scope.
+  Persistent semantic sessions are default-off and require the soak gate. The
+  optional disk cache does no startup scan, validates fresh ordered inputs/options/
+  tops/snapshots before every hit, keeps entries private and treats corruption as a miss.
+- `cancellation.py` and `_run_in_wave_thread` keep wave scans off the event loop.
+  Acquire locks inside workers: one process-global FSDB lock, one per VCD path,
+  dual-path locks in stable order. Cancelled waiters never touch parsers. Interactive
+  FSDB work may preempt background sweeps at checkpoints, never overlap FFR access.
+  Native calls checkpoint on return; do not promise interruption inside them.
+  Static/Source Graph work is lock-free and cancellable; local NPI remains synchronous,
+  LSF uses workers. Preserve `test_server_concurrency.py` and public trace routing tests.
+- `trace_x_source` releases wave locks before connectivity work. Backend/artifact
+  changes discard the partial chain and restart at the original signal; new X targets
+  outside an artifact rebuild the exact ancestor union. Incomplete positive edges
+  remain partial; only complete negatives terminate. Bounded driver traversal stops
+  with `driver_traversal_incomplete`, never an exclusive root-cause claim.
+- `operation_metrics.py` and telemetry accept only whitelisted numeric aggregates
+  and fixed phases/labels, never paths, scope/signal names, values, commands, hosts,
+  queues or license/exception text. Preserve aggregate sweep/native timings, volume,
+  cache/RSS measurements and their privacy boundary; see architecture for the allowlist.
+- `path_discovery.py` owns compile/sim/wave discovery; `compile_log_parser.py` parses
+  compile evidence. `analyzer.py` / `log_parser.py` own failure analysis;
+  `signal_driver.py` / `signal_load.py` are symmetric driver/load resolvers.
+- `compile_source_index.py` / `compile_source_runtime.py` share a transient exact
+  compile preload between parallel hierarchy/scans (default 128MiB/32,768 files).
+  Text and raw digest/stat/marker evidence are immutable; final lease release clears
+  source bodies. Capacity/config failure bypasses this optimization. One waiter
+  cancellation preserves others; final-waiter cancellation stops preload. Bounded
+  bootstrap may join an active exact index but cannot create a full-design preload.
+- `tb_hierarchy_builder.py` preserves the nested-dict schema while repeated module/UVM
+  descendants share immutable child mappings. Stats distinguish logical/physical
+  nodes, allocations and reuse. Only complete positive local instance edges enter
+  the tree: unresolved generate, instance-array and bind edges stay diagnostic;
+  duplicate definitions stop at ambiguity. Parameter overrides retain safe direct
+  edges while Slang owns specialization. Relevant gaps become Source Graph objective
+  exclusions; parameter-only gaps are informational. Optional NPI source overlays
+  detect aliases and copy on write so annotations never bleed across instances.
+  Hierarchy materialization and real-design A/B benchmark scripts are the scaling oracles.
+- `hierarchy_provider.py` offers exact child lookup over compile trees, immutable
+  Connectivity IR indexes and an explicit development NPI differential provider.
+  NPI prefix lookup is capped before load (default 256, max 1,024), never walks tops/
+  siblings and always reports `npi_hierarchy_fragment_bounded`. IDs are design scoped.
+  Basic hierarchy builds neither import Slang nor invoke a native semantic provider.
+- `connectivity_backend.py` selects local/LSF NPI for an existing KDB, otherwise Static.
+  Backend-specific failures degrade through the parent router. `verdi_backend.py`
+  discovers KDB/license candidates and simulator-specific missing-KDB hints.
+- `npi_lsf.py` / workers use only `TRACEWEAVE_NPI_EXECUTION` and namespaced
+  `TRACEWEAVE_NPI_LSF_QUEUE`; never interpret generic scheduler variables.
+  Versioned requests use private shared staging and `bsub -K` with `shell=False`.
+  Workers execute their exact native operation, never Static/Slang or parent fallback.
+  Cancellation/timeout uses a random identity-free job name for bounded `bkill -J`
+  and waiter termination. Parent waits use cancellable workers. Full hierarchy's
+  optional source overlay must not implicitly submit jobs.
+- `kdb_builder.py` explicitly runs `vericom -kdb` + `elabcom`, caches under
+  `$TRACEWEAVE_CACHE_DIR/kdb/<hash>/` and writes `build.sh`. In LSF mode all cache
+  misses/forced rebuilds run remotely; exact hits remain local filesystem reads.
+  Preserve auto-KDB opt-out and cached-KDB discovery. Analysis must not rebuild an
+  original user project to obtain a missing KDB.
+- `verdi_npi_backend.py` lazily loads pynpi and reuses bound designs. Preserve the
+  testbench-driver guard: compare ORIGINAL `driver_list` against the SAME net's
+  `load_list`, normalizing bit indexes only, before recursive fan-in. A matching
+  consumer alias is not a source; prefer a genuine runtime driver, otherwise return
+  `testbench_driven`, `cross_check.conflict`, and
+  `driver_is_load_real_driver_is_testbench`. Initial-value blocks do not qualify.
+  Never use recursive fan-in or fan-out for this decision (downstream alias misses /
+  self-feedback false positives). Cover the logic without KDB, including recursive=True.
+- Recursive native fan-in uses the official global FAN_IN callback, capped at 4,096
+  states / 32 public facts. Serialize registration/traversal/reset and reset on every
+  exit. Missing callback support never enables unbounded traversal. NPI/Source Graph
+  share the additive traversal receipt: positive prefixes remain authoritative partial
+  facts; zero-fact incomplete negatives continue fallback.
+- `connectivity_query.py` uses deterministic BFS with one selection/predecessor per
+  discovered state and reconstructs once with checkpoints. Never queue full path
+  prefixes; preserve ordering, caps, coverage, schemas and fingerprints.
+- `waveform_batch.py` gives FSDB/VCD window reads a shared shape. `schemas.py` is
+  the public output contract; `problem_hints.py` adds lightweight symptom annotations.
+- FSDB tags are TICKS, not ps. Read scale at open through `ffrGetScaleUnit()`.
+  All conversions use `_ToTag` (floor input) and `_TagToPs` (ceil output) in
+  `native/fsdb/fsdb_wrapper.cpp`, using integer fs internally; never hand-roll shifts.
+  Unknown scale rejects time queries with `FSDB_ERR_SCALE_UNKNOWN`. Summary exposes
+  scale; preserve cross-scale regressions in `tests/test_fsdb_timescale.py`.
+- FSDB/VCD transition lists are strict closed windows; predecessor is separate.
+  `cycle_query.py` seeds first-edge direction/pre-sample values from predecessor
+  before point queries, especially in active FSDB groups where independent reads
+  invalidate resident state. Around-time likewise separates in-window and prior history.
+  Compatibility groups load once, use the 64MiB buffer and unload in finally, inside
+  the global lock. Default group cap 16 (clamped 1..256); oversized/unsupported/error
+  groups fall back to per-signal loading. Cancellation must still unload.
+- Cycle sweeps reuse one `EdgeSamplingSession` per clock group, cache shared signals
+  only and evict after final use; groups stay serial. Around-time transient annotation
+  flags only dip-and-return X→glitch→X, never arbitrary edge changes.
+- `fsdb_sweep_stream.py` limits pages to 1,024 records/256KiB and blocks to 2,048
+  edges/8MiB logical bytes. `HandshakeConsumer` retains protocol state, findings and
+  counters across blocks; finish at request end or explicit stop. Preserve raw-fs /
+  strict-before ordering, same-tick groups, cancellation and global lock. Work caps
+  are 50M records/32GiB logical work/300s; stops stay partial. Unsupported groups
+  use compatibility sampling. Native FFR session RSS may still grow.
+- Hierarchy handles and cursor anchors are process scoped, never persisted.
+  `handle_tools.py` resolves registered hierarchy dictionaries. File lookup requires
+  a filter; detail lookup suggests basenames for wrong compiled versions. Cursors
+  are always explicit @name references, with no active cursor. `timespec.py` resolves
+  ps integers, units and cursors; cursor/cycle arithmetic remains unimplemented.
+- `verify_condition.py` provides divergence/period/handshake facts and evidence cursors.
+  AHB address payload excludes HWDATA/HRDATA; write-data holds require a confirmed
+  initiator bundle. X-while-valid applies to AHB control, not literal-valid data.
+  Payload hold, X control and premature deassertion are producer violations and
+  exonerate ready; a plain stall stays two-sided. Read coverage, protocol_semantics,
+  accepted_before_deassert and violating_signal. UVM producers may be testbench driven;
+  do not reinterpret DUT loads as sources. Do not register diff_value_distribution
+  without a demonstrated use case.
+- `window_verify.py` uses templated predicates/modes, not a DSL. Hold/stability needs
+  overlap=false and within_cycles>=1; vacuous passes never exclude a hypothesis.
+  Sequence modulo/restart/gating preserves predecessor semantics; X/Z breaks continuity.
+  Unknown/end-window cases remain explicit. Driver links are evidence, not attribution.
+- `handshake_suggest.py` discovers bounded scope pages (legacy search fallback).
+  Pair valid/ready by scope/stem and mechanical direction; ambiguous clocks/payload
+  stay unresolved. AHB uses HTRANS address controls only, offers HWDATA checks only
+  on confirmed initiators, and includes a ready-to-call inspect relay. APB discovery
+  does not pretend the missing derived-valid check ran. Discovery locates; inspection
+  analyzes. Req/ack requires explicit hold semantics. Never infer direction from names.
+- `handshake_sweep.py` scans AHB and valid/ready with one shared discovery snapshot
+  and one cursor; it excludes clocking mirrors, APB and legal idle-ready flags/ranking.
+  Top-ranked stalls may be propagation fronts, not causes. Preserve bounded pages,
+  exact scope/index identity, total versus lower bound, memory/visit caps and fallback.
+  zero_coverage is not pass; truncated/degraded stays partial. Transition prefixes force
+  non-complete coverage and transition_truncated_count. Retry only with changed scope/
+  window/edge/cap. Shared sampling, FSDB groups, lock and cancellation remain mandatory.
+- `txn_reconstruct.py` uses one generic id-correlated request/completion core, with
+  optional in-order W data for AXI writes and FIFO matching when both ids are absent.
+  Preserve reset-cleared in-flight state, optional beat capture, per-id out-of-order
+  completion and one cursor prioritizing uncompleted requests. Req_len checks beat_count
+  against len+1; unknown/absent len is not checked, not clean. Latency/reorder/outstanding
+  are facts, not outlier/legal/root-cause verdicts. Reuse existing edge sampling helpers.
+- `usage_telemetry.py` is local-only, best-effort, default-off; opt in with
+  TRACEWEAVE_TELEMETRY=1 and reconnect. No argument values or exception text enter JSONL.
+  `telemetry_context.py` pins exact artifact/stat ownership, rechecks at completion and
+  never assigns unknown/conflicting calls to the latest case. Retention caps 128 owners /
+  4,096 bindings, then unknown until restart. Readback counts do not prove model use;
+  unknown calls have no session denominator. Session opportunities are upper bounds,
+  not semantic reuse proof. `config.py` centralizes environment-sensitive behavior.
 
 ## Working Rule
 
