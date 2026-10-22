@@ -196,6 +196,8 @@ def scan_native_ports(provider, options):
         kind = p.scalar(handle, 'type')
         if kind not in _SCOPES:
             gap('npi_scope_kind_unmodeled'); return
+        if kind in {'npiModule', 'npiInterface', 'npiProgram'} and p.scalar(handle, 'is_black_box') == 1:
+            gap('npi_blackbox_boundary')
         inspect_ports(handle, path)
         it = _LanguageIterator(p, p.low.InternalScope, handle)
         try:

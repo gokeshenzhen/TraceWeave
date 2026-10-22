@@ -139,3 +139,10 @@ def test_degraded_binding_survives_early_work_limit():
     p = Provider([]); p.degraded = True; p.budget.max_scopes = 1
     r = scan_native_ports(p, p.options)
     assert {'scope_limit', 'npi_degraded_design'} <= set(r['gaps'])
+
+
+def test_blackbox_zero_ports_cannot_report_complete_negative():
+    p = Provider([]); p.child.data['is_black_box'] = 1
+    r = scan_native_ports(p, p.options)
+    assert r['status'] == 'partial' and r['total_facts'] == 0
+    assert 'npi_blackbox_boundary' in r['gaps']
