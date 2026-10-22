@@ -9845,9 +9845,11 @@ async def _dispatch_inner(name: str, args: dict):
                 deadline=deadline, validate=source_guard, selected_top=args.get("top_hint"),
             )
             await source_guard()
-            raw["artifact_identity"] = identity.digest
+            observed = bool(raw.get("categories_checked") or raw.get("facts"))
+            raw["artifact_identity"] = identity.digest if observed else None
             raw["selected_top"] = args.get("top_hint")
-            raw["checked_scope"] = semantic_options["scope"] or args.get("top_hint")
+            raw["checked_scope"] = ((semantic_options["scope"] or args.get("top_hint"))
+                                    if observed else None)
             return raw
 
         def metadata_guard():

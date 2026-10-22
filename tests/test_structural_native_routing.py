@@ -205,3 +205,15 @@ async def test_source_only_category_skips_native_discovery(setup):
     r = await server._dispatch('scan_structural_risks', {**args,'semantic_categories':['constant_comparison']})
     assert not calls and r.semantic.status == 'not_run'
     assert r.semantic.backend_attempts[0]['reason'] == 'npi_category_unsupported'
+
+
+@pytest.mark.anyio
+async def test_failed_reused_backend_is_not_permanently_sticky(setup, monkeypatch):
+    args, _, _ = setup
+    await server._dispatch('scan_structural_risks', args)
+    assert server._structural_native_runtime._backend is not None
+    def fail(*a, **kw): raise NpiHierarchyUnavailable('npi_load_failed')
+    monkeypatch.setattr(native, 'query_native_scan', fail)
+    r = await server._dispatch('scan_structural_risks', args)
+    assert server._structural_native_runtime._backend is None
+    assert r.semantic.result_groups[0].checked_scope is None

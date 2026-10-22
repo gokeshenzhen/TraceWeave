@@ -113,7 +113,8 @@ class StructuralNativeRuntime:
                                 native = unavailable(options, 'npi_scan_failed')
                     if inputs is not None:
                         native['selected_top'] = inputs.selected_top
-                        native['checked_scope'] = options['scope'] or inputs.selected_top
+                        native['checked_scope'] = ((options['scope'] or inputs.selected_top)
+                            if native['status'] == 'complete' or native.get('instances_visited', 0) > 0 else None)
                     attempts.append(dict(backend='verdi_npi', status=native['status'], reason=(native.get('gaps') or ['completed'])[0]))
                 else:
                     native = unavailable(options, 'npi_category_unsupported', status='unsupported')
@@ -133,6 +134,10 @@ class StructuralNativeRuntime:
                 # Publish loaded-backend reuse only after every final validation.
                 if backend is not None and native['status'] in {'complete', 'partial'} and execution.mode == 'local':
                     self._backend_key, self._backend = key, backend
+                elif backend is not None and self._backend is backend:
+                    # Cleanup/load failures may poison this Python backend.
+                    # A later request gets a fresh bounded native attempt.
+                    self._backend_key = self._backend = None
                 return result
         except OperationCancelled:
             raise
