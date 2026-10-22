@@ -146,3 +146,21 @@ def test_blackbox_zero_ports_cannot_report_complete_negative():
     r = scan_native_ports(p, p.options)
     assert r['status'] == 'partial' and r['total_facts'] == 0
     assert 'npi_blackbox_boundary' in r['gaps']
+
+
+def test_procedural_scopes_excluded_but_generate_bindings_traversed():
+    p = Provider([])
+    procedural = [Handle(type=k) for k in ['npiFor', 'npiBegin', 'npiFork']]
+    gen = Handle(type='npiGenScope', full_name='top.g', scope_handle=p.root)
+    child = Handle(type='npiModule', full_name='top.g.u', scope_handle=gen,
+                   Port=[port('a', const('1010'))])
+    gen.data['InternalScope'] = [child]
+    p.root.data['InternalScope'] = procedural + [gen]
+    p.options['categories'] = ['constant_connection', 'open_input']
+    r = scan_native_ports(p, p.options)
+    assert r['status'] == 'complete' and r['instances_visited'] == 3
+    assert r['facts'][0]['instance'] == 'top.g.u'
+    p.root.data['InternalScope'].append(
+        Handle(type='npiUnknownScope', full_name='top.unknown', scope_handle=p.root))
+    r = scan_native_ports(p, p.options)
+    assert 'npi_scope_kind_unmodeled' in r['gaps']

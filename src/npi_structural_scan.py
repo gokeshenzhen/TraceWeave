@@ -18,7 +18,11 @@ from .structural_semantic_router import NPI_PORT_CATEGORIES
 CAPABILITY_VERSION = "npi_input_ports_v1"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar"}
 _SCOPES = {"npiModule", "npiInterface", "npiProgram", "npiGenScope"}
-_IGNORE_SCOPES = {"npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork", "npiClassDefn"}
+# InternalScope also exposes procedural statement scopes. They cannot contain
+# elaborated module input bindings; generate scopes have their own npiGenScope
+# kind and must still be traversed.
+_IGNORE_SCOPES = {"npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork", "npiClassDefn",
+                  "npiFor", "npiBegin", "npiFork"}
 
 
 class _UnsupportedPort(Exception):
