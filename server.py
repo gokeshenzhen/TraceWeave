@@ -11828,7 +11828,10 @@ def _shrink_scan_structural_risks_terminal(
             **model.model_dump(exclude_none=True),
             "detail_level": "summary",
             "detail_hint": "Response truncated to fit budget. Re-run scan_structural_risks with one category.",
-            "semantic": _trim_semantic_scan(model.semantic, 0),
+            # Keep coverage/identity/counters, shed explanatory prose and
+            # optional timings before ever dropping required semantic receipts.
+            "semantic": {**_trim_semantic_scan(model.semantic, 0), "note": None, "metrics": {}},
+            "scan_metrics": {},
             "risks": [],
             "categories_scanned": model.categories_scanned,
             "skipped_files": [],
