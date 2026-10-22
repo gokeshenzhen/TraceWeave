@@ -17,6 +17,8 @@ def category_result(result, category):
         return {"status": "not_run", "gaps": ["category_not_checked"]}
     if category in result.get("category_results", {}):
         return result["category_results"][category]
+    if result["status"] in {"not_run", "unavailable", "failed", "unsupported"}:
+        return {"status": result["status"], "gaps": result.get("gaps", [])}
     if category not in result.get("categories_checked", []):
         return {"status": "not_run", "gaps": result.get("gaps", []) or ["category_not_checked"]}
     return {"status": result["status"], "gaps": result.get("gaps", [])}
@@ -77,14 +79,22 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
     backends = {c["backend"] for c in coverage if c["backend"] != "none"}
     # Preserve existing source fields (propagation, templates, display receipt).
     result = copy.deepcopy(source or {})
-    result.pop("category_results", None)
+    for key in ("category_results", "artifact_identity", "limitations"):
+        result.pop(key, None)
     result.update(status=status, scope=scope, backend=(next(iter(backends)) if len(backends) == 1 else "mixed" if backends else "none"),
                   facts=facts, total_facts=len(facts), counts=dict(Counter(f["kind"] for f in facts)),
                   categories_checked=checked, category_coverage=coverage, result_groups=groups,
+                  instances_visited=sum(r.get("instances_visited", 0) for r in (native, source) if r),
                   backend_attempts=list(attempts),
                   gaps=sorted({gap for c in coverage if c["status"] != "complete" for gap in c["gaps"]}),
                   native_execution=copy.deepcopy((native or {}).get("native_execution", {})))
     result["metrics"] = {**(source or {}).get("metrics", {}), **(native or {}).get("metrics", {}),
                          "semantic_total_ms": elapsed_ms}
+    # Two individually bounded inventories can exceed the display allowance.
+    # Preserve computed counts/coverage; this is display trimming, not a proof gap.
+    display_limit = options.get("limits", {}).get("max_facts", len(facts))
+    if len(facts) > display_limit:
+        result["facts"] = facts[:display_limit]
+        result["output_truncated"] = True
     result["note"] = "Structural evidence, not confirmed defects. Read each category's domain, identity and gaps; KDB/source association is unverified."
     return result

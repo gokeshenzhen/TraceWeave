@@ -557,6 +557,7 @@ class StructuralResultGroup(SchemaModel):
 
 
 class SemanticScanResult(SchemaModel):
+    termination_reason: str | None = None
     backend: Literal["none", "verdi_npi", "slang", "mixed"] = "none"
     category_coverage: list[StructuralCategoryCoverage] = Field(default_factory=list)
     result_groups: list[StructuralResultGroup] = Field(default_factory=list)
@@ -610,6 +611,12 @@ class StructuralScanSummary(SchemaModel):
     lexical_coverage_status: str
     categories_scanned: list[str]
     semantic_status: str
+    semantic_backend: str = "none"
+    semantic_category_coverage: list[StructuralCategoryCoverage] = Field(default_factory=list)
+    semantic_result_groups: list[StructuralResultGroup] = Field(default_factory=list)
+    semantic_backend_attempts: list[dict[str, str]] = Field(default_factory=list)
+    semantic_native_execution: dict[str, str] = Field(default_factory=dict)
+    semantic_termination_reason: str | None = None
     semantic_fact_count: int
     semantic_scope: str | None = None
     semantic_categories_checked: list[str]

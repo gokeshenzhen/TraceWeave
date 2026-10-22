@@ -151,6 +151,7 @@ from src.tb_hierarchy_builder import (
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
 from src.structural_scan_runtime import StructuralScanRuntime
+from src.structural_native_runtime import StructuralNativeRuntime
 from src.design_identity import DesignIdentity, DesignIdentityReader
 import src.design_context_runtime as design_context_runtime
 from src.design_backend_binding import prepare_backend_binding, ExecutionBindingChanged
@@ -227,6 +228,7 @@ _COMPILE_CONTEXT_CACHE_MAX = 4
 _compile_context_cache: dict[str, dict] = {}
 _compile_source_index_runtime = CompileSourceIndexRuntime()
 _structural_scan_runtime = StructuralScanRuntime()
+_structural_native_runtime = StructuralNativeRuntime()
 _design_identity_reader = DesignIdentityReader()
 _semantic_scan_runtime = SemanticScanRuntime()
 
@@ -6843,13 +6845,15 @@ async def list_tools():
         Tool(
             name="scan_structural_risks",
             description=(
-                "Scan compiled RTL/TB sources for structural risks. fast runs lexical rules; auto (default) "
-                "also reuses compatible semantic facts without a cold frontend build; deep explicitly requests "
-                "a bounded, license-free semantic pass for ties, open inputs and constant comparisons. "
-                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes. "
-                "Always read coverage_status: only complete with total_risks=0 supports a clean-scan observation; "
-                "zero_coverage scanned no supported sources, and degraded covers only part of the source set. "
-                "Read lexical_coverage_status and semantic.status separately; not_run is not a semantic pass."
+                "Scan compiled RTL/TB for structural risks. fast runs lexical rules only. auto (default) "
+                "also tries existing/cached KDBs through Verdi NPI, then reuses compatible source semantic "
+                "results for missing categories without a cold Slang build. deep also allows bounded Slang "
+                "supplementation. NPI may request a license locally or through configured LSF; scans never build "
+                "a KDB. Native checks cover elaborated input-port bindings, with explicit unsupported/default/width gaps. "
+                "Read lexical_coverage_status, semantic.category_coverage, result_groups and gaps separately; "
+                "zero_coverage scanned no supported sources. "
+                "Zero risks, cached facts and not_run do not establish semantic completeness. These are investigation "
+                "facts, not confirmed defects or root causes."
             ),
             inputSchema={
                 "type": "object",
@@ -6863,6 +6867,8 @@ async def list_tools():
                         "description": "vcs / xcelium / verilator / auto (default: auto)",
                         "default": "auto",
                     },
+                    "top_hint": {"type": "string", "minLength": 1,
+                                 "description": "Select an elaborated top when compile metadata lacks a unique top; verified against compile evidence and KDB."},
                     "scan_scope": {
                         "type": "string",
                         "description": "Scan scope version. Currently only scope1 is supported.",
@@ -9694,6 +9700,9 @@ async def _dispatch_inner(name: str, args: dict):
         analysis_mode, semantic_options = validate_semantic_options(args)
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
+        top_hint = args.get("top_hint")
+        if top_hint is not None and (not isinstance(top_hint, str) or not top_hint.strip() or "\x00" in top_hint):
+            raise ValueError("top_hint must be nonempty")
         compile_result, context_simulator = await _run_in_cancellable_thread(
             lambda: _parse_merged_compile_context(
                 compile_log=args["compile_log"],
@@ -9701,6 +9710,8 @@ async def _dispatch_inner(name: str, args: dict):
                 supplementary_compile_logs=[],
             )
         )
+        if top_hint is not None and compile_result.get("top_modules") and top_hint not in compile_result["top_modules"]:
+            raise ValueError("top_hint does not match compile evidence")
         compile_snapshot_sha256 = compute_snapshot_fingerprint(
             args["compile_log"],
             context_simulator,
@@ -9810,22 +9821,50 @@ async def _dispatch_inner(name: str, args: dict):
         })
         result["analysis_mode"] = analysis_mode
         result["lexical_coverage_status"] = result.get("coverage_status", "complete")
-        semantic_config = get_source_graph_execution_config()
-        query_request, query_runtime = await _structural_query_context(
-            args["compile_log"], simulator, semantic_options["scope"], analysis_mode, semantic_config,
+        async def source_scan(missing, deadline, validate):
+            semantic_config = get_source_graph_execution_config()
+            async def source_guard():
+                await validate()
+                if get_source_graph_execution_config() != semantic_config:
+                    raise ExecutionBindingChanged()
+                if identity.complete and not await _run_in_cancellable_thread(identity.current):
+                    from src.native_query import NativeInputChanged
+                    raise NativeInputChanged("structural_source_identity_changed")
+            await source_guard()
+            query_request, query_runtime = await _structural_query_context(
+                args["compile_log"], simulator, semantic_options["scope"], analysis_mode, semantic_config,
+            )
+            await source_guard()
+            source_options = {**semantic_options, "categories": missing,
+                              "timeout_sec": min(semantic_options["timeout_sec"], deadline-time.monotonic())}
+            raw = await _semantic_scan_runtime.scan(
+                identity=identity, mode=analysis_mode, options=source_options,
+                compile_log=args["compile_log"], compile_result=compile_result,
+                config=semantic_config, run_thread=_run_in_cancellable_thread,
+                query_request=query_request, query_runtime=query_runtime,
+                deadline=deadline, validate=source_guard, selected_top=args.get("top_hint"),
+            )
+            await source_guard()
+            raw["artifact_identity"] = identity.digest
+            return raw
+
+        def metadata_guard():
+            if compute_snapshot_fingerprint(args["compile_log"], context_simulator) != compile_snapshot_sha256:
+                from src.native_query import NativeInputChanged
+                raise NativeInputChanged("compile_metadata_changed")
+
+        result["semantic"] = await _structural_native_runtime.scan(
+            mode=analysis_mode, options=semantic_options, compile_log=args["compile_log"], simulator=simulator,
+            source_scan=source_scan, run_thread=_run_in_cancellable_thread,
+            top_hint=args.get("top_hint"), metadata_guard=metadata_guard,
         )
-        result["semantic"] = await _semantic_scan_runtime.scan(
-            identity=identity, mode=analysis_mode, options=semantic_options,
-            compile_log=args["compile_log"], compile_result=compile_result,
-            config=semantic_config, run_thread=_run_in_cancellable_thread,
-            query_request=query_request, query_runtime=query_runtime,
-        )
+        if analysis_mode != "fast" and result["semantic"]["status"] != "complete":
+            result.setdefault("coverage_warnings", []).append(
+                "Requested semantic checks are incomplete; inspect semantic.category_coverage and semantic.gaps."
+            )
         if analysis_mode == "deep" and result["semantic"]["status"] != "complete":
             if result["coverage_status"] != "zero_coverage":
                 result["coverage_status"] = "degraded"
-            result.setdefault("coverage_warnings", []).append(
-                "Requested semantic checks are incomplete; inspect semantic.status and semantic.gaps."
-            )
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
             [
@@ -10553,6 +10592,12 @@ def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) 
         "lexical_coverage_status": result.lexical_coverage_status,
         "categories_scanned": result.categories_scanned,
         "semantic_status": result.semantic.status,
+        "semantic_backend": result.semantic.backend,
+        "semantic_category_coverage": result.semantic.category_coverage,
+        "semantic_result_groups": result.semantic.result_groups,
+        "semantic_backend_attempts": result.semantic.backend_attempts,
+        "semantic_native_execution": result.semantic.native_execution,
+        "semantic_termination_reason": result.semantic.termination_reason,
         "semantic_fact_count": result.semantic.total_facts,
         "semantic_scope": result.semantic.scope,
         "semantic_categories_checked": result.semantic.categories_checked,

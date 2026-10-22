@@ -21,6 +21,12 @@ _SCOPES = {"npiModule", "npiInterface", "npiProgram", "npiGenScope"}
 _IGNORE_SCOPES = {"npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork", "npiClassDefn"}
 
 
+class _UnsupportedPort(Exception):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def scan_budget(options, *, deadline=None):
     limits = options['limits']
     budget = HierarchyQueryBudget(timeout_sec=options['timeout_sec'],
@@ -45,8 +51,10 @@ def scan_native_ports(provider, options):
 
     def width(handle):
         value = p.scalar(handle, 'size')
-        if type(value) is not int or not 1 <= value <= options['limits']['max_width']:
-            raise HierarchyBudgetExceeded('native_width_limit')
+        if type(value) is not int or value < 1:
+            raise _UnsupportedPort('npi_width_unavailable')
+        if value > options['limits']['max_width']:
+            raise _UnsupportedPort('native_width_limit')
         return value
 
     def binary(handle, size):
@@ -162,8 +170,12 @@ def scan_native_ports(provider, options):
                     continue
                 if 'constant_connection' not in categories:
                     continue
-                size, regions, _ = parts(actual)
-                port_width = width(port)
+                try:
+                    size, regions, _ = parts(actual)
+                    port_width = width(port)
+                except _UnsupportedPort as exc:
+                    gap(exc.reason, ['constant_connection'])
+                    continue
                 if size != port_width:
                     gap('npi_contextual_width_conversion_unverified', ['constant_connection'])
                     continue

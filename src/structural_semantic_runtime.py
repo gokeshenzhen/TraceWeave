@@ -118,22 +118,53 @@ class SemanticScanRuntime:
     def __init__(self):
         self._cache = OrderedDict()
         self._bytes = 0
+        self._contexts = {}
         self._admission = asyncio.Lock()
 
     async def scan(self, *, identity, mode, options, compile_log, compile_result, config, run_thread,
-                   query_request=None, query_runtime=None):
+                   query_request=None, query_runtime=None, deadline=None, validate=None, selected_top=None):
         if mode == "fast":
             return {"status": "not_run", "gaps": ["fast_mode"]}
-        key = _digest({"identity": identity.digest, "options": options,
-                       "frontend": config.frontend_version, "python": config.python_bin, "rules": SEMANTIC_RULE_VERSION})
-        reusable = identity.complete and identity.include_resolution_complete
-        if reusable and key in self._cache and await run_thread(identity.current):
-            self._cache.move_to_end(key)
-            result = json.loads(self._cache[key])
-            result["cache_disposition"] = "hit_memory"
+        async def guard():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("semantic_timeout")
+            if validate is not None:
+                await validate()
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("semantic_timeout")
+
+        if selected_top is not None:
+            compile_result = {**compile_result, "top_modules": [selected_top]}
+        await guard()
+        # Completed observations do not depend on the unused time allowance.
+        # Exact category supersets may serve native's missing categories only.
+        key_options = {k: v for k, v in options.items() if k not in {"timeout_sec", "categories"}}
+        context_key = _digest({"identity": identity.digest, "options": key_options,
+                              "frontend": config.frontend_version, "python": config.python_bin,
+                              "rules": SEMANTIC_RULE_VERSION, "selected_top": selected_top})
+        key = _digest({"context": context_key, "categories": options["categories"]})
+        def cached_key():
+            if key in self._cache:
+                return key
+            return next((k for k in reversed(self._cache) if self._contexts.get(k, (None, ()))[0] == context_key
+                         and set(options["categories"]) <= set(self._contexts[k][1])), None)
+
+        def cached_result(hit, disposition):
+            self._cache.move_to_end(hit)
+            result = json.loads(self._cache[hit])
+            result["facts"] = [f for f in result.get("facts", []) if f["kind"] in options["categories"]]
+            result["counts"] = {c: n for c, n in result.get("counts", {}).items() if c in options["categories"]}
+            result["total_facts"] = len(result["facts"])
+            result["categories_checked"] = [c for c in result.get("categories_checked", []) if c in options["categories"]]
+            result["cache_disposition"] = disposition
             result["query_artifact_status"] = "not_requested_result_hit"
             result.setdefault("metrics", {})["frontend_build_count"] = 0
             return result
+
+        reusable = identity.complete and identity.include_resolution_complete
+        if reusable and (hit := cached_key()) is not None and await run_thread(identity.current):
+            await guard()
+            return cached_result(hit, "hit_memory")
         if mode == "auto":
             if reusable and query_request is not None and query_runtime is not None and await run_thread(identity.current):
                 entry = await query_runtime.lookup_prepared(query_request)
@@ -145,25 +176,32 @@ class SemanticScanRuntime:
                     if (query_request.identity.compile_inputs.to_dict() == payload["manifest"]
                             and await run_thread(identity.current)):
                         from .structural_artifact import scan_ir_connections
-                        return await run_thread(lambda: scan_ir_connections(entry, options))
+                        result = await run_thread(lambda: scan_ir_connections(entry, options))
+                        await guard()
+                        return result
             return {"status": "not_run", "gaps": ["semantic_cache_miss"], "cache_disposition": "miss"}
         if not config.valid or not config.enabled:
             return {"status": "unavailable", "gaps": ["semantic_frontend_disabled_or_invalid"]}
         async with self._admission:
-            if reusable and key in self._cache and await run_thread(identity.current):
-                result = json.loads(self._cache[key])
-                result["cache_disposition"] = "hit_after_admission"
-                result["query_artifact_status"] = "not_requested_result_hit"
-                result.setdefault("metrics", {})["frontend_build_count"] = 0
-                return result
+            await guard()
+            if reusable and (hit := cached_key()) is not None and await run_thread(identity.current):
+                await guard()
+                return cached_result(hit, "hit_after_admission")
             payload = await run_thread(lambda: build_semantic_payload(compile_log, compile_result, options, config.frontend_version))
             if not payload["manifest"]["ordered_tops"] or not payload["manifest"]["ordered_inputs"]:
                 return {"status": "unavailable", "gaps": ["compile_inputs_or_top_missing"]}
             if query_request is not None:
                 payload["query_artifact_request"] = query_request.artifact_build_request.to_dict()
+            await guard()
+            if deadline is not None:
+                payload["timeout_sec"] = min(payload["timeout_sec"], deadline - time.monotonic())
+                if payload["timeout_sec"] <= 0:
+                    raise TimeoutError("semantic_timeout")
             result = await run_isolated_scan(payload, config.python_bin)
+            await guard()
             artifact = result.pop("_query_artifact", None)
             current = await run_thread(identity.current)
+            await guard()
             if artifact is not None and current and query_runtime is not None and query_request is not None:
                 try:
                     worker = IsolatedSourceGraphProcessRunner._decode_response(artifact)
@@ -186,10 +224,14 @@ class SemanticScanRuntime:
             result["cache_disposition"] = "miss"
             encoded = json.dumps(result, separators=(",", ":")).encode()
             if reusable and current and result["status"] == "complete" and len(encoded) <= 32 * 1024 * 1024:
+                await guard()
                 old = self._cache.pop(key, None)
                 self._bytes -= len(old) if old is not None else 0
                 self._cache[key] = encoded
+                self._contexts[key] = (context_key, tuple(options["categories"]))
                 self._bytes += len(encoded)
                 while self._bytes > 32 * 1024 * 1024 or len(self._cache) > 4:
-                    self._bytes -= len(self._cache.popitem(last=False)[1])
+                    evicted, data = self._cache.popitem(last=False)
+                    self._bytes -= len(data)
+                    self._contexts.pop(evicted, None)
             return result
