@@ -164,3 +164,24 @@ def test_procedural_scopes_excluded_but_generate_bindings_traversed():
         Handle(type='npiUnknownScope', full_name='top.unknown', scope_handle=p.root))
     r = scan_native_ports(p, p.options)
     assert 'npi_scope_kind_unmodeled' in r['gaps']
+
+
+@pytest.mark.parametrize('kind', ['npiRefObj', 'npiExtRef'])
+def test_references_resolve_actual_type_without_evaluating_state(kind):
+    live = Handle(type='npiReg', size=4, binary='1111')
+    ref = Handle(type=kind, size=-1, actual_handle=live)
+    _, r = run([port('a', ref)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+    ref.data['actual_handle'] = const('10xz')
+    _, r = run([port('a', ref)], semantic_categories=['constant_connection'])
+    assert r['facts'][0]['constant_regions'][0]['bits'] == '10xz'
+
+
+def test_missing_or_cyclic_reference_never_completes_negative():
+    ref = Handle(type='npiRefObj', size=-1)
+    _, r = run([port('a', ref)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'partial' and 'npi_reference_unresolved' in r['gaps']
+    ref.data['actual_handle'] = ref
+    p, r = run([port('a', ref)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'partial' and not r['facts']
+    assert 'native_expression_depth_limit' in r['gaps'] and not p.iterators

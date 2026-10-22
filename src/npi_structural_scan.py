@@ -76,7 +76,16 @@ def scan_native_ports(provider, options):
     def parts(handle, depth=0):
         if depth > 64:
             raise HierarchyBudgetExceeded('native_expression_depth_limit')
-        kind, size = p.scalar(handle, 'type'), width(handle)
+        kind = p.scalar(handle, 'type')
+        if kind in {'npiRefObj', 'npiExtRef'}:
+            # These are references, not packed values: size is -1 in the SDK.
+            # Resolve the documented relationship before inspecting type/width;
+            # in particular, never evaluate an initial value of referenced state.
+            actual = p.one(handle, 'actual_handle')
+            if actual is None:
+                raise _UnsupportedPort('npi_reference_unresolved')
+            return parts(actual, depth + 1)
+        size = width(handle)
         if kind in {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst'}:
             bits = binary(handle, size)
             if bits is None:
