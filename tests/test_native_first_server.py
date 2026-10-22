@@ -85,6 +85,39 @@ async def test_native_change_discards_result_without_source_fallback(tmp_path, m
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("stage", ["before_capture", "after_capture"])
+async def test_verilator_filelist_appearing_during_source_fallback_never_publishes(
+        tmp_path, monkeypatch, controls, stage):
+    source, log, kdb = project(tmp_path)
+    missing = tmp_path / "missing.f"
+    log.write_text(f"Command: verilator --cc -f {missing} --top-module top\n")
+    controls.failure_reason = "npi_query_failed"
+    original = design_context_runtime.prepare_design_context
+    captured_units = []
+
+    def prepare(*args, **kwargs):
+        if stage == "before_capture":
+            missing.write_text(f"{source}\n")
+        context = original(*args, **kwargs)
+        captured_units.append(context.compile_result()["compile_evidence"]["ordered_compilation_units"])
+        if stage == "after_capture":
+            missing.write_text(f"{source}\n")
+        return context
+
+    monkeypatch.setattr(design_context_runtime, "prepare_design_context", prepare)
+    result = await public("find_signal_loads", **arguments("find_signal_loads",
+        compile_log=str(log), kdb_path=str(kdb)))
+    assert len(controls.calls) == len(captured_units) == 1
+    assert len(captured_units[0]) == (1 if stage == "before_capture" else 0)
+    assert result.get("error_code") == "compile_metadata_changed", result
+    assert result["native_route"]["source_design_handle"] is None
+    assert result["native_route"]["source_context_identity_sha256"] is None
+    assert not server._design_context_store.summaries()
+    assert not server._source_fallback_runtime.aliases
+    assert not server._source_fallback_runtime.flights
+
+
+@pytest.mark.anyio
 async def test_native_candidate_never_hashes_cached_source(tmp_path, monkeypatch, controls):
     from src import verdi_backend
     _, log, kdb = project(tmp_path)

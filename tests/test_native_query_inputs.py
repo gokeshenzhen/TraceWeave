@@ -10,8 +10,11 @@ from tests.native_first_helpers import project
 
 
 @pytest.mark.parametrize("change", ["content", "delete", "symlink"])
-def test_metadata_observation_does_not_validate_declared_source(tmp_path, change):
+@pytest.mark.parametrize("simulator", ["vcs", "verilator"])
+def test_metadata_observation_does_not_validate_declared_source(tmp_path, change, simulator):
     source, log, kdb = project(tmp_path)
+    if simulator == "verilator":
+        log.write_text(f"Command: verilator --cc {source} --top-module top\n")
     inputs = read_native_inputs({"compile_log": str(log)})
     assert {r.path for r in inputs.metadata_snapshot.records} == {str(log)}
     assert str(source) not in dict(inputs.aliases)
@@ -25,6 +28,34 @@ def test_metadata_observation_does_not_validate_declared_source(tmp_path, change
     assert inputs.current()
     restored = decode_native_inputs(encode_native_inputs(inputs))
     assert restored == inputs and restored.current()
+
+
+@pytest.mark.parametrize("flag", ["-f", "-F"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_verilator_missing_filelist_appearance_invalidates_metadata(tmp_path, flag, nested):
+    source, log, _ = project(tmp_path)
+    missing = tmp_path / "missing.f"
+    operand = missing
+    if nested:
+        operand = tmp_path / "outer.f"
+        operand.write_text(f"{flag} {missing}\n")
+    log.write_text(f"Command: verilator --cc {flag} {operand} --top-module top\n")
+    inputs = read_native_inputs({"compile_log": str(log)})
+    assert inputs.compile_result()["compile_evidence"]["ordered_compilation_units"] == []
+    assert inputs.current()
+
+    missing.write_text(f"{source}\n")
+    assert not inputs.current()
+    assert not decode_native_inputs(encode_native_inputs(inputs)).current()
+    with pytest.raises(NativeInputChanged, match="compile_metadata_changed"):
+        inputs.require_current()
+    assert str(missing) in dict(inputs.unavailable)
+    assert not inputs.identity_complete
+    assert str(source) not in {r.path for r in inputs.metadata_snapshot.records}
+    refreshed = read_native_inputs({"compile_log": str(log)})
+    assert [unit["path"] for unit in refreshed.compile_result()["compile_evidence"][
+        "ordered_compilation_units"]] == [str(source)]
+    assert refreshed.compile_metadata_identity_sha256 != inputs.compile_metadata_identity_sha256
 
 
 @pytest.mark.parametrize("change", ["log", "filelist", "env", "alias", "missing_filelist"])

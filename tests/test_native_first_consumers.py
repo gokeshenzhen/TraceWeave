@@ -126,6 +126,67 @@ async def test_dual_design_native_binding_never_borrows_other_side(tmp_path, mon
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["compile_log", "kdb_only"])
+@pytest.mark.parametrize("stage", ["before_final", "after_final"])
+async def test_dual_native_trace_reset_discards_graph_and_preserves_new_session_cursor(
+        tmp_path, monkeypatch, mode, stage):
+    from src.divergence_design_context import DivergenceDesigns
+
+    use_sdk(monkeypatch, PackedSdk(top="top"))
+
+    def dynamic(self, signal_path, **kwargs):
+        assert self._ensure_loaded(self._bound_kdb_anchor.path, "top")
+        self._record_query_kdb_status()
+        return unsupported_step(signal_path, "verdi_npi", "testbench_driven")
+
+    monkeypatch.setattr(verdi_npi_backend.VerdiNpiBackend, "get_dynamic_step", dynamic)
+    sides = {}
+    for label, value in (("a", "1"), ("b", "0")):
+        root = tmp_path / label
+        _, log, kdb = project(root)
+        selector = {"compile_log": str(log)} if mode == "compile_log" else {
+            "kdb_path": str(kdb), "top_hint": "top"}
+        sides[f"side_{label}"] = dict(selector, wave_path=wave(root / "trace.vcd", value),
+                                     signal_path="top.y")
+    replacement = []
+
+    def reset():
+        server.reset_session_state()
+        replacement.append(server._cursor_store.set("generation_cursor", 777, note="new session"))
+
+    original = DivergenceDesigns.validate_final
+
+    async def final(self, *args):
+        assert not self.entries and set(self.native_bounds) == {"a", "b"}
+        if stage == "before_final":
+            reset()
+        changed = await original(self, *args)
+        if stage == "after_final":
+            reset()
+        return changed
+
+    monkeypatch.setattr(DivergenceDesigns, "validate_final", final)
+    result = await public("trace_divergence", **sides, start_time_ps=0, end_time_ps=10,
+                          cursor_name="generation_cursor")
+    assert result.get("status") == "inconclusive", result
+    assert result["coverage"]["gaps"] == ["design_context_generation_changed"]
+    assert result["comparison"] == {} and result.get("cursor") is None
+    assert result["nodes"] == result["edges"] == result["findings"] == []
+    assert server._cursor_store.list() == replacement
+    assert not server._design_context_store.summaries()
+    for label in ("a", "b"):
+        assert result["contexts"][label]["native_route"]["source_design_handle"] is None
+    assert len(result["next_actions"]) == 2
+    for action in result["next_actions"]:
+        assert action["tool"] == "explain_signal_driver" and action["status"] == "ready"
+        assert action["evidence"]["context_status"] == "design_context_generation_changed"
+        assert "compile_context" not in action["arguments"]
+        assert "design_handle" not in action["arguments"]
+        selector = "compile_log" if mode == "compile_log" else "kdb_path"
+        assert action["arguments"][selector] == sides[f"side_{action['side']}"][selector]
+
+
+@pytest.mark.anyio
 async def test_wave_and_analyze_failures_do_not_create_native_or_source_context(tmp_path, monkeypatch):
     from src import native_dispatch
     monkeypatch.setattr(native_dispatch, "dispatch_native_query", lambda *a: pytest.fail("unexpected design query"))

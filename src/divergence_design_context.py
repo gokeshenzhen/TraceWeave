@@ -173,7 +173,7 @@ class DivergenceDesigns:
 
     def require_owner(self):
         check_cancelled()
-        if self.entries:
+        if self.entries or self.native_bounds:
             self.base._require_design_store_owner(self.store)
         for bound in self.native_bounds.values():
             bound.prepared.binding.require_policy_current()

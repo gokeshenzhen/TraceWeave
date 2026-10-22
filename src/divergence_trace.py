@@ -149,6 +149,7 @@ async def trace_divergence(services, raw, *, route_factory=DynamicRoute):
                             f"signal_{label}": side["signal_path"],
                             "first_divergence_time_ps": None},
                     side=label, context=context, reason=code,
+                    native=designs.native_eligible(label),
                 ))
             result = _finish(failed, budget)
         designs.describe(result.contexts)

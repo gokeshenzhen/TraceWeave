@@ -136,6 +136,7 @@ def driver_action(
     context: dict | None,
     bound: BoundContext | None = None,
     reason: str = "hierarchy_unavailable",
+    native: bool = False,
 ) -> dict:
     arguments = {
         "wave_path": result[f"wave_path_{side}"],
@@ -180,6 +181,16 @@ def driver_action(
             action["prerequisite_calls"].extend(_scan_calls(context, side))
         else:
             action["missing_fields"].append(f"side_{side}.compile_log")
+        return action
+    if native:
+        # A retry starts a new native observation; no stale bound context or
+        # legacy compile_context identity is carried across a lifecycle error.
+        arguments.update({key: context[key] for key in (
+            "compile_log", "supplementary_compile_logs", "simulator", "top_hint",
+            "kdb_path", "backend_preference", "retry_npi",
+        ) if context.get(key) is not None})
+        action.update(status="ready", missing_fields=[])
+        action["evidence"]["context_status"] = reason
         return action
     if bound is not None and getattr(getattr(bound, "prepared", None), "native", False):
         inputs = bound.prepared.context

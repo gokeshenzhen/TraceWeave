@@ -11,7 +11,9 @@ import shlex
 from pathlib import Path
 
 from .cancellation import check_cancelled
-from .compile_input_capture import read_compile_text, resolve_compile_path, sample_compile_bytes
+from .compile_input_capture import (
+    observe_compile_metadata_path, read_compile_text, resolve_compile_path, sample_compile_bytes,
+)
 from .filelist_tokenizer import tokenize_filelist
 from .hdl_suffixes import HDL_SOURCE_SUFFIXES
 
@@ -123,6 +125,7 @@ def parse(log_path: str) -> dict:
                 if depth >= MAX_DEPTH or path in active:
                     warnings.append('Verilator filelist depth/cycle limit: ' + path)
                 else:
+                    observe_compile_metadata_path(path)
                     try:
                         if Path(path).stat().st_size > MAX_BYTES:
                             raise ValueError('filelist byte limit')
