@@ -531,7 +531,37 @@ class StructuralPropagationReceipt(SchemaModel):
     note: str | None = None
 
 
+class StructuralCategoryCoverage(SchemaModel):
+    category: str
+    status: Literal["not_run", "complete", "partial", "unavailable", "unsupported", "failed"]
+    backend: Literal["none", "verdi_npi", "slang"]
+    result_group: str | None = None
+    scope: str | None = None
+    evidence_domain: str
+    total_facts: int = 0
+    gaps: list[str] = Field(default_factory=list)
+
+
+class StructuralResultGroup(SchemaModel):
+    group_id: str
+    backend: Literal["verdi_npi", "slang"]
+    artifact_identity: str | None = None
+    scope: str | None = None
+    evidence_domain: str
+    status: str
+    categories_checked: list[str] = Field(default_factory=list)
+    selected_categories: list[str] = Field(default_factory=list)
+    total_facts: int = 0
+    gaps: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class SemanticScanResult(SchemaModel):
+    backend: Literal["none", "verdi_npi", "slang", "mixed"] = "none"
+    category_coverage: list[StructuralCategoryCoverage] = Field(default_factory=list)
+    result_groups: list[StructuralResultGroup] = Field(default_factory=list)
+    backend_attempts: list[dict[str, str]] = Field(default_factory=list)
+    native_execution: dict[str, str] = Field(default_factory=dict)
     status: Literal["not_run", "complete", "partial", "unavailable"] = "not_run"
     scope: str | None = None
     categories_checked: list[str] = Field(default_factory=list)
