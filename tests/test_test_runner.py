@@ -16,7 +16,7 @@ def invoke(tmp_path, source):
     test.write_text(source)
     output = tmp_path / 'evidence'
     proc = subprocess.run([sys.executable, str(ROOT/'scripts/run_tests.py'),
-                           '--output', str(output), '--', '-p', 'scripts.pytest_profiles',
+                           '--output', str(output), '--',
                            str(test), '-q'], cwd=ROOT, capture_output=True, text=True, timeout=30)
     return proc, json.loads((output/'report.json').read_text())
 
@@ -54,3 +54,14 @@ def test_readonly_checks_separate_stress_from_vcs(monkeypatch):
     original = test_profiles.importlib.util.find_spec
     monkeypatch.setattr(test_profiles.importlib.util, 'find_spec', lambda name: None if name == 'pylibfst' else original(name))
     assert 'python:pylibfst' in test_profiles.prerequisites('portable')
+
+
+def test_profile_without_explicit_test_paths_collects_original_stress_set(tmp_path):
+    output = tmp_path/'plan'
+    proc = subprocess.run([sys.executable, str(ROOT/'scripts/run_tests.py'),
+                           '--profile', 'stress', '--list', '--output', str(output)],
+                          cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout+proc.stderr
+    plan = json.loads((output/'pytest.json').read_text())
+    assert len(plan['selected']) == 5
+    assert {r['layer'] for r in plan['selected']} == {'stress'}

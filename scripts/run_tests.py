@@ -47,7 +47,8 @@ def main(argv=None):
             report['failure_phase'] = 'prerequisites'
             print('Missing prerequisites: ' + ', '.join(missing), file=sys.stderr)
         else:
-            command = [sys.executable, '-m', 'pytest', '--tw-profile', args.profile,
+            command = [sys.executable, '-m', 'pytest', '-p', 'scripts.pytest_profiles',
+                       '-c', str(ROOT / 'pytest.ini'), '--tw-profile', args.profile,
                        '--tw-report', str(output / 'pytest.json'), '--junitxml', str(output / 'junit.xml')]
             if args.list:
                 command += ['--collect-only', '-q']
