@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import time
+from contextlib import nullcontext
 
 from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyQueryBudget
 from .npi_hierarchy_source import _LanguageIterator, NpiHierarchyUnavailable
@@ -673,28 +674,30 @@ def scan_native_ports(provider, options, *, state=None, driver_reader=None):
                             raise
                         gap(exc.reason, DRIVER_CATEGORIES)
                         bits = ()
-                    for offset in range(job['bit_index'], len(bits)):
-                        if ports + driver_bits >= budget.max_symbols:
-                            raise HierarchyBudgetExceeded('native_driver_bit_limit')
-                        bit = bits[offset]
-                        query_path = full if size == 1 and bit == 0 else f'{full}[{bit}]'
-                        drivers, complete, used, reasons = driver_reader.read(query_path, categories=driver_categories)
-                        driver_bits += 1
-                        selected_kind = ('multiple_driver' if len(drivers) >= 2 else
-                            'undriven_signal' if not drivers and complete and used
-                            and full not in boundaries and eligible_scope and kind == 'npiNet'
-                            and net_kind in {'npiWire','npiTri','npiUwire'} else None)
-                        if not drivers and complete and used and full not in boundaries and selected_kind is None:
-                            reasons.add('npi_driver_negative_boundary')
-                        if selected_kind in driver_categories:
-                            fact = driver_fact(selected_kind, full, [bit], drivers,
-                                complete=complete, source=source, net_kind=net_kind)
-                            fact['source_association'] = 'unverified'
-                            save(fact.pop('kind'), **fact)
-                        for reason in reasons:
-                            gap(reason, DRIVER_CATEGORIES)
-                        job['bit_index'] = offset + 1
-                        job['signal_current_fingerprint'] = current
+                    span = getattr(driver_reader, 'signal', None)
+                    with (span(full, left, right) if bits and callable(span) else nullcontext()):
+                        for offset in range(job['bit_index'], len(bits)):
+                            if ports + driver_bits >= budget.max_symbols:
+                                raise HierarchyBudgetExceeded('native_driver_bit_limit')
+                            bit = bits[offset]
+                            query_path = full if size == 1 and bit == 0 else f'{full}[{bit}]'
+                            drivers, complete, used, reasons = driver_reader.read(query_path, categories=driver_categories)
+                            driver_bits += 1
+                            selected_kind = ('multiple_driver' if len(drivers) >= 2 else
+                                'undriven_signal' if not drivers and complete and used
+                                and full not in boundaries and eligible_scope and kind == 'npiNet'
+                                and net_kind in {'npiWire','npiTri','npiUwire'} else None)
+                            if not drivers and complete and used and full not in boundaries and selected_kind is None:
+                                reasons.add('npi_driver_negative_boundary')
+                            if selected_kind in driver_categories:
+                                fact = driver_fact(selected_kind, full, [bit], drivers,
+                                    complete=complete, source=source, net_kind=net_kind)
+                                fact['source_association'] = 'unverified'
+                                save(fact.pop('kind'), **fact)
+                            for reason in reasons:
+                                gap(reason, DRIVER_CATEGORIES)
+                            job['bit_index'] = offset + 1
+                            job['signal_current_fingerprint'] = current
                     index += 1; fingerprint = following
                     job.update(signal_index=index, bit_index=0, signal_fingerprint=fingerprint,
                                signal_current_fingerprint='')

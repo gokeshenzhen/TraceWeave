@@ -2582,7 +2582,11 @@ reported as undriven. Driver evidence is capped at 32 rows per fact, with
 force/DPI/class writes require further investigation before assigning a defect.
 
 NPI enumerates integral declarations through Language and queries each bit's
-direct Netlist drivers and loads in the existing native owner. Consumer aliases
+direct Netlist drivers and loads in the existing native owner.
+Verified vectors reuse one declaration handle and resolve individual bits through
+the native index API. Names, bounds and widths must agree with Language metadata;
+unsupported mappings use exact-name queries. The vector handle is cleared before
+leaving the declaration, including cancellation and bounded work stops. Consumer aliases
 are checked against the same net's original load inventory, never recursive
 fan-in. Undriven proofs require a healthy, non-black-box module boundary and an
 internal wire/tri/uwire with known bounds and observed loads. Input/inout/ref

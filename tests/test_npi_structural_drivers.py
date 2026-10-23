@@ -139,3 +139,68 @@ def test_cancelled_bit_resume_preserves_the_saved_frontier():
     with pytest.raises(OperationCancelled):
         scan_native_ports(p,p.options,state=checkpoint,driver_reader=Cancel())
     assert first['_scan_state']==checkpoint
+
+
+def vector_reader(left=1,right=4,mutate=None):
+    p=provider();lookups=[];indices=[]
+    bit=NS(driver_list=lambda:[object()])
+    def index(value):
+        indices.append(value)
+        return bit
+    vector=NS(full_name=lambda:f'top.u.S[{left}:{right}]',left=lambda:left,
+              right=lambda:right,size=lambda:abs(left-right)+1,index=index)
+    if mutate:mutate(vector)
+    def get_net(path):
+        lookups.append(path)
+        return vector if path=='top.u.S' else bit
+    backend=NS(_npi_modules=(None,NS(get_net=get_net)))
+    return NpiBitDrivers(p,backend),lookups,indices
+
+
+@pytest.mark.parametrize('left,right',[(1,4),(3,0),(-1,-4),(-4,-1)])
+def test_verified_vector_lookup_keeps_declared_bit_coordinates(left,right):
+    reader,lookups,indices=vector_reader(left,right)
+    bits=list(range(left,right+(-1 if left>right else 1),-1 if left>right else 1))
+    for _ in range(2):
+        with reader.signal('top.u.S',left,right):
+            for bit in bits:
+                assert reader.read(f'top.u.S[{bit}]',categories=set(CATEGORIES))==([],True,False,set())
+        assert reader._signal is None
+    assert lookups==['top.u.S','top.u.S']
+    assert indices==bits*2
+
+
+@pytest.mark.parametrize('case',['name','bounds','size','metadata_type','missing_index','index_none','index_error','metadata_error'])
+def test_unverified_vector_queries_preserve_exact_name_fallback(case):
+    def mutate(vector):
+        if case=='name':vector.full_name=lambda:'top.other.S[1:4]'
+        elif case=='bounds':vector.left=lambda:4
+        elif case=='size':vector.size=lambda:8
+        elif case=='metadata_type':vector.left=lambda:True
+        elif case=='missing_index':vector.index=None
+        elif case=='index_none':vector.index=lambda _:None
+        elif case=='index_error':
+            def unsupported(_):raise NotImplementedError()
+            vector.index=unsupported
+        else:
+            def missing():raise ValueError()
+            vector.full_name=missing
+    reader,lookups,_=vector_reader(mutate=mutate)
+    with reader.signal('top.u.S',1,4):
+        reader.read('top.u.S[1]',categories=set(CATEGORIES))
+        reader.read('top.u.S[2]',categories=set(CATEGORIES))
+    assert lookups==['top.u.S','top.u.S[1]','top.u.S[2]']
+    assert reader._signal is None
+
+
+@pytest.mark.parametrize('error',[OperationCancelled('cancelled'),HierarchyBudgetExceeded('native_call_limit'),TimeoutError()])
+def test_vector_terminal_failures_clear_handles_without_name_fallback(error):
+    def mutate(vector):
+        def stop(_):raise error
+        vector.index=stop
+    reader,lookups,_=vector_reader(mutate=mutate)
+    with pytest.raises(type(error)):
+        with reader.signal('top.u.S',1,4):
+            reader.read('top.u.S[1]',categories=set(CATEGORIES))
+    assert reader._signal is None
+    assert lookups==['top.u.S']

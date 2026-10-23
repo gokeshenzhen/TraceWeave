@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import contextmanager
 
 from .cancellation import OperationCancelled
 from .hierarchy_source_ir import HierarchyBudgetExceeded
 from .npi_hierarchy_source import NpiHierarchyUnavailable
 
 MAX_ENDPOINTS = 256
+_UNRESOLVED = object()
+_TERMINAL = (OperationCancelled, HierarchyBudgetExceeded, NpiHierarchyUnavailable, TimeoutError)
 
 
 def writer_identity(raw):
@@ -31,6 +34,52 @@ class NpiBitDrivers:
     def __init__(self, provider, backend):
         self.p, self.backend = provider, backend
         self.netlist = backend._npi_modules[1]
+        self._signal = None
+
+    @contextmanager
+    def signal(self, path, left, right):
+        """Keep one verified vector handle inside this declaration's owner span."""
+        self._signal = dict(path=path, left=left, right=right, net=_UNRESOLVED)
+        try:
+            yield
+        finally:
+            self._signal = None
+
+    def net(self, path):
+        signal = self._signal
+        if signal is not None and signal['left'] != signal['right']:
+            prefix = signal['path'] + '['
+            suffix = path[len(prefix):-1] if path.startswith(prefix) and path.endswith(']') else ''
+            if re.fullmatch(r'-?\d+', suffix):
+                bit = int(suffix)
+                left, right = signal['left'], signal['right']
+                if min(left, right) <= bit <= max(left, right):
+                    if signal['net'] is _UNRESOLVED:
+                        signal['net'] = None
+                        try:
+                            parent = self.call(self.netlist.get_net, signal['path'])
+                            if parent is not None and callable(getattr(parent, 'index', None)):
+                                name = self.call(parent.full_name)
+                                bounds = (self.call(parent.left), self.call(parent.right))
+                                size = self.call(parent.size)
+                                if (name in {signal['path'], f"{signal['path']}[{left}:{right}]"}
+                                        and all(type(value) is int for value in (*bounds, size))
+                                        and bounds == (left, right) and size == abs(left-right)+1):
+                                    signal['net'] = parent
+                        except _TERMINAL:
+                            raise
+                        except Exception:
+                            pass
+                    if signal['net'] is not None:
+                        try:
+                            indexed = self.call(signal['net'].index, bit)
+                            if indexed is not None:
+                                return indexed
+                        except _TERMINAL:
+                            raise
+                        except Exception:
+                            pass
+        return self.call(self.netlist.get_net, path)
 
     def call(self, fn, *args):
         self.p.check()
@@ -43,7 +92,7 @@ class NpiBitDrivers:
         from .verdi_npi_backend import driver_is_load_alias
         gaps = set()
         try:
-            net = self.call(self.netlist.get_net, path)
+            net = self.net(path)
             if net is None:
                 return [], False, False, {'npi_driver_net_unresolved'}
             original = self.call(net.driver_list)
@@ -90,7 +139,7 @@ class NpiBitDrivers:
                     source=(dict(file=row['source_file'],line=row['source_line'])
                             if row.get('source_file') and row.get('source_line') else None))
             return list(rows.values()), complete, bool(loads), gaps
-        except (OperationCancelled, HierarchyBudgetExceeded, NpiHierarchyUnavailable, TimeoutError):
+        except _TERMINAL:
             raise
         except Exception:
             return [], False, False, {'npi_driver_query_failed'}
