@@ -22,7 +22,9 @@ def writer_identity(raw):
     process = re.match(r'^(.*?:Always\d+)(?:#|:)', raw)
     if process:
         return process.group(1)
-    return re.sub(r'\[[^\]]*\]', '', raw)
+    # Different output bits can be connected to the same parent bit. Their
+    # selectors are source identities, not redundant display decorations.
+    return raw
 
 
 class NpiBitDrivers:
@@ -79,6 +81,11 @@ class NpiBitDrivers:
                     continue
                 identity = writer_identity(raw)
                 key = hashlib.sha256(identity.encode()).hexdigest()
+                if key in rows and rows[key]['signal_path'] != raw:
+                    # Same-process pins are not independent writers. Their
+                    # logical-bit equivalence is not proved by the process
+                    # prefix alone, so do not claim exhaustive classification.
+                    gaps.add('npi_driver_process_mapping_unverified'); complete = False
                 rows[key] = dict(driver_id=key, signal_path=raw, kind=row['driver_kind'],
                     source=(dict(file=row['source_file'],line=row['source_line'])
                             if row.get('source_file') and row.get('source_line') else None))

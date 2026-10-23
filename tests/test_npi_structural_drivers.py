@@ -101,6 +101,7 @@ def test_native_alias_guard_and_process_grouping():
     assert len(rows)==1
     assert not complete and 'npi_driver_load_alias' in gaps
     assert writer_identity(names[0])==writer_identity(names[1])
+    assert writer_identity('top.u.out[1:0]#[0]')!=writer_identity('top.u.out[1:0]#[1]')
 
 
 def test_large_load_inventory_is_not_used_as_an_exhaustive_alias_check():

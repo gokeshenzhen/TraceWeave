@@ -61,6 +61,8 @@ class _Inventory:
     def signal(self, symbol):
         if type(symbol).__name__ not in {'NetSymbol', 'VariableSymbol'}:
             return None
+        if type(symbol).__name__ == 'VariableSymbol' and symbol.lifetime.name == 'Automatic':
+            return None
         name = str(symbol.hierarchicalPath)
         if name in self.signals:
             return name
@@ -84,6 +86,8 @@ class _Inventory:
                            -1 if rng.left > rng.right else 1))
         kind = symbol.netType.netKind.name if type(symbol).__name__ == 'NetSymbol' else 'variable'
         self.signals[name] = _Signal(symbol, bits, self.location(symbol), kind)
+        if type(symbol).__name__ == 'VariableSymbol' and symbol.initializer is not None:
+            self.blocked.update((name, b) for b in bits)
         if kind not in {'Wire', 'Tri', 'UWire', 'variable'}:
             self.blocked.update((name, b) for b in bits)
             self.gaps.add('driver_net_resolution_boundary')
@@ -132,7 +136,13 @@ class _Inventory:
 
     def claim(self, targets, writer):
         for bit in targets:
-            self.writers.setdefault(self.root(bit), set()).add(writer)
+            # Preserve a writer's original logical bit before net collapse.
+            # Two bits of one vector may be wired onto the same physical net;
+            # repeated assignments to the SAME bit in one process remain one.
+            identity = hashlib.sha256((writer + ':' + repr(bit)).encode()).hexdigest()
+            self.driver_rows[identity] = {**self.driver_rows[writer], 'driver_id':identity,
+                                         'target_signal':bit[0], 'target_bits':[bit[1]]}
+            self.writers.setdefault(self.root(bit), set()).add(identity)
 
     def block(self, node, instance, reason):
         self.gaps.add(reason)
@@ -243,7 +253,13 @@ class _Inventory:
             elif direction == 'Out':
                 self.reads.update(internal)
                 if external:
-                    self.claim(external, self.writer(port, path, 'output_binding', str(port.name)))
+                    if len(external) == len(internal):
+                        for target, (_, bit) in zip(external, internal):
+                            writer = self.writer(port, path, 'output_binding', f'{port.name}[{bit}]')
+                            self.driver_rows[writer].update(signal_path=name,source_bits=[bit])
+                            self.claim((target,),writer)
+                    else:
+                        self.claim(external, self.writer(port, path, 'output_binding', str(port.name)))
                     if signal.net_kind != 'variable':
                         self.blocked.update(internal)
                         self.gaps.add('driver_output_net_conversion_boundary')

@@ -22,6 +22,7 @@ endmodule
 module top(input [1:4] a,b, output [1:12] y);core c(a,b,y);endmodule
 ''', scope='top.c')
     overlap = next(f for f in result['facts'] if f['signal_path']=='top.c.S' and f['kind']=='multiple_driver')
+    assert result['status']=='complete',result['gaps']
     assert overlap['target_bits'] == [9]
     assert overlap['driver_count'] == 2
     assert {d['instance'] for d in overlap['drivers']} == {'top.c.u1','top.c.u2'}
@@ -55,6 +56,7 @@ empty e(c); assign c=1'b0;
 endmodule
 ''')
     assert result['facts'] == []
+    assert result['status']=='complete',result['gaps']
 
 
 def test_cross_hierarchy_writes_are_included_for_scoped_output(tmp_path):
@@ -63,6 +65,7 @@ module leaf(output wire [3:0] y);wire [3:0] n;assign y=n;endmodule
 module top(output [3:0] y); leaf l(y); assign l.n=4'hf;endmodule
 ''', scope='top.l')
     assert result['facts'] == []
+    assert result['status']=='complete',result['gaps']
 
 
 def test_indexed_select_and_parameterized_generate_use_elaborated_writers(tmp_path):
@@ -74,6 +77,7 @@ if(0)begin:unused assign y=b;end
 endmodule
 ''')
     assert result['facts'] == []
+    assert result['status']=='complete',result['gaps']
 
 
 def test_only_read_bits_are_reported_and_unused_nets_are_not(tmp_path):
@@ -139,6 +143,26 @@ module top(input clk,output y);bus b(clk);assign y=b.d;endmodule
 ''')
     assert not any(f['kind']=='undriven_signal' for f in result['facts'])
     assert 'driver_interface_runtime_boundary' in result['gaps']
+
+
+@pytest.mark.parametrize('variable',[False,True])
+def test_two_output_bits_aliased_onto_one_net_are_distinct_sources(tmp_path,variable):
+    body='output reg [1:0] y);always @* y=a;' if variable else 'output wire [1:0] y);assign y=a;'
+    result=scan(tmp_path,'module leaf(input [1:0] a,'+body+'''
+endmodule
+module top(input [1:0] a,output q);leaf l(a,{q,q});endmodule
+''')
+    fact=next(f for f in result['facts'] if f['kind']=='multiple_driver' and f['signal_path']=='top.q')
+    assert fact['driver_count']==2
+    assert fact['target_bits']==[0]
+
+
+def test_automatic_and_initialized_subroutine_locals_are_not_undriven(tmp_path):
+    result=scan(tmp_path,'''module top(input a,output y,z);
+function automatic logic f(input b);logic t;return t;endfunction
+function logic g(input b);logic t=0;return t;endfunction
+assign y=f(a);assign z=g(a);endmodule''')
+    assert not any(f['kind']=='undriven_signal' for f in result['facts'])
 
 
 @pytest.mark.anyio
