@@ -174,6 +174,20 @@ assign y=f(a);assign z=missing;endmodule''')
     assert [(f['signal'],f['target_bits']) for f in result['facts']]==[('missing',[0])]
 
 
+def test_driver_and_propagation_checks_share_the_ast_budget(tmp_path):
+    design=session(tmp_path,'''module top(output y,z);
+wire missing,c;assign c=1;assign y=c;assign z=missing;endmodule''')
+    limits=ScanLimits(max_ast_nodes=40)
+    drivers=scan_semantic_session(design,categories=CATEGORIES,limits=limits)
+    propagation=scan_semantic_session(design,categories=['propagated_constant'],limits=limits)
+    assert drivers['status']==propagation['status']=='complete'
+    combined=scan_semantic_session(design,categories=[*CATEGORIES,'propagated_constant'],limits=limits)
+    assert combined['status']=='partial'
+    assert combined['counts']=={'undriven_signal':1}
+    assert 'propagation_ast_limit' in combined['gaps']
+    assert not combined['propagation']['inventory_complete']
+
+
 @pytest.mark.anyio
 async def test_public_deep_driver_categories_and_auto_result_reuse(tmp_path, monkeypatch):
     import server

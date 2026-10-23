@@ -241,6 +241,8 @@ def scan_semantic_session(session, *, scope=None, categories=DEFAULT_SEMANTIC_CA
         gaps.update(drivers['gaps'])
         facts.extend(drivers['facts'])
         counts.update(f['kind'] for f in drivers['facts'])
+        nodes = min(limits.max_ast_nodes, nodes + drivers['ast_nodes'])
+        visited_instances = max(visited_instances, drivers['instances'])
     if set(categories) & {"propagated_constant", "constant_control"}:
         from .structural_propagation import propagate_session
         propagated = propagate_session(session, scope=scope, categories=categories,
