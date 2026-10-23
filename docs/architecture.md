@@ -1188,7 +1188,13 @@ Verification
   the exact texts consumed by regex rules; unresolved macro/library includes
   separately prohibit treating it as a complete semantic identity.
   The default process-local LRU retains at most eight results / 32 MiB of JSON
-  and 16 MiB of digest/include facts, never persistent source bodies. A warm hit
+  and 16 MiB of digest/include facts, never persistent source bodies. The identity
+  reader additionally retains at most four complete immutable identity graphs /
+  8 MiB of estimated metadata (bounded further by its configured capacity).
+  An exact compile-context hit still hashes current bytes, validates aliases and
+  re-resolves literal includes, including earlier shadow candidates; it skips
+  rebuilding the unchanged graph. Incomplete/oversized identities bypass this
+  tier. No source bodies or semantic coverage proof enter it. A warm result hit
   skips source preload and all rules. Exact concurrent callers share one build;
   one cancellation preserves it, final-waiter cancellation stops it. Results
   computed across a source change are degraded and never published. Set

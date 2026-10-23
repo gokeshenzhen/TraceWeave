@@ -77,6 +77,44 @@ def test_coarsened_stat_identity_cannot_hide_content_change(tmp_path, monkeypatc
     assert reader.capture(str(log), result).digest != first.digest
 
 
+def test_exact_identity_reuse_still_checks_bytes_and_include_shadowing(tmp_path, monkeypatch):
+    import src.design_identity as module
+    early, late = tmp_path / 'early', tmp_path / 'late'
+    early.mkdir(); late.mkdir()
+    (late / 'defs.svh').write_text('`define WIDTH 8\n')
+    log, source, result = context(tmp_path, '`include "defs.svh"\nmodule top; endmodule\n')
+    result['compile_command'] += f' +incdir+{early}+{late}'
+    reader = DesignIdentityReader()
+    first = reader.capture(str(log), result)
+    # A hit bypasses graph reconstruction, but content hashing remains mandatory.
+    original = module.extract_preprocessor_options
+    monkeypatch.setattr(module, 'extract_preprocessor_options', lambda *a: pytest.fail('rebuilt unchanged graph'))
+    assert reader.capture(str(log), result) is first
+    monkeypatch.setattr(module, 'extract_preprocessor_options', original)
+    (early / 'defs.svh').write_text('`define WIDTH 16\n')
+    second = reader.capture(str(log), result)
+    assert second.digest != first.digest and second is not first
+    from src.compile_session_snapshot import FileContentSnapshot
+    monkeypatch.setattr(FileContentSnapshot, 'current', lambda _: True)
+    source.write_text('`include "defs.svh"\nmodule top; wire a; endmodule\n')
+    assert reader.capture(str(log), result).digest != second.digest
+
+
+def test_identity_memo_is_bounded_and_never_retains_incomplete_capture(tmp_path):
+    log, source, result = context(tmp_path)
+    reader = DesignIdentityReader(max_entries=2)
+    for i in range(8):
+        reader.capture(str(log), {**result, 'compile_command': result['compile_command'] + f' +define+V={i}'})
+    assert len(reader._identities) == 2
+    assert reader._identity_bytes == sum(n for _, n in reader._identities.values())
+    assert reader._identity_bytes <= reader._identity_max_bytes
+    bypass = DesignIdentityReader(max_bytes=1)
+    assert bypass.capture(str(log), result).complete and not bypass._identities
+    source.unlink()
+    incomplete = DesignIdentityReader()
+    assert not incomplete.capture(str(log), result).complete and not incomplete._identities
+
+
 @pytest.mark.anyio
 async def test_hit_returns_copy_and_rules_are_not_reexecuted(tmp_path):
     log, source, context_ = context(tmp_path)
