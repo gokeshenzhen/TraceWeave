@@ -7,12 +7,17 @@ from src.compile_session_snapshot import CompileSessionSnapshotBuilder
 from src.compile_source_index import CompileSourceIndex
 from src.tb_hierarchy_builder import build_hierarchy
 
+# Resident accounting includes absolute path metadata. Functional cache-hit
+# cases must fit under both short /tmp and long retained-evidence paths; the
+# dedicated capacity-bypass tests below retain their deliberately small limits.
+FUNCTIONAL_CACHE_BYTES = 16 * 1024
+
 
 def test_preload_deduplicates_content_and_reuses_exact_byte_snapshot(tmp_path):
     source = tmp_path / "top.sv"
     raw = b"module top;\r\nendmodule\r\n"
     source.write_bytes(raw)
-    index = CompileSourceIndex(max_bytes=1024, max_files=4)
+    index = CompileSourceIndex(max_bytes=FUNCTIONAL_CACHE_BYTES, max_files=4)
 
     index.preload([str(source), str(source)])
     first = index.read(str(source))
@@ -88,7 +93,7 @@ def test_lazy_same_path_miss_is_single_flight(tmp_path, monkeypatch):
         "read_source_content",
         delayed_read,
     )
-    index = CompileSourceIndex(max_bytes=1024, max_files=4)
+    index = CompileSourceIndex(max_bytes=FUNCTIONAL_CACHE_BYTES, max_files=4)
     index.preload([])
     results = []
 
@@ -115,7 +120,7 @@ def test_lazy_same_path_miss_is_single_flight(tmp_path, monkeypatch):
 def test_snapshot_builder_accepts_indexed_content_without_rehashing(tmp_path):
     source = tmp_path / "top.sv"
     source.write_text("module top; endmodule\n")
-    index = CompileSourceIndex(max_bytes=1024, max_files=4)
+    index = CompileSourceIndex(max_bytes=FUNCTIONAL_CACHE_BYTES, max_files=4)
     index.preload([str(source)])
     builder = CompileSessionSnapshotBuilder(indexed_reader=index.read)
 
@@ -130,7 +135,7 @@ def test_snapshot_builder_accepts_indexed_content_without_rehashing(tmp_path):
 def test_close_drops_source_text_and_future_reads_bypass_cache(tmp_path):
     source = tmp_path / "top.sv"
     source.write_text("module top; endmodule\n")
-    index = CompileSourceIndex(max_bytes=1024, max_files=4)
+    index = CompileSourceIndex(max_bytes=FUNCTIONAL_CACHE_BYTES, max_files=4)
     index.preload([str(source)])
 
     index.close()
@@ -161,7 +166,7 @@ def test_hierarchy_reuses_index_snapshot_and_reports_numeric_metrics(tmp_path):
             ]
         },
     }
-    index = CompileSourceIndex(max_bytes=1024, max_files=4)
+    index = CompileSourceIndex(max_bytes=FUNCTIONAL_CACHE_BYTES, max_files=4)
     index.preload([str(source)])
 
     result = build_hierarchy(
