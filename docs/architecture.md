@@ -2963,6 +2963,29 @@ profile. Reports are private local files and the existing MCP stdout isolation
 remains in effect. Measure control/profile separately to quantify instrumentation
 overhead before drawing performance conclusions.
 
+A targeted run on the same OpenTitan workload above measured 129.68s without
+phase timers and 132.06s with them (1.8% difference); both used separate fresh
+processes with warm filesystem pages. Both took 44 calls, drained 142,987 scopes,
+and produced identical full native fact hashes for 12,433 facts and identical
+per-page progress, coverage, gap hashes and KDB identity. Peak child RSS was
+553,772 / 554,448 KiB. This single pair measures instrumentation overhead for
+this workload, not a general performance bound.
+
+Inclusive phase totals exposed remaining repeated source work: 265 complete
+identity validations took 47.50s, including 24.59s for include resolution and
+9.46s for 341,055 file validations (5.28 GiB of repeated logical input). Each
+identity contained 1,287 file records; its 1,021 include lookups had 707 distinct
+name/search-directory tuples. Preprocessor option replay took 12.97s and compile
+log parsing 9.09s. Native queries took 48.92s including 45.00s in the scan core;
+source supplementation took 32.11s, mostly identity validation, despite `auto`
+returning a source cache miss rather than building Slang. Result model creation,
+output budgeting and serialization together took under 0.8s. These nested totals
+must not be summed. Candidates for another optimization round are consolidating
+redundant validation within a phase, deduplicating identical include lookups and
+reusing validated compile/option processing. Fresh content, alias, include-choice,
+environment and publication checks, cancellation and deadline behavior must
+remain observable; the measured validation time is not a removable-cost claim.
+
 ### Continuing a bounded native scan
 
 A work-limited scan that made progress returns `semantic.continuation` and a
