@@ -190,6 +190,112 @@ class FixtureCache:
             return run([converter, source, '-seq_num', '-o', path/'parser.fsdb'], path, timeout=30)
         return self.get('legacy-parser', identity([source, converter], version=1), build) / 'parser.fsdb'
 
+    def shape_probe(self):
+        sdk = Path(os.environ['VERDI_HOME'])/'share/FsdbReader'
+        source = ROOT/'scripts/fsdb_optimization_probe.cpp'
+        native = ROOT/'native/fsdb'
+        inputs = identity([source, native/'fsdb_wrapper.cpp'] + sorted(native.glob('*.h')) +
+                          [sdk/'ffrAPI.h', sdk/'linux64/libnffr.so', shutil.which('g++')], version=1)
+        def build(path):
+            include = path/'include.cpp'
+            include.write_text('static unsigned long long bench_reclaims=0, bench_reclaim_ns=0;\n'
+                               '#include "'+str(native/'fsdb_wrapper.cpp')+'"\n')
+            return run(['g++', '-O0', '-std=c++11', '-I'+str(sdk), '-I'+str(native),
+                        '-DTRACEWEAVE_BENCH_WRAPPER="'+str(include)+'"', source,
+                        '-L'+str(sdk/'linux64'), '-lnffr', '-lnsys', '-lz', '-ldl',
+                        '-Wl,-rpath,'+str(sdk/'linux64'), '-o', path/'probe'], path)
+        return self.get('shape-probe', inputs, build)/'probe'
+
+    def inspect(self, path, signal_path, records, *, multisession=False, output_dir=None):
+        probe = self.shape_probe()
+        output_dir = output_dir or path.parent
+        result = run([probe, path, signal_path, '0', '-1', str(records), '1', 'count'],
+                     output_dir, timeout=180, label='shape')
+        rows = [json.loads(line) for line in (output_dir/'shape.log').read_text().splitlines()
+                if line.startswith('{')]
+        metadata = next(r for r in rows if r['phase'] == 'metadata')
+        count = next(r for r in rows if r['phase'] == 'count')
+        if multisession and metadata['sessions'] < 2:
+            raise RuntimeError('fixture needs multiple physical FFR sessions')
+        return dict(shape=metadata, count=count, validation=result)
+
+    def activity(self, steps):
+        from scripts.benchmark_waveform_reads import generate
+        converter = Path(os.environ['VERDI_HOME'])/'bin/vcd2fsdb'
+        inputs = identity([ROOT/'scripts/benchmark_waveform_reads.py', converter],
+                          steps=steps, writer_memory_mib=4, seq_num=True)
+        def build(path):
+            start = time.monotonic()
+            generate(path/'activity.vcd', steps)
+            conversion = run([converter, path/'activity.vcd', '-seq_num', '-o', path/'activity.fsdb'], path,
+                             env=dict(os.environ, FSDB_ENV_WRITER_MEM_LIMIT='4'), timeout=600)
+            info = self.inspect(path/'activity.fsdb', 'top.data', steps+1, multisession=True)
+            from src.fsdb_parser import FSDBParser
+            parser = FSDBParser(str(path/'activity.fsdb'))
+            try:
+                for step in (0, steps//2, steps-1, steps):
+                    got = parser.get_value_at_time('top.data', step*10)['value']['bin']
+                    if got != f'{step*2654435761 & 0xffffffff:032b}':
+                        raise RuntimeError('activity mathematical value oracle failed')
+                if parser.get_summary()['scale_fs_per_tick'] != 1000:
+                    raise RuntimeError('activity scale oracle failed')
+            finally:
+                parser.close()
+            # Retain the reproducible source, but avoid caching a second huge copy.
+            vcd_bytes = (path/'activity.vcd').stat().st_size
+            (path/'activity.vcd').unlink()
+            return dict(steps=steps, data_records=steps+1, clock_posedges=steps//2,
+                        signals=4, generated_vcd_bytes=vcd_bytes,
+                        elapsed_sec=time.monotonic()-start, conversion=conversion, **info)
+        return self.get('activity-'+str(steps), inputs, build)/'activity.fsdb'
+
+    def writer_fixture(self, name):
+        specifications = {'wide_256_reclaim': ('wide256', 600000, 0, 128),
+                          'protocol_small': ('protocol', 256, 32, 128),
+                          'protocol_complete': ('protocol', 32768, 4096, 128),
+                          'protocol_large': ('protocol', 131072, 4096, 128)}
+        mode, steps, sync, memory = specifications[name]
+        sdk = Path(os.environ['VERDI_HOME'])/'share/FsdbWriter'
+        source = ROOT/'scripts/fsdb_optimization_fixture.cpp'
+        inputs = identity([source, sdk/'ffwAPI.h', sdk/'linux64/libnffw.so', shutil.which('g++')],
+                          mode=mode, steps=steps, sync=sync, memory=memory)
+        def build(path):
+            compilation = run(['g++', '-O2', '-std=c++11', '-I'+str(sdk), source,
+                               '-L'+str(sdk/'linux64'), '-lnffw', '-ldl',
+                               '-Wl,-rpath,'+str(sdk/'linux64'), '-o', path/'writer'], path)
+            generation = run([path/'writer', path/'wave.fsdb', mode, steps, sync, memory], path, timeout=300,
+                             label='generation')
+            signal_path = 'top.data[255:0]' if mode == 'wide256' else 'top.fast.clk'
+            info = self.inspect(path/'wave.fsdb', signal_path, steps+1 if mode == 'wide256' else steps*2+1,
+                                multisession=mode == 'wide256')
+            return dict(mode=mode, steps=steps, compilation=compilation, generation=generation, **info)
+        return self.get(name, inputs, build)/'wave.fsdb'
+
+    def wave(self, variable, generate, *, signal_path=None, records=None, scale_fs=1000,
+             multisession=False, sample=None):
+        """Legacy path overrides remain read-only, with the same semantic contract."""
+        raw = os.environ.get(variable)
+        if not raw:
+            return generate()
+        external = Path(raw).resolve(strict=True)
+        if not external.is_file():
+            raise ValueError(variable+' must be a waveform file')
+        def validate(path):
+            metadata = self.inspect(external, signal_path, records, multisession=multisession,
+                                    output_dir=path) if signal_path else {}
+            from src.fsdb_parser import FSDBParser
+            parser = FSDBParser(str(external))
+            try:
+                if parser.get_summary()['scale_fs_per_tick'] != scale_fs:
+                    raise RuntimeError(variable+' timescale mismatch')
+                if sample:
+                    sample(parser)
+            finally:
+                parser.close()
+            return dict(external=str(external), sha256=sha(external), **metadata)
+        self.get('override-'+variable.lower(), identity([external], variable=variable), validate)
+        return external
+
 
 def prepare_for_tests(selected, cache_dir=None):
     """Prepare only selected capabilities; further input families are demand loaded."""
@@ -202,4 +308,28 @@ def prepare_for_tests(selected, cache_dir=None):
     fsdb_parser._WRAPPER_SO = str(wrapper)
     if any('test_fsdb_parser.py::' in r['nodeid'] for r in selected):
         os.environ['TW_LEGACY_PARSER_FSDB'] = str(cache.legacy_parser())
+    fixtures = {name for row in selected for name in row.get('fixtures', [])}
+    if 'same_tick_fsdb' in fixtures:
+        os.environ['TW_SAME_TICK_FSDB'] = str(cache.same_tick())
+    million = ('test_multiblock_points_preserve_following_reads', 'test_real_reader_restores_an_existing_view',
+               'test_interleaved_reads_release_selection_and_residency',
+               'test_lazy_windows_match_generator_across_sessions_in_both_directions',
+               'test_lazy_around_keeps_full_requested_history_and_center')
+    if any(row['nodeid'].split('::')[-1].split('[')[0] in million for row in selected):
+        os.environ['TW_POINT_READ_FSDB'] = str(cache.wave('TW_POINT_READ_FSDB', lambda: cache.activity(1_000_000),
+            signal_path='top.data', records=1_000_001, multisession=True))
+    if any(row['layer'] == 'stress' for row in selected):
+        os.environ['TW_LAZY_LARGE_FSDB'] = str(cache.wave('TW_LAZY_LARGE_FSDB', lambda: cache.activity(10_000_000),
+            signal_path='top.data', records=10_000_001, multisession=True))
+    for var, name, needed in [
+        ('TW_SESSION_RECLAIM_FSDB', 'wide_256_reclaim', 'test_real_multisession_wide_counter_count_and_values'),
+        ('TW_P2B_PROTOCOL_FSDB', 'protocol_small', 'native_protocol'),
+        ('TW_P2B_COMPLETE_FSDB', 'protocol_complete', 'TW_P2B_COMPLETE_FSDB'),
+        ('TW_P2B_LARGE_FSDB', 'protocol_large', 'TW_P2B_LARGE_FSDB')]:
+        if needed in fixtures or any(needed in row['nodeid'] for row in selected):
+            os.environ[var] = str(cache.wave(var, lambda: cache.writer_fixture(name),
+                signal_path='top.data[255:0]' if name == 'wide_256_reclaim' else 'top.fast.clk',
+                records=600001 if name == 'wide_256_reclaim' else
+                    {'protocol_small': 513, 'protocol_complete': 65537, 'protocol_large': 262145}[name],
+                multisession=name == 'wide_256_reclaim'))
     return cache.receipts

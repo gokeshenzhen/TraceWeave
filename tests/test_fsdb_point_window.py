@@ -81,8 +81,8 @@ def test_multiblock_points_preserve_following_reads():
 def native_reader_probe(tmp_path_factory):
     """Use real FFR selection/residency observations without changing public ABI."""
     verdi = os.environ.get("VERDI_HOME")
-    if not os.environ.get("TW_POINT_READ_FSDB") or not verdi or not shutil.which("g++"):
-        pytest.skip("requires TW_POINT_READ_FSDB, VERDI_HOME and g++")
+    if not verdi or not shutil.which("g++"):
+        pytest.skip("requires VERDI_HOME and g++")
     tmp_path = tmp_path_factory.mktemp("reader_probe")
     sdk = Path(verdi) / "share/FsdbReader"
     source = (NATIVE_FSDB / "fsdb_wrapper.cpp").read_text()
@@ -372,27 +372,8 @@ def test_lazy_around_keeps_full_requested_history_and_center(native_reader_probe
 
 @pytest.fixture(scope="module")
 def same_tick_fsdb(tmp_path_factory):
-    """Convert fixed events, including sequence numbers, without a simulator."""
-    verdi = os.environ.get("VERDI_HOME")
-    if not os.environ.get("TW_POINT_READ_FSDB") or not verdi:
-        pytest.skip("requires TW_POINT_READ_FSDB and VERDI_HOME")
-    converter = Path(verdi) / "bin/vcd2fsdb"
-    if not converter.exists():
-        pytest.skip("vcd2fsdb unavailable")
-    directory = tmp_path_factory.mktemp("same_tick_fsdb")
-    vcd = directory / "events.vcd"
-    vcd.write_text(
-        '$timescale 100fs $end\n$scope module top $end\n'
-        '$var wire 1 ! data $end\n$var wire 1 @ sparse $end\n'
-        '$upscope $end\n$enddefinitions $end\n'
-        '#0\n0!\n0@\n#1\n1!\n#2\nx!\n#9\nz!\n'
-        '#10\n0!\n1!\nx!\n0!\n#11\n1!\n'
-        '#20\nz!\n1@\n#29\n0!\n#30\n1!\n#40\n')
-    fsdb = directory / "events.fsdb"
-    subprocess.run([str(converter), str(vcd), "-seq_num", "-o", str(fsdb)],
-                   cwd=directory, env={**os.environ, "FSDB_ENV_MAX_GLITCH_NUM": "0"},
-                   check=True, capture_output=True, timeout=30)
-    return fsdb
+    """Shared, independently validated 100fs sequence fixture."""
+    return Path(os.environ["TW_SAME_TICK_FSDB"])
 
 
 @pytest.mark.eda_integration

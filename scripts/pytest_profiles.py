@@ -34,7 +34,7 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         layer = membership(item.nodeid, fixtures=item.fixturenames,
                            eda_marker=item.get_closest_marker('eda_integration') is not None)
-        entry = {'nodeid': item.nodeid, 'layer': layer}
+        entry = {'nodeid': item.nodeid, 'layer': layer, 'fixtures': sorted(item.fixturenames)}
         layers[item.nodeid] = layer
         if layer in PROFILES[profile]:
             selected.append(item)

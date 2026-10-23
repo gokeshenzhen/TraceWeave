@@ -67,3 +67,11 @@ def test_untrusted_manifest_cannot_validate_outside_cache(tmp_path):
     (p/'manifest.json').write_text(json.dumps(manifest))
     cache.get('test', {}, build)
     assert len(calls) == 2
+
+
+def test_missing_override_fails_without_generating(tmp_path, monkeypatch):
+    cache = FixtureCache(tmp_path/'cache')
+    monkeypatch.setenv('TW_POINT_READ_FSDB', str(tmp_path/'missing.fsdb'))
+    with pytest.raises(FileNotFoundError):
+        cache.wave('TW_POINT_READ_FSDB', lambda: pytest.fail('must not fall back'))
+    assert not list(cache.root.rglob('manifest.json'))

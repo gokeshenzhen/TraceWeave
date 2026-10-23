@@ -37,8 +37,8 @@ RAW_EVENTS = [(0, "0"), (1, "1"), (2, "x"), (9, "z"),
 def reclaim_libraries(tmp_path_factory):
     verdi = os.environ.get("VERDI_HOME")
     compiler = shutil.which("g++")
-    if not os.environ.get("TW_POINT_READ_FSDB") or not verdi or not compiler:
-        pytest.skip("requires TW_POINT_READ_FSDB, VERDI_HOME and g++")
+    if not verdi or not compiler:
+        pytest.skip("requires VERDI_HOME and g++")
     sdk = Path(verdi) / "share/FsdbReader"
     directory = tmp_path_factory.mktemp("cursor_reclaim")
     libraries = {}
