@@ -312,9 +312,20 @@ def _infer_compile_environment(
     path expressions that matched simulator-reported absolute paths.
     """
 
-    anchors = _evidence_anchor_paths(compile_result)
-    if not anchors:
+    check_cancelled()
+    # Unit evidence guarantees a nonempty anchor domain. Canonicalize it only
+    # when inference actually encounters a variable. Literal command files
+    # must still be read: a nested filelist may introduce the first variable.
+    anchors = (None if _compilation_unit_records(compile_result)
+               else _evidence_anchor_paths(compile_result))
+    if anchors == ():
         return {}, set()
+    def evidence_anchors():
+        nonlocal anchors
+        if anchors is None:
+            anchors = _evidence_anchor_paths(compile_result)
+        return anchors
+
     try:
         command_tokens = shlex.split(command, comments=True, posix=True)
     except ValueError:
@@ -333,15 +344,17 @@ def _infer_compile_environment(
             check_cancelled()
             for mode, raw_path in _iter_filelist_references(tokens):
                 rendered = _expand_with_overrides_only(raw_path, bindings)
-                candidate = _candidate_environment_values(
-                    rendered,
-                    base=base,
-                    anchors=anchors,
-                ) or _candidate_filelist_root_values(
-                    rendered,
-                    base=base,
-                    anchors=anchors,
-                )
+                candidate = None
+                if _ENV_REF_RE.search(rendered):
+                    candidate = _candidate_environment_values(
+                        rendered,
+                        base=base,
+                        anchors=evidence_anchors(),
+                    ) or _candidate_filelist_root_values(
+                        rendered,
+                        base=base,
+                        anchors=evidence_anchors(),
+                    )
                 if candidate is not None:
                     name, values = candidate
                     if name not in bindings:
@@ -354,10 +367,12 @@ def _infer_compile_environment(
                 # binding must override that value locally rather than trust
                 # ambient state by accident.
                 rendered = _expand_with_overrides_only(expression, bindings)
+                if not _ENV_REF_RE.search(rendered):
+                    continue
                 candidate = _candidate_environment_values(
                     rendered,
                     base=base,
-                    anchors=anchors,
+                    anchors=evidence_anchors(),
                 )
                 if candidate is None:
                     continue

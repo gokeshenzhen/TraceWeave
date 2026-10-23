@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src import sv_preprocessor
 from src import tb_hierarchy_builder
 from src.sv_preprocessor import SystemVerilogPreprocessor
@@ -150,6 +152,78 @@ def test_context_index_canonicalization_scales_linearly(tmp_path, monkeypatch):
         preprocessor.preprocess(str(path))
 
     assert canonical_calls <= source_count + 4
+
+
+@pytest.mark.parametrize('phases', [None, [], [{'compile_command': ''}]])
+def test_common_compile_command_does_not_index_unrelated_unit_paths(tmp_path, monkeypatch, phases):
+    sources = [tmp_path / f'unit_{i}.sv' for i in range(64)]
+    result = dict(compile_cwd=str(tmp_path), compile_command='vcs +define+SHARED=7',
+                  compile_evidence=dict(ordered_compilation_units=[
+                      dict(path=str(path), source_log_index=0) for path in sources],
+                      source_phases=phases))
+    original, visits = sv_preprocessor._canonical, []
+    def canonical(path):
+        visits.append(str(path))
+        return original(path)
+    monkeypatch.setattr(sv_preprocessor, '_canonical', canonical)
+    options = sv_preprocessor.extract_preprocessor_options(result, str(sources[0]))
+    assert options.complete and options.macro_dict() == {'SHARED': '7'}
+    assert not set(map(str, sources[1:])) & set(visits)
+
+
+def _replay_context(tmp_path, source, filelist):
+    return dict(simulator='vcs', compile_cwd=str(tmp_path), compile_command=f'vcs -f {filelist}',
+                compile_evidence=dict(schema_version=1, unit_order_source='simulator_log',
+                    ordered_compilation_units=[dict(path=str(source), role='project')]))
+
+
+def test_literal_filelist_skips_unused_inference_anchors_but_is_reread(tmp_path, monkeypatch):
+    from src import compile_environment
+    a, b = tmp_path / 'a.sv', tmp_path / 'b.sv'
+    a.write_text('module a; endmodule\n'); b.write_text('module b; endmodule\n')
+    filelist = tmp_path / 'units.f'
+    filelist.write_text('a.sv\n')
+    result = _replay_context(tmp_path, a, filelist)
+    def forbidden(*args):
+        pytest.fail('a literal-only replay materialized inference anchors')
+    monkeypatch.setattr(compile_environment, '_evidence_anchor_paths', forbidden)
+    first = compile_environment.resolve_compile_environment(result)
+    assert first.complete and not first.bindings and first.filelists == (str(filelist),)
+    filelist.write_text('b.sv\n')  # same length; command and unit evidence unchanged
+    assert not compile_environment.resolve_compile_environment(result).complete
+
+
+def test_nested_filelist_can_lazily_require_inference_and_override_stale_environment(tmp_path, monkeypatch):
+    from src import compile_environment
+    rtl = tmp_path / 'rtl'
+    rtl.mkdir()
+    source = rtl / 'a.sv'
+    source.write_text('module a; endmodule\n')
+    outer, inner = tmp_path / 'outer.f', tmp_path / 'inner.f'
+    outer.write_text('-F inner.f\n')
+    inner.write_text('$TW_LAZY_ROOT/rtl/a.sv\n')
+    monkeypatch.setenv('TW_LAZY_ROOT', str(tmp_path / 'wrong'))
+    original, calls = compile_environment._evidence_anchor_paths, []
+    def anchors(*args):
+        calls.append(1)
+        return original(*args)
+    monkeypatch.setattr(compile_environment, '_evidence_anchor_paths', anchors)
+    result = _replay_context(tmp_path, source, outer)
+    first = compile_environment.resolve_compile_environment(result)
+    assert first.complete and first.bindings['TW_LAZY_ROOT'] == str(tmp_path)
+    assert len(calls) == 1
+    inner.write_text('$TW_LAZY_ROOT/rtl/b.sv\n')
+    assert not compile_environment.resolve_compile_environment(result).complete
+    assert len(calls) == 2  # fresh inference, no cross-call binding cache
+
+
+def test_missing_anchor_domain_never_reads_filelists(tmp_path, monkeypatch):
+    from src import compile_environment
+    def forbidden(*args, **kwargs):
+        pytest.fail('inference without log anchors read a command file')
+    monkeypatch.setattr(compile_environment, 'read_compile_text', forbidden)
+    assert compile_environment._infer_compile_environment(
+        'vcs -f missing.f', command_dir=tmp_path, compile_result={}) == ({}, set())
 
 
 def test_plain_source_skips_directive_comment_masking(tmp_path, monkeypatch):

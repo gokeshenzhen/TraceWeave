@@ -149,21 +149,6 @@ class _CommandContextIndex:
 
         evidence = compile_result.get("compile_evidence")
         evidence = evidence if isinstance(evidence, Mapping) else {}
-        records = evidence.get("ordered_compilation_units")
-        if isinstance(records, Sequence) and not isinstance(
-            records, (str, bytes)
-        ):
-            for record in records:
-                if not isinstance(record, Mapping) or not record.get("path"):
-                    continue
-                canonical = canonicalize(str(record["path"]))
-                if canonical in self._source_log_indexes:
-                    continue
-                raw_index = record.get("source_log_index")
-                self._source_log_indexes[canonical] = (
-                    raw_index if isinstance(raw_index, int) else None
-                )
-
         default_cwd = compile_result.get("compile_cwd")
         default_base = (
             canonicalize(str(default_cwd)) if default_cwd else None
@@ -198,6 +183,23 @@ class _CommandContextIndex:
                     # A malformed, unhashable phase index cannot equal the
                     # integer source indices accepted above.
                     continue
+
+        # Unit-to-phase lookup is unused when every source replays the same
+        # fallback command. Keep path resolution local to actual phase lookup.
+        records = evidence.get("ordered_compilation_units")
+        if all_templates and isinstance(records, Sequence) and not isinstance(
+            records, (str, bytes)
+        ):
+            for record in records:
+                if not isinstance(record, Mapping) or not record.get("path"):
+                    continue
+                canonical = canonicalize(str(record["path"]))
+                if canonical in self._source_log_indexes:
+                    continue
+                raw_index = record.get("source_log_index")
+                self._source_log_indexes[canonical] = (
+                    raw_index if isinstance(raw_index, int) else None
+                )
 
         self._all_templates = tuple(all_templates)
         self._templates_by_index = {
