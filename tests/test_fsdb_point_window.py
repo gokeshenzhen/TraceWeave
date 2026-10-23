@@ -85,7 +85,7 @@ def native_reader_probe(tmp_path_factory):
         pytest.skip("requires VERDI_HOME and g++")
     tmp_path = tmp_path_factory.mktemp("reader_probe")
     sdk = Path(verdi) / "share/FsdbReader"
-    source = (NATIVE_FSDB / "fsdb_wrapper.cpp").read_text()
+    source = (NATIVE_FSDB / "fsdb_wrapper.cpp").read_text(encoding="utf-8")
     finish_marker = "    bool Finish() {\n        FreeHandle();"
     assert source.count(finish_marker) == 1
     source = "static unsigned long long test_peak_loaded_records = 0;\n" + source.replace(
@@ -138,7 +138,7 @@ extern "C" int test_signal_state(void *p, const char *path, unsigned long long *
 }
 '''
     cpp, library = tmp_path / "probe.cpp", tmp_path / "probe.so"
-    cpp.write_text(source)
+    cpp.write_text(source, encoding="utf-8")
     subprocess.run(["g++", "-shared", "-fPIC", "-std=c++11", "-I" + str(NATIVE_FSDB),
                     "-I" + str(sdk), str(cpp), "-o", str(library),
                     "-L" + str(sdk / "linux64"), "-lnffr", "-lnsys", "-lz",

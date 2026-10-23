@@ -46,7 +46,7 @@ def reclaim_libraries(tmp_path_factory):
     def build(mode):
         if mode in libraries:
             return libraries[mode]
-        source = (NATIVE / "fsdb_wrapper.cpp").read_text()
+        source = (NATIVE / "fsdb_wrapper.cpp").read_text(encoding="utf-8")
         # Observe immediately before every explicit per-ID unload, including
         # reclamation. Page-boundary sampling alone could miss a resident peak.
         marker = "static bool _CloseEventCursors(FsdbCtx *ctx) {"
@@ -140,7 +140,7 @@ extern "C" int test_session_plan(void *p, int mode) {
         else:
             assert mode == "default"
         cpp, library = directory / (mode + ".cpp"), directory / (mode + ".so")
-        cpp.write_text(source)
+        cpp.write_text(source, encoding="utf-8")
         subprocess.run([compiler, "-shared", "-fPIC", "-std=c++11", *flags,
                         "-I" + str(NATIVE), "-I" + str(sdk), str(cpp), "-o", str(library),
                         "-L" + str(sdk / "linux64"), "-lnffr", "-lnsys", "-lz",
