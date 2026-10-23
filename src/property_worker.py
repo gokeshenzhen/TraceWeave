@@ -363,7 +363,7 @@ def explain(payload):
     result['node_count']=len(result['nodes'])
     result['semantic_status']='partial' if result['gaps'] else 'complete'
     if not result['nodes']: result['semantic_status']='not_run'
-    result['summary']=[n['explanation'] for n in result['nodes'] if n['explanation']][:12]
+    result['summary']=projector.summary()
     if result['gaps']:
         result['summary'].append('Gaps remain: '+', '.join(dict.fromkeys(g['code'] for g in result['gaps'])))
     if result['diagnostics_truncated']:

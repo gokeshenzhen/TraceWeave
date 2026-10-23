@@ -205,6 +205,16 @@ async def test_output_trim_is_distinct_from_analysis_limit():
 
 
 @pytest.mark.anyio
+async def test_summary_mode_retains_concrete_alignment_rule_after_graph_is_omitted():
+    pytest.importorskip('pyslang')
+    r=await run({'text':'a |-> ((1 ##1 b) and (1 ##3 a))','unit':'u','units':[UNIT],'detail':'summary'})
+    item=r.results[0]
+    assert item.semantic_status=='complete' and not item.nodes
+    assert item.output_truncated and not item.analysis_limited
+    assert any('1 ##1 b' in s and '1 ##3 a' in s and 'requires_same_end=false' in s for s in item.summary)
+
+
+@pytest.mark.anyio
 async def test_source_binding_and_changed_input_do_not_advance_fallback(tmp_path,monkeypatch):
     pytest.importorskip('pyslang')
     source=tmp_path/'top.sv';source.write_text('module top; bit clk,a,b; ap: assert property(@(posedge clk) a |=> b); endmodule')

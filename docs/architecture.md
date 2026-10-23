@@ -1563,6 +1563,11 @@ consequent may choose a successful alternative. The projection distinguishes seq
 and property `and/or`, fixed/range delays, consecutive/nonconsecutive/goto repetition,
 empty matches, `first_match` (including tied earliest ends), `throughout`, `within`,
 `intersect`, conditional properties, strong/weak completion and abort/disable rules.
+For `and/or`, the frontend syntax determines the domain even when a sequence is
+used as a property consequent. `domain_basis` records this classification.
+`and` and `intersect` expose `requires_same_start` and `requires_same_end` explicitly:
+both share a start, but only `intersect` requires equal ends. Sequence `and` ends
+at the later operand end; property `and` combines independently completing truths.
 Multiple clocks retain destination-event alignment and the clock owning each delay.
 Sampled functions retain arguments, types, history rules and vector/LSB distinctions.
 Default disables retain asynchronous evaluation separately from sampled functions
@@ -1601,7 +1606,9 @@ missing context, unsupported behavior, frontend failure, identity changes and li
 have separate gap categories and recovery instructions. One bad item does not discard
 independent results. `analysis_limited` means work stopped; `output_truncated` means
 display was reduced. `detail=summary` omits graph/effect rows, preserving status and
-gaps. A byte-limited response also retains `gap_codes` and marks `gaps_truncated` when
+gaps. Summaries prioritize operator rules with node IDs and source excerpts over
+repeated value-node boilerplate; alignment explanations name their actual operands.
+A byte-limited response also retains `gap_codes` and marks `gaps_truncated` when
 detailed diagnostics are shortened. Request an explicit item again for more detail;
 there is no implicit current property. AI interpretation of remaining source gaps
 must stay labelled as inference.

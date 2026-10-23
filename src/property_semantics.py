@@ -85,6 +85,45 @@ class Projector:
         self.result['nodes'].append(out)
         return out
 
+    def operator_domain(self, expr, context):
+        """Preserve the frontend's sequence/property distinction through wrappers.
+
+        A sequence used as a property consequent is still a sequence. Slang
+        attaches its outer property-spec / parenthesized syntax to the bound
+        node, so inspect those wrappers before falling back to call context.
+        """
+        from pyslang import syntax
+        node = expr.syntax
+        depth = 0
+        while node is not None and kind(node) in {
+                'PropertySpec', 'SimplePropertyExpr', 'ParenthesizedPropertyExpr'}:
+            self.charge(depth)
+            node = node.expr
+            depth += 1
+        if isinstance(node, syntax.SequenceExprSyntax):
+            return 'sequence', 'frontend_sequence_syntax'
+        if isinstance(node, syntax.PropertyExprSyntax):
+            return 'property', 'frontend_property_syntax'
+        return context, 'enclosing_projection_context'
+
+    @staticmethod
+    def operand_label(expr):
+        text = ' '.join(spelling(expr).split())
+        return '`' + (text[:160] + '...' if len(text) > 160 else text) + '`'
+
+    def summary(self):
+        """Prioritize source-linked operator rules over repeated value boilerplate."""
+        nodes = [n for n in self.result['nodes'] if n['explanation']]
+        operators = [n for n in nodes if n['op'] not in {'sample', 'clock', 'reference'}]
+        selected = operators or nodes
+        return [f"[{n['id']}] {self.operand_label_text(n['source'].get('text', ''))}: {n['explanation']}"
+                for n in selected[:12]]
+
+    @staticmethod
+    def operand_label_text(text):
+        text = ' '.join(text.split())
+        return text[:200] + '...' if len(text) > 200 else text
+
     def clock(self, timing, inherited_from=None):
         text = spelling(timing)
         if not text:
@@ -395,23 +434,33 @@ class Projector:
                     cross_clock_alignment='nearest_strictly_after' if nonoverlap else 'nearest_at_or_after')
                 out['explanation'] = 'Every antecedent match creates a separate consequent obligation. No match is vacuous success; each consequent may choose a successful sequence alternative.'
             elif op in {'And', 'Or', 'Intersect', 'Throughout', 'Within'}:
-                seq = domain == 'sequence' or op in {'Intersect', 'Throughout', 'Within'}
+                resolved, basis = self.operator_domain(expr, domain)
+                seq = resolved == 'sequence' or op in {'Intersect', 'Throughout', 'Within'}
                 out['domain'] = 'sequence' if seq else 'property'
+                facts['domain_basis'] = basis
                 left, right = child(expr.left, out['domain']), child(expr.right, out['domain'])
                 facts.update(left=left['id'], right=right['id'])
                 if op == 'And':
                     facts.update(start_relation='same_start', success='both',
+                        requires_same_start=True, requires_same_end=False,
                         end_relation='max(left.end,right.end)' if seq else 'independent_property_completion',
                         local_flow='variables_assigned_in_both_parallel_threads_cannot_flow_out; each_thread_keeps_its_state')
-                    out['explanation'] = 'Both operands must succeed from the same start.' + (' Their sequence ends may differ; the combined end is the later end.' if seq else ' Property truth is combined, without imposing sequence end alignment.')
+                    out['explanation'] = ('AND requires both ' + self.operand_label(expr.left) + ' and '
+                        + self.operand_label(expr.right) + ' to succeed from the same start. '
+                        + 'Their end ticks MAY DIFFER (requires_same_end=false). '
+                        + ('The combined sequence ends at max(left.end,right.end).' if seq else
+                           'Each property has its own completion; combine their truth values.'))
                 elif op == 'Or':
                     facts.update(start_relation='same_start', success='either',
                         matches='union_of_branch_matches' if seq else 'disjunction_of_property_truth',
                         local_flow='retain_branch_private_values; a_variable_used_after_or_must_be_assigned_on_each_possible_flow_path')
                     out['explanation'] = 'Either branch can succeed; preserve branch identity and local values, including ties at the same endpoint.'
                 elif op == 'Intersect':
-                    facts.update(start_relation='same_start', end_relation='same_end', success='both')
-                    out['explanation'] = 'Both sequences must match with identical start and end ticks.'
+                    facts.update(start_relation='same_start', end_relation='same_end', success='both',
+                                 requires_same_start=True, requires_same_end=True)
+                    out['explanation'] = ('INTERSECT requires both ' + self.operand_label(expr.left)
+                        + ' and ' + self.operand_label(expr.right)
+                        + ' to match with the SAME start AND end ticks (requires_same_end=true).')
                 elif op == 'Throughout':
                     facts.update(interval=right['id'], requirement='left_true_at_every_tick_of_right_match',
                                  equivalent='left[*0:$] intersect right')

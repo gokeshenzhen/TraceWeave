@@ -63,6 +63,42 @@ def test_sequence_and_property_and_have_different_endpoint_relations():
     assert node(complete('(a |=> b) or (b |=> c)'),'Or')['facts']['matches']=='disjunction_of_property_truth'
 
 
+@pytest.mark.parametrize('text,operator',[
+    ('a |-> ((1 ##1 b) and (1 ##3 b))','And'),
+    ('a |-> (1 ##1 b) and (1 ##3 b)','And'),
+    ('(1 ##1 b) and (1 ##3 b)','And'),
+    ('a |-> ((1 ##1 b) or (1 ##3 b))','Or'),
+    ('(1 ##1 b) or (1 ##3 b)','Or')])
+def test_sequence_operators_keep_frontend_domain_when_used_as_properties(text,operator):
+    r=complete(text)
+    n=node(r,operator)
+    assert n['domain']=='sequence'
+    assert n['facts']['domain_basis']=='frontend_sequence_syntax'
+    if operator=='And':
+        assert n['facts']['end_relation']=='max(left.end,right.end)'
+        assert n['facts']['requires_same_start'] is True
+        assert n['facts']['requires_same_end'] is False
+    else:
+        assert n['facts']['matches']=='union_of_branch_matches'
+
+
+def test_alignment_constraints_and_compact_summary_distinguish_and_from_intersect():
+    and_result=complete('a |-> ((1 ##1 b) and (1 ##3 c))')
+    intersect_result=complete('a |-> ((1 ##1 b) intersect (1 ##3 c))')
+    for result,operator,same_end in [(and_result,'And',False),(intersect_result,'Intersect',True)]:
+        n=node(result,operator)
+        assert n['facts']['requires_same_end'] is same_end
+        line=next(s for s in result['summary'] if s.startswith('['+n['id']+']'))
+        assert '1 ##1 b' in line and '1 ##3 c' in line
+        assert 'requires_same_end='+str(same_end).lower() in line
+        assert not any('Evaluate the typed value' in s for s in result['summary'])
+    prop=complete('(a |=> b) and (b |=> c)')
+    assert node(prop,'And')['domain']=='property'
+    assert node(prop,'And')['facts']['domain_basis']=='frontend_property_syntax'
+    assert node(prop,'And')['facts']['requires_same_end'] is False
+    assert node(prop,'And')['facts']['end_relation']=='independent_property_completion'
+
+
 def test_interval_containment_and_alignment_are_distinct():
     r=complete('a |-> ((b throughout (1 ##2 c)) intersect (b within c[->1]))')
     assert node(r,'Throughout')['facts']['requirement']=='left_true_at_every_tick_of_right_match'
