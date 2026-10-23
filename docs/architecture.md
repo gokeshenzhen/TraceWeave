@@ -2814,7 +2814,12 @@ a contextual-conversion gap. Variable indexes, out-of-range selections and
 unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v3`.
+`npi_input_ports_v4`. Four-state transfer functions model bitwise operations,
+logical not/and/or, reductions, conditional merging and bounded replication.
+They preserve proven constant regions even with dynamic operands; internal
+dynamic unknowns are distinct from constant RTL X/Z. Common operand signedness
+is applied before bitwise/conditional width alignment. Unmodeled operations
+remain gaps; state initial values are never used as a substitute for modeling.
 `constant_regions.lsb_offset` counts from the port's least significant position;
 each region's `bits` is MSB first, matching Slang. Unverified width conversions,
 unmodeled selections/expressions, unknown directions, unresolved array/scope forms

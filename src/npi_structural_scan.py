@@ -16,9 +16,9 @@ from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyQueryBudget
 from .npi_hierarchy_source import _LanguageIterator, NpiHierarchyUnavailable
 from .structural_semantic_router import NPI_PORT_CATEGORIES
 from .structural_gap_diagnostics import GapDiagnostics
-from .structural_native_values import vector, value as abstract_value
+from .structural_native_values import BITWISE, REDUCTIONS, operate, vector, value as abstract_value
 
-CAPABILITY_VERSION = "npi_input_ports_v3"
+CAPABILITY_VERSION = "npi_input_ports_v4"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar", "npiStructVar", "npiStructNet", "npiPackedArrayVar", "npiPackedArrayNet"}
 _CONSTANTS = {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst', 'npiPackedArrayParameter'}
 _SELECTS = {'npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit', 'npiPartSelect'}
@@ -196,15 +196,25 @@ def scan_native_ports(provider, options):
             if actual is None:
                 raise _UnsupportedPort('npi_reference_unresolved')
             return signedness(actual, depth + 1)
-        if kind == 'npiOperation' and p.scalar(handle, 'op_type') == 'npiExprCastOp':
+        op = p.scalar(handle, 'op_type') if kind == 'npiOperation' else None
+        if op in {'npiConcatOp', 'npiMultiConcatOp', 'npiNotOp', 'npiLogAndOp', 'npiLogOrOp'} | REDUCTIONS.keys():
+            return 0
+        if op in {'npiExprCastOp', 'npiConditionOp', 'npiBitNegOp'} | BITWISE.keys():
             it = _LanguageIterator(p, p.low.Operand, handle)
             try:
-                size_expr, operand, extra = it.read(), it.read(), it.read()
-                if size_expr is None or operand is None or extra is not None:
+                args = []
+                for _ in range(4):
+                    item = it.read()
+                    if item is None:
+                        break
+                    args.append(item)
+                expected = 3 if op == 'npiConditionOp' else 1 if op == 'npiBitNegOp' else 2
+                if len(args) != expected:
                     raise _UnsupportedPort('npi_signedness_unavailable', expression_kind=kind)
                 # A sized cast retains the data operand's signedness; SDK
                 # metadata can instead describe its width-expression operand.
-                return signedness(operand, depth + 1)
+                data = args[1:] if op in {'npiExprCastOp', 'npiConditionOp'} else args
+                return int(all(signedness(a, depth + 1) for a in data))
             finally:
                 p.close_iterator(it)
         signed = p.scalar(handle, 'signed')
@@ -216,7 +226,7 @@ def scan_native_ports(provider, options):
             raise _UnsupportedPort('npi_signedness_unavailable', expression_kind=kind)
         return signed
 
-    def resize(handle, data, target):
+    def resize(handle, data, target, common_signed=None):
         size, rows, _ = data
         bits = vector(size, rows)
         if target == size:
@@ -233,7 +243,7 @@ def scan_native_ports(provider, options):
                 raise _UnsupportedPort('npi_reference_unresolved')
         else:
             raise HierarchyBudgetExceeded('native_expression_depth_limit')
-        signed = signedness(resolved)
+        signed = signedness(resolved) if common_signed is None else common_signed
         # This SDK does not distinguish an unbased unsized '1/'x/'z from a
         # one-bit unsigned literal. Their context extension differs. Keep that
         # case unresolved; '0 and 1'b0 have identical extension semantics.
@@ -262,11 +272,25 @@ def scan_native_ports(provider, options):
             if not 1 <= size <= options['limits']['max_width']:
                 raise _UnsupportedPort('native_width_limit')
             return resize(handles[1], operands[1], size)
+        if op == 'npiMultiConcatOp' and len(handles) == 2:
+            count = index_value(handles[0], depth)
+            size = count * operands[1][0]
+            if count < 1 or size > options['limits']['max_width']:
+                raise _UnsupportedPort('native_width_limit')
+            return abstract_value(vector(*operands[1][:2]) * count)
         size = p.scalar(handle, 'size')
         # Concat operands are self-determined. The SDK can return an incorrect
         # positive parent Size as well as -1 for a nested sized cast.
         if op == 'npiConcatOp' and operands:
             size = sum(w for w, _, _ in operands)
+        elif op in BITWISE:
+            size = max((w for w, _, _ in operands), default=0)
+        elif op == 'npiBitNegOp' and len(operands) == 1:
+            size = operands[0][0]
+        elif op == 'npiConditionOp' and len(operands) == 3:
+            size = max(operands[1][0], operands[2][0])
+        elif op in {'npiNotOp', 'npiLogAndOp', 'npiLogOrOp'} | REDUCTIONS.keys():
+            size = 1
         if type(size) is not int or size < 1:
             raise _UnsupportedPort('npi_width_unavailable', expression_kind='npiOperation', operator=op, actual_width=size)
         if size > options['limits']['max_width']:
@@ -276,6 +300,15 @@ def scan_native_ports(provider, options):
             return size, [], False
         if op == 'npiConcatOp' and sum(w for w, _, _ in operands) == size:
             return abstract_value(''.join(vector(w, rows) for w, rows, _ in operands))
+        aligned = list(operands)
+        if op in BITWISE or op == 'npiConditionOp':
+            positions = range(1, 3) if op == 'npiConditionOp' and len(handles) == 3 else range(len(handles))
+            common = int(all(signedness(handles[i]) for i in positions))
+            for i in positions:
+                aligned[i] = resize(handles[i], operands[i], size, common_signed=common)
+        bits = operate(op, [vector(w, rows) for w, rows, _ in aligned])
+        if bits is not None:
+            return abstract_value(bits)
         if all(complete for _, _, complete in operands):
             bits = binary(handle, size)
             if bits is not None:

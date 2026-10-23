@@ -346,3 +346,30 @@ def test_sized_cast_signedness_comes_from_data_not_width_operand():
     one = port('a', cast); one.data['size'] = 8
     _, r = run([one], semantic_categories=['constant_connection'])
     assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '00001001'
+
+
+def test_dynamic_operand_can_produce_constant_bits_without_initial_evaluation():
+    live = Handle(type='npiReg', size=4, signed=0, binary='1111')
+    expr = Handle(type='npiOperation', op_type='npiBitAndOp', size=4, Operand=[live, const('0000')])
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '0000'
+    expr.data['Operand'][1] = const('1111')
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+
+
+def test_mixed_signed_bitwise_operands_zero_extend_before_operation():
+    a = const('11', signed=1)
+    b = const('1111', signed=0)
+    expr = Handle(type='npiOperation', op_type='npiBitAndOp', size=4, Operand=[a, b])
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['facts'][0]['constant_regions'][0]['bits'] == '0011'
+
+
+def test_replication_counts_are_bounded_before_allocation():
+    expr = Handle(type='npiOperation', op_type='npiMultiConcatOp', size=-1, Operand=[integer(2), const('10')])
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '1010'
+    expr.data['Operand'][0] = integer(100000)
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert 'native_width_limit' in r['gaps'] and not r['facts']
