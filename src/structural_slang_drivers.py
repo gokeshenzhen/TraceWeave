@@ -35,6 +35,7 @@ class _Inventory:
         self.session, self.scope, self.categories, self.limits = session, scope, categories, limits
         self.signals, self.parent, self.writers, self.reads, self.blocked = {}, {}, {}, set(), set()
         self.gaps, self.driver_rows, self.facts = set(), {}, []
+        self.source_paths = {}
         self.nodes = self.instances = self.bits = self.work = 0
         self.complete = False
         self.unbounded_write = False
@@ -56,7 +57,10 @@ class _Inventory:
         if loc is None:
             return None
         sm = self.session.driver.sourceManager
-        return dict(file=os.path.realpath(str(sm.getFileName(loc))), line=int(sm.getLineNumber(loc)))
+        filename = str(sm.getFileName(loc))
+        if filename not in self.source_paths:
+            self.source_paths[filename] = os.path.realpath(filename)
+        return dict(file=self.source_paths[filename], line=int(sm.getLineNumber(loc)))
 
     def signal(self, symbol):
         if type(symbol).__name__ not in {'NetSymbol', 'VariableSymbol'}:

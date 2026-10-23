@@ -7,6 +7,27 @@ from tests.test_structural_semantics import session
 CATEGORIES = ['multiple_driver', 'undriven_signal']
 
 
+def test_driver_source_paths_are_reused_only_within_one_inventory(tmp_path, monkeypatch):
+    from types import SimpleNamespace as NS
+    from src import structural_slang_drivers as drivers
+    pytest.importorskip('pyslang')
+    filename=str(tmp_path/'dut.sv')
+    manager=NS(getFileName=lambda _:filename,getLineNumber=lambda location:location)
+    frontend=NS(driver=NS(sourceManager=manager))
+    calls=[];original=drivers.os.path.realpath
+    def resolve(path):
+        calls.append(path)
+        return original(path)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(drivers.os.path,'realpath',resolve)
+        first=drivers._Inventory(frontend,None,CATEGORIES,ScanLimits())
+        assert first.location(NS(location=3))=={'file':filename,'line':3}
+        assert first.location(NS(location=8))=={'file':filename,'line':8}
+        second=drivers._Inventory(frontend,None,CATEGORIES,ScanLimits())
+        assert second.location(NS(location=11))=={'file':filename,'line':11}
+    assert calls==[filename,filename]
+
+
 def scan(tmp_path, text, **kwargs):
     return scan_semantic_session(session(tmp_path, text), categories=CATEGORIES, **kwargs)
 
