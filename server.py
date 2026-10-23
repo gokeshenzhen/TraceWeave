@@ -57,6 +57,7 @@ from config import (
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
     SIGNAL_SEARCH_MAX_KEYWORDS,
+    STRUCTURAL_SCAN_IN_WORKFLOW,
     TRANSITIONS_MAX_RETURNED,
     DEFAULT_MAX_GROUPS,
     DEFAULT_WAVE_WINDOW_PS,
@@ -1610,7 +1611,16 @@ _source_fallback_runtime = SourceFallbackRuntime()
 _native_failure_memory = NativeFailureMemory()
 
 
-SERVER_INSTRUCTIONS = """
+_STRUCTURAL_SCAN_WORKFLOW_INSTRUCTION = (
+    "Run scan_structural_risks on the selected compile_log as usual."
+    if STRUCTURAL_SCAN_IN_WORKFLOW else
+    "Structural scanning is excluded from the default workflow by "
+    "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0. Do not call or resume "
+    "scan_structural_risks unless the user explicitly requests a structural scan. "
+    "This policy does not disable explicit scans; skipped checks are not passes."
+)
+
+SERVER_INSTRUCTIONS = ("""
 Choose the workflow from the artifact type:
 
 - For JasperGold/formal-run artifact discovery, start with get_formal_paths.
@@ -1641,8 +1651,8 @@ Simulation waveform debug workflow:
      identity, supported tools and recording gaps. Missing observations and
      partial coverage never establish a clean analysis.
 
-2. Run scan_structural_risks on the selected compile_log as usual. Pass that
-   compile_log to connectivity, hierarchy/source, trace and failure tools:
+2. """ + _STRUCTURAL_SCAN_WORKFLOW_INSTRUCTION + """
+   Pass the selected compile_log to connectivity, hierarchy/source, trace and failure tools:
    native_first queries healthy NPI without capturing or validating full source.
    Ordinary native unavailability automatically prepares source in that request;
    native_route returns the real source_design_handle. Source association stays
@@ -1650,7 +1660,7 @@ Simulation waveform debug workflow:
    source analysis, strict source identity and recovery; changed/expired source
    handles require explicit preparation. Scan coverage remains independent.
    - build_tb_hierarchy remains an explicit compatibility/full-tree option.
-     If chosen, run it in parallel with scan_structural_risks on the same log.
+     If a structural scan is also requested, run both in parallel on the same log.
      Use the selected primary compile_log and simulator from step 1. In a split
      VCS flow, pass complementary logs only through supplementary_compile_logs.
      Returns a slim payload (project, stats, tree_skeleton truncated to depth 2,
@@ -1672,7 +1682,8 @@ Simulation waveform debug workflow:
      * dump_tb_section is a heavy escape hatch — prefer the targeted tools
        above.
    - scan_structural_risks: detects static structural risks (slice_overlap, multi_drive, etc.).
-     Use the same compile_log and simulator. Do not wait for parse_sim_log results.
+     Follow the workflow policy above when deciding whether to scan. For a requested
+     scan, use the same compile_log and simulator; do not wait for parse_sim_log results.
      Structural risks that overlap with failing signal paths are high-priority root cause candidates.
 
 3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
@@ -1700,7 +1711,8 @@ Simulation waveform debug workflow:
    - A scoreboard/data-compare failure is frequently the symptom of a lower-level
      protocol problem, so run this BEFORE reading RTL line-by-line or scrubbing the
      waveform by hand.
-   - Do not skip by default — same rule as scan_structural_risks. Skip only when
+   - The structural-scan workflow setting does not affect this handshake step.
+     Do not skip by default. Skip only when
      there is no waveform or the user explicitly asks.
    - Always interpret flagged_count together with coverage_status:
      zero_coverage means no protocol interfaces were checked and is NOT a pass;
@@ -1758,7 +1770,7 @@ Simulation waveform debug workflow:
 
 9. Call get_diagnostic_snapshot at any time to check workflow state.
    - Does NOT execute any sub-steps; only reads cached results
-""".strip()
+""").strip()
 
 app = Server("traceweave", version=__version__, instructions=SERVER_INSTRUCTIONS)
 
@@ -9917,7 +9929,12 @@ async def _dispatch_inner(name: str, args: dict):
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
             result["analysis_guide"] = {
-                "step0": "scan_structural_risks has not been run, so this analysis does not include structural risk correlation.",
+                "step0": (
+                    "scan_structural_risks has not been run, so this analysis does not include structural risk correlation."
+                    if STRUCTURAL_SCAN_IN_WORKFLOW else
+                    "Structural scanning is skipped in the default workflow by "
+                    "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0; structural risks remain unchecked."
+                ),
                 **original_guide,
             }
         return _enforce_output_budget(
@@ -10016,7 +10033,12 @@ async def _dispatch_inner(name: str, args: dict):
         # requiring attention. Only a parameter-changing retry is actionable;
         # terminal zero/degraded coverage remains explicitly inconclusive but
         # must not replay the same sweep forever.
-        missing_scan = scan_cache is None and has_failure_context
+        missing_scan = STRUCTURAL_SCAN_IN_WORKFLOW and scan_cache is None and has_failure_context
+        if not STRUCTURAL_SCAN_IN_WORKFLOW and scan_cache is None:
+            result.setdefault("why", []).append(
+                "Structural scanning is skipped in the default workflow by "
+                "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0; structural risks remain unchecked."
+            )
         sweep_needs_attention = (
             _sweep_coverage_incomplete(sweep_cache) and has_failure_context
         )
@@ -10701,7 +10723,7 @@ def _build_scan_required_next_call(
     compile_log: str | None,
     simulator: str | None,
 ) -> dict[str, dict[str, str]] | None:
-    if not compile_log or not simulator:
+    if not STRUCTURAL_SCAN_IN_WORKFLOW or not compile_log or not simulator:
         return None
     return {
         "tool": "scan_structural_risks",
@@ -11326,9 +11348,22 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             stale=is_stale,
             summary=_extract_structural_scan_summary(scan_result),
         )
+        if not STRUCTURAL_SCAN_IN_WORKFLOW:
+            sections["structural_scan"].summary["workflow_enabled"] = False
+    elif not STRUCTURAL_SCAN_IN_WORKFLOW:
+        sections["structural_scan"] = schemas.DiagnosticSnapshotSection(
+            available=False,
+            summary={
+                "workflow_enabled": False,
+                "status": "skipped_by_policy",
+                "coverage_status": "not_run",
+                "reason": "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0; structural risks remain unchecked.",
+            },
+        )
     else:
         sections["structural_scan"] = None
-    if anchor is not None and anchor.get("compile_log") and compatible_scan_result is None:
+    if (STRUCTURAL_SCAN_IN_WORKFLOW and anchor is not None
+            and anchor.get("compile_log") and compatible_scan_result is None):
         has_failure_context = bool(
             compatible_log_result is not None
             and compatible_log_result.runtime_total_errors > 0

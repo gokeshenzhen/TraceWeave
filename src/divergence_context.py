@@ -7,6 +7,8 @@ import os
 import hashlib
 import json
 
+from config import STRUCTURAL_SCAN_IN_WORKFLOW
+
 from .cancellation import check_cancelled
 from .compile_session_snapshot import CompileSessionSnapshot
 from .hierarchy_handles import compute_handle, compute_snapshot_fingerprint
@@ -232,6 +234,8 @@ def driver_action(
 
 def _scan_calls(ctx, side):
     """Independent default-workflow scans never require a full hierarchy."""
+    if not STRUCTURAL_SCAN_IN_WORKFLOW:
+        return []
     calls = []
     for index, path in enumerate(
         [ctx["compile_log"], *ctx.get("supplementary_compile_logs", [])]

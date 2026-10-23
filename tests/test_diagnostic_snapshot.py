@@ -278,6 +278,41 @@ def _reset_session_state():
 
 
 class TestDiagnosticSnapshot:
+    @pytest.mark.parametrize("has_cached_scan", [False, True])
+    def test_scan_opt_out_preserves_manual_evidence_without_missing_step(
+        self, monkeypatch, has_cached_scan
+    ):
+        monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", False)
+        _prefill_all()
+        if not has_cached_scan:
+            server._result_cache["scan_structural_risks"] = None
+            server._result_provenance["scan_structural_risks"] = None
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert all(step["tool"] != "scan_structural_risks" for step in result.missing_steps or [])
+        assert result.structural_scan.available is has_cached_scan
+        assert result.structural_scan.suggested_call is None
+        assert result.structural_scan.summary["workflow_enabled"] is False
+        if has_cached_scan:
+            assert result.structural_scan.summary["total_risks"] == 3
+            assert "status" not in result.structural_scan.summary
+        else:
+            assert result.structural_scan.summary["status"] == "skipped_by_policy"
+            assert result.structural_scan.summary["coverage_status"] == "not_run"
+            assert "unchecked" in result.structural_scan.summary["reason"]
+
+    def test_scan_opt_out_keeps_stale_manual_results_stale(self, monkeypatch):
+        monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", False)
+        _prefill_all()
+        server._result_provenance["scan_structural_risks"]["compile_log"] = "/tmp/other_compile.log"
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.structural_scan.stale is True
+        assert result.structural_scan.summary["workflow_enabled"] is False
+        assert all(step["tool"] != "scan_structural_risks" for step in result.missing_steps or [])
+
     def test_empty_session_returns_all_unavailable(self):
         result = server._handle_diagnostic_snapshot({})
 

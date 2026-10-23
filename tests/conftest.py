@@ -19,6 +19,10 @@ os.environ["TRACEWEAVE_TELEMETRY"] = "0"
 # monkeypatch and use a fake transport.
 os.environ["TRACEWEAVE_NPI_EXECUTION"] = "local"
 
+# Keep default-flow regressions independent of an operator's opt-out. Focused
+# policy tests launch fresh servers with explicit startup environments.
+os.environ["TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW"] = "1"
+
 # 把 TraceWeave/ 根目录加入路径
 ROOT = os.path.dirname(os.path.dirname(__file__))
 if ROOT not in sys.path:

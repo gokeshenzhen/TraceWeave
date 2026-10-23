@@ -197,6 +197,11 @@ def _env_flag(name: str, default: bool) -> bool:
 
 AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
 
+# Startup workflow policy only; explicit scans and their modes remain available.
+STRUCTURAL_SCAN_IN_WORKFLOW = _env_flag(
+    "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW", True
+)
+
 # A Verdi elaborated KDB can retain a useful partial netlist even when
 # elabcom recorded errors (for example unresolved VHDL or encrypted cells).
 # Keep that capability enabled by default; callers still require a successful

@@ -425,7 +425,9 @@ class TestStructuralScannerToolContract:
         assert "coverage_status" in scan_tool.description
         assert "zero_coverage" in scan_tool.description
 
-    async def test_dispatch_uses_auto_simulator_default(self):
+    @pytest.mark.parametrize("workflow_enabled", [True, False])
+    async def test_dispatch_uses_auto_simulator_default(self, monkeypatch, workflow_enabled):
+        monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", workflow_enabled)
         compile_result = {"simulator": "vcs", "files": {"user": []}}
         with (
             patch.object(
@@ -466,7 +468,11 @@ class TestStructuralScannerToolContract:
         assert result["scan_scope"] == "scope1"
         assert result["files_scanned"] == 1
 
-    async def test_build_tb_hierarchy_returns_required_next_call_when_scan_missing(self):
+    @pytest.mark.parametrize("workflow_enabled", [True, False])
+    async def test_build_tb_hierarchy_returns_required_next_call_when_scan_missing(
+        self, monkeypatch, workflow_enabled
+    ):
+        monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", workflow_enabled)
         with patch.object(server, "parse_compile_log", return_value={"files": []}), patch.object(
             server,
             "build_hierarchy",
@@ -484,6 +490,10 @@ class TestStructuralScannerToolContract:
                 {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
             )
 
+        if not workflow_enabled:
+            assert result["required_next_call"] is None
+            assert result["suggested_next"] is None
+            return
         assert result["required_next_call"] == {
             "tool": "scan_structural_risks",
             "arguments": {"compile_log": "/tmp/elab.log", "simulator": "vcs"},
@@ -2415,7 +2425,11 @@ $enddefinitions $end
         assert result["degraded_reason"] == "missing_structural_scan"
         assert result["required_next_call"] is None
 
-    async def test_analyze_failures_inserts_step0_when_scan_missing(self):
+    @pytest.mark.parametrize("workflow_enabled", [True, False])
+    async def test_analyze_failures_inserts_step0_when_scan_missing(
+        self, monkeypatch, workflow_enabled
+    ):
+        monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", workflow_enabled)
         _prefill_get_sim_paths_state()
         _prefill_build_tb_hierarchy_state()
 
@@ -2449,9 +2463,13 @@ $enddefinitions $end
             )
 
         assert list(result["analysis_guide"].keys())[:2] == ["step0", "step1"]
-        assert result["analysis_guide"]["step0"] == (
-            "scan_structural_risks has not been run, so this analysis does not include structural risk correlation."
-        )
+        if workflow_enabled:
+            assert result["analysis_guide"]["step0"] == (
+                "scan_structural_risks has not been run, so this analysis does not include structural risk correlation."
+            )
+        else:
+            assert "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0" in result["analysis_guide"]["step0"]
+            assert "unchecked" in result["analysis_guide"]["step0"]
 
     async def test_analyze_failures_skips_step0_when_scan_is_compatible(self):
         _prefill_get_sim_paths_state()

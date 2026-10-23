@@ -20,6 +20,7 @@ from config import (
     get_fsdb_runtime_info,
     MCP_CONFIG_FILE,
     SIM_LOG_PATTERNS,
+    STRUCTURAL_SCAN_IN_WORKFLOW,
     WAVE_PATTERNS,
     WORK_CONTAINER_NAMES,
 )
@@ -480,7 +481,7 @@ def _build_discovery_result(
         None,
     )
     target_log = elaborate_log or (compile_logs[0] if compile_logs else None)
-    if target_log:
+    if target_log and STRUCTURAL_SCAN_IN_WORKFLOW:
         result["next_required_step"] = {
             "tool": "scan_structural_risks",
             "compile_log": target_log["path"],
@@ -490,6 +491,12 @@ def _build_discovery_result(
                       "verify any file path via lookup_tb_files / get_tb_file_detail "
                       "before reading source.",
         }
+    if not STRUCTURAL_SCAN_IN_WORKFLOW:
+        result["hints"].append(
+            "Structural scanning is skipped in the default workflow by "
+            "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0. Structural risks remain "
+            "unchecked unless scan_structural_risks is explicitly requested."
+        )
 
     return result
 
