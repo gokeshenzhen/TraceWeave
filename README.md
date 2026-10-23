@@ -182,6 +182,7 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 |  | `get_tb_file_detail` | Inspect module, interface, and class declarations |
 |  | `get_tb_class_hierarchy` | Browse SystemVerilog / UVM class inheritance |
 |  | `dump_tb_section` | Export a selected hierarchy or source section |
+|  | `explain_property` | Explain SVA matching, obligations, clocks, local state and directive roles |
 | Logs and failures | `parse_sim_log` | Group runtime failures and extract times and summaries |
 |  | `get_error_context` | Read original log lines around an error |
 |  | `diff_sim_failure_results` | Compare failures between runs |
@@ -216,6 +217,15 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 | EDA integration | `build_kdb` | Build and cache a Verdi KDB |
 
 ### Native-first design queries
+
+`explain_property` also accepts standalone text or an ordered batch with explicit
+shared declaration units. It explains source semantics without running simulation,
+formal proof or an LLM. Supply `compile_log` or `design_handle` for compiled source
+targets; select one declaration/directive with `target`, `instance_path` or `line`.
+Read each item's completeness and gaps. Unassociated text has an unknown run mode;
+an exact `run_anchor` links an existing simulation/formal discovery. See
+[property explanations](docs/architecture.md#property-explanations) for examples,
+the optional frontend requirement and limits.
 
 After `get_sim_paths`, run `scan_structural_risks` as usual, then continue log
 and waveform investigation. Connectivity, hierarchy/file/class queries, X traces,

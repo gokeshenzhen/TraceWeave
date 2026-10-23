@@ -366,7 +366,13 @@ class TestVertexFunctionSchemaCompatibility:
                         f"{tool_name}:{path} has items with type {schema_type!r}"
                     )
                 for key, value in node.items():
-                    walk(tool_name, f"{path}.{key}", value)
+                    if key in {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"} and isinstance(value, dict):
+                        # A property called "items" is a name in a map, not
+                        # the array-schema keyword. Walk the actual schemas.
+                        for child_name, child in value.items():
+                            walk(tool_name, f"{path}.{key}.{child_name}", child)
+                    else:
+                        walk(tool_name, f"{path}.{key}", value)
             elif isinstance(node, list):
                 for index, value in enumerate(node):
                     walk(tool_name, f"{path}[{index}]", value)

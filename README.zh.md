@@ -176,6 +176,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 |  | `get_tb_file_detail` | 查看文件中的模块、接口和类定义 |
 |  | `get_tb_class_hierarchy` | 查看 SystemVerilog / UVM 类继承 |
 |  | `dump_tb_section` | 导出指定层次或源码分析部分 |
+|  | `explain_property` | 解释 SVA 匹配分支、检查义务、时钟、局部状态与指令作用 |
 | 日志与失败 | `parse_sim_log` | 归类运行失败，提取时间和摘要 |
 |  | `get_error_context` | 读取错误附近的原始日志 |
 |  | `diff_sim_failure_results` | 比较两次运行的失败变化 |
@@ -210,6 +211,13 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 | EDA 集成 | `build_kdb` | 构建并缓存 Verdi KDB |
 
 ### 原生优先查询
+
+`explain_property` 支持独立文本、保留输入顺序和 ID 的批量输入，以及显式共享声明单元。
+源码目标可附 `compile_log` 或 `design_handle`，通过 `target`、`instance_path`
+或 `line` 选择一个定义或指令。它只解释源码语义，不启动仿真、证明或 LLM。
+逐项读取完整性与具体缺口；未关联运行的文本模式为 unknown，可用精确的
+`run_anchor` 关联已有 simulation/formal 发现结果。示例、可选前端依赖与资源限制见
+[断言语义解释](docs/architecture.md#property-explanations)。
 
 `get_sim_paths` 后照常执行 `scan_structural_risks`，继续日志与波形调查。
 连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`：

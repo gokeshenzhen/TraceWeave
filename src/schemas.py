@@ -5,6 +5,8 @@ import config as _config
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, WithJsonSchema, model_serializer, model_validator
 
+from .property_model import ExplainPropertyOptions, ExplainPropertyResult, PropertyExplanation
+
 
 class SchemaModel(BaseModel):
     model_config = ConfigDict(extra="forbid")

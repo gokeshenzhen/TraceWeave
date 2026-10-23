@@ -1603,12 +1603,17 @@ def reset_session_state():
     _session_state["build_tb_hierarchy"] = None
     _clear_simulation_result_state()
     _clear_formal_result_state()
+    if "_property_runs" in globals():
+        _property_runs.entries.clear()
 
 
 from src.source_fallback_runtime import SourceFallbackRuntime
 from src.native_query import NativeFailureMemory
 _source_fallback_runtime = SourceFallbackRuntime()
 _native_failure_memory = NativeFailureMemory()
+
+from src.property_runtime import PropertyRunRegistry, explain_properties
+_property_runs = PropertyRunRegistry()
 
 
 _STRUCTURAL_SCAN_WORKFLOW_INSTRUCTION = (
@@ -6335,6 +6340,24 @@ _SIGNAL_READBACK_HINT = (
 async def list_tools():
     _tools = [
         Tool(
+            name="explain_property",
+            description=(
+                "Explain an already located SystemVerilog assertion as a bounded typed temporal graph. "
+                "Accepts one text/source target or ordered items with unique IDs; explicitly named units "
+                "share declarations, parameters, macros and default clocks without merging unrelated scopes. "
+                "Use target / instance_path / line to select one definition or directive. Definitions and "
+                "fragments do not imply an active assert. Requires optional pyslang in the existing Source Graph "
+                "interpreter, runs in an isolated worker, and never invokes simulation, proof or an LLM. "
+                "Read syntax_status, semantic_status, context_status and gaps separately. Graphs preserve "
+                "matching alternatives, per-match obligations, multiple clocks, local state and recursive "
+                "references. run_anchor associates an exact get_sim_paths/get_formal_paths discovery; "
+                "unassociated text remains mode=unknown. Formal discovery never proves enabled assumptions "
+                "or property outcomes. Missing support includes a source fragment and recovery advice; "
+                "additional AI reasoning must remain labelled inference. No waveform lock or failed log is required."
+            ),
+            inputSchema=schemas.ExplainPropertyOptions.model_json_schema(),
+        ),
+        Tool(
             name="prepare_design_context",
             description=(
                 "Capture compile inputs, source content identities and include dependencies from "
@@ -9048,9 +9071,38 @@ async def _dispatch_design_query(name: str, args: dict, *, started=None, deadlin
     )
 
 
+async def _handle_explain_property(args: dict):
+    options = schemas.ExplainPropertyOptions.model_validate(args)
+    config = get_source_graph_execution_config()
+    if not options.design_handle:
+        return await explain_properties(args, registry=_property_runs, config=config,
+                                        run_thread=_run_in_cancellable_thread)
+    store = _design_context_store
+    try:
+        with store.pin(options.design_handle) as entry:
+            context = entry.context
+            async def validate(deadline):
+                if (store is not _design_context_store
+                        or options.compile_log and not _same_realpath(options.compile_log, context.ordered_compile_logs[0])
+                        or options.simulator not in ("auto", context.simulator)
+                        or options.top_hint not in (None, context.selected_top)):
+                    raise ValueError("design_context_arguments_mismatch")
+                try:
+                    await _validate_design_source(context, timeout_sec=max(.001, deadline-time.monotonic()))
+                except design_context_runtime.ContextUnavailable:
+                    raise ValueError("design_context_changed") from None
+            return await explain_properties(args, registry=_property_runs, config=config,
+                run_thread=_run_in_cancellable_thread, prepared=context, validate=validate)
+    except design_context_runtime.ContextUnavailable:
+        return await explain_properties(args, registry=_property_runs, config=config,
+            run_thread=_run_in_cancellable_thread, source_blocker="design_context_expired")
+
+
 async def _dispatch(name: str, args: dict):
     if any(key.startswith("_") for key in args):
         return schemas.ToolErrorResult(error="Reserved internal argument.", error_code="invalid_design_context_arguments")
+    if name == "explain_property":
+        return await _handle_explain_property(args)
     if name == "get_diagnostic_snapshot":
         return await _dispatch_inner(name, args)
     from src.native_query import NATIVE_TOOLS
@@ -9149,6 +9201,7 @@ async def _dispatch_inner(name: str, args: dict):
         _result_provenance["get_sim_paths"] = _build_result_provenance(
             name, args, validated
         )
+        _property_runs.note("simulation", validated)
         return validated
 
     elif name == "get_formal_paths":
@@ -9161,6 +9214,7 @@ async def _dispatch_inner(name: str, args: dict):
         )
         validated = schemas.FormalPathsResult.model_validate(result)
         _cache_formal_discovery(validated)
+        _property_runs.note("formal", validated)
         return validated
 
     elif name == "parse_sim_log":

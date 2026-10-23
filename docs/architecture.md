@@ -1509,6 +1509,116 @@ Structural backend identity is independent of waveform format; wave readers
 close before connectivity work. Sub-ps causal scheduling and asynchronous
 assignment values retain their existing explicit proof gaps.
 
+## Property Explanations
+
+`explain_property` is a static SVA explanation service. It does not read a waveform,
+launch simulation/proof, execute Tcl or call an LLM. It does not determine a runtime
+failure's root cause. The optional, versioned `pyslang` frontend runs in the configured
+Source Graph interpreter, behind the existing process-wide cold-build admission.
+The MCP process imports no optional frontend and holds no waveform lock. Missing or
+disabled frontend support produces a structured per-item gap; it never installs a
+dependency or switches to an unvalidated parser.
+
+Use one `text` / source target, or `items` with unique caller IDs. Single input uses
+the same processing path, with default ID `property-1`. A shared `units` entry names
+module-scope `declarations`, optional `default_clock` (event text without `@(...)`)
+and `default_disable`. Each item explicitly selects its `unit`; items in different
+units never share same-named definitions. Unit declarations may include types,
+parameters, macros, sequences, properties and functions. Text includes require a
+source/compile request so dependency identity can be checked.
+
+```json
+{
+  "items": [
+    {"id": "all_matches", "unit": "bus", "text": "(req ##[1:3] ready) |=> ack"},
+    {"id": "first_only", "unit": "bus", "text": "first_match(req ##[1:3] ready) |=> ack"}
+  ],
+  "units": [{"id": "bus", "declarations": "logic clk, req, ready, ack;", "default_clock": "posedge clk"}]
+}
+```
+
+For source input, provide `source_file` and/or an exact `target`, with `compile_log`
+or a process-scoped `design_handle`. `target` can be a directive label or a fully
+qualified definition/directive path. `instance_path` and `line` narrow selection;
+an ambiguous target returns candidates. `arguments` supplies actual argument text
+when selecting a parameterized definition. Standalone source files are also accepted,
+but have no certified association with an earlier compilation or run. Existing
+compile replay and content/include identity checks apply to compiled source; changed
+or expired prepared observations require explicit preparation. Current source content
+does not by itself establish the bytes used by an earlier simulation.
+
+The frontend binds definitions using synthetic callers where needed, retaining their
+definition identity and original source. These callers are analysis scaffolding, not
+evidence that an assert was present or enabled. Parameter specialization and active
+generate instances come from elaboration. Source/context errors remain explicit.
+Slang assertion analysis validates clock flow and multiclock/empty-sequence legality
+in addition to compilation binding. Parenthesized clocks stay scoped to their expression.
+No result cache is used, so there is no cross-mode or cross-source semantic cache hit.
+
+Each `results[]` entry preserves its ID and carries `identity`, `target`, `mode`,
+`directive`, a typed `nodes` graph, `clocks`, local `variables`, `effects`, `references`
+and source-linked `gaps`. Sequence endpoints and alternatives remain symbolic:
+implications require a consequent for **every** antecedent match, while a sequence
+consequent may choose a successful alternative. The projection distinguishes sequence
+and property `and/or`, fixed/range delays, consecutive/nonconsecutive/goto repetition,
+empty matches, `first_match` (including tied earliest ends), `throughout`, `within`,
+`intersect`, conditional properties, strong/weak completion and abort/disable rules.
+Multiple clocks retain destination-event alignment and the clock owning each delay.
+Sampled functions retain arguments, types, history rules and vector/LSB distinctions.
+Default disables retain asynchronous evaluation separately from sampled functions
+inside their conditions. Physical waveform pre-edge values are not automatically
+assertion scheduling-region samples.
+
+Local variables belong to attempts and matching branches. A separate definite-flow
+pass checks incoming alternatives and zero repetitions; parallel writes that block
+flow are retained. Local sequence input/inout ports copy in at entry; whole-variable
+output/inout actuals receive values on successful matches. Indexed output aliases
+and function output/ref alias effects remain explicit gaps. Recursive definitions become finite reference graphs with guarded
+clock progression and argument bindings, without a termination or proof claim.
+Straight automatic functions with a single return and argument-only reads can expose
+their return expression without evaluation. Stateful calls, match items, actions and
+assertion-control tasks retain statically known reads/writes, conditions and phases.
+Loops, dynamic calls, unmodeled system calls, unsupported temporal operators and
+frontend language limitations produce specific gaps rather than guessed effects.
+Simulation-time functions retain their time domain; formal modeling requires separate
+tool/configuration evidence.
+
+`mode=auto` resolves an exact `run_anchor` (discovered log, wave or selected run
+directory), or the associated compile log, against independent bounded discovery
+receipts. It never chooses whichever discovery tool ran last. Unassociated or
+ambiguous inputs remain `unknown`, and common temporal analysis continues. Explicit
+`simulation`, `formal` and `unknown` modes retain caller provenance. Simulation
+assert/assume have the same property truth rules; assume does not constrain ordinary
+simulation stimulus. Formal roles are conditional proof goals, enabled constraints
+or witness searches. Discovery never supplies proof outcomes, enabled assumptions or
+reset semantics. Optional `role_context` identifies a caller statement or script
+declaration and its source; neither is promoted to verified execution. `cover property`
+and `cover sequence`, procedural `expect`, immediate and concurrent assertions retain
+their separate directive/activation forms.
+
+Read `syntax_status`, `semantic_status` and `context_status` independently. Syntax,
+missing context, unsupported behavior, frontend failure, identity changes and limits
+have separate gap categories and recovery instructions. One bad item does not discard
+independent results. `analysis_limited` means work stopped; `output_truncated` means
+display was reduced. `detail=summary` omits graph/effect rows, preserving status and
+gaps. A byte-limited response also retains `gap_codes` and marks `gaps_truncated` when
+detailed diagnostics are shortened. Request an explicit item again for more detail;
+there is no implicit current property. AI interpretation of remaining source gaps
+must stay labelled as inference.
+`diagnostics_truncated` marks the frontend diagnostic display cap; errors precede
+warnings, and warning-only truncation does not make complete semantic analysis partial.
+
+Limits: 16 items and 16 shared units; 64 Ki characters per text/declaration and 256 KiB
+total text; 16 KiB argument text per item; 256 captured source inputs / 32 MiB; default
+1,024 temporal nodes per item (maximum 4,096), depth 64 (maximum 128), and bounded AST
+visits. The total request deadline defaults to 20 seconds (maximum 120), including
+admission, preparation and validation. Workers have a monitored 512 MiB RSS limit
+and an 8 MiB transport cap. Output defaults to 512 KiB, configurable from 4 KiB to
+2 MiB; an envelope too small for every per-item receipt is explicitly rejected.
+Cancellation terminates the worker process group and never advances fallback. A
+timeout preserves already completed items and marks unfinished IDs; output trimming
+does not convert partial semantic analysis into a complete result.
+
 ## Formal Artifact Discovery
 
 `get_formal_paths` is a tool-neutral, artifact-only API backed by
